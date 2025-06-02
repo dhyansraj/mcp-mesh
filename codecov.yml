@@ -1,0 +1,49 @@
+codecov:
+  require_ci_to_pass: yes
+  notify:
+    wait_for_ci: yes
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+        base: auto
+        if_ci_failed: error
+
+    patch:
+      default:
+        target: 85%
+        threshold: 2%
+        base: auto
+        if_ci_failed: error
+
+comment:
+  layout: "header, diff, flags, files, footer"
+  behavior: default
+  require_changes: false
+  require_base: no
+  require_head: yes
+
+flags:
+  unit:
+    paths:
+      - "tests/unit/"
+  integration:
+    paths:
+      - "tests/integration/"
+  e2e:
+    paths:
+      - "tests/e2e/"
+
+ignore:
+  - "tests/"
+  - "examples/"
+  - "docs/"
+  - "scripts/"
+  - "**/conftest.py"

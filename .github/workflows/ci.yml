@@ -1,0 +1,296 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  FORCE_COLOR: 1
+  PIP_DISABLE_PIP_VERSION_CHECK: 1
+
+jobs:
+  lint-and-format:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run ruff linting
+        run: ruff check src tests
+
+      - name: Run ruff formatting check
+        run: ruff format --check src tests
+
+      - name: Run black formatting check
+        run: black --check src tests
+
+      - name: Run isort import sorting check
+        run: isort --check-only src tests
+
+  type-check:
+    name: Type Checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run mypy type checking
+        run: mypy src
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        test-group: ["unit", "integration", "e2e"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run unit tests
+        if: matrix.test-group == 'unit'
+        run: |
+          pytest tests/unit/ -v \
+            --cov=mcp_mesh_sdk \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junit-xml=test-results-unit-${{ matrix.python-version }}.xml
+
+      - name: Run integration tests
+        if: matrix.test-group == 'integration'
+        run: |
+          pytest tests/integration/ -v \
+            --cov=mcp_mesh_sdk \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junit-xml=test-results-integration-${{ matrix.python-version }}.xml
+
+      - name: Run e2e tests
+        if: matrix.test-group == 'e2e'
+        run: |
+          pytest tests/e2e/ -v \
+            --cov=mcp_mesh_sdk \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junit-xml=test-results-e2e-${{ matrix.python-version }}.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.test-group }}-${{ matrix.python-version }}
+          path: test-results-*.xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with:
+          file: ./coverage.xml
+          flags: ${{ matrix.test-group }}
+          name: codecov-${{ matrix.test-group }}
+          fail_ci_if_error: false
+
+  mcp-compliance:
+    name: MCP Protocol Compliance
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, type-check]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run MCP protocol compliance tests
+        run: |
+          pytest tests/integration/test_mcp_protocol_compliance.py -v \
+            --junit-xml=mcp-compliance-results.xml \
+            -m "not slow"
+
+      - name: Run JSON-RPC 2.0 format verification
+        run: |
+          python -m pytest tests/integration/test_mcp_protocol_compliance.py::TestJSONRPCFormat -v
+
+      - name: Run tool registration compliance tests
+        run: |
+          python -m pytest tests/integration/test_mcp_protocol_compliance.py::TestToolRegistration -v
+
+      - name: Run error response format validation
+        run: |
+          python -m pytest tests/integration/test_mcp_protocol_compliance.py::TestErrorResponses -v
+
+      - name: Upload MCP compliance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mcp-compliance-results
+          path: mcp-compliance-results.xml
+
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install bandit
+        run: pip install bandit[toml]
+
+      - name: Run bandit security scan
+        run: |
+          bandit -r src/ -f json -o bandit-report.json || true
+          bandit -r src/ -f txt
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-results
+          path: bandit-report.json
+
+  build-and-package:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    needs: [test, mcp-compliance]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build hatch
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package
+        run: |
+          pip install twine
+          twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-artifacts
+          path: dist/
+
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run performance tests
+        run: |
+          pytest tests/integration/test_performance_load.py -v \
+            --junit-xml=performance-results.xml \
+            -m "not slow"
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: performance-results.xml
+
+  integration-status:
+    name: Integration Status
+    runs-on: ubuntu-latest
+    needs:
+      [lint-and-format, type-check, test, mcp-compliance, build-and-package]
+    if: always()
+
+    steps:
+      - name: Check all jobs status
+        run: |
+          echo "Lint and Format: ${{ needs.lint-and-format.result }}"
+          echo "Type Check: ${{ needs.type-check.result }}"
+          echo "Tests: ${{ needs.test.result }}"
+          echo "MCP Compliance: ${{ needs.mcp-compliance.result }}"
+          echo "Build and Package: ${{ needs.build-and-package.result }}"
+
+          if [[ "${{ needs.lint-and-format.result }}" != "success" ]] || \
+             [[ "${{ needs.type-check.result }}" != "success" ]] || \
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.mcp-compliance.result }}" != "success" ]] || \
+             [[ "${{ needs.build-and-package.result }}" != "success" ]]; then
+            echo "❌ CI pipeline failed"
+            exit 1
+          else
+            echo "✅ All CI checks passed"
+          fi

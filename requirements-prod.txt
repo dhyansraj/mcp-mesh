@@ -1,0 +1,5 @@
+# Production dependencies for MCP Mesh
+# Install with: pip install -r requirements-prod.txt
+
+# Core MCP SDK - Official Anthropic MCP Python SDK
+mcp>=1.9.0
