@@ -21,6 +21,7 @@ from fastmcp import FastMCP
 from mcp_mesh_types.exceptions import SecurityValidationError
 
 from ..shared.lifecycle_manager import LifecycleManager
+from ..tools.contract_tools import ContractTools
 from ..tools.lifecycle_tools import LifecycleTools
 from .database import DatabaseConfig, RegistryDatabase
 from .models import (
@@ -789,6 +790,9 @@ class RegistryService:
         self.lifecycle_manager = LifecycleManager(self.storage)
         self.lifecycle_tools = LifecycleTools(self.lifecycle_manager)
 
+        # Initialize contract management
+        self.contract_tools = ContractTools(self.storage.database)
+
         # Initialize agent selection
         from ..shared.agent_selection import AgentSelector
         from ..tools.selection_tools import SelectionTools
@@ -1073,6 +1077,211 @@ class RegistryService:
         async def get_selection_stats() -> dict:
             """Get statistics about agent selection operations."""
             return await self.selection_tools.get_selection_stats()
+
+        # Service Contract Management Tools
+        @self.app.tool(
+            name="store_service_contract",
+            description="Store a service contract for an agent class",
+        )
+        async def store_service_contract(
+            class_name: str, method_metadata_dict: dict
+        ) -> dict:
+            """Store a service contract with method metadata."""
+            try:
+                # Convert dict back to MethodMetadata object
+                import inspect
+
+                from mcp_mesh_types.method_metadata import (
+                    MethodMetadata,
+                    MethodType,
+                )
+
+                # Reconstruct MethodMetadata from dictionary
+                metadata = MethodMetadata(
+                    method_name=method_metadata_dict["method_name"],
+                    signature=inspect.signature(
+                        lambda: None
+                    ),  # Placeholder, would need proper reconstruction
+                    capabilities=method_metadata_dict.get("capabilities", []),
+                    return_type=eval(
+                        method_metadata_dict.get("return_type", "type(None)")
+                    ),
+                    parameters=method_metadata_dict.get("parameters", {}),
+                    type_hints=method_metadata_dict.get("type_hints", {}),
+                    method_type=MethodType(
+                        method_metadata_dict.get("method_type", "function")
+                    ),
+                    is_async=method_metadata_dict.get("is_async", False),
+                    docstring=method_metadata_dict.get("docstring", ""),
+                    service_version=method_metadata_dict.get(
+                        "service_version", "1.0.0"
+                    ),
+                    stability_level=method_metadata_dict.get(
+                        "stability_level", "stable"
+                    ),
+                    deprecation_warning=method_metadata_dict.get(
+                        "deprecation_warning", ""
+                    ),
+                    expected_complexity=method_metadata_dict.get(
+                        "expected_complexity", "O(1)"
+                    ),
+                    resource_requirements=method_metadata_dict.get(
+                        "resource_requirements", {}
+                    ),
+                    timeout_hint=method_metadata_dict.get("timeout_hint", 30),
+                )
+
+                # Create a dummy class type for the class name
+                class_type = type(class_name, (), {})
+
+                result = await self.contract_tools.store_service_contract(
+                    class_type, metadata
+                )
+                return result.to_dict()
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "message": "Failed to store service contract",
+                }
+
+        @self.app.tool(
+            name="get_service_contract",
+            description="Retrieve a service contract for a class",
+        )
+        async def get_service_contract(class_name: str) -> dict:
+            """Retrieve a service contract for a class."""
+            try:
+                class_type = type(class_name, (), {})
+                contract = await self.contract_tools.get_service_contract(class_type)
+
+                if contract:
+                    return {
+                        "success": True,
+                        "contract": contract.to_dict(),
+                        "message": f"Retrieved contract for {class_name}",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "contract": None,
+                        "message": f"No contract found for {class_name}",
+                    }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "message": "Failed to retrieve service contract",
+                }
+
+        @self.app.tool(
+            name="validate_contract_compatibility",
+            description="Validate contract compatibility and signature consistency",
+        )
+        async def validate_contract_compatibility(contract_dict: dict) -> dict:
+            """Validate a service contract for compatibility."""
+            try:
+                from mcp_mesh_types.method_metadata import (
+                    ServiceContract,
+                )
+
+                # Reconstruct ServiceContract from dictionary
+                # This is a simplified reconstruction - in production would need full deserialization
+                contract = ServiceContract(
+                    service_name=contract_dict["service_name"],
+                    service_version=contract_dict.get("service_version", "1.0.0"),
+                    description=contract_dict.get("description", ""),
+                    contract_version=contract_dict.get("contract_version", "1.0.0"),
+                    compatibility_level=contract_dict.get(
+                        "compatibility_level", "strict"
+                    ),
+                )
+
+                result = await self.contract_tools.validate_contract_compatibility(
+                    contract
+                )
+                return result.to_dict()
+
+            except Exception as e:
+                return {
+                    "is_valid": False,
+                    "issues": [str(e)],
+                    "compatibility_score": 0.0,
+                    "error": "Failed to validate contract",
+                }
+
+        @self.app.tool(
+            name="find_contracts_by_capability",
+            description="Find contracts that provide a specific capability",
+        )
+        async def find_contracts_by_capability(capability_name: str) -> dict:
+            """Find all contracts that provide a specific capability."""
+            try:
+                contracts = await self.contract_tools.find_contracts_by_capability(
+                    capability_name
+                )
+                return {
+                    "success": True,
+                    "contracts": contracts,
+                    "count": len(contracts),
+                    "capability": capability_name,
+                }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "message": f"Failed to find contracts for capability {capability_name}",
+                }
+
+        @self.app.tool(
+            name="get_contract_compatibility_info",
+            description="Get contract compatibility information for version checking",
+        )
+        async def get_contract_compatibility_info(
+            service_name: str, version_constraint: str = None
+        ) -> dict:
+            """Get contract compatibility information."""
+            try:
+                info = await self.contract_tools.get_contract_compatibility_info(
+                    service_name, version_constraint
+                )
+                return {
+                    "success": True,
+                    "compatibility_info": info,
+                    "service_name": service_name,
+                    "version_constraint": version_constraint,
+                }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "message": f"Failed to get compatibility info for {service_name}",
+                }
+
+        @self.app.tool(
+            name="get_contract_performance_metrics",
+            description="Get performance metrics for contract operations",
+        )
+        async def get_contract_performance_metrics() -> dict:
+            """Get performance metrics for contract operations."""
+            try:
+                metrics = await self.contract_tools.get_performance_metrics()
+                return {
+                    "success": True,
+                    "metrics": metrics,
+                    "message": "Performance metrics retrieved successfully",
+                }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "message": "Failed to retrieve performance metrics",
+                }
 
     async def _validate_security_context(self, registration: AgentRegistration):
         """Validate security context for agent registration."""

@@ -568,6 +568,36 @@ class FileOperationMetrics(BaseModel):
     )
 
 
+class EndpointInfo(BaseModel):
+    """Service endpoint information model."""
+
+    url: StrictStr = Field(..., description="Service endpoint URL")
+    service_name: StrictStr = Field(..., description="Service name")
+    service_version: StrictStr = Field("1.0.0", description="Service version")
+    protocol: StrictStr = Field("mcp", description="Communication protocol")
+    status: HealthStatusType = Field(
+        HealthStatusType.UNKNOWN, description="Endpoint status"
+    )
+    metadata: dict[str, Any] | None = Field(
+        default_factory=dict, description="Endpoint metadata"
+    )
+    last_updated: datetime = Field(
+        default_factory=datetime.now, description="Last status update"
+    )
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Validate URL format."""
+        if not (
+            v.startswith("http://")
+            or v.startswith("https://")
+            or v.startswith("mcp://")
+        ):
+            raise ValueError("URL must start with http://, https://, or mcp://")
+        return v
+
+
 # Generic response types
 SuccessResponse = MCPResponse
 ErrorResponse = MCPResponse

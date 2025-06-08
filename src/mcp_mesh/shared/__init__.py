@@ -10,6 +10,13 @@ from mcp.shared import *
 
 from .exceptions import MeshAgentError, RegistryConnectionError, RegistryTimeoutError
 from .registry_client import RegistryClient
+from .service_discovery import (
+    EnhancedServiceDiscovery,
+    HealthMonitor,
+    SelectionCriteria,
+    ServiceDiscovery,
+)
+from .service_proxy import MeshServiceProxy
 from .types import DependencyConfig, HealthStatus
 
 __all__ = [
@@ -19,4 +26,9 @@ __all__ = [
     "RegistryConnectionError",
     "RegistryTimeoutError",
     "RegistryClient",
+    "ServiceDiscovery",
+    "SelectionCriteria",
+    "HealthMonitor",
+    "EnhancedServiceDiscovery",
+    "MeshServiceProxy",
 ]

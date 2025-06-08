@@ -2,14 +2,16 @@
 
 Provides advanced agent discovery tools with MCP protocol integration,
 including query_agents, get_best_agent, and check_compatibility.
+Registry Integration for Service Discovery implementation for Phase 2.
 """
 
+import asyncio
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
 from mcp_mesh_types import (
-    AgentInfo,
     AgentMatch,
     CapabilityQuery,
     CompatibilityScore,
@@ -17,9 +19,31 @@ from mcp_mesh_types import (
     Requirements,
     ServiceDiscoveryProtocol,
 )
+from mcp_mesh_types.service_discovery import AgentInfo
 
 from .capability_matching import CapabilityMatcher
 from .registry_client import RegistryClient
+from .types import EndpointInfo, HealthStatusType
+
+
+class SelectionCriteria:
+    """Simple selection criteria for service discovery."""
+
+    def __init__(
+        self,
+        min_compatibility_score: float = 0.7,
+        max_response_time_ms: int | None = None,
+        min_success_rate: float | None = None,
+        max_load: float | None = None,
+        exclude_agents: list[str] | None = None,
+        required_capabilities: list[str] | None = None,
+    ):
+        self.min_compatibility_score = min_compatibility_score
+        self.max_response_time_ms = max_response_time_ms
+        self.min_success_rate = min_success_rate
+        self.max_load = max_load
+        self.exclude_agents = exclude_agents or []
+        self.required_capabilities = required_capabilities or []
 
 
 class ServiceDiscovery:
@@ -362,6 +386,8 @@ class ServiceDiscovery:
                 tags=metadata_dict.get("tags", []),
                 performance_profile=metadata_dict.get("performance_profile", {}),
                 resource_usage=metadata_dict.get("resource_usage", {}),
+                created_at=datetime.now(),
+                last_seen=datetime.now(),
                 metadata=metadata_dict.get("metadata", {}),
             )
 
@@ -375,8 +401,12 @@ class ServiceDiscovery:
                 current_load=agent_dict.get("current_load", 0.0),
                 response_time_ms=agent_dict.get("response_time_ms"),
                 success_rate=agent_dict.get("success_rate", 1.0),
-                last_updated=datetime.fromisoformat(
-                    agent_dict.get("last_updated", datetime.now().isoformat())
+                last_updated=(
+                    datetime.fromisoformat(
+                        agent_dict.get("last_updated", datetime.now().isoformat())
+                    )
+                    if isinstance(agent_dict.get("last_updated"), str)
+                    else datetime.now()
                 ),
             )
 
@@ -466,6 +496,558 @@ class ServiceDiscovery:
             return f"Agent has exact match for {query.field} = {query.value}"
 
         return "Agent meets query criteria"
+
+    # Registry Integration for Service Discovery - Phase 2 Implementation
+
+    async def discover_service_by_class(
+        self, service_class: type
+    ) -> list[EndpointInfo]:
+        """Discover service endpoints by class type through registry.
+
+        Args:
+            service_class: The service class to discover endpoints for
+
+        Returns:
+            List of available service endpoints for the class
+        """
+        try:
+            service_name = service_class.__name__.lower()
+            self.logger.info(
+                f"Discovering services for class: {service_class.__name__}"
+            )
+
+            # Get all registered agents
+            agents = await self._get_all_agents()
+
+            # Filter agents that provide the service class
+            matching_endpoints = []
+            for agent in agents:
+                # Check if agent provides the requested service
+                if self._agent_provides_service(agent, service_class):
+                    endpoint_info = self._agent_to_endpoint_info(agent, service_name)
+                    if endpoint_info:
+                        matching_endpoints.append(endpoint_info)
+
+            # Filter out degraded services
+            healthy_endpoints = [
+                endpoint
+                for endpoint in matching_endpoints
+                if endpoint.status == HealthStatusType.HEALTHY
+            ]
+
+            self.logger.info(
+                f"Found {len(healthy_endpoints)} healthy endpoints for {service_class.__name__} "
+                f"({len(matching_endpoints)} total)"
+            )
+
+            return healthy_endpoints
+
+        except Exception as e:
+            self.logger.error(
+                f"Error discovering services for {service_class.__name__}: {e}"
+            )
+            return []
+
+    async def select_best_service_instance(
+        self, service_class: type, criteria: SelectionCriteria
+    ) -> EndpointInfo | None:
+        """Select the best service instance based on criteria.
+
+        Args:
+            service_class: The service class to select an instance for
+            criteria: Selection criteria for choosing the best instance
+
+        Returns:
+            Best matching service endpoint or None if no suitable instance found
+        """
+        try:
+            # Discover available service endpoints
+            endpoints = await self.discover_service_by_class(service_class)
+
+            if not endpoints:
+                self.logger.warning(f"No endpoints found for {service_class.__name__}")
+                return None
+
+            # Convert to requirements for compatibility scoring
+            requirements = self._criteria_to_requirements(criteria)
+
+            best_endpoint = None
+            best_score = 0.0
+
+            for endpoint in endpoints:
+                # Get agent info for this endpoint
+                agent = await self._get_agent_by_endpoint(endpoint)
+                if not agent:
+                    continue
+
+                try:
+                    # Calculate compatibility score
+                    compatibility_score = (
+                        self.capability_matcher.compute_compatibility_score(
+                            agent, requirements
+                        )
+                    )
+
+                    # Apply selection criteria scoring
+                    final_score = self._apply_selection_criteria(
+                        compatibility_score, agent, criteria
+                    )
+
+                    if final_score > best_score:
+                        best_score = final_score
+                        best_endpoint = endpoint
+
+                except Exception as e:
+                    self.logger.warning(f"Error scoring endpoint {endpoint.url}: {e}")
+                    # Create a simple fallback score based on health metrics only if criteria are lenient
+                    health_score = agent.health_score * agent.availability
+
+                    # Check if agent meets basic criteria before considering it
+                    meets_criteria = True
+                    if (
+                        criteria.max_response_time_ms
+                        and agent.response_time_ms
+                        and agent.response_time_ms > criteria.max_response_time_ms
+                    ):
+                        meets_criteria = False
+                    if (
+                        criteria.min_success_rate
+                        and agent.success_rate < criteria.min_success_rate
+                    ):
+                        meets_criteria = False
+                    if criteria.max_load and agent.current_load > criteria.max_load:
+                        meets_criteria = False
+
+                    if meets_criteria and health_score > best_score:
+                        best_score = health_score
+                        best_endpoint = endpoint
+
+            if best_endpoint:
+                self.logger.info(
+                    f"Selected best endpoint for {service_class.__name__}: "
+                    f"{best_endpoint.url} (score: {best_score:.3f})"
+                )
+            else:
+                self.logger.warning(
+                    f"No suitable endpoint found for {service_class.__name__} "
+                    f"meeting criteria: {criteria}"
+                )
+
+            return best_endpoint
+
+        except Exception as e:
+            self.logger.error(
+                f"Error selecting best service instance for {service_class.__name__}: {e}"
+            )
+            return None
+
+    async def monitor_service_health(
+        self, service_class: type, callback: Callable[[str, HealthStatusType], None]
+    ) -> "HealthMonitor":
+        """Monitor service health with callback notifications.
+
+        Args:
+            service_class: The service class to monitor
+            callback: Callback function for health status changes
+
+        Returns:
+            HealthMonitor instance for managing the monitoring
+        """
+        try:
+            service_name = service_class.__name__.lower()
+            monitor = HealthMonitor(
+                service_name=service_name,
+                service_class=service_class,
+                callback=callback,
+                service_discovery=self,
+            )
+
+            # Start monitoring
+            await monitor.start_monitoring()
+
+            self.logger.info(f"Started health monitoring for {service_class.__name__}")
+            return monitor
+
+        except Exception as e:
+            self.logger.error(
+                f"Error starting health monitoring for {service_class.__name__}: {e}"
+            )
+            raise
+
+    def _agent_provides_service(self, agent: AgentInfo, service_class: type) -> bool:
+        """Check if an agent provides a specific service class."""
+        service_name = service_class.__name__.lower()
+
+        # Check if agent has matching capabilities
+        for capability in agent.agent_metadata.capabilities:
+            if capability.name.lower() == service_name:
+                return True
+
+            # Check if capability provides the service class
+            if (
+                hasattr(capability, "service_class")
+                and capability.service_class == service_class
+            ):
+                return True
+
+            # Check metadata for service class information
+            if (
+                capability.metadata
+                and capability.metadata.get("service_class") == service_class.__name__
+            ):
+                return True
+
+        # Check agent metadata for service class information
+        if agent.agent_metadata.metadata:
+            services = agent.agent_metadata.metadata.get("provided_services", [])
+            if service_class.__name__ in services or service_name in services:
+                return True
+
+        return False
+
+    def _agent_to_endpoint_info(
+        self, agent: AgentInfo, service_name: str
+    ) -> EndpointInfo | None:
+        """Convert agent info to endpoint info."""
+        try:
+            # Get endpoint from agent metadata
+            endpoint_url = agent.agent_metadata.endpoint
+            if not endpoint_url:
+                # Generate default endpoint
+                endpoint_url = f"mcp://localhost:8080/{service_name}"
+
+            # Determine health status
+            health_status = HealthStatusType.HEALTHY
+            if agent.health_score < 0.8:
+                health_status = HealthStatusType.DEGRADED
+            elif agent.health_score < 0.5:
+                health_status = HealthStatusType.UNHEALTHY
+
+            return EndpointInfo(
+                url=endpoint_url,
+                service_name=service_name,
+                service_version=agent.agent_metadata.version,
+                protocol="mcp",
+                status=health_status,
+                metadata={
+                    "agent_id": agent.agent_id,
+                    "health_score": agent.health_score,
+                    "availability": agent.availability,
+                    "current_load": agent.current_load,
+                    "response_time_ms": agent.response_time_ms,
+                    "success_rate": agent.success_rate,
+                },
+                last_updated=agent.last_updated,
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error converting agent to endpoint info: {e}")
+            return None
+
+    async def _get_agent_by_endpoint(self, endpoint: EndpointInfo) -> AgentInfo | None:
+        """Get agent info by endpoint."""
+        agent_id = endpoint.metadata.get("agent_id") if endpoint.metadata else None
+        if agent_id:
+            return await self._get_agent_by_id(agent_id)
+
+        # Fallback: search by service name
+        agents = await self._get_all_agents()
+        for agent in agents:
+            if agent.agent_metadata.endpoint == endpoint.url:
+                return agent
+
+        return None
+
+    def _criteria_to_requirements(self, criteria: SelectionCriteria) -> Requirements:
+        """Convert selection criteria to requirements for compatibility scoring."""
+        return Requirements(
+            required_capabilities=getattr(criteria, "required_capabilities", []),
+            compatibility_threshold=getattr(criteria, "min_compatibility_score", 0.7),
+            exclude_agents=getattr(criteria, "exclude_agents", []),
+            max_response_time_ms=getattr(criteria, "max_response_time_ms", None),
+            min_success_rate=getattr(criteria, "min_success_rate", None),
+            max_load=getattr(criteria, "max_load", None),
+        )
+
+    def _apply_selection_criteria(
+        self,
+        compatibility_score: CompatibilityScore,
+        agent: AgentInfo,
+        criteria: SelectionCriteria,
+    ) -> float:
+        """Apply selection criteria to calculate final score."""
+        base_score = compatibility_score.overall_score
+
+        # Apply performance criteria
+        performance_multiplier = 1.0
+
+        # Response time criteria
+        if (
+            hasattr(criteria, "max_response_time_ms")
+            and criteria.max_response_time_ms
+            and agent.response_time_ms
+            and agent.response_time_ms > criteria.max_response_time_ms
+        ):
+            performance_multiplier *= 0.5
+
+        # Success rate criteria
+        if (
+            hasattr(criteria, "min_success_rate")
+            and criteria.min_success_rate
+            and agent.success_rate < criteria.min_success_rate
+        ):
+            performance_multiplier *= 0.3
+
+        # Load criteria
+        if (
+            hasattr(criteria, "max_load")
+            and criteria.max_load
+            and agent.current_load > criteria.max_load
+        ):
+            performance_multiplier *= 0.6
+
+        # Apply health bonus
+        health_bonus = agent.health_score * 0.1
+
+        # Apply availability bonus
+        availability_bonus = agent.availability * 0.05
+
+        final_score = (
+            base_score * performance_multiplier + health_bonus + availability_bonus
+        )
+
+        return min(final_score, 1.0)
+
+
+class HealthMonitor:
+    """Health monitoring system for service endpoints with callback notifications."""
+
+    def __init__(
+        self,
+        service_name: str,
+        service_class: type,
+        callback: Callable[[str, HealthStatusType], None],
+        service_discovery: ServiceDiscovery,
+        check_interval: int = 30,
+    ):
+        """Initialize health monitor.
+
+        Args:
+            service_name: Name of the service to monitor
+            service_class: Service class type
+            callback: Callback function for health status changes
+            service_discovery: Service discovery instance
+            check_interval: Health check interval in seconds
+        """
+        self.service_name = service_name
+        self.service_class = service_class
+        self.callback = callback
+        self.service_discovery = service_discovery
+        self.check_interval = check_interval
+        self.logger = logging.getLogger(f"health_monitor.{service_name}")
+
+        # Monitoring state
+        self._monitoring = False
+        self._monitor_task: asyncio.Task | None = None
+        self._endpoint_statuses: dict[str, HealthStatusType] = {}
+        self._last_check: datetime | None = None
+
+    async def start_monitoring(self) -> None:
+        """Start health monitoring."""
+        if self._monitoring:
+            self.logger.warning("Health monitoring already started")
+            return
+
+        self._monitoring = True
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+        self.logger.info(f"Started health monitoring for {self.service_name}")
+
+    async def stop_monitoring(self) -> None:
+        """Stop health monitoring."""
+        if not self._monitoring:
+            return
+
+        self._monitoring = False
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+
+        self.logger.info(f"Stopped health monitoring for {self.service_name}")
+
+    def get_current_status(self) -> dict[str, HealthStatusType]:
+        """Get current health status of all monitored endpoints."""
+        return self._endpoint_statuses.copy()
+
+    def is_monitoring(self) -> bool:
+        """Check if monitoring is active."""
+        return self._monitoring
+
+    async def _monitor_loop(self) -> None:
+        """Main monitoring loop."""
+        try:
+            while self._monitoring:
+                await self._perform_health_check()
+                await asyncio.sleep(self.check_interval)
+        except asyncio.CancelledError:
+            self.logger.info("Health monitoring cancelled")
+        except Exception as e:
+            self.logger.error(f"Health monitoring error: {e}")
+
+    async def _perform_health_check(self) -> None:
+        """Perform health check on all service endpoints."""
+        try:
+            # Discover current endpoints
+            endpoints = await self.service_discovery.discover_service_by_class(
+                self.service_class
+            )
+
+            current_statuses = {}
+
+            # Check health of each endpoint
+            for endpoint in endpoints:
+                try:
+                    # Get health status from endpoint metadata or check directly
+                    health_status = await self._check_endpoint_health(endpoint)
+                    current_statuses[endpoint.url] = health_status
+
+                    # Check if status changed
+                    previous_status = self._endpoint_statuses.get(endpoint.url)
+                    if previous_status != health_status:
+                        self.logger.info(
+                            f"Health status changed for {endpoint.url}: "
+                            f"{previous_status} -> {health_status}"
+                        )
+
+                        # Notify callback of status change
+                        try:
+                            self.callback(endpoint.url, health_status)
+                        except Exception as e:
+                            self.logger.error(f"Callback error for {endpoint.url}: {e}")
+
+                except Exception as e:
+                    self.logger.error(f"Error checking health for {endpoint.url}: {e}")
+                    current_statuses[endpoint.url] = HealthStatusType.UNKNOWN
+
+            # Check for removed endpoints
+            for endpoint_url in self._endpoint_statuses:
+                if endpoint_url not in current_statuses:
+                    self.logger.info(f"Endpoint removed: {endpoint_url}")
+                    try:
+                        self.callback(endpoint_url, HealthStatusType.UNKNOWN)
+                    except Exception as e:
+                        self.logger.error(
+                            f"Callback error for removed endpoint {endpoint_url}: {e}"
+                        )
+
+            # Update tracking
+            self._endpoint_statuses = current_statuses
+            self._last_check = datetime.now()
+
+        except Exception as e:
+            self.logger.error(f"Error performing health check: {e}")
+
+    async def _check_endpoint_health(self, endpoint: EndpointInfo) -> HealthStatusType:
+        """Check health of a specific endpoint."""
+        try:
+            # Use the endpoint's status if available
+            if endpoint.status and endpoint.status != HealthStatusType.UNKNOWN:
+                return endpoint.status
+
+            # Get agent info for detailed health check
+            agent = await self.service_discovery._get_agent_by_endpoint(endpoint)
+            if not agent:
+                return HealthStatusType.UNKNOWN
+
+            # Determine health based on agent metrics
+            if agent.health_score >= 0.8 and agent.availability >= 0.9:
+                return HealthStatusType.HEALTHY
+            elif agent.health_score >= 0.5 and agent.availability >= 0.7:
+                return HealthStatusType.DEGRADED
+            else:
+                return HealthStatusType.UNHEALTHY
+
+        except Exception as e:
+            self.logger.error(f"Error checking endpoint health for {endpoint.url}: {e}")
+            return HealthStatusType.UNKNOWN
+
+
+# Enhanced Service Discovery with health-aware proxy creation
+class EnhancedServiceDiscovery(ServiceDiscovery):
+    """Enhanced service discovery with health-aware proxy creation."""
+
+    def __init__(self, registry_client: RegistryClient | None = None):
+        super().__init__(registry_client)
+        self._proxy_factory = None
+
+    async def create_healthy_proxy(
+        self, service_class: type, criteria: SelectionCriteria | None = None
+    ):
+        """Create a proxy for a healthy service instance.
+
+        Args:
+            service_class: The service class to create a proxy for
+            criteria: Optional selection criteria
+
+        Returns:
+            Service proxy instance or None if no healthy instance available
+        """
+        try:
+            # Import proxy factory dynamically to avoid circular imports
+            if self._proxy_factory is None:
+                from ..tools.proxy_factory import get_proxy_factory
+
+                self._proxy_factory = get_proxy_factory()
+
+            # Use default criteria if none provided
+            if criteria is None:
+                criteria = SelectionCriteria(
+                    min_compatibility_score=0.7,
+                    max_response_time_ms=5000,
+                    min_success_rate=0.9,
+                    max_load=0.8,
+                )
+
+            # Select best healthy service instance
+            endpoint = await self.select_best_service_instance(service_class, criteria)
+            if not endpoint:
+                self.logger.warning(
+                    f"No healthy endpoint available for {service_class.__name__}"
+                )
+                return None
+
+            # Create proxy for the selected endpoint
+            # Set custom endpoint for proxy creation
+            service_class._proxy_endpoint = endpoint.url
+
+            try:
+                proxy = self._proxy_factory.create_service_proxy(service_class)
+                self.logger.info(
+                    f"Created healthy proxy for {service_class.__name__} -> {endpoint.url}"
+                )
+                return proxy
+            finally:
+                # Clean up custom endpoint
+                if hasattr(service_class, "_proxy_endpoint"):
+                    delattr(service_class, "_proxy_endpoint")
+
+        except Exception as e:
+            self.logger.error(
+                f"Error creating healthy proxy for {service_class.__name__}: {e}"
+            )
+            return None
+
+    async def get_healthy_endpoints(self, service_class: type) -> list[EndpointInfo]:
+        """Get only healthy endpoints for a service class (excludes degraded)."""
+        all_endpoints = await self.discover_service_by_class(service_class)
+        return [
+            endpoint
+            for endpoint in all_endpoints
+            if endpoint.status == HealthStatusType.HEALTHY
+        ]
 
 
 # Implement the protocol

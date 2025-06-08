@@ -38,6 +38,18 @@ from .exceptions import (
     PermissionDeniedError,
     SecurityValidationError,
 )
+from .fallback import (
+    DependencyResolver,
+    FallbackChainInterface,
+    FallbackConfiguration,
+    FallbackMetrics,
+    FallbackMode,
+    FallbackMonitor,
+    FallbackReason,
+    FallbackResult,
+    LocalInstanceResolver,
+    RemoteProxyResolver,
+)
 from .file_operations import FileOperations
 from .lifecycle import (
     AgentInfo,
@@ -73,6 +85,26 @@ from .service_discovery import (
     Requirements,
     ServiceDiscoveryProtocol,
 )
+from .service_proxy import (
+    MeshServiceProxyInterface,
+    ProxyGenerationError,
+    RemoteInvocationError,
+    ServiceContractError,
+    ServiceProxyProtocol,
+)
+from .unified_dependencies import (
+    DependencyAnalyzer,
+    DependencyContext,
+    DependencyList,
+    DependencyMap,
+    DependencyPattern,
+    DependencyResolutionResult,
+    DependencySpecification,
+    DependencyValidationError,
+    DependencyValidator,
+    UnifiedDependencyResolver,
+    ValidationResult,
+)
 from .versioning import (
     AgentVersionInfo,
     DeploymentInfo,
@@ -92,6 +124,17 @@ __all__ = [
     "FileOperationError",
     "SecurityValidationError",
     "PermissionDeniedError",
+    # Fallback chain (CRITICAL FEATURE)
+    "FallbackChainInterface",
+    "FallbackConfiguration",
+    "FallbackMetrics",
+    "FallbackMode",
+    "FallbackMonitor",
+    "FallbackReason",
+    "FallbackResult",
+    "DependencyResolver",
+    "RemoteProxyResolver",
+    "LocalInstanceResolver",
     "CapabilityMetadata",
     "CapabilityQuery",
     "AgentInfo",
@@ -156,4 +199,21 @@ __all__ = [
     "ParameterKind",
     "ParameterMetadata",
     "ServiceContract",
+    "MeshServiceProxyInterface",
+    "ServiceProxyProtocol",
+    "ProxyGenerationError",
+    "RemoteInvocationError",
+    "ServiceContractError",
+    # Unified dependencies (CRITICAL FEATURE)
+    "DependencyPattern",
+    "DependencySpecification",
+    "DependencyResolutionResult",
+    "UnifiedDependencyResolver",
+    "DependencyValidator",
+    "DependencyValidationError",
+    "ValidationResult",
+    "DependencyAnalyzer",
+    "DependencyList",
+    "DependencyMap",
+    "DependencyContext",
 ]

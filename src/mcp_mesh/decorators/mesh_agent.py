@@ -15,12 +15,20 @@ from datetime import datetime, timedelta
 from typing import Any, TypeVar
 
 from mcp_mesh_types import CapabilityMetadata, MeshAgentMetadata
+from mcp_mesh_types.fallback import FallbackConfiguration, FallbackMode
 from mcp_mesh_types.method_metadata import MethodMetadata, MethodType, ServiceContract
+from mcp_mesh_types.unified_dependencies import (
+    DependencyAnalyzer,
+    DependencyList,
+    DependencySpecification,
+)
 
 from ..shared.exceptions import MeshAgentError, RegistryConnectionError
+from ..shared.fallback_chain import MeshFallbackChain
 from ..shared.registry_client import RegistryClient
 from ..shared.service_discovery import ServiceDiscoveryService
 from ..shared.types import HealthStatus
+from ..shared.unified_dependency_resolver import MeshUnifiedDependencyResolver
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -32,7 +40,7 @@ class MeshAgentDecorator:
         self,
         capabilities: list[str],
         health_interval: int = 30,
-        dependencies: list[str] | None = None,
+        dependencies: DependencyList | None = None,
         registry_url: str | None = None,
         agent_name: str | None = None,
         security_context: str | None = None,
@@ -40,6 +48,7 @@ class MeshAgentDecorator:
         retry_attempts: int = 3,
         enable_caching: bool = True,
         fallback_mode: bool = True,
+        fallback_config: FallbackConfiguration | None = None,
         # Enhanced capability metadata
         version: str = "1.0.0",
         description: str | None = None,
@@ -60,6 +69,15 @@ class MeshAgentDecorator:
         self.enable_caching = enable_caching
         self.fallback_mode = fallback_mode
 
+        # Configure fallback chain
+        self.fallback_config = fallback_config or FallbackConfiguration(
+            enabled=fallback_mode,
+            mode=FallbackMode.REMOTE_FIRST,
+            remote_timeout_ms=timeout * 1000 * 0.75,  # 75% of total timeout for remote
+            local_timeout_ms=timeout * 1000 * 0.25,  # 25% of total timeout for local
+            total_timeout_ms=timeout * 1000,
+        )
+
         # Enhanced metadata for capability registration
         self.version = version
         self.description = description
@@ -72,11 +90,16 @@ class MeshAgentDecorator:
         # Internal state
         self._registry_client: RegistryClient | None = None
         self._service_discovery: ServiceDiscoveryService | None = None
+        self._fallback_chain: MeshFallbackChain | None = None
+        self._unified_resolver: MeshUnifiedDependencyResolver | None = None
         self._health_task: asyncio.Task | None = None
         self._dependency_cache: dict[str, Any] = {}
         self._last_health_check: datetime | None = None
         self._initialization_lock = asyncio.Lock()
         self._initialized = False
+
+        # Dependency specifications
+        self._dependency_specifications: list[DependencySpecification] = []
 
         # Method signature extraction state
         self._method_metadata: dict[str, MethodMetadata] = {}
@@ -84,6 +107,96 @@ class MeshAgentDecorator:
         self._signature_extraction_time: float = 0.0
 
         self.logger = logging.getLogger(f"mesh_agent.{self.agent_name}")
+
+        # Pre-analyze dependencies for unified resolution
+        self._analyze_dependencies()
+
+        # Validate dependency specifications
+        self._validate_dependencies()
+
+    def _analyze_dependencies(self) -> None:
+        """
+        Analyze dependencies to create unified dependency specifications.
+
+        This method converts the mixed dependency list (strings, protocols, concrete classes)
+        into standardized DependencySpecification objects for unified resolution.
+        """
+        if not self.dependencies:
+            return
+
+        try:
+            # Analyze dependencies without function signature initially
+            # We'll update with function signature info when decorating
+            self._dependency_specifications = (
+                DependencyAnalyzer.analyze_dependencies_list(
+                    dependencies=self.dependencies,
+                    function_signature=None,  # Will be updated in __call__
+                )
+            )
+
+            self.logger.debug(
+                f"Analyzed {len(self._dependency_specifications)} dependency specifications"
+            )
+
+        except Exception as e:
+            self.logger.warning(f"Failed to analyze dependencies: {e}")
+            # Fallback to treating all as string dependencies for backward compatibility
+            self._dependency_specifications = [
+                DependencySpecification.from_string(str(dep))
+                for dep in self.dependencies
+            ]
+
+    def _update_dependency_specifications_with_signature(
+        self, function_signature: inspect.Signature
+    ) -> None:
+        """Update dependency specifications with function signature information."""
+        try:
+            # Re-analyze with function signature for better parameter mapping
+            updated_specs = DependencyAnalyzer.analyze_dependencies_list(
+                dependencies=self.dependencies, function_signature=function_signature
+            )
+
+            self._dependency_specifications = updated_specs
+
+            self.logger.debug(
+                f"Updated dependency specifications with signature info: "
+                f"{[spec.display_name for spec in self._dependency_specifications]}"
+            )
+
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to update dependency specifications with signature: {e}"
+            )
+
+    def _validate_dependencies(self) -> None:
+        """Validate dependency specifications and log warnings for issues."""
+        if not self._dependency_specifications:
+            return
+
+        try:
+            from ..shared.unified_dependency_resolver import BasicDependencyValidator
+
+            validator = BasicDependencyValidator()
+
+            validation_results = validator.validate_specifications(
+                self._dependency_specifications
+            )
+
+            if validation_results:
+                self.logger.warning("Dependency validation issues found:")
+                for dep_name, errors in validation_results.items():
+                    for error in errors:
+                        self.logger.warning(f"  {dep_name}: {error.message}")
+                        if error.suggestions:
+                            for suggestion in error.suggestions:
+                                self.logger.info(f"    Suggestion: {suggestion}")
+            else:
+                self.logger.debug(
+                    "All dependency specifications validated successfully"
+                )
+
+        except Exception as e:
+            self.logger.warning(f"Failed to validate dependencies: {e}")
 
     def _extract_method_signatures(self, func_or_class: Any) -> None:
         """
@@ -257,6 +370,18 @@ class MeshAgentDecorator:
 
         # Extract method signatures automatically
         self._extract_method_signatures(func_or_class)
+
+        # Update dependency specifications with function signature if decorating a function
+        if not inspect.isclass(func_or_class) and self.dependencies:
+            try:
+                function_signature = inspect.signature(func_or_class)
+                self._update_dependency_specifications_with_signature(
+                    function_signature
+                )
+            except Exception as e:
+                self.logger.debug(
+                    f"Could not extract signature for dependency analysis: {e}"
+                )
 
         # Handle class decoration
         if inspect.isclass(func_or_class):
@@ -556,6 +681,21 @@ class MeshAgentDecorator:
                 # Initialize service discovery
                 self._service_discovery = ServiceDiscoveryService(self._registry_client)
 
+                # Initialize fallback chain
+                self._fallback_chain = MeshFallbackChain(
+                    registry_client=self._registry_client,
+                    service_discovery=self._service_discovery,
+                    config=self.fallback_config,
+                )
+
+                # Initialize unified dependency resolver
+                self._unified_resolver = MeshUnifiedDependencyResolver(
+                    registry_client=self._registry_client,
+                    service_discovery=self._service_discovery,
+                    fallback_chain=self._fallback_chain,
+                    enable_caching=self.enable_caching,
+                )
+
                 # Register enhanced capabilities with registry
                 await self._register_enhanced_capabilities()
 
@@ -669,53 +809,223 @@ class MeshAgentDecorator:
             self.logger.warning(f"Failed to register enhanced capabilities: {e}")
 
     async def _inject_dependencies(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Inject dependency values into function kwargs."""
-        if not self.dependencies or not self._registry_client:
+        """Inject dependency values into function kwargs using the unified resolver."""
+        if not self._dependency_specifications:
+            return kwargs
+
+        injected_kwargs = kwargs.copy()
+
+        # Use unified resolver to resolve all dependencies
+        if self._unified_resolver:
+            try:
+                resolution_results = await self._unified_resolver.resolve_multiple(
+                    specifications=self._dependency_specifications,
+                    context={
+                        "agent_name": self.agent_name,
+                        "capabilities": self.capabilities,
+                        "existing_kwargs": kwargs,
+                    },
+                )
+
+                # Process resolution results
+                for result in resolution_results:
+                    spec = result.specification
+
+                    # Determine parameter name to use
+                    param_name = spec.parameter_name or spec.display_name
+
+                    # Skip if already provided in kwargs
+                    if param_name in kwargs:
+                        continue
+
+                    if result.success and result.instance is not None:
+                        injected_kwargs[param_name] = result.instance
+                        self.logger.debug(
+                            f"Injected {spec.pattern.value} dependency '{param_name}' "
+                            f"via {result.resolution_method}"
+                        )
+                    else:
+                        if not spec.is_optional:
+                            if self.fallback_mode:
+                                self.logger.warning(
+                                    f"Failed to resolve required dependency '{param_name}': "
+                                    f"{result.error}"
+                                )
+                            else:
+                                raise MeshAgentError(
+                                    f"Failed to resolve required dependency '{param_name}': "
+                                    f"{result.error}"
+                                )
+                        else:
+                            self.logger.debug(
+                                f"Optional dependency '{param_name}' not resolved: {result.error}"
+                            )
+
+            except Exception as e:
+                if self.fallback_mode:
+                    self.logger.warning(f"Unified dependency resolution failed: {e}")
+                else:
+                    raise MeshAgentError(
+                        f"Unified dependency resolution failed: {e}"
+                    ) from e
+        else:
+            # Fallback to legacy resolution if unified resolver not available
+            injected_kwargs = await self._inject_dependencies_legacy(kwargs)
+
+        return injected_kwargs
+
+    async def _inject_dependencies_legacy(
+        self, kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Legacy dependency injection for backward compatibility."""
+        if not self.dependencies:
             return kwargs
 
         injected_kwargs = kwargs.copy()
 
         for dependency in self.dependencies:
+            # Convert to string for legacy handling
+            dependency_str = str(dependency)
+
             # Skip if dependency already provided
-            if dependency in kwargs:
+            if dependency_str in kwargs:
                 continue
 
             # Check cache first
-            if self.enable_caching and dependency in self._dependency_cache:
-                cache_entry = self._dependency_cache[dependency]
+            if self.enable_caching and dependency_str in self._dependency_cache:
+                cache_entry = self._dependency_cache[dependency_str]
                 if not self._is_cache_expired(cache_entry):
-                    injected_kwargs[dependency] = cache_entry["value"]
+                    injected_kwargs[dependency_str] = cache_entry["value"]
                     continue
 
-            # Fetch from registry
+            # Resolve dependency using legacy approach
             try:
-                dependency_value = await self._registry_client.get_dependency(
-                    dependency
+                dependency_value = await self._resolve_dependency_via_fallback(
+                    dependency_str
                 )
 
                 # Cache the result
                 if self.enable_caching and dependency_value is not None:
-                    self._dependency_cache[dependency] = {
+                    self._dependency_cache[dependency_str] = {
                         "value": dependency_value,
                         "timestamp": datetime.now(),
                         "ttl": timedelta(minutes=5),  # 5-minute cache TTL
                     }
 
                 if dependency_value is not None:
-                    injected_kwargs[dependency] = dependency_value
+                    injected_kwargs[dependency_str] = dependency_value
 
             except Exception as e:
                 if self.fallback_mode:
                     self.logger.warning(
-                        f"Failed to inject dependency {dependency}: {e}"
+                        f"Failed to inject dependency {dependency_str}: {e}"
                     )
                     # Don't inject the dependency, let function handle missing parameter
                 else:
                     raise MeshAgentError(
-                        f"Failed to inject dependency {dependency}: {e}"
+                        f"Failed to inject dependency {dependency_str}: {e}"
                     ) from e
 
         return injected_kwargs
+
+    async def _resolve_dependency_via_fallback(self, dependency: str) -> Any:
+        """
+        Resolve a dependency using the fallback chain.
+
+        This is the core method that enables interface-optional dependency injection:
+        1. Try to resolve as a remote proxy via registry discovery
+        2. Fall back to local class instantiation if remote fails
+        3. Provide graceful error handling if both fail
+        """
+        if not self._fallback_chain:
+            # Fallback to legacy registry-based dependency resolution
+            if self._registry_client:
+                return await self._registry_client.get_dependency(dependency)
+            return None
+
+        # Try to resolve dependency as a type
+        dependency_type = self._resolve_dependency_type(dependency)
+        if not dependency_type:
+            # If we can't resolve the type, try legacy approach
+            if self._registry_client:
+                return await self._registry_client.get_dependency(dependency)
+            return None
+
+        # Use fallback chain to resolve the dependency
+        instance = await self._fallback_chain.resolve_dependency(
+            dependency_type=dependency_type,
+            context={
+                "agent_name": self.agent_name,
+                "capabilities": self.capabilities,
+                "dependency_name": dependency,
+            },
+        )
+
+        return instance
+
+    def _resolve_dependency_type(self, dependency: str) -> type | None:
+        """
+        Resolve a dependency string to a type/class.
+
+        This method tries to convert dependency strings like:
+        - "OAuth2AuthService" -> OAuth2AuthService class
+        - "auth_service" -> AuthService class (via naming conventions)
+        - "my_module.MyClass" -> MyClass from my_module
+        """
+        # Try direct name lookup in globals
+        try:
+            # Check if it's already a type
+            if isinstance(dependency, type):
+                return dependency
+
+            # Try to import if it looks like a module path
+            if "." in dependency:
+                module_path, class_name = dependency.rsplit(".", 1)
+                try:
+                    import importlib
+
+                    module = importlib.import_module(module_path)
+                    return getattr(module, class_name)
+                except (ImportError, AttributeError):
+                    pass
+
+            # Try to find in current module's globals
+            import sys
+
+            current_frame = sys._getframe(1)
+            while current_frame:
+                if dependency in current_frame.f_globals:
+                    candidate = current_frame.f_globals[dependency]
+                    if inspect.isclass(candidate):
+                        return candidate
+                current_frame = current_frame.f_back
+
+            # Try common naming convention transformations
+            # e.g., "auth_service" -> "AuthService"
+            class_name_candidates = [
+                dependency,  # As-is
+                dependency.title().replace("_", ""),  # auth_service -> AuthService
+                dependency.replace(
+                    "_", ""
+                ).title(),  # auth_service -> AuthService (alternative)
+                f"{dependency.title().replace('_', '')}Service",  # auth -> AuthService
+                f"{dependency.title().replace('_', '')}Client",  # auth -> AuthClient
+            ]
+
+            for candidate_name in class_name_candidates:
+                # Check in all loaded modules
+                for module_name, module in sys.modules.items():
+                    if module and hasattr(module, candidate_name):
+                        candidate = getattr(module, candidate_name)
+                        if inspect.isclass(candidate):
+                            return candidate
+
+        except Exception as e:
+            self.logger.debug(
+                f"Failed to resolve dependency type for '{dependency}': {e}"
+            )
+
+        return None
 
     async def _health_monitor(self) -> None:
         """Background task for periodic health monitoring."""
@@ -897,7 +1207,7 @@ def get_mesh_method_by_name(
 def mesh_agent(
     capabilities: list[str],
     health_interval: int = 30,
-    dependencies: list[str] | None = None,
+    dependencies: DependencyList | None = None,
     registry_url: str | None = None,
     agent_name: str | None = None,
     security_context: str | None = None,
@@ -905,6 +1215,7 @@ def mesh_agent(
     retry_attempts: int = 3,
     enable_caching: bool = True,
     fallback_mode: bool = True,
+    fallback_config: FallbackConfiguration | None = None,
     # Enhanced capability metadata
     version: str = "1.0.0",
     description: str | None = None,
@@ -921,14 +1232,47 @@ def mesh_agent(
     - Enhanced registry registration with capability metadata
     - Semantic capability matching and discovery
     - Periodic health monitoring with enhanced metrics
-    - Dependency injection
-    - Error handling and fallback modes
+    - Interface-optional dependency injection with fallback chain
+    - Error handling and graceful degradation modes
     - Caching of dependency values
+    - Performance optimization for <200ms fallback transitions
+
+    CRITICAL FEATURE: Interface-Optional Dependency Injection
+    ========================================================
+    This decorator enables the same code to work in mesh environment (remote proxies)
+    and standalone (local instances) without any Protocol definitions or interface changes.
+
+    The fallback chain:
+    1. Try remote proxy via registry discovery
+    2. Fall back to local class instantiation if remote fails
+    3. Provide graceful error handling if both fail
+    4. Complete remote→local transition in <200ms
+
+    Example:
+        @mesh_agent(
+            capabilities=["auth", "file_operations"],
+            dependencies=[
+                "legacy_auth",           # String (existing)
+                AuthService,             # Protocol interface
+                OAuth2AuthService,       # Concrete class (new)
+            ]
+        )
+        async def flexible_function(
+            legacy_auth: str,
+            auth_service: AuthService,
+            oauth2_auth: OAuth2AuthService
+        ):
+            # All three patterns work simultaneously!
+            return await auth_service.authenticate(oauth2_auth.get_token())
 
     Args:
         capabilities: List of capabilities this tool provides
         health_interval: Heartbeat interval in seconds (default: 30)
-        dependencies: List of service dependencies to inject (default: None)
+        dependencies: List of service dependencies to inject - supports:
+            - String dependencies: "legacy_auth" (existing Week 1, Day 4 format)
+            - Protocol interfaces: AuthService (traditional interface-based)
+            - Concrete classes: OAuth2AuthService (new auto-discovery pattern)
+            (default: None)
         registry_url: Registry service URL (default: from env/config)
         agent_name: Agent identifier (default: auto-generated)
         security_context: Security context for authorization (default: None)
@@ -936,6 +1280,7 @@ def mesh_agent(
         retry_attempts: Number of retry attempts for registry calls (default: 3)
         enable_caching: Enable local caching of dependencies (default: True)
         fallback_mode: Enable graceful degradation mode (default: True)
+        fallback_config: Advanced fallback chain configuration (default: auto-configured)
         version: Agent version for capability versioning (default: "1.0.0")
         description: Agent description for discovery (default: None)
         endpoint: Agent endpoint URL for direct communication (default: None)
@@ -955,6 +1300,7 @@ def mesh_agent(
         retry_attempts=retry_attempts,
         enable_caching=enable_caching,
         fallback_mode=fallback_mode,
+        fallback_config=fallback_config,
         version=version,
         description=description,
         endpoint=endpoint,

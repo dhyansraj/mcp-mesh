@@ -342,6 +342,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def _apply_migrations(self) -> None:
         """Apply database migrations."""
         conn = await self._get_connection()
@@ -363,6 +393,36 @@ class RegistryDatabase:
                 await conn.commit()
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def _apply_schema_migrations(
         self, conn: aiosqlite.Connection, from_version: int
@@ -488,6 +548,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def unregister_agent(self, agent_id: str) -> bool:
         """Unregister an agent from the database."""
         conn = await self._get_connection()
@@ -523,6 +613,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def get_agent(self, agent_id: str) -> AgentRegistration | None:
         """Retrieve an agent by ID."""
         conn = await self._get_connection()
@@ -547,6 +667,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def list_agents(
         self,
@@ -617,6 +767,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def update_heartbeat(self, agent_id: str) -> bool:
         """Update agent heartbeat timestamp."""
         conn = await self._get_connection()
@@ -655,6 +835,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     # Health Monitoring Operations
 
     async def get_unhealthy_agents(self, timeout_seconds: int = 60) -> list[str]:
@@ -676,6 +886,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def mark_agents_unhealthy(self, agent_ids: list[str]) -> int:
         """Mark multiple agents as unhealthy."""
@@ -714,6 +954,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     # Capability Discovery Operations
 
     async def find_agents_by_capability(self, capability_name: str) -> set[str]:
@@ -734,6 +1004,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def get_capability_index(self) -> dict[str, set[str]]:
         """Get complete capability to agent mapping."""
@@ -759,6 +1059,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     # Helper Methods
 
@@ -877,6 +1207,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     # Service Contract Operations
 
     async def store_service_contract(self, agent_id: str, contract) -> int:
@@ -936,6 +1296,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def _store_method_metadata(
         self, conn: aiosqlite.Connection, contract_id: int, method
     ) -> int:
@@ -973,7 +1363,7 @@ class RegistryDatabase:
                 contract_id,
                 method.method_name,
                 signature_data,
-                str(method.return_type),
+                self._serialize_type(method.return_type),
                 method.is_async,
                 method.method_type.value,
                 method.docstring,
@@ -1004,14 +1394,14 @@ class RegistryDatabase:
                 (
                     method_id,
                     param_name,
-                    str(param_metadata.type_hint),
+                    self._serialize_type(param_metadata.type_hint),
                     param_metadata.kind.value,
                     (
                         json.dumps(param_metadata.default)
                         if param_metadata.has_default
                         else None
                     ),
-                    str(param_metadata.annotation),
+                    self._serialize_type(param_metadata.annotation),
                     param_metadata.has_default,
                     param_metadata.is_optional,
                     position,
@@ -1126,7 +1516,11 @@ class RegistryDatabase:
                     method_name=method_name,
                     signature=signature,
                     capabilities=capabilities,
-                    return_type=eval(method_row[3]) if method_row[3] else type(None),
+                    return_type=(
+                        self._deserialize_type(method_row[3])
+                        if method_row[3]
+                        else type(None)
+                    ),
                     parameters={name: pm.type_hint for name, pm in parameters.items()},
                     type_hints={name: pm.type_hint for name, pm in parameters.items()},
                     parameter_metadata=parameters,
@@ -1158,6 +1552,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def _get_method_parameters(self, conn: aiosqlite.Connection, method_id: int):
         """Get parameters for a method."""
@@ -1192,14 +1616,20 @@ class RegistryDatabase:
 
             parameters[param_name] = ParameterMetadata(
                 name=param_name,
-                type_hint=eval(param_type) if param_type else type(None),
+                type_hint=(
+                    self._deserialize_type(param_type) if param_type else type(None)
+                ),
                 kind=ParameterKind(param_kind),
                 default=(
                     json.loads(default_value)
                     if default_value
                     else inspect.Parameter.empty
                 ),
-                annotation=eval(annotation) if annotation else inspect.Parameter.empty,
+                annotation=(
+                    self._deserialize_type(annotation)
+                    if annotation
+                    else inspect.Parameter.empty
+                ),
                 has_default=bool(has_default),
                 is_optional=bool(is_optional),
             )
@@ -1261,6 +1691,36 @@ class RegistryDatabase:
         finally:
             await self._return_connection(conn)
 
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
+
     async def update_capability_method_mapping(
         self,
         capability_id: int,
@@ -1289,6 +1749,36 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
 
     async def get_contract_compatibility_info(
         self, service_name: str, version_constraint: str | None = None
@@ -1335,3 +1825,33 @@ class RegistryDatabase:
 
         finally:
             await self._return_connection(conn)
+
+    def _serialize_type(self, type_obj) -> str:
+        """Safely serialize a type object to string."""
+        if type_obj is None or type_obj == type(None):
+            return "NoneType"
+        elif hasattr(type_obj, "__name__"):
+            return type_obj.__name__
+        else:
+            return str(type_obj)
+
+    def _deserialize_type(self, type_str: str):
+        """Safely deserialize a type string back to type object."""
+        if not type_str or type_str == "NoneType":
+            return type(None)
+
+        # Handle basic built-in types
+        type_mapping = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "bytes": bytes,
+            "Any": type(None),  # Fallback for Any type
+        }
+
+        return type_mapping.get(type_str, str)  # Default to str if unknown
