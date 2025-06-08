@@ -117,7 +117,7 @@ class CITestRunner:
 
         cmd.extend(
             [
-                "--cov=mcp_mesh_sdk",
+                "--cov=mcp_mesh",
                 "--cov-report=xml",
                 "--cov-report=term-missing",
                 f"--junit-xml=test-results-{test_type}.xml",

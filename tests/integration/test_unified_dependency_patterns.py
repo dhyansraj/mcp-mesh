@@ -11,13 +11,12 @@ from typing import Protocol, runtime_checkable
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp_mesh_types.unified_dependencies import (
+from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+from mcp_mesh_runtime.unified_dependencies import (
     DependencyAnalyzer,
     DependencyPattern,
     DependencySpecification,
 )
-
-from mcp_mesh.decorators.mesh_agent import mesh_agent
 
 
 # Test Protocol Interface
@@ -153,7 +152,7 @@ class TestUnifiedDependencyResolver:
     @pytest.mark.asyncio
     async def test_resolve_string_dependency(self, mock_registry_client):
         """Test resolving string dependencies."""
-        from mcp_mesh.shared.unified_dependency_resolver import (
+        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -175,7 +174,7 @@ class TestUnifiedDependencyResolver:
     @pytest.mark.asyncio
     async def test_resolve_concrete_dependency(self, mock_fallback_chain):
         """Test resolving concrete class dependencies."""
-        from mcp_mesh.shared.unified_dependency_resolver import (
+        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -202,7 +201,7 @@ class TestUnifiedDependencyResolver:
         self, mock_registry_client, mock_fallback_chain
     ):
         """Test resolving multiple dependencies of different types."""
-        from mcp_mesh.shared.unified_dependency_resolver import (
+        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -457,7 +456,7 @@ class TestBackwardCompatibility:
 
     def test_dependency_specification_creation(self):
         """Test that dependency specifications are created correctly for legacy deps."""
-        from mcp_mesh.decorators.mesh_agent import MeshAgentDecorator
+        from mcp_mesh_runtime.decorators.mesh_agent import MeshAgentDecorator
 
         decorator = MeshAgentDecorator(
             capabilities=["test"], dependencies=["user_service", "auth_service"]

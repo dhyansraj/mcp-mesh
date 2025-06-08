@@ -11,15 +11,15 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, "src")
 
-from mcp_mesh.decorators.mesh_agent import mesh_agent
-from mcp_mesh.shared.exceptions import (
+from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+from mcp_mesh_runtime.shared.exceptions import (
     FileNotFoundError,
     FileTooLargeError,
     FileTypeNotAllowedError,
     PathTraversalError,
 )
-from mcp_mesh.shared.types import OperationType
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.shared.types import OperationType
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 async def test_basic_file_operations():

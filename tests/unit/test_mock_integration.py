@@ -12,13 +12,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from mcp_mesh.shared.exceptions import (
+from mcp_mesh_runtime.shared.exceptions import (
     FileNotFoundError,
     RateLimitError,
 )
-from mcp_mesh.shared.types import HealthStatusType, RetryConfig, RetryStrategy
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.shared.types import HealthStatusType, RetryConfig, RetryStrategy
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture

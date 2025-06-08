@@ -4,7 +4,7 @@ Integration Tests for Pull-Based Registry Workflows
 Tests the complete workflow of agent registration, heartbeat monitoring,
 service discovery, and health management using the pull-based architecture.
 
-Ensures all imports are from mcp-mesh-types for MCP SDK compatibility.
+Ensures all imports are from mcp-mesh for MCP SDK compatibility.
 """
 
 import asyncio
@@ -13,10 +13,9 @@ from unittest.mock import patch
 
 import pytest
 
-# Import only from mcp-mesh-types for MCP SDK compatibility
-from mcp_mesh_types.exceptions import SecurityValidationError
-
-from mcp_mesh.server.models import (
+# Import only from mcp-mesh for MCP SDK compatibility
+from mcp_mesh_runtime.exceptions import SecurityValidationError
+from mcp_mesh_runtime.server.models import (
     AgentCapability,
     AgentRegistration,
     CapabilitySearchQuery,
@@ -24,7 +23,7 @@ from mcp_mesh.server.models import (
 )
 
 # Import registry components
-from mcp_mesh.server.registry import RegistryService
+from mcp_mesh_runtime.server.registry import RegistryService
 
 
 class TestPullBasedWorkflows:

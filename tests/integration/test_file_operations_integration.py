@@ -14,9 +14,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from mcp_mesh.shared.types import HealthStatus
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.shared.types import HealthStatus
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 # Mock FastMCP for integration testing

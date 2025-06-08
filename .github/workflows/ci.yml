@@ -30,16 +30,16 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run ruff linting
-        run: ruff check src tests
+        run: ruff check packages tests
 
       - name: Run ruff formatting check
-        run: ruff format --check src tests
+        run: ruff format --check packages tests
 
       - name: Run black formatting check
-        run: black --check src tests
+        run: black --check packages tests
 
       - name: Run isort import sorting check
-        run: isort --check-only src tests
+        run: isort --check-only packages tests
 
   type-check:
     name: Type Checking
@@ -59,7 +59,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run mypy type checking
-        run: mypy src
+        run: mypy packages
 
   test:
     name: Test Suite
@@ -89,7 +89,8 @@ jobs:
         if: matrix.test-group == 'unit'
         run: |
           pytest tests/unit/ -v \
-            --cov=mcp_mesh_sdk \
+            --cov=packages/mcp_mesh/src/mcp_mesh \
+            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-unit-${{ matrix.python-version }}.xml
@@ -98,7 +99,8 @@ jobs:
         if: matrix.test-group == 'integration'
         run: |
           pytest tests/integration/ -v \
-            --cov=mcp_mesh_sdk \
+            --cov=packages/mcp_mesh/src/mcp_mesh \
+            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-integration-${{ matrix.python-version }}.xml
@@ -107,7 +109,8 @@ jobs:
         if: matrix.test-group == 'e2e'
         run: |
           pytest tests/e2e/ -v \
-            --cov=mcp_mesh_sdk \
+            --cov=packages/mcp_mesh/src/mcp_mesh \
+            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-e2e-${{ matrix.python-version }}.xml
@@ -192,8 +195,8 @@ jobs:
 
       - name: Run bandit security scan
         run: |
-          bandit -r src/ -f json -o bandit-report.json || true
-          bandit -r src/ -f txt
+          bandit -r packages/ -f json -o bandit-report.json || true
+          bandit -r packages/ -f txt
 
       - name: Upload security scan results
         uses: actions/upload-artifact@v4

@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_types import (
+from mcp_mesh import (
     AgentInfo,
     AgentSelectionResult,
     AgentVersionInfo,
@@ -67,7 +67,7 @@ class MockLifecycleManager:
         pass
 
     async def drain_agent(self, agent_info, timeout=30):
-        from mcp_mesh_types import DrainResult
+        from mcp_mesh import DrainResult
 
         return DrainResult(
             success=True, agent_id=agent_info.agent_id, status="draining"
@@ -106,7 +106,7 @@ class MockVersioningManager:
         )
 
     async def rollback_agent(self, agent_info, target_version):
-        from mcp_mesh_types import RollbackInfo
+        from mcp_mesh import RollbackInfo
 
         return RollbackInfo(
             success=True,
@@ -121,7 +121,7 @@ class MockCapabilityMatcher:
         pass
 
     def calculate_match_score(self, agent_capabilities, query):
-        from mcp_mesh_types import CompatibilityScore
+        from mcp_mesh import CompatibilityScore
 
         # Simple mock scoring
         query_caps = query.capabilities if hasattr(query, "capabilities") else []

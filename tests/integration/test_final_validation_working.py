@@ -8,10 +8,10 @@ system with working implementations and actual package functionality.
 from typing import Any
 
 import pytest
-from mcp_mesh_types.decorators import mesh_agent
+from mcp_mesh_runtime.decorators import mesh_agent
 
-# Test imports from mcp-mesh-types (validates package separation)
-from mcp_mesh_types.unified_dependencies import (
+# Test imports from mcp-mesh (validates package separation)
+from mcp_mesh_runtime.unified_dependencies import (
     DependencyPattern,
     DependencySpecification,
 )
@@ -21,12 +21,12 @@ class TestFinalValidationWorking:
     """Working validation tests for final integration."""
 
     def test_package_separation_validation(self):
-        """Test 1: Validate mcp-mesh-types has zero runtime dependencies except MCP SDK."""
+        """Test 1: Validate mcp-mesh has zero runtime dependencies except MCP SDK."""
 
         # These imports should work without any mcp_mesh runtime dependencies
-        from mcp_mesh_types import DependencyPattern
-        from mcp_mesh_types.decorators import mesh_agent
-        from mcp_mesh_types.unified_dependencies import (
+        from mcp_mesh import DependencyPattern
+        from mcp_mesh_runtime.decorators import mesh_agent
+        from mcp_mesh_runtime.unified_dependencies import (
             DependencySpecification,
         )
 
@@ -393,7 +393,7 @@ class TestFinalValidationWorking:
 
         import inspect
 
-        from mcp_mesh_types.unified_dependencies import DependencyAnalyzer
+        from mcp_mesh_runtime.unified_dependencies import DependencyAnalyzer
 
         # Test function for analysis
         def test_function(

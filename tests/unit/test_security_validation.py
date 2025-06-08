@@ -12,16 +12,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from mcp_mesh.shared.exceptions import (
+from mcp_mesh_runtime.shared.exceptions import (
     FileAccessDeniedError,
     FileTooLargeError,
     FileTypeNotAllowedError,
     PathTraversalError,
     SecurityValidationError,
 )
-from mcp_mesh.shared.types import OperationType
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.shared.types import OperationType
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture

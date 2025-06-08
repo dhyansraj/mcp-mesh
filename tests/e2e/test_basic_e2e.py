@@ -8,8 +8,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 @pytest.mark.asyncio

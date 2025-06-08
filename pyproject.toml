@@ -34,7 +34,6 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.9.0",
-    "mcp-mesh-types>=0.1.0",
     "fastmcp>=2.7.0",
     "uvicorn>=0.34.0",
     "psutil>=5.9.0",
@@ -59,14 +58,14 @@ Repository = "https://github.com/yourusername/mcp-mesh"
 Issues = "https://github.com/yourusername/mcp-mesh/issues"
 
 [project.scripts]
-mcp-mesh-server = "mcp_mesh.server:main"
-mcp-mesh-registry = "mcp_mesh.server.registry_server:main"
+mcp-mesh-server = "mcp_mesh_runtime.server:main"
+mcp-mesh-registry = "mcp_mesh_runtime.server.registry_server:main"
 
 [tool.hatch.version]
-path = "src/mcp_mesh/__init__.py"
+path = "packages/mcp_mesh/src/mcp_mesh/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_mesh"]
+packages = []
 
 # Black configuration
 [tool.black]
@@ -92,7 +91,7 @@ extend-exclude = '''
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["mcp_mesh", "mcp_mesh_types"]
+known_first_party = ["mcp_mesh", "mcp_mesh_runtime"]
 known_third_party = ["mcp"]
 
 # MyPy configuration
@@ -150,7 +149,8 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=mcp_mesh",
+    "--cov=packages/mcp_mesh/src/mcp_mesh",
+    "--cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -165,7 +165,7 @@ asyncio_mode = "auto"
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["src/mcp_mesh"]
+source = ["packages/mcp_mesh/src/mcp_mesh", "packages/mcp_mesh_runtime/src/mcp_mesh_runtime"]
 branch = true
 
 [tool.coverage.report]

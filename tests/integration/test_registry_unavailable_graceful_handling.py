@@ -23,7 +23,7 @@ import pytest
 
 # Import only from mcp-mesh-types for MCP SDK compatibility
 # Import registry components for testing
-from mcp_mesh.server.registry_server import RegistryServer
+from mcp_mesh_runtime.server.registry_server import RegistryServer
 
 
 class MockAgent:

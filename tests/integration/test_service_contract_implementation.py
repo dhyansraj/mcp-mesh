@@ -10,8 +10,7 @@ import time
 from datetime import datetime, timezone
 
 import pytest
-from mcp_mesh_types.method_metadata import MethodMetadata, MethodType, ServiceContract
-
+from mcp_mesh_runtime.method_metadata import MethodMetadata, MethodType, ServiceContract
 from src.mcp_mesh.server.database import DatabaseConfig, RegistryDatabase
 from src.mcp_mesh.tools.contract_tools import ContractTools
 

@@ -6,8 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from mcp_mesh.decorators import MeshAgentDecorator, mesh_agent
+from mcp_mesh_runtime.decorators import MeshAgentDecorator, mesh_agent
 
 
 class TestMeshAgentDecorator:

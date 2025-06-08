@@ -17,10 +17,10 @@ import pytest
 from fastmcp import FastMCP
 
 # Import only from mcp-mesh-types for MCP SDK compatibility
-from mcp_mesh.server.models import AgentCapability, AgentRegistration
+from mcp_mesh_runtime.server.models import AgentCapability, AgentRegistration
 
 # Import registry and MCP components
-from mcp_mesh.server.registry import RegistryService
+from mcp_mesh_runtime.server.registry import RegistryService
 
 
 class TestMCPProtocolCompliance:

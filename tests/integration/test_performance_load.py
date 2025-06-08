@@ -17,10 +17,9 @@ from unittest.mock import AsyncMock, patch
 
 import psutil
 import pytest
-
-from mcp_mesh.shared.exceptions import RateLimitError, TransientError
-from mcp_mesh.shared.types import RetryConfig, RetryStrategy
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.shared.exceptions import RateLimitError, TransientError
+from mcp_mesh_runtime.shared.types import RetryConfig, RetryStrategy
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 class PerformanceMetrics:

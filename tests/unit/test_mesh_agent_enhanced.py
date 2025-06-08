@@ -10,10 +10,9 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from mcp_mesh.decorators.mesh_agent import MeshAgentDecorator, mesh_agent
-from mcp_mesh.shared.exceptions import MeshAgentError, RegistryConnectionError
-from mcp_mesh.shared.types import HealthStatus
+from mcp_mesh_runtime.decorators.mesh_agent import MeshAgentDecorator, mesh_agent
+from mcp_mesh_runtime.shared.exceptions import MeshAgentError, RegistryConnectionError
+from mcp_mesh_runtime.shared.types import HealthStatus
 
 
 class TestMeshAgentDecoratorCore:

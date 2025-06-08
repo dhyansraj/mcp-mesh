@@ -12,9 +12,8 @@ import asyncio
 
 import aiohttp
 import pytest
-
-from mcp_mesh.server.models import AgentCapability, AgentRegistration
-from mcp_mesh.server.registry_server import RegistryServer
+from mcp_mesh_runtime.server.models import AgentCapability, AgentRegistration
+from mcp_mesh_runtime.server.registry_server import RegistryServer
 
 
 class TestRegistryBasicWorkflow:

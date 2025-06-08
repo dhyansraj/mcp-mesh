@@ -12,13 +12,13 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp_mesh_types.agent_selection import AgentSelector
-from mcp_mesh_types.decorators import mesh_agent
-from mcp_mesh_types.fallback import FallbackChain, FallbackStrategy
-from mcp_mesh_types.service_discovery import ServiceDiscoveryClient
+from mcp_mesh_runtime.agent_selection import AgentSelector
+from mcp_mesh_runtime.decorators import mesh_agent
+from mcp_mesh_runtime.fallback import FallbackChain, FallbackStrategy
+from mcp_mesh_runtime.service_discovery import ServiceDiscoveryClient
 
-# Import from mcp-mesh-types only (zero runtime deps except MCP SDK)
-from mcp_mesh_types.unified_dependencies import (
+# Import from mcp-mesh only (zero runtime deps except MCP SDK)
+from mcp_mesh_runtime.unified_dependencies import (
     DependencyPattern,
     UnifiedDependencyResolver,
 )
@@ -258,17 +258,12 @@ class TestFinalIntegrationValidation:
     def test_package_separation_validation(self):
         """Test 6: Validate mcp-mesh-types has zero runtime dependencies."""
 
-        # Import all mcp-mesh-types modules
-        import mcp_mesh_types
-        import mcp_mesh_types.agent_selection
-        import mcp_mesh_types.decorators
-        import mcp_mesh_types.fallback
-        import mcp_mesh_types.service_discovery
-        import mcp_mesh_types.unified_dependencies
+        # Import all mcp-mesh modules
+        import mcp_mesh
 
         # These should import successfully without any mcp_mesh imports
         # The fact that this test runs validates package separation
-        assert hasattr(mcp_mesh_types, "__version__")
+        assert hasattr(mcp_mesh, "__version__")
 
     @pytest.mark.asyncio
     async def test_revolutionary_interface_optional_patterns(self):

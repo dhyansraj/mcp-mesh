@@ -12,8 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
-
-from mcp_mesh.shared.exceptions import (
+from mcp_mesh_runtime.shared.exceptions import (
     DirectoryNotFoundError,
     EncodingError,
     FileNotFoundError,
@@ -24,13 +23,13 @@ from mcp_mesh.shared.exceptions import (
     PathTraversalError,
     SecurityValidationError,
 )
-from mcp_mesh.shared.types import (
+from mcp_mesh_runtime.shared.types import (
     HealthStatusType,
     OperationType,
     RetryConfig,
     RetryStrategy,
 )
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture

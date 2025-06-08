@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from mcp_mesh_types import (
+from mcp_mesh import (
     DatabaseConfig,
     DatabaseType,
     InvalidConfigurationError,
@@ -19,8 +19,7 @@ from mcp_mesh_types import (
     ServerConfig,
     ServiceDiscoveryConfig,
 )
-
-from mcp_mesh.shared.configuration import (
+from mcp_mesh_runtime.shared.configuration import (
     CompositeConfigProvider,
     ConfigurationManager,
     FileConfigProvider,
@@ -540,7 +539,7 @@ class TestEndToEndConfiguration:
 
         with patch.dict(os.environ, env_vars):
             # Create providers in priority order
-            from mcp_mesh_types import EnvironmentConfigProvider
+            from mcp_mesh import EnvironmentConfigProvider
 
             providers = [
                 FileConfigProvider(base_file),

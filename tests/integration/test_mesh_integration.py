@@ -11,11 +11,10 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-
-from mcp_mesh.decorators.mesh_agent import mesh_agent
-from mcp_mesh.shared.exceptions import MeshAgentError, RegistryConnectionError
-from mcp_mesh.shared.types import HealthStatus
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+from mcp_mesh_runtime.shared.exceptions import MeshAgentError, RegistryConnectionError
+from mcp_mesh_runtime.shared.types import HealthStatus
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 class MockRegistryClient:

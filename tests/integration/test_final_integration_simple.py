@@ -8,10 +8,10 @@ dependency injection concepts without requiring full implementations.
 from typing import Any
 
 import pytest
-from mcp_mesh_types.decorators import mesh_agent
+from mcp_mesh_runtime.decorators import mesh_agent
 
-# Import only basic types from mcp-mesh-types
-from mcp_mesh_types.unified_dependencies import (
+# Import only basic types from mcp-mesh
+from mcp_mesh_runtime.unified_dependencies import (
     DependencyPattern,
     DependencySpecification,
 )
@@ -207,9 +207,9 @@ class TestFinalIntegrationSimple:
         """Test that mcp-mesh-types imports work independently."""
 
         # These imports should work without any mcp_mesh dependencies
-        from mcp_mesh_types import DependencyPattern
-        from mcp_mesh_types.decorators import mesh_agent
-        from mcp_mesh_types.unified_dependencies import DependencySpecification
+        from mcp_mesh import DependencyPattern
+        from mcp_mesh_runtime.decorators import mesh_agent
+        from mcp_mesh_runtime.unified_dependencies import DependencySpecification
 
         # Validate they're accessible
         assert DependencyPattern.STRING is not None

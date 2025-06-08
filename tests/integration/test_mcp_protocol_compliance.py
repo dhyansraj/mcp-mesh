@@ -10,13 +10,12 @@ import uuid
 from typing import Any
 
 import pytest
-
-from mcp_mesh.shared.exceptions import (
+from mcp_mesh_runtime.shared.exceptions import (
     FileNotFoundError,
     FileOperationError,
     SecurityValidationError,
 )
-from mcp_mesh.tools.file_operations import FileOperations
+from mcp_mesh_runtime.tools.file_operations import FileOperations
 
 
 class MCPProtocolValidator:
@@ -641,7 +640,7 @@ class TestMCPErrorHandling:
 
     async def test_error_serialization(self):
         """Test that all errors can be serialized to JSON."""
-        from mcp_mesh.shared.exceptions import (
+        from mcp_mesh_runtime.shared.exceptions import (
             FileAccessDeniedError,
             FileNotFoundError,
             FileTooLargeError,

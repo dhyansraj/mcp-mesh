@@ -38,7 +38,7 @@ jobs:
       - name: Run full test suite
         run: |
           pytest tests/ -v \
-            --cov=mcp_mesh_sdk \
+            --cov=mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing
 

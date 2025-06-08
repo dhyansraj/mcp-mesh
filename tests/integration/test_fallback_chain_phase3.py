@@ -13,15 +13,14 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_types.fallback import (
+from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+from mcp_mesh_runtime.fallback import (
     FallbackConfiguration,
     FallbackMode,
 )
-
-from mcp_mesh.decorators.mesh_agent import mesh_agent
-from mcp_mesh.shared.fallback_chain import MeshFallbackChain
-from mcp_mesh.shared.registry_client import RegistryClient
-from mcp_mesh.shared.service_discovery import ServiceDiscoveryService
+from mcp_mesh_runtime.shared.fallback_chain import MeshFallbackChain
+from mcp_mesh_runtime.shared.registry_client import RegistryClient
+from mcp_mesh_runtime.shared.service_discovery import ServiceDiscoveryService
 
 
 # Test service classes for dependency injection

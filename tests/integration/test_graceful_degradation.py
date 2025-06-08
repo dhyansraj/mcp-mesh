@@ -16,11 +16,11 @@ import pytest
 from aiohttp import ClientConnectorError
 
 # Import only from mcp-mesh-types for MCP SDK compatibility
-from mcp_mesh.server.models import AgentRegistration
+from mcp_mesh_runtime.server.models import AgentRegistration
 
 # Import registry components
-from mcp_mesh.server.registry import RegistryService
-from mcp_mesh.server.registry_server import RegistryServer
+from mcp_mesh_runtime.server.registry import RegistryService
+from mcp_mesh_runtime.server.registry_server import RegistryServer
 
 
 class MockAgent:
@@ -607,7 +607,7 @@ class TestGracefulDegradation:
             await service.storage.register_agent(agent)
 
             # Query to populate cache
-            from mcp_mesh.server.models import ServiceDiscoveryQuery
+            from mcp_mesh_runtime.server.models import ServiceDiscoveryQuery
 
             query = ServiceDiscoveryQuery(namespace="test")
             agents1 = await service.storage.list_agents(query)
