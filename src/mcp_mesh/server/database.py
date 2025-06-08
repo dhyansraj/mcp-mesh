@@ -33,7 +33,7 @@ class DatabaseSchema:
     """SQLite schema definitions for the MCP Mesh Registry."""
 
     # Core schema version for migrations
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     SCHEMA_SQL = {
         "schema_version": """
@@ -120,6 +120,100 @@ class DatabaseSchema:
                 metadata TEXT DEFAULT '{}'  -- JSON
             );
         """,
+        "service_contracts": """
+            CREATE TABLE IF NOT EXISTS service_contracts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                service_name TEXT NOT NULL,
+                service_version TEXT NOT NULL DEFAULT '1.0.0',
+                description TEXT,
+                contract_version TEXT NOT NULL DEFAULT '1.0.0',
+                compatibility_level TEXT NOT NULL DEFAULT 'strict',
+
+                -- Contract metadata
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                UNIQUE(agent_id, service_name, service_version)
+            );
+        """,
+        "method_metadata": """
+            CREATE TABLE IF NOT EXISTS method_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id INTEGER NOT NULL,
+                method_name TEXT NOT NULL,
+                signature_data TEXT NOT NULL,  -- JSON serialized inspect.Signature
+                return_type TEXT,
+                is_async BOOLEAN DEFAULT FALSE,
+                method_type TEXT DEFAULT 'function',
+
+                -- Method documentation and versioning
+                docstring TEXT,
+                service_version TEXT DEFAULT '1.0.0',
+                stability_level TEXT DEFAULT 'stable',
+                deprecation_warning TEXT,
+
+                -- Performance metadata
+                expected_complexity TEXT DEFAULT 'O(1)',
+                timeout_hint INTEGER DEFAULT 30,
+                resource_requirements TEXT DEFAULT '{}',  -- JSON
+
+                -- Timestamps
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (contract_id) REFERENCES service_contracts(id) ON DELETE CASCADE,
+                UNIQUE(contract_id, method_name)
+            );
+        """,
+        "method_parameters": """
+            CREATE TABLE IF NOT EXISTS method_parameters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method_id INTEGER NOT NULL,
+                parameter_name TEXT NOT NULL,
+                parameter_type TEXT NOT NULL,
+                parameter_kind TEXT NOT NULL,
+                default_value TEXT,  -- JSON serialized
+                annotation TEXT,  -- JSON serialized
+                has_default BOOLEAN DEFAULT FALSE,
+                is_optional BOOLEAN DEFAULT FALSE,
+                position INTEGER NOT NULL,
+
+                FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE,
+                UNIQUE(method_id, parameter_name)
+            );
+        """,
+        "method_capabilities": """
+            CREATE TABLE IF NOT EXISTS method_capabilities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method_id INTEGER NOT NULL,
+                capability_name TEXT NOT NULL,
+
+                -- Link to agent capabilities for validation
+                capability_id INTEGER,
+
+                FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE,
+                FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE SET NULL,
+                UNIQUE(method_id, capability_name)
+            );
+        """,
+        "capability_method_mapping": """
+            CREATE TABLE IF NOT EXISTS capability_method_mapping (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                capability_id INTEGER NOT NULL,
+                method_id INTEGER NOT NULL,
+                mapping_type TEXT DEFAULT 'direct',  -- direct, derived, composite
+                priority INTEGER DEFAULT 0,
+
+                -- Mapping metadata
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE CASCADE,
+                FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE,
+                UNIQUE(capability_id, method_id)
+            );
+        """,
     }
 
     INDEXES = {
@@ -140,6 +234,28 @@ class DatabaseSchema:
         "idx_events_agent": "CREATE INDEX IF NOT EXISTS idx_events_agent ON registry_events(agent_id);",
         "idx_events_timestamp": "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON registry_events(timestamp);",
         "idx_events_type": "CREATE INDEX IF NOT EXISTS idx_events_type ON registry_events(event_type, timestamp);",
+        # Service contract optimization
+        "idx_contracts_agent": "CREATE INDEX IF NOT EXISTS idx_contracts_agent ON service_contracts(agent_id);",
+        "idx_contracts_service": "CREATE INDEX IF NOT EXISTS idx_contracts_service ON service_contracts(service_name, service_version);",
+        "idx_contracts_composite": "CREATE INDEX IF NOT EXISTS idx_contracts_composite ON service_contracts(agent_id, service_name);",
+        # Method metadata optimization
+        "idx_methods_contract": "CREATE INDEX IF NOT EXISTS idx_methods_contract ON method_metadata(contract_id);",
+        "idx_methods_name": "CREATE INDEX IF NOT EXISTS idx_methods_name ON method_metadata(method_name);",
+        "idx_methods_composite": "CREATE INDEX IF NOT EXISTS idx_methods_composite ON method_metadata(contract_id, method_name);",
+        "idx_methods_stability": "CREATE INDEX IF NOT EXISTS idx_methods_stability ON method_metadata(stability_level);",
+        # Parameter optimization
+        "idx_parameters_method": "CREATE INDEX IF NOT EXISTS idx_parameters_method ON method_parameters(method_id);",
+        "idx_parameters_type": "CREATE INDEX IF NOT EXISTS idx_parameters_type ON method_parameters(parameter_type);",
+        "idx_parameters_position": "CREATE INDEX IF NOT EXISTS idx_parameters_position ON method_parameters(method_id, position);",
+        # Method capabilities optimization
+        "idx_method_caps_method": "CREATE INDEX IF NOT EXISTS idx_method_caps_method ON method_capabilities(method_id);",
+        "idx_method_caps_capability": "CREATE INDEX IF NOT EXISTS idx_method_caps_capability ON method_capabilities(capability_name);",
+        "idx_method_caps_composite": "CREATE INDEX IF NOT EXISTS idx_method_caps_composite ON method_capabilities(capability_name, method_id);",
+        # Capability-method mapping optimization
+        "idx_cap_mapping_capability": "CREATE INDEX IF NOT EXISTS idx_cap_mapping_capability ON capability_method_mapping(capability_id);",
+        "idx_cap_mapping_method": "CREATE INDEX IF NOT EXISTS idx_cap_mapping_method ON capability_method_mapping(method_id);",
+        "idx_cap_mapping_type": "CREATE INDEX IF NOT EXISTS idx_cap_mapping_type ON capability_method_mapping(mapping_type);",
+        "idx_cap_mapping_priority": "CREATE INDEX IF NOT EXISTS idx_cap_mapping_priority ON capability_method_mapping(capability_id, priority);",
     }
 
 
@@ -215,11 +331,11 @@ class RegistryDatabase:
         conn = await self._get_connection()
         try:
             # Create all tables
-            for table_name, sql in DatabaseSchema.SCHEMA_SQL.items():
+            for _table_name, sql in DatabaseSchema.SCHEMA_SQL.items():
                 await conn.execute(sql)
 
             # Create all indexes
-            for index_name, sql in DatabaseSchema.INDEXES.items():
+            for _index_name, sql in DatabaseSchema.INDEXES.items():
                 await conn.execute(sql)
 
             await conn.commit()
@@ -239,6 +355,7 @@ class RegistryDatabase:
 
             # Apply migrations if needed
             if current_version < DatabaseSchema.SCHEMA_VERSION:
+                await self._apply_schema_migrations(conn, current_version)
                 await conn.execute(
                     "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
                     (DatabaseSchema.SCHEMA_VERSION,),
@@ -246,6 +363,49 @@ class RegistryDatabase:
                 await conn.commit()
         finally:
             await self._return_connection(conn)
+
+    async def _apply_schema_migrations(
+        self, conn: aiosqlite.Connection, from_version: int
+    ) -> None:
+        """Apply schema migrations from specific version."""
+        if from_version < 2:
+            # Migration from v1 to v2: Add service contract tables
+            migration_tables = [
+                "service_contracts",
+                "method_metadata",
+                "method_parameters",
+                "method_capabilities",
+                "capability_method_mapping",
+            ]
+
+            for table_name in migration_tables:
+                if table_name in DatabaseSchema.SCHEMA_SQL:
+                    await conn.execute(DatabaseSchema.SCHEMA_SQL[table_name])
+
+            # Add new indexes for service contract tables
+            migration_indexes = [
+                "idx_contracts_agent",
+                "idx_contracts_service",
+                "idx_contracts_composite",
+                "idx_methods_contract",
+                "idx_methods_name",
+                "idx_methods_composite",
+                "idx_methods_stability",
+                "idx_parameters_method",
+                "idx_parameters_type",
+                "idx_parameters_position",
+                "idx_method_caps_method",
+                "idx_method_caps_capability",
+                "idx_method_caps_composite",
+                "idx_cap_mapping_capability",
+                "idx_cap_mapping_method",
+                "idx_cap_mapping_type",
+                "idx_cap_mapping_priority",
+            ]
+
+            for index_name in migration_indexes:
+                if index_name in DatabaseSchema.INDEXES:
+                    await conn.execute(DatabaseSchema.INDEXES[index_name])
 
     # Agent Management Operations
 
@@ -713,6 +873,465 @@ class RegistryDatabase:
                 stats["database_size_bytes"] = row[0] if row else 0
 
             return stats
+
+        finally:
+            await self._return_connection(conn)
+
+    # Service Contract Operations
+
+    async def store_service_contract(self, agent_id: str, contract) -> int:
+        """Store a service contract for an agent and return contract ID."""
+
+        conn = await self._get_connection()
+        try:
+            await conn.execute("BEGIN TRANSACTION")
+
+            # Insert or update service contract
+            async with conn.execute(
+                """
+                INSERT OR REPLACE INTO service_contracts (
+                    agent_id, service_name, service_version, description,
+                    contract_version, compatibility_level, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent_id,
+                    contract.service_name,
+                    contract.service_version,
+                    contract.description,
+                    contract.contract_version,
+                    contract.compatibility_level,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            ) as cursor:
+                contract_id = cursor.lastrowid
+
+            # Get contract_id if this was an update
+            if not contract_id:
+                async with conn.execute(
+                    "SELECT id FROM service_contracts WHERE agent_id = ? AND service_name = ? AND service_version = ?",
+                    (agent_id, contract.service_name, contract.service_version),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    contract_id = row[0] if row else None
+
+            if not contract_id:
+                raise RuntimeError("Failed to get contract ID")
+
+            # Clear existing method metadata for this contract
+            await conn.execute(
+                "DELETE FROM method_metadata WHERE contract_id = ?", (contract_id,)
+            )
+
+            # Store method metadata
+            for _method_name, method_metadata in contract.methods.items():
+                await self._store_method_metadata(conn, contract_id, method_metadata)
+
+            await conn.commit()
+            return contract_id
+
+        except Exception:
+            await conn.rollback()
+            raise
+        finally:
+            await self._return_connection(conn)
+
+    async def _store_method_metadata(
+        self, conn: aiosqlite.Connection, contract_id: int, method
+    ) -> int:
+        """Store method metadata and return method ID."""
+        import json
+
+        # Serialize signature data
+        signature_data = json.dumps(
+            {
+                "parameters": {
+                    name: {
+                        "annotation": str(param.annotation),
+                        "default": (
+                            str(param.default) if param.default != param.empty else None
+                        ),
+                        "kind": param.kind.name,
+                    }
+                    for name, param in method.signature.parameters.items()
+                },
+                "return_annotation": str(method.signature.return_annotation),
+            }
+        )
+
+        # Insert method metadata
+        async with conn.execute(
+            """
+            INSERT INTO method_metadata (
+                contract_id, method_name, signature_data, return_type, is_async,
+                method_type, docstring, service_version, stability_level,
+                deprecation_warning, expected_complexity, timeout_hint,
+                resource_requirements, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                contract_id,
+                method.method_name,
+                signature_data,
+                str(method.return_type),
+                method.is_async,
+                method.method_type.value,
+                method.docstring,
+                method.service_version,
+                method.stability_level,
+                method.deprecation_warning,
+                method.expected_complexity,
+                method.timeout_hint,
+                json.dumps(method.resource_requirements),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        ) as cursor:
+            method_id = cursor.lastrowid
+
+        if not method_id:
+            raise RuntimeError("Failed to get method ID")
+
+        # Store method parameters
+        position = 0
+        for param_name, param_metadata in method.parameter_metadata.items():
+            await conn.execute(
+                """
+                INSERT INTO method_parameters (
+                    method_id, parameter_name, parameter_type, parameter_kind,
+                    default_value, annotation, has_default, is_optional, position
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    method_id,
+                    param_name,
+                    str(param_metadata.type_hint),
+                    param_metadata.kind.value,
+                    (
+                        json.dumps(param_metadata.default)
+                        if param_metadata.has_default
+                        else None
+                    ),
+                    str(param_metadata.annotation),
+                    param_metadata.has_default,
+                    param_metadata.is_optional,
+                    position,
+                ),
+            )
+            position += 1
+
+        # Store method capabilities
+        for capability in method.capabilities:
+            # Try to link to existing capability
+            async with conn.execute(
+                "SELECT id FROM capabilities WHERE name = ?", (capability,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                capability_id = row[0] if row else None
+
+            await conn.execute(
+                """
+                INSERT INTO method_capabilities (
+                    method_id, capability_name, capability_id
+                ) VALUES (?, ?, ?)
+                """,
+                (method_id, capability, capability_id),
+            )
+
+        return method_id
+
+    async def get_service_contract(self, agent_id: str, service_name: str):
+        """Retrieve a service contract for an agent."""
+        import inspect
+        import json
+
+        from mcp_mesh_types.method_metadata import (
+            MethodMetadata,
+            MethodType,
+            ServiceContract,
+        )
+
+        conn = await self._get_connection()
+        try:
+            # Get contract basic info
+            async with conn.execute(
+                """
+                SELECT id, service_name, service_version, description, contract_version, compatibility_level
+                FROM service_contracts
+                WHERE agent_id = ? AND service_name = ?
+                """,
+                (agent_id, service_name),
+            ) as cursor:
+                contract_row = await cursor.fetchone()
+                if not contract_row:
+                    return None
+
+            (
+                contract_id,
+                service_name,
+                service_version,
+                description,
+                contract_version,
+                compatibility_level,
+            ) = contract_row
+
+            # Get methods for this contract
+            async with conn.execute(
+                """
+                SELECT id, method_name, signature_data, return_type, is_async, method_type,
+                       docstring, service_version, stability_level, deprecation_warning,
+                       expected_complexity, timeout_hint, resource_requirements
+                FROM method_metadata WHERE contract_id = ?
+                """,
+                (contract_id,),
+            ) as cursor:
+                method_rows = await cursor.fetchall()
+
+            # Build methods dictionary
+            methods = {}
+            contract_capabilities = []
+
+            for method_row in method_rows:
+                method_id = method_row[0]
+                method_name = method_row[1]
+
+                # Get method parameters
+                parameters = await self._get_method_parameters(conn, method_id)
+
+                # Get method capabilities
+                capabilities = await self._get_method_capabilities(conn, method_id)
+                contract_capabilities.extend(capabilities)
+
+                # Reconstruct signature
+                signature_data = json.loads(method_row[2])
+                sig_params = []
+                for param_name, param_info in signature_data["parameters"].items():
+                    param_metadata = parameters.get(param_name)
+                    if param_metadata:
+                        param = inspect.Parameter(
+                            name=param_name,
+                            kind=getattr(inspect.Parameter, param_info["kind"]),
+                            default=(
+                                inspect.Parameter.empty
+                                if not param_metadata.has_default
+                                else param_metadata.default
+                            ),
+                            annotation=param_metadata.type_hint,
+                        )
+                        sig_params.append(param)
+
+                signature = inspect.Signature(parameters=sig_params)
+
+                # Create MethodMetadata
+                method_metadata = MethodMetadata(
+                    method_name=method_name,
+                    signature=signature,
+                    capabilities=capabilities,
+                    return_type=eval(method_row[3]) if method_row[3] else type(None),
+                    parameters={name: pm.type_hint for name, pm in parameters.items()},
+                    type_hints={name: pm.type_hint for name, pm in parameters.items()},
+                    parameter_metadata=parameters,
+                    method_type=MethodType(method_row[5]),
+                    is_async=bool(method_row[4]),
+                    docstring=method_row[6] or "",
+                    service_version=method_row[7] or "1.0.0",
+                    stability_level=method_row[8] or "stable",
+                    deprecation_warning=method_row[9] or "",
+                    expected_complexity=method_row[10] or "O(1)",
+                    timeout_hint=method_row[11] or 30,
+                    resource_requirements=(
+                        json.loads(method_row[12]) if method_row[12] else {}
+                    ),
+                )
+
+                methods[method_name] = method_metadata
+
+            # Create ServiceContract
+            return ServiceContract(
+                service_name=service_name,
+                service_version=service_version,
+                methods=methods,
+                capabilities=list(set(contract_capabilities)),
+                description=description or "",
+                contract_version=contract_version,
+                compatibility_level=compatibility_level,
+            )
+
+        finally:
+            await self._return_connection(conn)
+
+    async def _get_method_parameters(self, conn: aiosqlite.Connection, method_id: int):
+        """Get parameters for a method."""
+        import inspect
+        import json
+
+        from mcp_mesh_types.method_metadata import ParameterKind, ParameterMetadata
+
+        async with conn.execute(
+            """
+            SELECT parameter_name, parameter_type, parameter_kind, default_value,
+                   annotation, has_default, is_optional
+            FROM method_parameters
+            WHERE method_id = ?
+            ORDER BY position
+            """,
+            (method_id,),
+        ) as cursor:
+            param_rows = await cursor.fetchall()
+
+        parameters = {}
+        for row in param_rows:
+            (
+                param_name,
+                param_type,
+                param_kind,
+                default_value,
+                annotation,
+                has_default,
+                is_optional,
+            ) = row
+
+            parameters[param_name] = ParameterMetadata(
+                name=param_name,
+                type_hint=eval(param_type) if param_type else type(None),
+                kind=ParameterKind(param_kind),
+                default=(
+                    json.loads(default_value)
+                    if default_value
+                    else inspect.Parameter.empty
+                ),
+                annotation=eval(annotation) if annotation else inspect.Parameter.empty,
+                has_default=bool(has_default),
+                is_optional=bool(is_optional),
+            )
+
+        return parameters
+
+    async def _get_method_capabilities(
+        self, conn: aiosqlite.Connection, method_id: int
+    ) -> list[str]:
+        """Get capabilities for a method."""
+        async with conn.execute(
+            "SELECT capability_name FROM method_capabilities WHERE method_id = ?",
+            (method_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        return [row[0] for row in rows]
+
+    async def find_methods_by_capability(
+        self, capability_name: str, agent_status: str = "healthy"
+    ) -> list[dict]:
+        """Find methods that provide a specific capability."""
+        conn = await self._get_connection()
+        try:
+            async with conn.execute(
+                """
+                SELECT DISTINCT
+                    a.id as agent_id, a.name as agent_name, a.endpoint,
+                    sc.service_name, sc.service_version,
+                    mm.method_name, mm.stability_level, mm.timeout_hint
+                FROM method_capabilities mc
+                JOIN method_metadata mm ON mc.method_id = mm.id
+                JOIN service_contracts sc ON mm.contract_id = sc.id
+                JOIN agents a ON sc.agent_id = a.id
+                WHERE mc.capability_name = ? AND a.status = ?
+                ORDER BY mm.stability_level DESC, a.updated_at DESC
+                """,
+                (capability_name, agent_status),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append(
+                    {
+                        "agent_id": row[0],
+                        "agent_name": row[1],
+                        "endpoint": row[2],
+                        "service_name": row[3],
+                        "service_version": row[4],
+                        "method_name": row[5],
+                        "stability_level": row[6],
+                        "timeout_hint": row[7],
+                    }
+                )
+
+            return results
+
+        finally:
+            await self._return_connection(conn)
+
+    async def update_capability_method_mapping(
+        self,
+        capability_id: int,
+        method_id: int,
+        mapping_type: str = "direct",
+        priority: int = 0,
+    ) -> None:
+        """Create or update capability-to-method mapping."""
+        conn = await self._get_connection()
+        try:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO capability_method_mapping (
+                    capability_id, method_id, mapping_type, priority, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    capability_id,
+                    method_id,
+                    mapping_type,
+                    priority,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            await conn.commit()
+
+        finally:
+            await self._return_connection(conn)
+
+    async def get_contract_compatibility_info(
+        self, service_name: str, version_constraint: str | None = None
+    ) -> list[dict]:
+        """Get contract compatibility information for version checking."""
+        conn = await self._get_connection()
+        try:
+            query = """
+                SELECT DISTINCT
+                    sc.agent_id, sc.service_name, sc.service_version,
+                    sc.contract_version, sc.compatibility_level,
+                    a.name as agent_name, a.status
+                FROM service_contracts sc
+                JOIN agents a ON sc.agent_id = a.id
+                WHERE sc.service_name = ?
+            """
+            params = [service_name]
+
+            if version_constraint:
+                # Simple version filtering - can be enhanced with proper semver logic
+                query += " AND sc.service_version = ?"
+                params.append(version_constraint)
+
+            query += " ORDER BY sc.service_version DESC"
+
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append(
+                    {
+                        "agent_id": row[0],
+                        "service_name": row[1],
+                        "service_version": row[2],
+                        "contract_version": row[3],
+                        "compatibility_level": row[4],
+                        "agent_name": row[5],
+                        "agent_status": row[6],
+                    }
+                )
+
+            return results
 
         finally:
             await self._return_connection(conn)

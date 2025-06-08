@@ -53,8 +53,14 @@ from .lifecycle import (
     LifecycleTransition,
     RegistrationResult,
 )
+from .method_metadata import (
+    MethodMetadata,
+    MethodType,
+    ParameterKind,
+    ParameterMetadata,
+    ServiceContract,
+)
 from .service_discovery import (
-    AgentInfo,
     AgentMatch,
     CapabilityHierarchy,
     CapabilityMatchingProtocol,
@@ -145,4 +151,9 @@ __all__ = [
     "ConfigurationError",
     "MissingConfigurationError",
     "InvalidConfigurationError",
+    "MethodMetadata",
+    "MethodType",
+    "ParameterKind",
+    "ParameterMetadata",
+    "ServiceContract",
 ]

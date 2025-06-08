@@ -2,6 +2,7 @@
 Pydantic models for MCP Mesh Registry
 
 Contains all data models used by the registry service to avoid circular imports.
+Includes enhanced service contract models for method metadata storage.
 """
 
 import re
@@ -229,3 +230,54 @@ class CapabilitySearchQuery(BaseModel):
                 "Stability must be one of: stable, beta, alpha, deprecated"
             )
         return v
+
+
+class ServiceContractQuery(BaseModel):
+    """Query for service contract discovery and compatibility checking."""
+
+    service_name: str | None = None
+    service_version: str | None = None
+    method_name: str | None = None
+    capability_name: str | None = None
+    agent_id: str | None = None
+    agent_status: str | None = "healthy"
+    stability_level: str | None = None
+    compatibility_level: str | None = None
+
+    @validator("stability_level")
+    def validate_stability_level(cls, v):
+        """Validate stability level filter."""
+        if v and v not in ["stable", "beta", "alpha", "experimental"]:
+            raise ValueError(
+                "Stability level must be one of: stable, beta, alpha, experimental"
+            )
+        return v
+
+    @validator("compatibility_level")
+    def validate_compatibility_level(cls, v):
+        """Validate compatibility level filter."""
+        if v and v not in ["strict", "relaxed", "permissive"]:
+            raise ValueError(
+                "Compatibility level must be one of: strict, relaxed, permissive"
+            )
+        return v
+
+
+class MethodDiscoveryResult(BaseModel):
+    """Result from method discovery queries."""
+
+    agent_id: str
+    agent_name: str
+    endpoint: str
+    service_name: str
+    service_version: str
+    method_name: str
+    stability_level: str
+    timeout_hint: int
+    capabilities: list[str] = Field(default_factory=list)
+
+    # Optional contract compatibility info
+    contract_version: str | None = None
+    compatibility_level: str | None = None
+    parameter_count: int | None = None
+    required_parameters: list[str] = Field(default_factory=list)
