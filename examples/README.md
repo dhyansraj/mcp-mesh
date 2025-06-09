@@ -37,7 +37,7 @@ System information agent providing:
 ### **Step 1: Start Hello World Server**
 
 ```bash
-mcp-mesh-dev start samples/hello_world.py
+mcp_mesh_dev start examples/hello_world.py
 ```
 
 **Expected Output:**
@@ -67,7 +67,7 @@ call_tool greet_from_mcp_mesh
 ### **Step 3: Start System Agent (Dependency Provider)**
 
 ```bash
-mcp-mesh-dev start samples/system_agent.py
+mcp_mesh_dev start examples/system_agent.py
 ```
 
 **Expected Output:**
@@ -95,7 +95,7 @@ call_tool greet_from_mcp_mesh
 ### **Step 5: Stop System Agent (Remove Dependencies)**
 
 ```bash
-mcp-mesh-dev stop system_agent.py
+mcp_mesh_dev stop system_agent.py
 ```
 
 ### **Step 6: Test Again (Dependencies Removed)**
@@ -171,29 +171,29 @@ call_tool greet_from_mcp_mesh
 
 ### **Prerequisites:**
 
-1. MCP Mesh CLI tools installed (`mcp-mesh-dev`)
+1. MCP Mesh CLI tools installed (`mcp_mesh_dev`)
 2. MCP client for testing tool calls
-3. Both sample files in `samples/` directory
+3. Both sample files in `examples/` directory
 
 ### **Complete Test Sequence:**
 
 ```bash
 # Terminal 1: Start hello_world server
-mcp-mesh-dev start samples/hello_world.py
+mcp_mesh_dev start examples/hello_world.py
 
 # Terminal 2: Test initial behavior
 mcp_client_test greet_from_mcp
 mcp_client_test greet_from_mcp_mesh
 
 # Terminal 3: Start system agent
-mcp-mesh-dev start samples/system_agent.py
+mcp_mesh_dev start examples/system_agent.py
 
 # Terminal 2: Test with dependencies
 mcp_client_test greet_from_mcp      # Same result
 mcp_client_test greet_from_mcp_mesh # NEW behavior with date!
 
 # Terminal 3: Stop system agent
-mcp-mesh-dev stop system_agent.py
+mcp_mesh_dev stop system_agent.py
 
 # Terminal 2: Test after dependency removal
 mcp_client_test greet_from_mcp_mesh # Back to original behavior
@@ -256,4 +256,221 @@ This demonstration perfectly showcases:
 - **Purpose:** Provides date service for dependency injection
 - **Example:** "June 8, 2025 at 10:30 AM"
 
+## 📦 **Package Installation & Limitations**
+
+### **Installation Options**
+
+#### **Option 1: MCP SDK Only (Basic MCP Functions)**
+
+```bash
+pip install mcp-mesh
+```
+
+**What you get:**
+
+- ✅ Full MCP SDK functionality
+- ✅ `@server.tool()` decorators work perfectly
+- ✅ Plain MCP functions run normally
+- ❌ **NO MCP Mesh features** (dependency injection disabled)
+- ❌ **NO @mesh_agent() decorator functionality**
+- ❌ **NO automatic service discovery**
+
+**Behavior with MCP SDK only:**
+
+- `greet_from_mcp()` - ✅ Works perfectly (returns "Hello from MCP")
+- `greet_from_mcp_mesh()` - ⚠️ Works but NO dependency injection (returns "Hello from MCP Mesh")
+- SystemAgent parameter will ALWAYS be None
+
+#### **Option 2: Full MCP Mesh Runtime (All Features)**
+
+```bash
+pip install mcp-mesh-runtime
+```
+
+**What you get:**
+
+- ✅ Complete MCP SDK functionality
+- ✅ **Full MCP Mesh dependency injection magic**
+- ✅ `@mesh_agent()` decorator with automatic discovery
+- ✅ Real-time service registration and injection
+- ✅ CLI tools (`mcp-mesh-dev`)
+- ✅ Registry services and monitoring
+
+**Behavior with MCP Mesh Runtime:**
+
+- `greet_from_mcp()` - ✅ Works perfectly (returns "Hello from MCP")
+- `greet_from_mcp_mesh()` - 🎉 **AUTOMATIC DEPENDENCY INJECTION** (returns enhanced greeting with date)
+- SystemAgent parameter automatically injected when system_agent.py runs
+
+### **Critical Understanding**
+
+🚨 **IMPORTANT**: The `@mesh_agent()` decorator is **interface-optional** but **runtime-dependent**:
+
+- **With `mcp-mesh` only:** Functions decorated with `@mesh_agent()` work as plain MCP functions
+- **With `mcp-mesh-runtime`:** Functions decorated with `@mesh_agent()` get full dependency injection
+
+### **Demonstration Compatibility**
+
+| Package            | greet_from_mcp      | greet_from_mcp_mesh       | SystemAgent Injection |
+| ------------------ | ------------------- | ------------------------- | --------------------- |
+| `mcp-mesh` only    | ✅ "Hello from MCP" | ⚠️ "Hello from MCP Mesh"  | ❌ Always None        |
+| `mcp-mesh-runtime` | ✅ "Hello from MCP" | 🎉 "Hello, its June 8..." | ✅ Automatic          |
+
+### **Quick Start Guide**
+
+1. **For MCP SDK compatibility only:**
+
+   ```bash
+   pip install mcp-mesh
+   python examples/hello_world.py  # Basic MCP functions only
+   ```
+
+2. **For full MCP Mesh experience:**
+   ```bash
+   pip install mcp-mesh-runtime
+   mcp-mesh-dev start examples/hello_world.py
+   mcp-mesh-dev start examples/system_agent.py  # Watch dependency injection!
+   ```
+
 **This is the future of service mesh architecture - zero-boilerplate, interface-optional, real-time dependency injection!** 🚀
+
+## 🛠️ **CLI Usage and Compatibility**
+
+### **Working Examples**
+
+All examples in the `examples/` directory are **fully compatible** with the CLI:
+
+✅ **examples/hello_world.py** - Perfect demonstration of CLI usage
+✅ **examples/system_agent.py** - Dependency injection demo
+✅ **examples/process_management_demo.py** - Process monitoring demo
+
+### **Backup Examples Compatibility**
+
+The `examples.bkp/` directory contains older examples with some compatibility issues:
+
+⚠️ **Some backup examples** use older import syntax:
+
+- Old: `from mcp_mesh_types import mesh_agent`
+- New: `from mcp_mesh import mesh_agent`
+
+⚠️ **Working backup examples:**
+
+- `hello_world_server.py` - Works with CLI
+- `vanilla_mcp_test.py` - Works with CLI
+- `test_client.py` - Works with CLI
+
+❌ **Backup examples needing updates:**
+
+- `file_agent_example.py` - Import issues
+- `fastmcp_integration_example.py` - Import issues
+- Others with `mcp_mesh_types` imports
+
+### **CLI Command Reference**
+
+#### **Basic Usage**
+
+```bash
+# Start single agent
+mcp_mesh_dev start examples/hello_world.py
+
+# Start multiple agents
+mcp_mesh_dev start examples/hello_world.py examples/system_agent.py
+
+# Stop specific agent
+mcp_mesh_dev stop system_agent
+
+# Stop all services
+mcp_mesh_dev stop
+```
+
+#### **Monitoring and Debug**
+
+```bash
+# Check service status
+mcp_mesh_dev status
+
+# List running services
+mcp_mesh_dev list
+
+# View logs
+mcp_mesh_dev logs
+mcp_mesh_dev logs --follow
+mcp_mesh_dev logs --agent hello_world
+```
+
+#### **Advanced Configuration**
+
+```bash
+# Custom registry port
+mcp_mesh_dev start --registry-port 8081 examples/hello_world.py
+
+# Custom database path
+mcp_mesh_dev start --database-path ./custom_registry.db examples/hello_world.py
+
+# Verbose output
+mcp_mesh_dev start --verbose examples/hello_world.py
+```
+
+### **Expected CLI Behavior**
+
+When you run `mcp_mesh_dev start examples/hello_world.py`, you should see:
+
+```
+ℹ INFO: Starting MCP Mesh services with configuration:
+  Registry: localhost:8080
+  Database: ./dev_registry.db
+  Log Level: INFO
+  Mode: Registry + 1 agent(s)
+ℹ INFO: Agent files: examples/hello_world.py
+ℹ INFO: Starting registry service...
+✓ SUCCESS: Registry service ready
+  PID: 12345
+  Host: localhost
+  Port: 8080
+  URL: http://localhost:8080
+ℹ INFO: Starting 1 agent(s)...
+✓ SUCCESS: Agent hello_world started
+  PID: 12346
+  File: /path/to/examples/hello_world.py
+  Registry: http://localhost:8080
+ℹ INFO: Waiting for agent registration...
+```
+
+### **Troubleshooting CLI Issues**
+
+#### **Common Problems**
+
+1. **Port already in use:**
+
+   ```bash
+   mcp_mesh_dev start --registry-port 8081 examples/hello_world.py
+   ```
+
+2. **Import errors in backup examples:**
+
+   ```
+   ModuleNotFoundError: No module named 'mcp_mesh_types'
+   ```
+
+   → Use examples from `examples/` directory instead of `examples.bkp/`
+
+3. **Agent fails to start:**
+   ```bash
+   mcp_mesh_dev status  # Check what went wrong
+   mcp_mesh_dev logs    # View error details
+   ```
+
+#### **CLI vs Direct Python Execution**
+
+| Method                           | Use Case              | Benefits                                 |
+| -------------------------------- | --------------------- | ---------------------------------------- |
+| `mcp_mesh_dev start`             | Development & Testing | Registry, monitoring, process management |
+| `python examples/hello_world.py` | Basic MCP Testing     | Simple, direct execution                 |
+
+### **Production vs Development**
+
+- **Development**: Use `mcp_mesh_dev` for full mesh features
+- **Production**: Use `mcp-server` or direct Python execution for basic MCP
+- **Hybrid**: Use `mcp_mesh` package for compatibility with both approaches
+
+The CLI provides the complete MCP Mesh experience with automatic dependency injection, service discovery, and robust process management! 🚀

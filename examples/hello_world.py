@@ -189,8 +189,8 @@ def main():
     print("4. greet_from_mcp remains unchanged (plain MCP)")
     print("\n📝 Server ready on stdio transport...")
     print("💡 Use MCP client to test functions.")
-    print("🔧 Start with: mcp-mesh-dev start samples/hello_world.py")
-    print("📊 Then add: mcp-mesh-dev start samples/system_agent.py")
+    print("🔧 Start with: mcp_mesh_dev start examples/hello_world.py")
+    print("📊 Then add: mcp_mesh_dev start examples/system_agent.py")
     print("🛑 Press Ctrl+C to stop.\n")
 
     # Run the server with stdio transport

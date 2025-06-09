@@ -203,6 +203,8 @@ def main():
     print("\n📝 Server ready on stdio transport...")
     print("💡 Test with MCP client tool calls.")
     print("🔧 Start hello_world.py first, then this agent to see injection")
+    print("🚀 Example: mcp_mesh_dev start examples/hello_world.py")
+    print("🚀 Then: mcp_mesh_dev start examples/system_agent.py")
     print("🛑 Press Ctrl+C to stop.\n")
 
     # Run the server with stdio transport

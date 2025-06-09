@@ -58,6 +58,7 @@ Repository = "https://github.com/yourusername/mcp-mesh"
 Issues = "https://github.com/yourusername/mcp-mesh/issues"
 
 [project.scripts]
+mcp_mesh_dev = "mcp_mesh_runtime.cli.main:main"
 mcp-mesh-server = "mcp_mesh_runtime.server:main"
 mcp-mesh-registry = "mcp_mesh_runtime.server.registry_server:main"
 
@@ -65,7 +66,10 @@ mcp-mesh-registry = "mcp_mesh_runtime.server.registry_server:main"
 path = "packages/mcp_mesh/src/mcp_mesh/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = []
+packages = [
+    "packages/mcp_mesh/src/mcp_mesh",
+    "packages/mcp_mesh_runtime/src/mcp_mesh_runtime",
+]
 
 # Black configuration
 [tool.black]

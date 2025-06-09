@@ -33,6 +33,14 @@ class HeartbeatRequest(BaseModel):
     metadata: dict[str, Any] | None = {}
 
 
+class RegisterAgentRequest(BaseModel):
+    """Request model for agent registration with metadata."""
+
+    agent_id: str
+    metadata: dict[str, Any]
+    timestamp: str
+
+
 class AgentsResponse(BaseModel):
     """Response model for agents endpoint."""
 
@@ -90,6 +98,9 @@ class RegistryServer:
         print("🔄 Mode: PASSIVE (pull-based)")
         print("🌐 REST Endpoints:")
         print("   POST /heartbeat - Agent status updates")
+        print(
+            "   POST /agents/register_with_metadata - Agent registration with metadata"
+        )
         print("   GET  /agents - Service discovery (with fuzzy matching & filtering)")
         print("   GET  /capabilities - Capability discovery (with advanced search)")
         print("   GET  /health - Health check")
@@ -188,6 +199,122 @@ class RegistryServer:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to process heartbeat: {str(e)}",
+                )
+
+        @app.post(
+            "/agents/register_with_metadata",
+            response_model=dict[str, Any],
+            status_code=status.HTTP_201_CREATED,
+            responses={
+                201: {"description": "Agent registered successfully"},
+                400: {"description": "Invalid registration data"},
+                500: {"description": "Internal server error"},
+            },
+        )
+        async def register_agent_with_metadata(request: RegisterAgentRequest):
+            """POST /agents/register_with_metadata - Register agent with enhanced metadata."""
+            try:
+                from datetime import datetime, timezone
+
+                from .models import AgentCapability, AgentRegistration
+
+                # Convert metadata to AgentRegistration format
+                metadata = request.metadata
+
+                # Build capabilities list from metadata
+                capabilities = []
+                if "capabilities" in metadata and metadata["capabilities"]:
+                    for cap_data in metadata["capabilities"]:
+                        if isinstance(cap_data, dict):
+                            capability = AgentCapability(
+                                name=cap_data.get("name", "unknown"),
+                                version=cap_data.get("version", "1.0.0"),
+                                description=cap_data.get("description", ""),
+                                tags=cap_data.get("tags", []),
+                                parameters=cap_data.get("parameters", {}),
+                                performance_metrics=cap_data.get(
+                                    "performance_metrics", {}
+                                ),
+                                security_level=cap_data.get(
+                                    "security_level", "standard"
+                                ),
+                                resource_requirements=cap_data.get(
+                                    "resource_requirements", {}
+                                ),
+                                metadata=cap_data.get("metadata", {}),
+                            )
+                            capabilities.append(capability)
+
+                # Normalize names to comply with validation rules (lowercase alphanumeric with hyphens)
+                def normalize_name(name: str) -> str:
+                    """Convert name to lowercase alphanumeric with hyphens."""
+                    import re
+
+                    # Replace underscores and other characters with hyphens
+                    normalized = re.sub(r"[^a-z0-9-]", "-", name.lower())
+                    # Remove consecutive hyphens
+                    normalized = re.sub(r"-+", "-", normalized)
+                    # Remove leading/trailing hyphens
+                    normalized = normalized.strip("-")
+                    return normalized or "agent"
+
+                agent_name = normalize_name(metadata.get("name", request.agent_id))
+                agent_type = normalize_name(metadata.get("agent_type", "mesh-agent"))
+
+                # Create a valid HTTP endpoint for stdio agents
+                agent_endpoint = metadata.get("endpoint")
+                if not agent_endpoint or not agent_endpoint.startswith(
+                    ("http://", "https://")
+                ):
+                    # For MCP stdio agents, create a placeholder HTTP endpoint
+                    agent_endpoint = f"http://localhost:0/{agent_name}"
+
+                # Create AgentRegistration object
+                registration = AgentRegistration(
+                    name=agent_name,
+                    namespace=metadata.get("namespace", "default"),
+                    endpoint=agent_endpoint,
+                    capabilities=capabilities,
+                    dependencies=metadata.get("dependencies", []),
+                    health_interval=metadata.get("health_interval", 30),
+                    agent_type=agent_type,
+                    config=metadata.get("metadata", {}),
+                    security_context=metadata.get("security_context"),
+                    labels=(
+                        metadata.get("tags", {})
+                        if isinstance(metadata.get("tags"), dict)
+                        else {}
+                    ),
+                    annotations={
+                        "registered_via": "register_with_metadata",
+                        "timestamp": request.timestamp,
+                        "original_name": metadata.get("name", request.agent_id),
+                        "original_agent_type": metadata.get("agent_type", "mesh_agent"),
+                        "original_endpoint": metadata.get(
+                            "endpoint", f"stdio://{request.agent_id}"
+                        ),
+                    },
+                )
+
+                # Register agent using existing storage method
+                registered_agent = await self.registry_service.storage.register_agent(
+                    registration
+                )
+
+                return {
+                    "status": "success",
+                    "agent_id": request.agent_id,
+                    "resource_version": registered_agent.resource_version,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": "Agent registered successfully",
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to register agent: {str(e)}",
                 )
 
         @app.get(
@@ -412,6 +539,7 @@ class RegistryServer:
                 "version": "1.0.0",
                 "endpoints": {
                     "heartbeat": "POST /heartbeat - Agent status updates",
+                    "register_agent": "POST /agents/register_with_metadata - Agent registration with metadata",
                     "agents": "GET /agents - Service discovery with advanced filtering",
                     "capabilities": "GET /capabilities - Capability discovery with search",
                     "health": "GET /health - Health check",
