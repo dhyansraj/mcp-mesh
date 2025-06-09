@@ -148,48 +148,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                             )
                         )
 
-                    # Wait for agents to register with registry
-                    print(status_display.show_info("Waiting for agent registration..."))
-                    successful_registrations = 0
-
-                    for agent_name in agent_results:
-                        registered = await agent_manager.wait_for_agent_registration(
-                            agent_name, timeout=config.startup_timeout
+                    print(
+                        status_display.show_success(
+                            f"All {len(agent_results)} agent(s) started successfully"
                         )
-                        if registered:
-                            print(
-                                status_display.show_success(
-                                    f"Agent {agent_name} registered successfully"
-                                )
-                            )
-                            successful_registrations += 1
-                        else:
-                            print(
-                                status_display.show_warning(
-                                    f"Agent {agent_name} did not register within timeout"
-                                )
-                            )
-
-                    # Summary
-                    if successful_registrations == len(agent_results):
-                        print(
-                            status_display.show_success(
-                                f"All {len(agent_results)} agent(s) started and registered successfully"
-                            )
-                        )
-                    elif successful_registrations > 0:
-                        print(
-                            status_display.show_warning(
-                                f"{successful_registrations}/{len(agent_results)} agent(s) registered successfully"
-                            )
-                        )
-                    else:
-                        print(
-                            status_display.show_error(
-                                "No agents registered successfully"
-                            )
-                        )
-                        return False
+                    )
 
                 return True
 

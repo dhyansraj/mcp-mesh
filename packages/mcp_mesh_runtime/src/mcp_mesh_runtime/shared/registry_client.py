@@ -97,14 +97,25 @@ class RegistryClient:
         payload = {
             "agent_id": agent_id,
             "metadata": {
-                "name": metadata.name,
+                # Required fields for Agent model
+                "id": agent_id,
+                "name": metadata.name or agent_id,  # Use agent_id as fallback name
+                "endpoint": metadata.endpoint
+                or "stdio://localhost",  # Default endpoint for MCP
+                "namespace": "default",  # Default namespace
+                "status": "healthy",  # Initial status
+                # Health configuration
+                "health_interval": metadata.health_interval,
+                "timeout_threshold": 60,  # Default 60 seconds
+                "eviction_threshold": 120,  # Default 120 seconds
+                "agent_type": "mcp_agent",  # Default agent type
+                # Optional security context
+                "security_context": metadata.security_context,
+                # Enhanced metadata
                 "version": metadata.version,
                 "description": metadata.description,
                 "capabilities": capabilities_data,
                 "dependencies": metadata.dependencies,
-                "health_interval": metadata.health_interval,
-                "security_context": metadata.security_context,
-                "endpoint": metadata.endpoint,
                 "tags": metadata.tags,
                 "performance_profile": metadata.performance_profile,
                 "resource_usage": metadata.resource_usage,
@@ -152,18 +163,30 @@ class RegistryClient:
         self, method: str, endpoint: str, payload: dict | None = None
     ) -> dict | None:
         """Make HTTP request to registry with retry logic."""
+        print(f"🐛 DEBUG (Python): Making {method} request to {endpoint}")
+        print(f"🐛 DEBUG (Python): Payload: {payload}")
+
         if aiohttp is None:
             # Fallback mode: simulate successful requests
+            print("🐛 DEBUG (Python): aiohttp is None, using fallback mode")
             return {"status": "ok", "message": "fallback mode"}
 
         try:
             session = await self._get_session()
             url = f"{self.url}{endpoint}"
+            print(f"🐛 DEBUG (Python): Full URL: {url}")
 
             for attempt in range(self.retry_attempts):
                 try:
+                    print(
+                        f"🐛 DEBUG (Python): Attempt {attempt + 1}/{self.retry_attempts}"
+                    )
+
                     if method == "GET":
                         async with session.get(url) as response:
+                            print(
+                                f"🐛 DEBUG (Python): GET response status: {response.status}"
+                            )
                             if response.status == 200:
                                 return await response.json()
                             else:
@@ -172,6 +195,7 @@ class RegistryClient:
                                 )
 
                     elif method == "POST":
+                        print("🐛 DEBUG (Python): Sending POST request...")
                         async with session.post(url, json=payload) as response:
                             if response.status in [200, 201]:
                                 return (
@@ -203,6 +227,43 @@ class RegistryClient:
             return None
 
         return None
+
+    async def post(self, endpoint: str, json: dict | None = None) -> Any:
+        """Make a POST request to the registry."""
+        try:
+            result = await self._make_request("POST", endpoint, json)
+
+            # Create a mock response object that has status and json() method
+            class MockResponse:
+                def __init__(self, data, status=201):
+                    self.status = status
+                    self._data = data
+
+                async def json(self):
+                    return self._data
+
+                async def text(self):
+                    return str(self._data)
+
+            if result:
+                return MockResponse(result, 201)
+            else:
+                return MockResponse({"error": "Failed to connect to registry"}, 500)
+
+        except Exception as e:
+
+            class MockResponse:
+                def __init__(self, error, status=500):
+                    self.status = status
+                    self._error = error
+
+                async def json(self):
+                    return {"error": str(self._error)}
+
+                async def text(self):
+                    return str(self._error)
+
+            return MockResponse(e, 500)
 
     def _get_registry_url_from_env(self) -> str:
         """Get registry URL from environment variables."""

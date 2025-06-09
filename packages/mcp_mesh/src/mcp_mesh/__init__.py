@@ -32,6 +32,13 @@ from .configuration import (
     ServerConfig,
     ServiceDiscoveryConfig,
 )
+from .decorator_registry import (
+    DecoratedFunction,
+    DecoratorRegistry,
+    clear_decorator_registry,
+    get_all_mesh_agents,
+    get_decorator_stats,
+)
 from .decorators import mesh_agent
 from .exceptions import (
     FileOperationError,
@@ -120,6 +127,11 @@ __version__ = "0.1.0"
 
 __all__ = [
     "mesh_agent",
+    "DecoratedFunction",
+    "DecoratorRegistry",
+    "clear_decorator_registry",
+    "get_all_mesh_agents",
+    "get_decorator_stats",
     "FileOperations",
     "FileOperationError",
     "SecurityValidationError",

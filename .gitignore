@@ -174,3 +174,5 @@ capability_store/
 .env.local
 .env.development
 config/local.yaml
+*.db-shm
+*.db-wal

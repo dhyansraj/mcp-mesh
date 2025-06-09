@@ -3,6 +3,8 @@
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from .decorator_registry import DecoratorRegistry
+
 T = TypeVar("T")
 
 
@@ -58,10 +60,6 @@ def mesh_agent(
     """
 
     def decorator(target: T) -> T:
-        # Store comprehensive metadata for potential enhancement by full package
-        if not hasattr(target, "_mesh_metadata"):
-            target._mesh_metadata = {}
-
         # Build enhanced metadata for capability registration
         metadata = {
             "capabilities": capabilities,
@@ -83,9 +81,15 @@ def mesh_agent(
             **metadata_kwargs,
         }
 
+        # Register with DecoratorRegistry for later processing
+        DecoratorRegistry.register_mesh_agent(target, metadata)
+
+        # Store metadata on function for backward compatibility
+        if not hasattr(target, "_mesh_metadata"):
+            target._mesh_metadata = {}
         target._mesh_metadata.update(metadata)
 
-        # Store additional metadata for runtime access
+        # Store additional metadata for runtime access (backward compatibility)
         target._mesh_agent_capabilities = capabilities
         target._mesh_agent_dependencies = dependencies or []
 

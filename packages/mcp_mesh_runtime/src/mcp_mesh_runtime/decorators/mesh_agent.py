@@ -8,6 +8,7 @@ import asyncio
 import functools
 import inspect
 import logging
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -112,6 +113,27 @@ class MeshAgentDecorator:
 
         self.logger = logging.getLogger(f"mesh_agent.{self.agent_name}")
 
+        # Set up debug logging if DEBUG environment variable is set
+        if os.getenv("MCP_MESH_DEBUG", "").lower() in ("true", "1", "yes"):
+            self.logger.setLevel(logging.DEBUG)
+            handler = logging.StreamHandler()
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                )
+            )
+            self.logger.addHandler(handler)
+
+        self.logger.debug(
+            f"🔧 Initializing MeshAgentDecorator for agent '{self.agent_name}'"
+        )
+        self.logger.debug(f"📋 Capabilities: {self.capabilities}")
+        self.logger.debug(f"🔗 Dependencies: {self.dependencies}")
+        self.logger.debug(
+            f"⚙️ Configuration: registry_url={self.registry_url}, "
+            f"health_interval={self.health_interval}, fallback_mode={self.fallback_mode}"
+        )
+
         # Pre-analyze dependencies for unified resolution
         self._analyze_dependencies()
 
@@ -129,6 +151,10 @@ class MeshAgentDecorator:
             return
 
         try:
+            self.logger.debug(
+                f"🔍 Starting dependency analysis for {len(self.dependencies)} dependencies"
+            )
+
             # Analyze dependencies without function signature initially
             # We'll update with function signature info when decorating
             self._dependency_specifications = (
@@ -139,22 +165,34 @@ class MeshAgentDecorator:
             )
 
             self.logger.debug(
-                f"Analyzed {len(self._dependency_specifications)} dependency specifications"
+                f"✅ Analyzed {len(self._dependency_specifications)} dependency specifications: "
+                f"{[spec.display_name for spec in self._dependency_specifications]}"
             )
 
         except Exception as e:
-            self.logger.warning(f"Failed to analyze dependencies: {e}")
+            self.logger.warning(f"❌ Failed to analyze dependencies: {e}")
+            self.logger.debug(
+                "🔄 Falling back to string-based dependency specifications"
+            )
             # Fallback to treating all as string dependencies for backward compatibility
             self._dependency_specifications = [
                 DependencySpecification.from_string(str(dep))
                 for dep in self.dependencies
             ]
+            self.logger.debug(
+                f"📝 Created {len(self._dependency_specifications)} fallback dependency specs"
+            )
 
     def _update_dependency_specifications_with_signature(
         self, function_signature: inspect.Signature
     ) -> None:
         """Update dependency specifications with function signature information."""
         try:
+            self.logger.debug(
+                "🔧 Updating dependency specifications with function signature"
+            )
+            self.logger.debug(f"📋 Function signature: {function_signature}")
+
             # Re-analyze with function signature for better parameter mapping
             updated_specs = DependencyAnalyzer.analyze_dependencies_list(
                 dependencies=self.dependencies, function_signature=function_signature
@@ -163,7 +201,7 @@ class MeshAgentDecorator:
             self._dependency_specifications = updated_specs
 
             self.logger.debug(
-                f"Updated dependency specifications with signature info: "
+                f"✅ Updated dependency specifications with signature info: "
                 f"{[spec.display_name for spec in self._dependency_specifications]}"
             )
 
@@ -182,21 +220,25 @@ class MeshAgentDecorator:
 
             validator = BasicDependencyValidator()
 
+            self.logger.debug(
+                f"🔍 Validating {len(self._dependency_specifications)} dependency specifications"
+            )
+
             validation_results = validator.validate_specifications(
                 self._dependency_specifications
             )
 
             if validation_results:
-                self.logger.warning("Dependency validation issues found:")
+                self.logger.warning("⚠️ Dependency validation issues found:")
                 for dep_name, errors in validation_results.items():
                     for error in errors:
-                        self.logger.warning(f"  {dep_name}: {error.message}")
+                        self.logger.warning(f"  ❌ {dep_name}: {error.message}")
                         if error.suggestions:
                             for suggestion in error.suggestions:
-                                self.logger.info(f"    Suggestion: {suggestion}")
+                                self.logger.info(f"    💡 Suggestion: {suggestion}")
             else:
                 self.logger.debug(
-                    "All dependency specifications validated successfully"
+                    "✅ All dependency specifications validated successfully"
                 )
 
         except Exception as e:
@@ -212,14 +254,24 @@ class MeshAgentDecorator:
         """
         start_time = time.perf_counter()
 
+        self.logger.debug(
+            f"🔍 Starting method signature extraction for {type(func_or_class).__name__}"
+        )
+
         try:
             # Determine if we're decorating a function or class
             if inspect.isclass(func_or_class):
+                self.logger.debug(
+                    f"📋 Extracting signatures from class: {func_or_class.__name__}"
+                )
                 self._extract_class_method_signatures(func_or_class)
             else:
+                func_name = getattr(func_or_class, "__name__", "unknown_function")
+                self.logger.debug(f"📋 Extracting signature from function: {func_name}")
                 self._extract_function_signature(func_or_class)
 
             # Create service contract
+            self.logger.debug("📄 Creating service contract")
             self._create_service_contract(func_or_class)
 
             self._signature_extraction_time = (
@@ -227,12 +279,15 @@ class MeshAgentDecorator:
             ) * 1000  # Convert to ms
 
             self.logger.debug(
-                f"Method signature extraction completed in {self._signature_extraction_time:.2f}ms "
-                f"for {len(self._method_metadata)} methods"
+                f"✅ Method signature extraction completed in {self._signature_extraction_time:.2f}ms "
+                f"for {len(self._method_metadata)} methods: {list(self._method_metadata.keys())}"
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to extract method signatures: {e}")
+            self.logger.error(f"❌ Failed to extract method signatures: {e}")
+            self.logger.debug(
+                "🔄 Continuing decorator initialization despite signature extraction failure"
+            )
             # Don't fail the decorator if signature extraction fails
 
     def _extract_class_method_signatures(self, cls: type) -> None:
@@ -372,27 +427,76 @@ class MeshAgentDecorator:
     def __call__(self, func_or_class: F) -> F:
         """Apply the decorator to a function or class."""
 
+        target_name = getattr(func_or_class, "__name__", "unknown")
+        self.logger.debug(f"🎯 Applying mesh agent decorator to: {target_name}")
+
         # Extract method signatures automatically
+        self.logger.debug("📝 Extracting method signatures")
         self._extract_method_signatures(func_or_class)
 
         # Update dependency specifications with function signature if decorating a function
         if not inspect.isclass(func_or_class) and self.dependencies:
             try:
+                self.logger.debug(
+                    "🔧 Updating dependency specs with function signature"
+                )
                 function_signature = inspect.signature(func_or_class)
                 self._update_dependency_specifications_with_signature(
                     function_signature
                 )
             except Exception as e:
                 self.logger.debug(
-                    f"Could not extract signature for dependency analysis: {e}"
+                    f"⚠️ Could not extract signature for dependency analysis: {e}"
                 )
 
         # Handle class decoration
         if inspect.isclass(func_or_class):
-            return self._decorate_class(func_or_class)
+            self.logger.debug(f"🏗️ Decorating class: {func_or_class.__name__}")
+            decorated_class = self._decorate_class(func_or_class)
+        else:
+            # Handle function decoration
+            self.logger.debug(f"⚡ Decorating function: {target_name}")
+            decorated_class = self._decorate_function(func_or_class)
 
-        # Handle function decoration
-        return self._decorate_function(func_or_class)
+        # 🚀 CRITICAL FIX: Start mesh lifecycle immediately after decoration
+        self.logger.debug(f"🚀 Starting mesh lifecycle immediately for: {target_name}")
+        self._schedule_immediate_initialization()
+
+        return decorated_class
+
+    def _schedule_immediate_initialization(self) -> None:
+        """Schedule immediate mesh lifecycle initialization in a background thread."""
+
+        def run_async_init():
+            """Run async initialization in a new event loop."""
+            try:
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                # Run the initialization
+                loop.run_until_complete(self._initialize())
+
+                self.logger.debug(
+                    f"✅ Mesh lifecycle started successfully for agent '{self.agent_name}'"
+                )
+
+            except Exception as e:
+                self.logger.debug(f"❌ Failed to start mesh lifecycle: {e}")
+                # Don't fail the decorator application - graceful degradation
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+        # Start initialization in a daemon thread so it doesn't block decorator application
+        import threading
+
+        init_thread = threading.Thread(
+            target=run_async_init, name=f"MeshInit-{self.agent_name}", daemon=True
+        )
+        init_thread.start()
 
     def _decorate_class(self, cls: type) -> type:
         """Apply mesh agent decoration to a class."""
@@ -456,11 +560,7 @@ class MeshAgentDecorator:
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            # Initialize mesh integration on first call
-            if not self._initialized:
-                await self._initialize()
-
-            # Inject dependencies into kwargs
+            # Inject dependencies into kwargs (initialization already completed in background)
             injected_kwargs = await self._inject_dependencies(kwargs)
 
             # Execute the original function
@@ -479,12 +579,9 @@ class MeshAgentDecorator:
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            # For sync functions, we need to handle async initialization
+            # For sync functions, we need to handle async dependency injection
             async def _run():
-                if not self._initialized:
-                    await self._initialize()
-
-                # Inject dependencies into kwargs
+                # Inject dependencies into kwargs (initialization already completed in background)
                 injected_kwargs = await self._inject_dependencies(kwargs)
 
                 # Execute the original function
@@ -513,16 +610,7 @@ class MeshAgentDecorator:
 
         @functools.wraps(method)
         async def async_method_wrapper(self_instance, *args, **kwargs):
-            # Initialize mesh integration on first call
-            if hasattr(self_instance, "_mesh_decorator") and not getattr(
-                self_instance, "_mesh_initialized", False
-            ):
-                decorator = self_instance._mesh_decorator
-                if not decorator._initialized:
-                    await decorator._initialize()
-                self_instance._mesh_initialized = True
-
-            # Inject dependencies into kwargs
+            # Inject dependencies into kwargs (initialization already completed in background)
             if hasattr(self_instance, "_mesh_decorator"):
                 injected_kwargs = (
                     await self_instance._mesh_decorator._inject_dependencies(kwargs)
@@ -551,16 +639,7 @@ class MeshAgentDecorator:
         @functools.wraps(method)
         def sync_method_wrapper(self_instance, *args, **kwargs):
             async def _run():
-                # Initialize mesh integration on first call
-                if hasattr(self_instance, "_mesh_decorator") and not getattr(
-                    self_instance, "_mesh_initialized", False
-                ):
-                    decorator = self_instance._mesh_decorator
-                    if not decorator._initialized:
-                        await decorator._initialize()
-                    self_instance._mesh_initialized = True
-
-                # Inject dependencies into kwargs
+                # Inject dependencies into kwargs (initialization already completed in background)
                 if hasattr(self_instance, "_mesh_decorator"):
                     injected_kwargs = (
                         await self_instance._mesh_decorator._inject_dependencies(kwargs)
@@ -672,10 +751,16 @@ class MeshAgentDecorator:
         """Initialize mesh integration components."""
         async with self._initialization_lock:
             if self._initialized:
+                self.logger.debug("🔄 Mesh agent already initialized, skipping")
                 return
+
+            self.logger.debug("🚀 Starting mesh agent initialization")
 
             try:
                 # Initialize registry client
+                self.logger.debug(
+                    f"🌐 Initializing registry client: {self.registry_url}"
+                )
                 self._registry_client = RegistryClient(
                     url=self.registry_url,
                     timeout=self.timeout,
@@ -683,9 +768,13 @@ class MeshAgentDecorator:
                 )
 
                 # Initialize service discovery
+                self.logger.debug("🔍 Initializing service discovery")
                 self._service_discovery = ServiceDiscoveryService(self._registry_client)
 
                 # Initialize fallback chain
+                self.logger.debug(
+                    f"🔗 Initializing fallback chain with config: {self.fallback_config}"
+                )
                 self._fallback_chain = MeshFallbackChain(
                     registry_client=self._registry_client,
                     service_discovery=self._service_discovery,
@@ -693,6 +782,9 @@ class MeshAgentDecorator:
                 )
 
                 # Initialize unified dependency resolver
+                self.logger.debug(
+                    f"🧩 Initializing unified dependency resolver (caching: {self.enable_caching})"
+                )
                 self._unified_resolver = MeshUnifiedDependencyResolver(
                     registry_client=self._registry_client,
                     service_discovery=self._service_discovery,
@@ -701,23 +793,31 @@ class MeshAgentDecorator:
                 )
 
                 # Register enhanced capabilities with registry
+                self.logger.debug("📋 Registering enhanced capabilities")
                 await self._register_enhanced_capabilities()
 
                 # Start health monitoring task
+                self.logger.debug(
+                    f"💓 Starting health monitoring (interval: {self.health_interval}s)"
+                )
                 self._health_task = asyncio.create_task(self._health_monitor())
 
                 self._initialized = True
                 self.logger.info(
-                    f"Mesh agent initialized with capabilities: {self.capabilities}"
+                    f"🎉 Mesh agent '{self.agent_name}' initialized successfully with capabilities: {self.capabilities}"
                 )
 
             except Exception as e:
                 if self.fallback_mode:
                     self.logger.warning(
-                        f"Mesh initialization failed, running in fallback mode: {e}"
+                        f"⚠️ Mesh initialization failed, running in fallback mode: {e}"
+                    )
+                    self.logger.debug(
+                        "🔄 Continuing in standalone mode without mesh features"
                     )
                     self._initialized = True  # Allow function to work without mesh
                 else:
+                    self.logger.error(f"❌ Mesh agent initialization failed: {e}")
                     raise MeshAgentError(f"Failed to initialize mesh agent: {e}") from e
 
     async def _register_enhanced_capabilities(self) -> None:
@@ -796,9 +896,13 @@ class MeshAgentDecorator:
 
             if success:
                 self.logger.info(
-                    f"Registered enhanced capabilities: {self.capabilities}"
+                    f"✅ Successfully registered enhanced capabilities: {self.capabilities}"
+                )
+                self.logger.debug(
+                    f"📊 Service contract: {self._service_contract.service_name if self._service_contract else 'None'}"
                 )
             else:
+                self.logger.error("❌ Failed to register agent capabilities")
                 raise RegistryConnectionError("Failed to register agent capabilities")
 
         except RegistryConnectionError as e:
@@ -831,6 +935,10 @@ class MeshAgentDecorator:
                     },
                 )
 
+                self.logger.debug(
+                    f"🧩 Processing {len(resolution_results)} dependency resolution results"
+                )
+
                 # Process resolution results
                 for result in resolution_results:
                     spec = result.specification
@@ -840,35 +948,44 @@ class MeshAgentDecorator:
 
                     # Skip if already provided in kwargs
                     if param_name in kwargs:
+                        self.logger.debug(
+                            f"⏭️ Skipping '{param_name}' - already provided in kwargs"
+                        )
                         continue
 
                     if result.success and result.instance is not None:
                         injected_kwargs[param_name] = result.instance
                         self.logger.debug(
-                            f"Injected {spec.pattern.value} dependency '{param_name}' "
-                            f"via {result.resolution_method}"
+                            f"✅ Injected {spec.pattern.value} dependency '{param_name}' "
+                            f"via {result.resolution_method} (type: {type(result.instance).__name__})"
                         )
                     else:
                         if not spec.is_optional:
                             if self.fallback_mode:
                                 self.logger.warning(
-                                    f"Failed to resolve required dependency '{param_name}': "
+                                    f"⚠️ Failed to resolve required dependency '{param_name}': "
                                     f"{result.error}"
                                 )
                             else:
+                                self.logger.error(
+                                    f"❌ Failed to resolve required dependency '{param_name}': "
+                                    f"{result.error}"
+                                )
                                 raise MeshAgentError(
                                     f"Failed to resolve required dependency '{param_name}': "
                                     f"{result.error}"
                                 )
                         else:
                             self.logger.debug(
-                                f"Optional dependency '{param_name}' not resolved: {result.error}"
+                                f"🔘 Optional dependency '{param_name}' not resolved: {result.error}"
                             )
 
             except Exception as e:
                 if self.fallback_mode:
-                    self.logger.warning(f"Unified dependency resolution failed: {e}")
+                    self.logger.warning(f"⚠️ Unified dependency resolution failed: {e}")
+                    self.logger.debug("🔄 Falling back to legacy dependency resolution")
                 else:
+                    self.logger.error(f"❌ Unified dependency resolution failed: {e}")
                     raise MeshAgentError(
                         f"Unified dependency resolution failed: {e}"
                     ) from e
@@ -1048,6 +1165,8 @@ class MeshAgentDecorator:
             return
 
         try:
+            self.logger.debug(f"💓 Sending heartbeat for agent '{self.agent_name}'")
+
             health_status = HealthStatus(
                 agent_name=self.agent_name,
                 status="healthy",
@@ -1065,9 +1184,10 @@ class MeshAgentDecorator:
 
             await self._registry_client.send_heartbeat(health_status)
             self._last_health_check = datetime.now()
+            self.logger.debug("✅ Heartbeat sent successfully")
 
         except Exception as e:
-            self.logger.warning(f"Failed to send heartbeat: {e}")
+            self.logger.warning(f"❌ Failed to send heartbeat: {e}")
 
     def _is_cache_expired(self, cache_entry: dict[str, Any]) -> bool:
         """Check if a cache entry has expired."""
