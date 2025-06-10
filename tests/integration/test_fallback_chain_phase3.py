@@ -13,14 +13,14 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+from mcp_mesh.decorators import mesh_agent
+from mcp_mesh.runtime.shared.fallback_chain import MeshFallbackChain
+from mcp_mesh.runtime.shared.registry_client import RegistryClient
+from mcp_mesh.runtime.shared.service_discovery import ServiceDiscoveryService
 from mcp_mesh_runtime.fallback import (
     FallbackConfiguration,
     FallbackMode,
 )
-from mcp_mesh_runtime.shared.fallback_chain import MeshFallbackChain
-from mcp_mesh_runtime.shared.registry_client import RegistryClient
-from mcp_mesh_runtime.shared.service_discovery import ServiceDiscoveryService
 
 
 # Test service classes for dependency injection
@@ -230,7 +230,7 @@ class TestInterfaceOptionalDependencyInjection:
         """Test @mesh_agent decorator with fallback dependencies."""
 
         @mesh_agent(
-            capabilities=["secure_operation"],
+            capability="secure_operation",
             dependencies=["OAuth2AuthService"],
             fallback_mode=True,
         )
@@ -259,7 +259,7 @@ class TestInterfaceOptionalDependencyInjection:
         """Test class decoration with dependency injection."""
 
         @mesh_agent(
-            capabilities=["data_processing"],
+            capability="data_processing",
             dependencies=["DataProcessingService"],
             fallback_mode=True,
         )
@@ -294,7 +294,7 @@ class TestInterfaceOptionalDependencyInjection:
         """Test handling multiple dependencies with different resolution paths."""
 
         @mesh_agent(
-            capabilities=["advanced_processing"],
+            capability="advanced_processing",
             dependencies=["OAuth2AuthService", "DataProcessingService"],
             fallback_mode=True,
         )
@@ -326,7 +326,7 @@ class TestInterfaceOptionalDependencyInjection:
         """Test graceful degradation when some dependencies fail."""
 
         @mesh_agent(
-            capabilities=["resilient_operation"],
+            capability="resilient_operation",
             dependencies=["OAuth2AuthService"],
             fallback_mode=True,
         )
@@ -353,7 +353,7 @@ class TestPerformanceOptimization:
         """Test parallel resolution of multiple dependencies."""
 
         @mesh_agent(
-            capabilities=["parallel_processing"],
+            capability="parallel_processing",
             dependencies=["OAuth2AuthService", "DataProcessingService"],
             fallback_mode=True,
         )
@@ -430,7 +430,7 @@ class TestRealWorldScenarios:
 
         # Create services with different availability patterns
         @mesh_agent(
-            capabilities=["user_service"],
+            capability="user_service",
             dependencies=["OAuth2AuthService"],
             fallback_mode=True,
         )
@@ -442,7 +442,7 @@ class TestRealWorldScenarios:
             return {"user": user_info, "auth": auth_result, "service": "user_service"}
 
         @mesh_agent(
-            capabilities=["order_service"],
+            capability="order_service",
             dependencies=["DataProcessingService"],
             fallback_mode=True,
         )
@@ -501,7 +501,7 @@ class TestRealWorldScenarios:
         """Simulate network partition and recovery."""
 
         @mesh_agent(
-            capabilities=["critical_service"],
+            capability="critical_service",
             dependencies=["OAuth2AuthService"],
             fallback_mode=True,
         )

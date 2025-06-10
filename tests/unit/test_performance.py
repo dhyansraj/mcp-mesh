@@ -19,8 +19,8 @@ except ImportError:
 import gc
 from pathlib import Path
 
-from mcp_mesh_runtime.shared.exceptions import FileTooLargeError
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.runtime.shared.exceptions import FileTooLargeError
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture
@@ -454,7 +454,7 @@ class TestRetryPerformance:
 
     async def test_retry_delay_calculation_performance(self, perf_file_ops):
         """Test that retry delay calculation is fast."""
-        from mcp_mesh_runtime.shared.types import RetryConfig, RetryStrategy
+        from mcp_mesh.runtime.shared.types import RetryConfig, RetryStrategy
 
         retry_config = RetryConfig(
             strategy=RetryStrategy.EXPONENTIAL_BACKOFF,

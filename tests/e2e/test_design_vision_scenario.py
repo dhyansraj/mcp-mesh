@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from packages.mcp_mesh_runtime.src.mcp_mesh_runtime.cli.main import main
 
 
@@ -273,10 +272,6 @@ import json
 import platform
 import psutil
 import time
-from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
-from threading import Thread
 
 
 class SystemInfoHandler(BaseHTTPRequestHandler):
@@ -629,7 +624,6 @@ import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 
 async def demo_original_design_vision():

@@ -523,7 +523,6 @@ class TestMCPCompliantTools:
 
         # Should return JSON string
         assert isinstance(result, str)
-        import json
 
         data = json.loads(result)
         assert "url" in data or "error" in data
@@ -554,7 +553,6 @@ class TestMCPCompliantTools:
 
         # Should return JSON string
         assert isinstance(result, str)
-        import json
 
         data = json.loads(result)
         assert "service_class" in data

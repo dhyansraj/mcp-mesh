@@ -9,7 +9,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from mcp_mesh_runtime.decorators import mesh_agent
+from mcp_mesh.decorators import mesh_agent
 
 
 class TestTypeSafetyInterfaceOptional:

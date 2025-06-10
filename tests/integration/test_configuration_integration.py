@@ -19,7 +19,7 @@ from mcp_mesh import (
     ServerConfig,
     ServiceDiscoveryConfig,
 )
-from mcp_mesh_runtime.shared.configuration import (
+from mcp_mesh.runtime.shared.configuration import (
     CompositeConfigProvider,
     ConfigurationManager,
     FileConfigProvider,

@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"mcp-mesh/internal/config"
-	"mcp-mesh/internal/database"
-	"mcp-mesh/internal/registry"
+	"mcp-mesh/src/core/config"
+	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/registry"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 		version = flag.Bool("version", false, "Show version information")
 		help    = flag.Bool("help", false, "Show help information")
 	)
-	
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "MCP Mesh Registry Service\n\n")

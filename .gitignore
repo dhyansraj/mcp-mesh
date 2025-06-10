@@ -170,6 +170,16 @@ logs/
 capability_store/
 *.db
 
+# Go binaries
+mcp-mesh-dev
+mcp-mesh-registry
+*.exe
+*.dll
+*.dylib
+*.test
+*.out
+vendor/
+
 # Development files
 .env.local
 .env.development

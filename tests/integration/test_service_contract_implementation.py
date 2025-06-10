@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 from mcp_mesh_runtime.method_metadata import MethodMetadata, MethodType, ServiceContract
+
 from src.mcp_mesh.server.database import DatabaseConfig, RegistryDatabase
 from src.mcp_mesh.tools.contract_tools import ContractTools
 
@@ -263,14 +264,14 @@ class TestServiceContractImplementation:
         metadata1 = MethodMetadata(
             method_name="method1",
             signature=inspect.signature(method1),
-            capabilities=["math"],
+            capability="math",
             return_type=int,
         )
 
         metadata2 = MethodMetadata(
             method_name="method2",
             signature=inspect.signature(method2),
-            capabilities=["greeting"],
+            capability="greeting",
             return_type=str,
         )
 
@@ -384,7 +385,7 @@ class TestServiceContractImplementation:
         metadata1 = MethodMetadata(
             method_name="method1",
             signature=inspect.signature(method1),
-            capabilities=["user_operation"],
+            capability="user_operation",
         )
 
         # Method 2: requires 'user_id' parameter (inconsistent)
@@ -394,7 +395,7 @@ class TestServiceContractImplementation:
         metadata2 = MethodMetadata(
             method_name="method2",
             signature=inspect.signature(method2),
-            capabilities=["user_operation"],
+            capability="user_operation",
         )
 
         contract.add_method(metadata1)

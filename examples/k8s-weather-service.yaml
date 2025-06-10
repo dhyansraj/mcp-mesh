@@ -1,0 +1,182 @@
+# Kubernetes Deployment for MCP Mesh Weather Service
+#
+# This manifest demonstrates the revolutionary distributed MCP architecture
+# where agents run as HTTP services in Kubernetes pods.
+#
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-mesh
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-service
+  namespace: mcp-mesh
+  labels:
+    app: weather-service
+    mesh: mcp
+spec:
+  replicas: 3 # Scale MCP agents!
+  selector:
+    matchLabels:
+      app: weather-service
+  template:
+    metadata:
+      labels:
+        app: weather-service
+        mesh: mcp
+        version: "2.0.0"
+    spec:
+      containers:
+        - name: weather-service
+          image: mcp-mesh/weather-service:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVICE_NAME
+              value: "weather-service"
+            - name: MCP_MESH_HTTP_ENABLED
+              value: "true"
+            - name: MCP_MESH_REGISTRY_URL
+              value: "http://mcp-registry-service.mcp-mesh.svc.cluster.local:8080"
+            - name: MCP_MESH_LOG_LEVEL
+              value: "INFO"
+            - name: HTTP_PORT
+              value: "8080" # Fixed port for K8s service
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          # Kubernetes probes using auto-created endpoints
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-service
+  namespace: mcp-mesh
+  labels:
+    app: weather-service
+    mesh: mcp
+spec:
+  type: ClusterIP
+  selector:
+    app: weather-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+    - name: mcp
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+# Horizontal Pod Autoscaler for dynamic scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: weather-service-hpa
+  namespace: mcp-mesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: weather-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# NetworkPolicy for service mesh security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: weather-service-netpol
+  namespace: mcp-mesh
+spec:
+  podSelector:
+    matchLabels:
+      app: weather-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              mesh: mcp
+        - namespaceSelector:
+            matchLabels:
+              name: mcp-mesh
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mcp-registry
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to: # Allow DNS
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Ingress for external access (optional)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: weather-service-ingress
+  namespace: mcp-mesh
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: weather.mcp-mesh.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: weather-service
+                port:
+                  number: 80

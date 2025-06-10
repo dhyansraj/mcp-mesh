@@ -180,7 +180,7 @@ class TestAdvancedServiceDiscovery:
         mock_registry_client.get_agents = AsyncMock(return_value=[agent_info])
 
         # First call should hit the registry
-        query = CapabilityQuery(capabilities=["file_operations"])
+        query = CapabilityQuery(capability="file_operations")
         agents1 = await service_discovery_manager.discover_agents(query)
 
         assert len(agents1) == 1
@@ -217,7 +217,7 @@ class TestAdvancedServiceDiscovery:
         service_discovery_manager.config.cache_ttl = 1  # 1 second
 
         # First call
-        query = CapabilityQuery(capabilities=["file_operations"])
+        query = CapabilityQuery(capability="file_operations")
         await service_discovery_manager.discover_agents(query)
         mock_registry_client.get_agents.assert_called_once()
 
@@ -257,7 +257,7 @@ class TestAdvancedServiceDiscovery:
         )
 
         # Discovery should filter out unhealthy agents
-        query = CapabilityQuery(capabilities=["test"])
+        query = CapabilityQuery(capability="test")
         agents = await service_discovery_manager.discover_agents(
             query, include_unhealthy=False
         )
@@ -316,8 +316,8 @@ class TestAdvancedAgentSelection:
         ]
 
         criteria = SelectionCriteria(
-            required_capabilities=["file_operations"],
-            preferred_capabilities=["data_processing"],
+            required_capability="file_operations",
+            preferred_capability="data_processing",
             max_agents=1,
         )
 
@@ -345,7 +345,7 @@ class TestAdvancedAgentSelection:
         ]
 
         selection_manager.algorithm = "round_robin"
-        criteria = SelectionCriteria(required_capabilities=["test"], max_agents=1)
+        criteria = SelectionCriteria(required_capability="test", max_agents=1)
 
         selected_ids = []
         for _ in range(6):  # Select 6 times to see round-robin behavior
@@ -381,7 +381,7 @@ class TestAdvancedAgentSelection:
         ]
 
         selection_manager.algorithm = "load_balanced"
-        criteria = SelectionCriteria(required_capabilities=["test"], max_agents=1)
+        criteria = SelectionCriteria(required_capability="test", max_agents=1)
 
         # Should consistently select the low-load agent
         for _ in range(5):
@@ -591,14 +591,14 @@ class TestCapabilityMatching:
         ]
 
         # Test exact capability match
-        exact_query = CapabilityQuery(capabilities=["file_operations.read"])
+        exact_query = CapabilityQuery(capability="file_operations.read")
         exact_match = capability_matcher.calculate_match_score(
             agent_capabilities, exact_query
         )
         assert exact_match.score >= 0.9
 
         # Test parent capability match
-        parent_query = CapabilityQuery(capabilities=["file_operations"])
+        parent_query = CapabilityQuery(capability="file_operations")
         parent_match = capability_matcher.calculate_match_score(
             agent_capabilities, parent_query
         )
@@ -621,15 +621,9 @@ class TestCapabilityMatching:
 
         # Compatible version queries
         compatible_queries = [
-            CapabilityQuery(
-                capabilities=["api"], version_requirements={"api": "^2.0.0"}
-            ),
-            CapabilityQuery(
-                capabilities=["api"], version_requirements={"api": "~2.1.0"}
-            ),
-            CapabilityQuery(
-                capabilities=["api"], version_requirements={"api": ">=2.0.0"}
-            ),
+            CapabilityQuery(capability="api", version_requirements={"api": "^2.0.0"}),
+            CapabilityQuery(capability="api", version_requirements={"api": "~2.1.0"}),
+            CapabilityQuery(capability="api", version_requirements={"api": ">=2.0.0"}),
         ]
 
         for query in compatible_queries:
@@ -638,12 +632,8 @@ class TestCapabilityMatching:
 
         # Incompatible version queries
         incompatible_queries = [
-            CapabilityQuery(
-                capabilities=["api"], version_requirements={"api": "^3.0.0"}
-            ),
-            CapabilityQuery(
-                capabilities=["api"], version_requirements={"api": "~1.0.0"}
-            ),
+            CapabilityQuery(capability="api", version_requirements={"api": "^3.0.0"}),
+            CapabilityQuery(capability="api", version_requirements={"api": "~1.0.0"}),
         ]
 
         for query in incompatible_queries:
@@ -785,13 +775,13 @@ async def test_end_to_end_advanced_workflow():
     registry_client.get_agents = AsyncMock(return_value=agents)
 
     # 1. Service Discovery
-    query = CapabilityQuery(capabilities=["file_operations"])
+    query = CapabilityQuery(capability="file_operations")
     discovered_agents = await discovery_manager.discover_agents(query)
     assert len(discovered_agents) == 2
 
     # 2. Agent Selection
     criteria = SelectionCriteria(
-        required_capabilities=["file_operations"],
+        required_capability="file_operations",
         max_agents=1,
     )
     selection_result = await selection_manager.select_agents(

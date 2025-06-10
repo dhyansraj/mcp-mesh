@@ -1,0 +1,276 @@
+"""MCP Mesh - Python runtime for Model Context Protocol service mesh."""
+
+import os
+import sys
+from typing import Optional
+
+# Import all the existing exports
+from .agent_selection import (
+    AgentHealthInfo,
+    AgentSelectionProtocol,
+    AgentSelectionResult,
+    HealthMonitoringProtocol,
+    HealthStatus,
+    SelectionAlgorithm,
+    SelectionAlgorithmProtocol,
+    SelectionCriteria,
+    SelectionState,
+    SelectionWeights,
+    WeightUpdateRequest,
+    WeightUpdateResult,
+)
+from .configuration import (
+    ConfigurationError,
+    ConfigurationProvider,
+    DatabaseConfig,
+    DatabaseType,
+    EnvironmentConfigProvider,
+    InvalidConfigurationError,
+    LogLevel,
+    MissingConfigurationError,
+    MonitoringConfig,
+    PerformanceConfig,
+    RegistryConfig,
+    RegistryMode,
+    SecurityConfig,
+    SecurityMode,
+    ServerConfig,
+    ServiceDiscoveryConfig,
+)
+from .decorator_registry import (
+    DecoratedFunction,
+    DecoratorRegistry,
+    clear_decorator_registry,
+    get_all_mesh_agents,
+    get_decorator_stats,
+)
+from .decorators import mesh_agent
+from .exceptions import (
+    FileOperationError,
+    PermissionDeniedError,
+    SecurityValidationError,
+)
+from .fallback import (
+    DependencyResolver,
+    FallbackChainInterface,
+    FallbackConfiguration,
+    FallbackMetrics,
+    FallbackMode,
+    FallbackMonitor,
+    FallbackReason,
+    FallbackResult,
+    LocalInstanceResolver,
+    RemoteProxyResolver,
+)
+from .file_operations import FileOperations
+from .lifecycle import (
+    AgentInfo,
+    DeregistrationResult,
+    DrainResult,
+    HealthTransitionTrigger,
+    LifecycleConfiguration,
+    LifecycleEvent,
+    LifecycleEventData,
+    LifecycleEventProtocol,
+    LifecycleProtocol,
+    LifecycleStatus,
+    LifecycleTransition,
+    RegistrationResult,
+)
+from .method_metadata import (
+    MethodMetadata,
+    MethodType,
+    ParameterKind,
+    ParameterMetadata,
+    ServiceContract,
+)
+from .service_discovery import (
+    AgentMatch,
+    CapabilityHierarchy,
+    CapabilityMatchingProtocol,
+    CapabilityMetadata,
+    CapabilityQuery,
+    CompatibilityScore,
+    MatchingStrategy,
+    MeshAgentMetadata,
+    QueryOperator,
+    Requirements,
+    ServiceDiscoveryProtocol,
+)
+from .service_proxy import (
+    MeshServiceProxyInterface,
+    ProxyGenerationError,
+    RemoteInvocationError,
+    ServiceContractError,
+    ServiceProxyProtocol,
+)
+from .unified_dependencies import (
+    DependencyAnalyzer,
+    DependencyContext,
+    DependencyList,
+    DependencyMap,
+    DependencyPattern,
+    DependencyResolutionResult,
+    DependencySpecification,
+    DependencyValidationError,
+    DependencyValidator,
+    UnifiedDependencyResolver,
+    ValidationResult,
+)
+from .versioning import (
+    AgentVersionInfo,
+    DeploymentInfo,
+    DeploymentResult,
+    DeploymentStatus,
+    RollbackInfo,
+    SemanticVersion,
+    VersionComparisonProtocol,
+    VersioningProtocol,
+)
+
+__version__ = "0.2.0"
+
+# Store reference to runtime processor if initialized
+_runtime_processor: Optional["DecoratorProcessor"] = None
+
+
+def initialize_runtime():
+    """Initialize the MCP Mesh runtime processor."""
+    global _runtime_processor
+
+    if _runtime_processor is not None:
+        return  # Already initialized
+
+    try:
+        from .runtime.fastmcp_integration import patch_fastmcp
+        from .runtime.processor import DecoratorProcessor
+
+        # Create and start the processor
+        _runtime_processor = DecoratorProcessor()
+        _runtime_processor.start()
+
+        # Enhance the mesh_agent decorator with runtime capabilities
+        from . import decorators
+
+        if hasattr(decorators, "_enhance_mesh_agent"):
+            decorators._enhance_mesh_agent(_runtime_processor)
+
+        # Patch FastMCP for dependency injection
+        patch_fastmcp()
+
+        print("MCP Mesh runtime initialized", file=sys.stderr)
+    except Exception as e:
+        # Log but don't fail - allows graceful degradation
+        print(f"MCP Mesh runtime initialization failed: {e}", file=sys.stderr)
+
+
+# Auto-initialize runtime if enabled
+if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
+    initialize_runtime()
+
+
+__all__ = [
+    "mesh_agent",
+    "initialize_runtime",
+    "DecoratedFunction",
+    "DecoratorRegistry",
+    "clear_decorator_registry",
+    "get_all_mesh_agents",
+    "get_decorator_stats",
+    "FileOperations",
+    "FileOperationError",
+    "SecurityValidationError",
+    "PermissionDeniedError",
+    # Fallback chain (CRITICAL FEATURE)
+    "FallbackChainInterface",
+    "FallbackConfiguration",
+    "FallbackMetrics",
+    "FallbackMode",
+    "FallbackMonitor",
+    "FallbackReason",
+    "FallbackResult",
+    "DependencyResolver",
+    "RemoteProxyResolver",
+    "LocalInstanceResolver",
+    "CapabilityMetadata",
+    "CapabilityQuery",
+    "AgentInfo",
+    "AgentMatch",
+    "CompatibilityScore",
+    "Requirements",
+    "ServiceDiscoveryProtocol",
+    "CapabilityMatchingProtocol",
+    "MeshAgentMetadata",
+    "CapabilityHierarchy",
+    "QueryOperator",
+    "MatchingStrategy",
+    "DeploymentStatus",
+    "SemanticVersion",
+    "AgentVersionInfo",
+    "DeploymentInfo",
+    "DeploymentResult",
+    "RollbackInfo",
+    "VersioningProtocol",
+    "VersionComparisonProtocol",
+    "LifecycleEvent",
+    "LifecycleStatus",
+    "RegistrationResult",
+    "DeregistrationResult",
+    "DrainResult",
+    "LifecycleEventData",
+    "LifecycleTransition",
+    "LifecycleProtocol",
+    "LifecycleEventProtocol",
+    "HealthTransitionTrigger",
+    "LifecycleConfiguration",
+    "SelectionAlgorithm",
+    "HealthStatus",
+    "SelectionCriteria",
+    "SelectionWeights",
+    "AgentSelectionResult",
+    "AgentHealthInfo",
+    "WeightUpdateRequest",
+    "WeightUpdateResult",
+    "SelectionState",
+    "AgentSelectionProtocol",
+    "SelectionAlgorithmProtocol",
+    "HealthMonitoringProtocol",
+    "LogLevel",
+    "DatabaseType",
+    "SecurityMode",
+    "RegistryMode",
+    "ServerConfig",
+    "DatabaseConfig",
+    "SecurityConfig",
+    "ServiceDiscoveryConfig",
+    "MonitoringConfig",
+    "PerformanceConfig",
+    "RegistryConfig",
+    "ConfigurationProvider",
+    "EnvironmentConfigProvider",
+    "ConfigurationError",
+    "MissingConfigurationError",
+    "InvalidConfigurationError",
+    "MethodMetadata",
+    "MethodType",
+    "ParameterKind",
+    "ParameterMetadata",
+    "ServiceContract",
+    "MeshServiceProxyInterface",
+    "ServiceProxyProtocol",
+    "ProxyGenerationError",
+    "RemoteInvocationError",
+    "ServiceContractError",
+    # Unified dependencies (CRITICAL FEATURE)
+    "DependencyPattern",
+    "DependencySpecification",
+    "DependencyResolutionResult",
+    "UnifiedDependencyResolver",
+    "DependencyValidator",
+    "DependencyValidationError",
+    "ValidationResult",
+    "DependencyAnalyzer",
+    "DependencyList",
+    "DependencyMap",
+    "DependencyContext",
+]

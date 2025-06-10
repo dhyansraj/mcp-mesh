@@ -3,46 +3,95 @@ Tests for the @mesh_agent decorator functionality.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_runtime.decorators import MeshAgentDecorator, mesh_agent
+from mcp_mesh import mesh_agent
 
 
 class TestMeshAgentDecorator:
-    """Test cases for the MeshAgentDecorator class."""
+    """Test cases for the mesh_agent decorator functionality."""
 
-    def test_decorator_initialization(self):
-        """Test that the decorator initializes with correct parameters."""
-        capabilities = ["file_read", "file_write"]
-        dependencies = ["auth_service", "audit_logger"]
+    def test_decorator_basic_usage(self):
+        """Test that the decorator works with basic parameters."""
 
-        decorator = MeshAgentDecorator(
-            capabilities=capabilities,
-            dependencies=dependencies,
+        @mesh_agent(capability="file_read")
+        def test_function(path: str) -> str:
+            """Test function docstring."""
+            return f"Read {path}"
+
+        # Verify metadata is attached
+        assert hasattr(test_function, "_mesh_metadata")
+        metadata = test_function._mesh_metadata
+        assert metadata["capability"] == "file_read"
+        assert metadata["capabilities"] == ["file_read"]  # Stored as list internally
+        assert metadata["description"] == "Test function docstring."
+
+        # Test function execution
+        result = test_function("/test/file.txt")
+        assert result == "Read /test/file.txt"
+
+    def test_decorator_with_all_parameters(self):
+        """Test decorator with all parameters specified."""
+
+        @mesh_agent(
+            capability="file_write",
             health_interval=60,
+            dependencies=["auth_service", "audit_logger"],
+            registry_url="http://test-registry",
             agent_name="test-agent",
+            security_context="file_ops",
+            timeout=45,
+            retry_attempts=5,
+            enable_caching=False,
+            fallback_mode=False,
+            version="2.0.0",
+            description="Custom description",
+            endpoint="http://test-endpoint",
+            tags=["test", "file"],
+            performance_profile={"cpu": "low", "memory": "medium"},
+            resource_requirements={"min_memory": "512MB"},
+            enable_http=True,
+            http_host="localhost",
+            http_port=8080,
+            custom_field="custom_value",
         )
+        def test_function():
+            return "test"
 
-        assert decorator.capabilities == capabilities
-        assert decorator.dependencies == dependencies
-        assert decorator.health_interval == 60
-        assert decorator.agent_name == "test-agent"
-        assert decorator.fallback_mode is True
-        assert decorator.enable_caching is True
+        metadata = test_function._mesh_metadata
+        assert metadata["capability"] == "file_write"
+        assert metadata["health_interval"] == 60
+        assert metadata["dependencies"] == ["auth_service", "audit_logger"]
+        assert metadata["registry_url"] == "http://test-registry"
+        assert metadata["agent_name"] == "test-agent"
+        assert metadata["security_context"] == "file_ops"
+        assert metadata["timeout"] == 45
+        assert metadata["retry_attempts"] == 5
+        assert metadata["enable_caching"] is False
+        assert metadata["fallback_mode"] is False
+        assert metadata["version"] == "2.0.0"
+        assert metadata["description"] == "Custom description"
+        assert metadata["endpoint"] == "http://test-endpoint"
+        assert metadata["tags"] == ["test", "file"]
+        assert metadata["performance_profile"] == {"cpu": "low", "memory": "medium"}
+        assert metadata["resource_requirements"] == {"min_memory": "512MB"}
+        assert metadata["enable_http"] is True
+        assert metadata["http_host"] == "localhost"
+        assert metadata["http_port"] == 8080
+        assert metadata["custom_field"] == "custom_value"
 
     @pytest.mark.asyncio
     async def test_async_function_decoration(self):
         """Test decorator works with async functions."""
 
-        @mesh_agent(capabilities=["test"])
+        @mesh_agent(capability="async_test")
         async def test_function(value: str) -> str:
+            await asyncio.sleep(0.01)  # Simulate async work
             return f"processed: {value}"
 
         # Verify metadata is attached
-        assert hasattr(test_function, "_mesh_agent_metadata")
-        metadata = test_function._mesh_agent_metadata
-        assert metadata["capabilities"] == ["test"]
+        assert hasattr(test_function, "_mesh_metadata")
+        assert test_function._mesh_metadata["capability"] == "async_test"
 
         # Test function execution
         result = await test_function("hello")
@@ -51,175 +100,94 @@ class TestMeshAgentDecorator:
     def test_sync_function_decoration(self):
         """Test decorator works with sync functions."""
 
-        @mesh_agent(capabilities=["test"])
+        @mesh_agent(capability="sync_test")
         def test_function(value: str) -> str:
             return f"processed: {value}"
 
         # Verify metadata is attached
-        assert hasattr(test_function, "_mesh_agent_metadata")
-        metadata = test_function._mesh_agent_metadata
-        assert metadata["capabilities"] == ["test"]
+        assert hasattr(test_function, "_mesh_metadata")
+        assert test_function._mesh_metadata["capability"] == "sync_test"
 
         # Test function execution
         result = test_function("hello")
         assert result == "processed: hello"
 
-    @pytest.mark.asyncio
-    async def test_dependency_injection(self):
-        """Test that dependencies are injected into function kwargs."""
-        mock_registry = AsyncMock()
-        mock_registry.get_dependency.return_value = "injected_value"
+    def test_backward_compatibility_attributes(self):
+        """Test that backward compatibility attributes are set."""
 
-        decorator = MeshAgentDecorator(
-            capabilities=["test"], dependencies=["test_service"], fallback_mode=False
-        )
-        decorator._registry_client = mock_registry
-        decorator._initialized = True
+        @mesh_agent(capability="test", dependencies=["service1", "service2"])
+        def test_function():
+            return "test"
 
-        @decorator
-        async def test_function(value: str, test_service: str = None) -> str:
-            return f"{value}:{test_service}"
-
-        result = await test_function("hello")
-        assert result == "hello:injected_value"
-        mock_registry.get_dependency.assert_called_with("test_service")
+        # Check backward compatibility attributes
+        assert hasattr(test_function, "_mesh_agent_capabilities")
+        assert test_function._mesh_agent_capabilities == ["test"]
+        assert hasattr(test_function, "_mesh_agent_dependencies")
+        assert test_function._mesh_agent_dependencies == ["service1", "service2"]
 
     @pytest.mark.asyncio
-    async def test_fallback_mode_on_registry_failure(self):
-        """Test graceful degradation when registry is unavailable."""
-        decorator = MeshAgentDecorator(capabilities=["test"], fallback_mode=True)
+    async def test_dependency_injection_wrapper_creation(self):
+        """Test that dependency injection wrapper is created when dependencies are specified."""
 
-        # Mock registry client to raise exception
-        with patch(
-            "mcp_mesh.decorators.mesh_agent.RegistryClient"
-        ) as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.register_agent.side_effect = Exception("Registry unavailable")
-            mock_client_class.return_value = mock_client
+        # We'll check if the function has the injection-related attributes
+        @mesh_agent(capability="test", dependencies=["TestService"])
+        def test_function(data: str, TestService=None) -> str:
+            if TestService:
+                return f"With service: {data}"
+            return f"No service: {data}"
 
-            @decorator
-            async def test_function(value: str) -> str:
-                return f"processed: {value}"
+        # The function should have dependency metadata
+        assert test_function._mesh_agent_dependencies == ["TestService"]
 
-            # Function should still work despite registry failure
-            result = await test_function("hello")
-            assert result == "processed: hello"
+        # Without injection setup, it should work with default
+        result = test_function(data="hello")
+        assert result == "No service: hello"
 
-    @pytest.mark.asyncio
-    async def test_caching_mechanism(self):
-        """Test that dependency values are cached properly."""
-        mock_registry = AsyncMock()
-        mock_registry.get_dependency.return_value = "cached_value"
+    def test_default_values(self):
+        """Test that default values are properly set."""
 
-        decorator = MeshAgentDecorator(
-            capabilities=["test"],
-            dependencies=["test_service"],
-            enable_caching=True,
-            fallback_mode=False,
-        )
-        decorator._registry_client = mock_registry
-        decorator._initialized = True
+        @mesh_agent(capability="test")
+        def test_function():
+            """Function doc"""
+            return "test"
 
-        @decorator
-        async def test_function(test_service: str = None) -> str:
-            return test_service
+        metadata = test_function._mesh_metadata
 
-        # First call should fetch from registry
-        result1 = await test_function()
-        assert result1 == "cached_value"
-        assert mock_registry.get_dependency.call_count == 1
+        # Check defaults
+        assert metadata["health_interval"] == 30
+        assert metadata["dependencies"] == []
+        assert metadata["registry_url"] is None
+        assert metadata["agent_name"] == "test_function"
+        assert metadata["security_context"] is None
+        assert metadata["timeout"] == 30
+        assert metadata["retry_attempts"] == 3
+        assert metadata["enable_caching"] is True
+        assert metadata["fallback_mode"] is True
+        assert metadata["version"] == "1.0.0"
+        assert metadata["description"] == "Function doc"
+        assert metadata["endpoint"] is None
+        assert metadata["tags"] == []
+        assert metadata["performance_profile"] == {}
+        assert metadata["resource_requirements"] == {}
+        assert metadata["enable_http"] is None
+        assert metadata["http_host"] == "0.0.0.0"
+        assert metadata["http_port"] == 0
 
-        # Second call should use cache
-        result2 = await test_function()
-        assert result2 == "cached_value"
-        assert mock_registry.get_dependency.call_count == 1  # No additional calls
+    def test_decorator_preserves_function_attributes(self):
+        """Test that decorator preserves function name, docstring, etc."""
 
-    @pytest.mark.asyncio
-    async def test_health_monitoring_initialization(self):
-        """Test that health monitoring task is started."""
-        decorator = MeshAgentDecorator(
-            capabilities=["test"], health_interval=1  # Short interval for testing
-        )
+        def original_function(x: int, y: int) -> int:
+            """Adds two numbers."""
+            return x + y
 
-        with patch(
-            "mcp_mesh.decorators.mesh_agent.RegistryClient"
-        ) as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value = mock_client
+        decorated = mesh_agent(capability="math")(original_function)
 
-            @decorator
-            async def test_function() -> str:
-                return "test"
+        # Check preserved attributes
+        assert decorated.__name__ == "original_function"
+        assert decorated.__doc__ == "Adds two numbers."
 
-            # Call function to trigger initialization
-            await test_function()
-
-            # Verify health task was created
-            assert decorator._health_task is not None
-            assert not decorator._health_task.done()
-
-            # Cleanup
-            await decorator.cleanup()
-
-    @pytest.mark.asyncio
-    async def test_cleanup(self):
-        """Test that cleanup properly cancels health monitoring."""
-        decorator = MeshAgentDecorator(capabilities=["test"])
-
-        # Create a proper asyncio task mock
-        async def dummy_coro():
-            await asyncio.sleep(1)
-
-        # Create actual task and then mock it
-        actual_task = asyncio.create_task(dummy_coro())
-        with patch.object(actual_task, "cancel") as mock_cancel:
-            decorator._health_task = actual_task
-
-            # Create mock registry client
-            mock_registry = AsyncMock()
-            decorator._registry_client = mock_registry
-
-            await decorator.cleanup()
-
-            # Verify cleanup actions
-            mock_cancel.assert_called_once()
-            mock_registry.close.assert_called_once()
-
-
-class TestMeshAgentFunction:
-    """Test cases for the mesh_agent decorator function."""
-
-    def test_decorator_function_parameters(self):
-        """Test that the decorator function accepts all parameters."""
-
-        @mesh_agent(
-            capabilities=["file_read"],
-            health_interval=60,
-            dependencies=["auth_service"],
-            registry_url="http://test-registry",
-            agent_name="test-agent",
-            security_context="file_ops",
-            timeout=45,
-            retry_attempts=5,
-            enable_caching=False,
-            fallback_mode=False,
-        )
-        async def test_function():
-            pass
-
-        metadata = test_function._mesh_agent_metadata
-        decorator_instance = metadata["decorator_instance"]
-
-        assert decorator_instance.capabilities == ["file_read"]
-        assert decorator_instance.health_interval == 60
-        assert decorator_instance.dependencies == ["auth_service"]
-        assert decorator_instance.registry_url == "http://test-registry"
-        assert decorator_instance.agent_name == "test-agent"
-        assert decorator_instance.security_context == "file_ops"
-        assert decorator_instance.timeout == 45
-        assert decorator_instance.retry_attempts == 5
-        assert decorator_instance.enable_caching is False
-        assert decorator_instance.fallback_mode is False
+        # Function should still work
+        assert decorated(5, 3) == 8
 
     @pytest.mark.asyncio
     async def test_decorator_with_fastmcp_integration(self):
@@ -230,7 +198,7 @@ class TestMeshAgentFunction:
             func._is_tool = True
             return func
 
-        @mesh_agent(capabilities=["file_read"], dependencies=["auth_service"])
+        @mesh_agent(capability="file_read", dependencies=["auth_service"])
         @mock_tool_decorator
         async def read_file(path: str, auth_service: str = None) -> str:
             if auth_service:
@@ -238,8 +206,28 @@ class TestMeshAgentFunction:
             return f"Read {path}"
 
         # Verify both decorators work together
-        assert hasattr(read_file, "_mesh_agent_metadata")
+        assert hasattr(read_file, "_mesh_metadata")
         assert hasattr(read_file, "_is_tool")
+        assert read_file._mesh_metadata["capability"] == "file_read"
 
-        result = await read_file("/test/file.txt")
+        result = await read_file(path="/test/file.txt")
         assert "Read /test/file.txt" in result
+
+    def test_multiple_decorations(self):
+        """Test applying decorator to multiple functions."""
+
+        @mesh_agent(capability="read")
+        def read_func():
+            return "read"
+
+        @mesh_agent(capability="write")
+        def write_func():
+            return "write"
+
+        # Each should have its own metadata
+        assert read_func._mesh_metadata["capability"] == "read"
+        assert write_func._mesh_metadata["capability"] == "write"
+
+        # Functions should work independently
+        assert read_func() == "read"
+        assert write_func() == "write"

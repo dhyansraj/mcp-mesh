@@ -18,11 +18,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 from mcp_mesh import MethodMetadata, ServiceContract
-from mcp_mesh_runtime.shared.registry_client import RegistryClient
-from mcp_mesh_runtime.shared.service_proxy import MeshServiceProxy
+from mcp_mesh.runtime.shared.registry_client import RegistryClient
+from mcp_mesh.runtime.shared.service_proxy import MeshServiceProxy
 
 # Test imports
-from mcp_mesh_runtime.tools.proxy_factory import (
+from mcp_mesh.runtime.tools.proxy_factory import (
     DynamicProxyGenerator,
     EnhancedProxyFactory,
     TypeValidator,

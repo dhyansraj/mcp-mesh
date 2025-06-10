@@ -12,11 +12,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_runtime.shared.registry_client import RegistryClient
-from mcp_mesh_runtime.shared.types import HealthStatus
+from mcp_mesh.runtime.registry_client import RegistryClient
+from mcp_mesh.runtime.shared.types import HealthStatus
 
 # Import SDK components for testing
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 # Configure asyncio for all tests

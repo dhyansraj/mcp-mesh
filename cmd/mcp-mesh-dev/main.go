@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"mcp-mesh/internal/cli"
+	"mcp-mesh/src/core/cli"
 )
 
 var rootCmd = &cobra.Command{
@@ -27,12 +27,12 @@ func main() {
 	rootCmd.AddCommand(cli.NewLogsCommand())
 	rootCmd.AddCommand(cli.NewRestartCommand())
 	rootCmd.AddCommand(cli.NewConfigCommand())
-	
+
 	// Add new process management commands
 	rootCmd.AddCommand(cli.NewMonitorCommand())
 	rootCmd.AddCommand(cli.NewStatsCommand())
 	rootCmd.AddCommand(cli.NewLogAggregatorCommand())
-	
+
 	// Add workflow testing command
 	rootCmd.AddCommand(cli.NewWorkflowTestCommand())
 

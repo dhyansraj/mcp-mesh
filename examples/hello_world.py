@@ -57,9 +57,8 @@ def create_hello_world_server() -> FastMCP:
     # This function uses DUAL-DECORATOR pattern: @server.tool() + @mesh_agent()
     # Includes mesh integration with automatic dependency injection
 
-    @server.tool()
     @mesh_agent(
-        capabilities=["greeting", "mesh_integration"],
+        capability="greeting",  # Single capability
         dependencies=["SystemAgent"],  # Will be automatically injected when available
         health_interval=30,
         fallback_mode=True,
@@ -67,6 +66,7 @@ def create_hello_world_server() -> FastMCP:
         description="Greeting function with automatic SystemAgent dependency injection",
         tags=["demo", "dependency_injection"],
     )
+    @server.tool()
     def greet_from_mcp_mesh(SystemAgent: Any | None = None) -> str:
         """
         MCP Mesh greeting function with automatic dependency injection.
@@ -93,6 +93,44 @@ def create_hello_world_server() -> FastMCP:
             except Exception as e:
                 return f"Hello from MCP Mesh (Error getting date: {e})"
 
+    # ===== NEW SINGLE CAPABILITY PATTERN (KUBERNETES-OPTIMIZED) =====
+    # Each function provides exactly ONE capability for better organization
+
+    @mesh_agent(
+        capability="greeting",  # Single capability (new pattern)
+        dependencies=["SystemAgent"],
+        version="2.0.0",
+        tags=["demo", "kubernetes", "single-capability"],
+        description="Single-capability greeting function optimized for Kubernetes",
+    )
+    @server.tool()
+    def greet_single_capability(SystemAgent: Any | None = None) -> str:
+        """
+        Greeting function using new single-capability pattern.
+
+        This demonstrates the preferred pattern for Kubernetes deployments:
+        - Each function provides exactly ONE capability
+        - Easier to scale (one pod can handle one capability)
+        - Better organization in registry (capability tree structure)
+        - More efficient service discovery
+
+        Args:
+            SystemAgent: Optional system agent (automatically injected by mesh)
+
+        Returns:
+            Greeting message with system info if available
+        """
+        base_greeting = "Hello from single-capability function"
+
+        if SystemAgent is not None:
+            try:
+                current_date = SystemAgent.getDate()
+                return f"{base_greeting} - Date from SystemAgent: {current_date}"
+            except Exception as e:
+                return f"{base_greeting} - SystemAgent error: {e}"
+        else:
+            return f"{base_greeting} - No SystemAgent available"
+
     # ===== ADDITIONAL DEMO TOOLS =====
 
     @server.tool()
@@ -111,7 +149,8 @@ def create_hello_world_server() -> FastMCP:
             "description": "MCP vs MCP Mesh demonstration server",
             "endpoints": {
                 "greet_from_mcp": "Plain MCP function (no dependency injection)",
-                "greet_from_mcp_mesh": "MCP Mesh function (automatic dependency injection)",
+                "greet_from_mcp_mesh": "MCP Mesh function with dependency injection",
+                "greet_single_capability": "Single capability function (Kubernetes-optimized)",
             },
             "demonstration_workflow": [
                 "1. Test both endpoints (both return basic greetings)",
@@ -127,12 +166,12 @@ def create_hello_world_server() -> FastMCP:
             ],
         }
 
-    @server.tool()
     @mesh_agent(
-        capabilities=["testing", "dependency_validation"],
+        capability="dependency_validation",  # Single capability
         dependencies=["SystemAgent"],
         fallback_mode=True,
     )
+    @server.tool()
     def test_dependency_injection(SystemAgent: Any | None = None) -> dict[str, Any]:
         """
         Test and report current dependency injection status.
@@ -173,6 +212,23 @@ def create_hello_world_server() -> FastMCP:
 
 def main():
     """Run the Hello World demonstration server."""
+    import signal
+    import sys
+
+    # Setup signal handler
+    def signal_handler(signum, frame):
+        """Handle shutdown signals gracefully."""
+        try:
+            print(f"\n📍 Received signal {signum}")
+            print("🛑 Shutting down gracefully...")
+        except Exception:
+            pass
+        sys.exit(0)
+
+    # Install signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     print("🚀 Starting MCP vs MCP Mesh Demonstration Server...")
 
     # Create the server
@@ -181,7 +237,10 @@ def main():
     print(f"📡 Server name: {server.name}")
     print("\n🎯 Demonstration Functions:")
     print("• greet_from_mcp - Plain MCP function (no dependency injection)")
-    print("• greet_from_mcp_mesh - MCP Mesh function (automatic dependency injection)")
+    print("• greet_from_mcp_mesh - MCP Mesh function with dependency injection")
+    print(
+        "• greet_single_capability - Single capability function (Kubernetes-optimized)"
+    )
     print("\n🔧 Test Workflow:")
     print("1. Both functions return basic greetings initially")
     print("2. Start system_agent.py to see automatic dependency injection")
@@ -189,17 +248,25 @@ def main():
     print("4. greet_from_mcp remains unchanged (plain MCP)")
     print("\n📝 Server ready on stdio transport...")
     print("💡 Use MCP client to test functions.")
-    print("🔧 Start with: mcp_mesh_dev start examples/hello_world.py")
-    print("📊 Then add: mcp_mesh_dev start examples/system_agent.py")
+    print("🔧 Start with: mcp-mesh-dev start examples/hello_world.py")
+    print("📊 Then add: mcp-mesh-dev start examples/system_agent.py")
     print("🛑 Press Ctrl+C to stop.\n")
 
     # Run the server with stdio transport
     try:
         server.run(transport="stdio")
     except KeyboardInterrupt:
-        print("\n🛑 Hello World demo server stopped by user.")
+        try:
+            print("\n🛑 Hello World demo server stopped by user.")
+        except Exception:
+            pass
+    except SystemExit:
+        pass  # Clean exit
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        try:
+            print(f"❌ Server error: {e}")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

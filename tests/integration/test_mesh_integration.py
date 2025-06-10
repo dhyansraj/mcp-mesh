@@ -11,10 +11,10 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
-from mcp_mesh_runtime.shared.exceptions import MeshAgentError, RegistryConnectionError
-from mcp_mesh_runtime.shared.types import HealthStatus
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.decorators import mesh_agent
+from mcp_mesh.runtime.shared.exceptions import MeshAgentError, RegistryConnectionError
+from mcp_mesh.runtime.shared.types import HealthStatus
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 class MockRegistryClient:
@@ -204,7 +204,7 @@ class TestMeshAgentRegistration:
         ):
 
             @mesh_agent(
-                capabilities=["test_capability"],
+                capability="test_capability",
                 security_context="test_security_context",
                 agent_name="test-agent",
             )
@@ -231,7 +231,7 @@ class TestDependencyInjection:
         mock_registry.add_dependency("test_service", "test-service-v1.0.0")
 
         @mesh_agent(
-            capabilities=["test"], dependencies=["test_service"], fallback_mode=False
+            capability="test", dependencies=["test_service"], fallback_mode=False
         )
         async def test_function(value: str, test_service: str | None = None) -> str:
             return f"{value}:{test_service}"
@@ -262,7 +262,7 @@ class TestDependencyInjection:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["auth_service"],
                 enable_caching=True,
                 fallback_mode=False,
@@ -291,7 +291,7 @@ class TestDependencyInjection:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["unavailable_service"],
                 fallback_mode=True,
             )
@@ -316,7 +316,7 @@ class TestDependencyInjection:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["required_service"],
                 fallback_mode=False,
             )
@@ -384,7 +384,7 @@ class TestHealthMonitoring:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 health_interval=1,  # Fast heartbeat for testing
                 agent_name="test-heartbeat-agent",
             )
@@ -415,7 +415,7 @@ class TestHealthMonitoring:
             return_value=mock_registry,
         ):
 
-            @mesh_agent(capabilities=["test"], health_interval=1, fallback_mode=True)
+            @mesh_agent(capability="test", health_interval=1, fallback_mode=True)
             async def test_function() -> str:
                 return "test"
 
@@ -455,7 +455,7 @@ class TestServiceDiscovery:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=list(services.keys()),
                 fallback_mode=False,
             )
@@ -481,7 +481,7 @@ class TestServiceDiscovery:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["available_service", "unavailable_service"],
                 fallback_mode=True,
             )
@@ -505,8 +505,6 @@ class TestMeshIntegrationWithFileOperations:
         """Test file operations with audit logging dependency."""
         file_ops, mock_registry = file_ops_with_mesh
 
-        import tempfile
-
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
             f.write("test content")
             temp_path = f.name
@@ -521,15 +519,12 @@ class TestMeshIntegrationWithFileOperations:
             assert result is True
 
         finally:
-            import os
 
             os.unlink(temp_path)
 
     async def test_file_operations_with_backup_service(self, file_ops_with_mesh):
         """Test file operations with backup service dependency."""
         file_ops, mock_registry = file_ops_with_mesh
-
-        import tempfile
 
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
             f.write("original content")
@@ -547,7 +542,6 @@ class TestMeshIntegrationWithFileOperations:
             assert content == "new content"
 
         finally:
-            import os
 
             os.unlink(temp_path)
 
@@ -556,7 +550,6 @@ class TestMeshIntegrationWithFileOperations:
         file_ops, mock_registry = file_ops_with_mesh
 
         import os
-        import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create multiple test files
@@ -607,7 +600,7 @@ class TestMeshErrorHandling:
 
             # Test with fallback mode enabled
             @mesh_agent(
-                capabilities=["test"], dependencies=["test_service"], fallback_mode=True
+                capability="test", dependencies=["test_service"], fallback_mode=True
             )
             async def fallback_function(value: str) -> str:
                 return f"fallback:{value}"
@@ -618,7 +611,7 @@ class TestMeshErrorHandling:
 
             # Test with fallback mode disabled
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["test_service"],
                 fallback_mode=False,
             )
@@ -650,7 +643,7 @@ class TestMeshErrorHandling:
         ):
 
             @mesh_agent(
-                capabilities=["test"],
+                capability="test",
                 dependencies=["working_service", "failing_service"],
                 fallback_mode=True,
             )
@@ -673,7 +666,7 @@ class TestMeshErrorHandling:
             return_value=mock_registry,
         ):
 
-            @mesh_agent(capabilities=["test"], health_interval=1)
+            @mesh_agent(capability="test", health_interval=1)
             async def failing_function() -> str:
                 raise ValueError("Test exception")
 

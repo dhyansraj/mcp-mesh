@@ -1,0 +1,44 @@
+# Dockerfile for MCP Mesh Agents - Kubernetes-Native Architecture
+#
+# This Dockerfile demonstrates how to containerize MCP agents with
+# automatic HTTP endpoint creation for distributed deployments.
+
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy agent code
+COPY . .
+
+# Environment variables for container mode
+ENV MCP_MESH_HTTP_ENABLED=true \
+    CONTAINER_MODE=true \
+    PYTHONUNBUFFERED=1 \
+    # Default service configuration
+    SERVICE_NAME=weather-service \
+    MCP_MESH_REGISTRY_URL=http://mcp-registry:8080 \
+    MCP_MESH_LOG_LEVEL=INFO
+
+# Expose port range for auto-assigned ports
+# In production, you might want to fix the port
+EXPOSE 8000-9000
+
+# Health check using the auto-created endpoint
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health || exit 1
+
+# Run the MCP agent
+# The mesh decorator will automatically create HTTP endpoints
+CMD ["python", "-m", "examples.http_distributed_agent"]

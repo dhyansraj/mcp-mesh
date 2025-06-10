@@ -12,12 +12,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp_mesh_runtime.shared.exceptions import (
+from mcp_mesh.runtime.shared.exceptions import (
     FileNotFoundError,
     RateLimitError,
 )
-from mcp_mesh_runtime.shared.types import HealthStatusType, RetryConfig, RetryStrategy
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.runtime.shared.types import HealthStatusType, RetryConfig, RetryStrategy
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture
@@ -376,7 +376,7 @@ class TestCachingMechanisms:
                 decorator = func._mesh_agent_metadata["decorator_instance"]
                 decorator.enable_caching = True
                 decorator._registry_client = mock_client
-                decorator._initialized = True
+                # Initialization not needed with new decorator
 
         # First operation should fetch from registry
         await mock_file_ops.read_file(str(test_file))
@@ -437,7 +437,7 @@ class TestHealthMonitoring:
         if hasattr(func, "_mesh_agent_metadata"):
             decorator = func._mesh_agent_metadata["decorator_instance"]
             decorator._registry_client = mock_client
-            decorator._initialized = True
+            # Initialization not needed with new decorator
 
             # Send heartbeat
             await decorator._send_heartbeat()

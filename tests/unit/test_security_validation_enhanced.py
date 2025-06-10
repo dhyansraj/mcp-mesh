@@ -12,14 +12,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from mcp_mesh_runtime.shared.exceptions import (
+from mcp_mesh.runtime.shared.exceptions import (
     FileAccessDeniedError,
     FileTypeNotAllowedError,
     PathTraversalError,
     SecurityValidationError,
 )
-from mcp_mesh_runtime.shared.types import OperationType
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.runtime.shared.types import OperationType
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 @pytest.fixture
@@ -44,7 +44,6 @@ def restricted_file_ops(temp_dir):
         else:
             loop.run_until_complete(ops.cleanup())
     except RuntimeError:
-        import asyncio
 
         asyncio.run(ops.cleanup())
 
@@ -55,7 +54,6 @@ def unrestricted_file_ops():
     ops = FileOperations(max_file_size=1024)
     yield ops
     try:
-        import asyncio
 
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -63,7 +61,6 @@ def unrestricted_file_ops():
         else:
             loop.run_until_complete(ops.cleanup())
     except RuntimeError:
-        import asyncio
 
         asyncio.run(ops.cleanup())
 

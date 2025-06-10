@@ -11,7 +11,8 @@ from typing import Protocol, runtime_checkable
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
+
+from mcp_mesh.decorators import mesh_agent
 from mcp_mesh_runtime.unified_dependencies import (
     DependencyAnalyzer,
     DependencyPattern,
@@ -152,7 +153,7 @@ class TestUnifiedDependencyResolver:
     @pytest.mark.asyncio
     async def test_resolve_string_dependency(self, mock_registry_client):
         """Test resolving string dependencies."""
-        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
+        from mcp_mesh.runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -174,7 +175,8 @@ class TestUnifiedDependencyResolver:
     @pytest.mark.asyncio
     async def test_resolve_concrete_dependency(self, mock_fallback_chain):
         """Test resolving concrete class dependencies."""
-        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
+        # Test with a concrete class dependency
+        from mcp_mesh.runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -201,7 +203,6 @@ class TestUnifiedDependencyResolver:
         self, mock_registry_client, mock_fallback_chain
     ):
         """Test resolving multiple dependencies of different types."""
-        from mcp_mesh_runtime.shared.unified_dependency_resolver import (
             MeshUnifiedDependencyResolver,
         )
 
@@ -270,8 +271,7 @@ class TestMeshAgentUnifiedDependencies:
     async def test_string_dependency_injection(self, mock_registry_and_services):
         """Test string dependency injection works."""
 
-        @mesh_agent(
-            capabilities=["test"], dependencies=["legacy_auth"], fallback_mode=True
+        @mesh_agent(capability="test", dependencies=["legacy_auth"], fallback_mode=True
         )
         async def test_function(legacy_auth: str = None):
             return f"Using: {legacy_auth}"
@@ -286,8 +286,7 @@ class TestMeshAgentUnifiedDependencies:
     async def test_concrete_dependency_injection(self, mock_registry_and_services):
         """Test concrete class dependency injection works."""
 
-        @mesh_agent(
-            capabilities=["test"], dependencies=[SimpleAuthService], fallback_mode=True
+        @mesh_agent(capability="test", dependencies=[SimpleAuthService], fallback_mode=True
         )
         async def test_function(simple_auth_service: SimpleAuthService = None):
             if simple_auth_service:
@@ -304,8 +303,7 @@ class TestMeshAgentUnifiedDependencies:
     async def test_mixed_dependency_injection(self, mock_registry_and_services):
         """Test mixed dependency types work together."""
 
-        @mesh_agent(
-            capabilities=["test"],
+        @mesh_agent(capability="test",
             dependencies=[
                 "legacy_auth",  # String
                 SimpleAuthService,  # Concrete class
@@ -338,8 +336,7 @@ class TestMeshAgentUnifiedDependencies:
             compatible_instance
         )
 
-        @mesh_agent(
-            capabilities=["test"], dependencies=[AuthService], fallback_mode=True
+        @mesh_agent(capability="test", dependencies=[AuthService], fallback_mode=True
         )
         async def test_function(auth_service: AuthService = None):
             if auth_service:
@@ -372,8 +369,7 @@ class TestMeshAgentUnifiedDependencies:
             mock_resolve_dependency
         )
 
-        @mesh_agent(
-            capabilities=["auth", "file_operations"],
+        @mesh_agent(capability="auth", "file_operations"[0] if isinstance("auth", "file_operations", list) else "auth", "file_operations",
             dependencies=[
                 "legacy_auth",  # String (existing)
                 AuthService,  # Protocol interface
@@ -440,8 +436,7 @@ class TestBackwardCompatibility:
             patch("mcp_mesh.decorators.mesh_agent.MeshFallbackChain"),
         ):
 
-            @mesh_agent(
-                capabilities=["legacy_test"],
+            @mesh_agent(capability="legacy_test",
                 dependencies=["user_service", "auth_service"],  # Old format
                 fallback_mode=True,
             )
@@ -456,10 +451,10 @@ class TestBackwardCompatibility:
 
     def test_dependency_specification_creation(self):
         """Test that dependency specifications are created correctly for legacy deps."""
-        from mcp_mesh_runtime.decorators.mesh_agent import MeshAgentDecorator
+        from mcp_mesh import mesh_agent
 
-        decorator = MeshAgentDecorator(
-            capabilities=["test"], dependencies=["user_service", "auth_service"]
+        decorator = mesh_agent(
+            capability="test", dependencies=["user_service", "auth_service"]
         )
 
         # Should have created string dependency specifications

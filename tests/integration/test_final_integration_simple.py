@@ -8,7 +8,7 @@ dependency injection concepts without requiring full implementations.
 from typing import Any
 
 import pytest
-from mcp_mesh_runtime.decorators import mesh_agent
+from mcp_mesh.decorators import mesh_agent
 
 # Import only basic types from mcp-mesh
 from mcp_mesh_runtime.unified_dependencies import (
@@ -208,7 +208,7 @@ class TestFinalIntegrationSimple:
 
         # These imports should work without any mcp_mesh dependencies
         from mcp_mesh import DependencyPattern
-        from mcp_mesh_runtime.decorators import mesh_agent
+        from mcp_mesh.decorators import mesh_agent
         from mcp_mesh_runtime.unified_dependencies import DependencySpecification
 
         # Validate they're accessible

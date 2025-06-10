@@ -11,15 +11,15 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, "src")
 
-from mcp_mesh_runtime.decorators.mesh_agent import mesh_agent
-from mcp_mesh_runtime.shared.exceptions import (
+from mcp_mesh.decorators import mesh_agent
+from mcp_mesh.runtime.shared.exceptions import (
     FileNotFoundError,
     FileTooLargeError,
     FileTypeNotAllowedError,
     PathTraversalError,
 )
-from mcp_mesh_runtime.shared.types import OperationType
-from mcp_mesh_runtime.tools.file_operations import FileOperations
+from mcp_mesh.runtime.shared.types import OperationType
+from mcp_mesh.runtime.tools.file_operations import FileOperations
 
 
 async def test_basic_file_operations():
@@ -109,7 +109,7 @@ async def test_mesh_agent_decorator():
     print("Testing mesh agent decorator...")
 
     # Test basic decoration
-    @mesh_agent(capabilities=["test"])
+    @mesh_agent(capability="test")
     async def test_function(value: str) -> str:
         return f"processed: {value}"
 
@@ -126,7 +126,7 @@ async def test_mesh_agent_decorator():
     print("✓ Decorated function execution works")
 
     # Test with dependencies
-    @mesh_agent(capabilities=["file_read"], dependencies=["auth_service"])
+    @mesh_agent(capability="file_read", dependencies=["auth_service"])
     async def secure_function(path: str, auth_service: str = None) -> str:
         auth_status = "authenticated" if auth_service else "unauthenticated"
         return f"Reading {path} ({auth_status})"

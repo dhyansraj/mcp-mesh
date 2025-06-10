@@ -12,8 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp_mesh.decorators import mesh_agent
 from mcp_mesh_runtime.agent_selection import AgentSelector
-from mcp_mesh_runtime.decorators import mesh_agent
 from mcp_mesh_runtime.fallback import FallbackChain, FallbackStrategy
 from mcp_mesh_runtime.service_discovery import ServiceDiscoveryClient
 

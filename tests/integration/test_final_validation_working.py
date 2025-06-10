@@ -8,7 +8,7 @@ system with working implementations and actual package functionality.
 from typing import Any
 
 import pytest
-from mcp_mesh_runtime.decorators import mesh_agent
+from mcp_mesh.decorators import mesh_agent
 
 # Test imports from mcp-mesh (validates package separation)
 from mcp_mesh_runtime.unified_dependencies import (
@@ -25,7 +25,7 @@ class TestFinalValidationWorking:
 
         # These imports should work without any mcp_mesh runtime dependencies
         from mcp_mesh import DependencyPattern
-        from mcp_mesh_runtime.decorators import mesh_agent
+        from mcp_mesh.decorators import mesh_agent
         from mcp_mesh_runtime.unified_dependencies import (
             DependencySpecification,
         )
@@ -106,7 +106,7 @@ class TestFinalValidationWorking:
                 return 1
 
         # Consumer with type hints - NO Protocol definitions needed!
-        @mesh_agent(capabilities=["data.process"])
+        @mesh_agent(capability="data.process")
         class DataProcessor:
             """Revolutionary: Type-safe dependency injection without Protocols."""
 
@@ -198,7 +198,7 @@ class TestFinalValidationWorking:
                 }
 
         # Revolutionary: Consumer uses duck typing for type safety
-        @mesh_agent(capabilities=["ecommerce.process"])
+        @mesh_agent(capability="ecommerce.process")
         class ECommerceProcessor:
             """Type-safe processing without shared interfaces."""
 
@@ -283,7 +283,7 @@ class TestFinalValidationWorking:
                 return True
 
         # Flexible processor with optional dependencies
-        @mesh_agent(capabilities=["business.process"])
+        @mesh_agent(capability="business.process")
         class FlexibleBusinessProcessor:
             """Processor with optional dependencies for graceful degradation."""
 
@@ -360,7 +360,7 @@ class TestFinalValidationWorking:
         """Test 6: mesh_agent decorator functionality."""
 
         @mesh_agent(
-            capabilities=["test.capability"],
+            capability="test.capability",
             version="2.0.0",
             description="Test agent for validation",
         )
@@ -444,7 +444,7 @@ class TestFinalValidationWorking:
 
         # Complete workflow processor
         @mesh_agent(
-            capabilities=["workflow.complete"],
+            capability="workflow.complete",
             dependencies=["logging", "validation", "processing", "notification"],
             version="1.0.0",
         )
