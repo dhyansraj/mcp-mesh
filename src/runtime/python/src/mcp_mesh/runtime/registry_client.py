@@ -91,6 +91,35 @@ class RegistryClient:
         result = await self._make_request("POST", "/heartbeat", payload)
         return result is not None
 
+    async def send_heartbeat_with_response(
+        self, health_status: HealthStatus
+    ) -> dict | None:
+        """Send periodic heartbeat to registry and return full response."""
+        # Convert to Go registry format - expects agent_id, status, and metadata
+        payload = {
+            "agent_id": health_status.agent_name,  # Go registry expects agent_id
+            "status": (
+                health_status.status.value
+                if hasattr(health_status.status, "value")
+                else health_status.status
+            ),
+            "metadata": {
+                "capabilities": health_status.capabilities,
+                "timestamp": (
+                    health_status.timestamp.isoformat()
+                    if health_status.timestamp
+                    else None
+                ),
+                "checks": health_status.checks,
+                "errors": health_status.errors,
+                "uptime_seconds": health_status.uptime_seconds,
+                "version": health_status.version,
+                **health_status.metadata,  # Include any additional metadata
+            },
+        }
+        # Use /heartbeat endpoint (not /agents/heartbeat)
+        return await self._make_request("POST", "/heartbeat", payload)
+
     async def get_dependency(self, dependency_name: str) -> Any:
         """Retrieve dependency configuration from registry."""
         response = await self._make_request("GET", f"/dependencies/{dependency_name}")

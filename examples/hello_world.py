@@ -57,6 +57,7 @@ def create_hello_world_server() -> FastMCP:
     # This function uses DUAL-DECORATOR pattern: @server.tool() + @mesh_agent()
     # Includes mesh integration with automatic dependency injection
 
+    @server.tool()
     @mesh_agent(
         capability="greeting",  # Single capability
         dependencies=["SystemAgent"],  # Will be automatically injected when available
@@ -66,7 +67,6 @@ def create_hello_world_server() -> FastMCP:
         description="Greeting function with automatic SystemAgent dependency injection",
         tags=["demo", "dependency_injection"],
     )
-    @server.tool()
     def greet_from_mcp_mesh(SystemAgent: Any | None = None) -> str:
         """
         MCP Mesh greeting function with automatic dependency injection.
@@ -96,6 +96,7 @@ def create_hello_world_server() -> FastMCP:
     # ===== NEW SINGLE CAPABILITY PATTERN (KUBERNETES-OPTIMIZED) =====
     # Each function provides exactly ONE capability for better organization
 
+    @server.tool()
     @mesh_agent(
         capability="greeting",  # Single capability (new pattern)
         dependencies=["SystemAgent"],
@@ -103,7 +104,6 @@ def create_hello_world_server() -> FastMCP:
         tags=["demo", "kubernetes", "single-capability"],
         description="Single-capability greeting function optimized for Kubernetes",
     )
-    @server.tool()
     def greet_single_capability(SystemAgent: Any | None = None) -> str:
         """
         Greeting function using new single-capability pattern.
@@ -166,12 +166,12 @@ def create_hello_world_server() -> FastMCP:
             ],
         }
 
+    @server.tool()
     @mesh_agent(
         capability="dependency_validation",  # Single capability
         dependencies=["SystemAgent"],
         fallback_mode=True,
     )
-    @server.tool()
     def test_dependency_injection(SystemAgent: Any | None = None) -> dict[str, Any]:
         """
         Test and report current dependency injection status.
@@ -214,6 +214,8 @@ def main():
     """Run the Hello World demonstration server."""
     import signal
     import sys
+    import threading
+    import time
 
     # Setup signal handler
     def signal_handler(signum, frame):
@@ -234,6 +236,136 @@ def main():
     # Create the server
     server = create_hello_world_server()
 
+    # Start FastAPI server for DI testing in background thread
+    def start_fastapi():
+        """Start FastAPI server for dependency injection testing."""
+        import uvicorn
+        from fastapi import FastAPI
+
+        app = FastAPI(title="MCP Mesh DI Tester")
+
+        @app.get("/")
+        def root():
+            return {
+                "message": "MCP Mesh Dependency Injection Tester",
+                "endpoint": "/check-di",
+            }
+
+        @app.get("/check-di")
+        def check_dependency_injection():
+            """Check the current state of dependency injection for all mesh functions."""
+            results = {}
+
+            # Check greet_from_mcp_mesh
+            if hasattr(server, "_tool_manager") and hasattr(
+                server._tool_manager, "_tools"
+            ):
+                for tool_name, tool_info in server._tool_manager._tools.items():
+                    if tool_name in [
+                        "greet_from_mcp_mesh",
+                        "greet_single_capability",
+                        "test_dependency_injection",
+                    ]:
+                        func = tool_info.fn
+
+                        result = {
+                            "has_dependencies": hasattr(
+                                func, "_mesh_agent_dependencies"
+                            ),
+                            "dependencies_declared": getattr(
+                                func, "_mesh_agent_dependencies", []
+                            ),
+                            "has_injection": hasattr(func, "_injected_deps"),
+                            "injection_status": "not_configured",
+                        }
+
+                        if hasattr(func, "_injected_deps"):
+                            deps = func._injected_deps
+                            if "SystemAgent" in deps and deps["SystemAgent"]:
+                                proxy = deps["SystemAgent"]
+                                result["injection_status"] = "injected"
+                                result["proxy_details"] = {
+                                    "type": str(type(proxy).__name__),
+                                    "endpoint": getattr(proxy, "_endpoint", "N/A"),
+                                    "agent_id": getattr(proxy, "_agent_id", "N/A"),
+                                    "status": getattr(proxy, "_status", "N/A"),
+                                    "repr": str(proxy),
+                                }
+                            else:
+                                result["injection_status"] = "waiting_for_provider"
+
+                        results[tool_name] = result
+
+            # Add summary
+            injected_count = sum(
+                1 for r in results.values() if r.get("injection_status") == "injected"
+            )
+
+            # Test actual invocation on greet_from_mcp_mesh if it has injection
+            invocation_test = None
+            if (
+                "greet_from_mcp_mesh" in results
+                and results["greet_from_mcp_mesh"].get("injection_status") == "injected"
+            ):
+                try:
+                    # Get the actual function
+                    func = None
+                    for tool_name, tool_info in server._tool_manager._tools.items():
+                        if tool_name == "greet_from_mcp_mesh":
+                            func = tool_info.fn
+                            break
+
+                    if func:
+                        # Try to invoke it
+                        result = func()
+                        invocation_test = {
+                            "status": "success",
+                            "result": result,
+                            "message": "Function successfully invoked with injected dependency!",
+                        }
+                except Exception as e:
+                    invocation_test = {
+                        "status": "error",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "message": "Expected error: stdio transport cannot invoke remote services",
+                        "explanation": "The SystemAgent proxy was injected, but stdio transport cannot make HTTP calls to invoke it",
+                    }
+
+            return {
+                "summary": {
+                    "total_functions_with_dependencies": len(results),
+                    "injected": injected_count,
+                    "waiting": len(results) - injected_count,
+                    "message": (
+                        "SystemAgent proxy is available!"
+                        if injected_count > 0
+                        else "No dependencies injected yet - start system_agent.py"
+                    ),
+                },
+                "functions": results,
+                "invocation_test": invocation_test,
+            }
+
+        @app.get("/health")
+        def health():
+            return {"status": "healthy", "service": "hello-world-di-tester"}
+
+        # Wait a bit for MCP server to initialize
+        time.sleep(2)
+
+        print("\n🌐 Starting FastAPI DI Tester on http://localhost:8888")
+        print("📍 Check dependency injection status at: http://localhost:8888/check-di")
+        print(
+            "💡 Refresh the endpoint after starting system_agent.py to see injection!\n"
+        )
+
+        uvicorn.run(app, host="0.0.0.0", port=8888, log_level="error")
+
+    # Start FastAPI in background thread
+    fastapi_thread = threading.Thread(target=start_fastapi, daemon=True)
+    fastapi_thread.start()
+
     print(f"📡 Server name: {server.name}")
     print("\n🎯 Demonstration Functions:")
     print("• greet_from_mcp - Plain MCP function (no dependency injection)")
@@ -242,10 +374,10 @@ def main():
         "• greet_single_capability - Single capability function (Kubernetes-optimized)"
     )
     print("\n🔧 Test Workflow:")
-    print("1. Both functions return basic greetings initially")
+    print("1. Check DI status: curl http://localhost:8888/check-di")
     print("2. Start system_agent.py to see automatic dependency injection")
-    print("3. greet_from_mcp_mesh behavior changes automatically!")
-    print("4. greet_from_mcp remains unchanged (plain MCP)")
+    print("3. Check again: curl http://localhost:8888/check-di")
+    print("4. See SystemAgent proxy details!")
     print("\n📝 Server ready on stdio transport...")
     print("💡 Use MCP client to test functions.")
     print("🔧 Start with: mcp-mesh-dev start examples/hello_world.py")

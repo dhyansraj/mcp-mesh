@@ -79,11 +79,19 @@ type AgentRegistrationRequest struct {
 
 // AgentRegistrationResponse matches Python response format exactly
 type AgentRegistrationResponse struct {
-	Status          string `json:"status"`
-	AgentID         string `json:"agent_id"`
-	ResourceVersion string `json:"resource_version"`
-	Timestamp       string `json:"timestamp"`
-	Message         string `json:"message"`
+	Status               string                            `json:"status"`
+	AgentID              string                            `json:"agent_id"`
+	ResourceVersion      string                            `json:"resource_version"`
+	Timestamp            string                            `json:"timestamp"`
+	Message              string                            `json:"message"`
+	DependenciesResolved map[string]*DependencyResolution `json:"dependencies_resolved,omitempty"`
+}
+
+// DependencyResolution represents a resolved dependency
+type DependencyResolution struct {
+	AgentID  string `json:"agent_id"`
+	Endpoint string `json:"endpoint"`
+	Status   string `json:"status"`
 }
 
 // HeartbeatRequest matches Python HeartbeatRequest exactly
@@ -95,9 +103,12 @@ type HeartbeatRequest struct {
 
 // HeartbeatResponse matches Python response format exactly
 type HeartbeatResponse struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
-	Message   string `json:"message"`
+	Status               string                            `json:"status"`
+	Timestamp            string                            `json:"timestamp"`
+	Message              string                            `json:"message"`
+	AgentID              string                            `json:"agent_id,omitempty"`
+	ResourceVersion      string                            `json:"resource_version,omitempty"`
+	DependenciesResolved map[string]*DependencyResolution `json:"dependencies_resolved,omitempty"`
 }
 
 // AgentsResponse matches Python AgentsResponse exactly
@@ -347,13 +358,30 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 	// Invalidate cache
 	s.cache.invalidateAll()
 
+	// Parse dependencies from JSON
+	var dependencies []string
+	if dependenciesJSON != "[]" && dependenciesJSON != "" {
+		if err := json.Unmarshal([]byte(dependenciesJSON), &dependencies); err != nil {
+			log.Printf("Warning: Failed to parse dependencies: %v", err)
+		}
+	}
+
+	// Resolve dependencies
+	dependenciesResolved, err := s.resolveDependencies(req.AgentID, dependencies)
+	if err != nil {
+		log.Printf("Warning: Failed to resolve dependencies: %v", err)
+		// Continue without dependencies rather than failing registration
+		dependenciesResolved = make(map[string]*DependencyResolution)
+	}
+
 	// Return response matching Python format exactly
 	response := &AgentRegistrationResponse{
-		Status:          "success",
-		AgentID:         req.AgentID,
-		ResourceVersion: agent.ResourceVersion,
-		Timestamp:       now.Format(time.RFC3339),
-		Message:         "Agent registered successfully",
+		Status:               "success",
+		AgentID:              req.AgentID,
+		ResourceVersion:      agent.ResourceVersion,
+		Timestamp:            now.Format(time.RFC3339),
+		Message:              "Agent registered successfully",
+		DependenciesResolved: dependenciesResolved,
 	}
 
 	return response, nil
@@ -434,10 +462,36 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	// Invalidate cache when heartbeat updates occur (matches Python behavior)
 	s.cache.invalidateAll()
 
+	// Get agent's dependencies from database
+	var dependenciesJSON string
+	err = s.db.DB.QueryRow("SELECT dependencies FROM agents WHERE id = ?", req.AgentID).Scan(&dependenciesJSON)
+	if err != nil {
+		log.Printf("Warning: Failed to get agent dependencies: %v", err)
+		dependenciesJSON = "[]"
+	}
+
+	// Parse dependencies
+	var dependencies []string
+	if dependenciesJSON != "[]" && dependenciesJSON != "" {
+		if err := json.Unmarshal([]byte(dependenciesJSON), &dependencies); err != nil {
+			log.Printf("Warning: Failed to parse dependencies: %v", err)
+		}
+	}
+
+	// Resolve dependencies
+	dependenciesResolved, err := s.resolveDependencies(req.AgentID, dependencies)
+	if err != nil {
+		log.Printf("Warning: Failed to resolve dependencies: %v", err)
+		dependenciesResolved = make(map[string]*DependencyResolution)
+	}
+
 	return &HeartbeatResponse{
-		Status:    "success",
-		Timestamp: now.Format(time.RFC3339),
-		Message:   "Heartbeat recorded",
+		Status:               "success",
+		Timestamp:            now.Format(time.RFC3339),
+		Message:              "Heartbeat recorded",
+		AgentID:              req.AgentID,
+		ResourceVersion:      resourceVersion,
+		DependenciesResolved: dependenciesResolved,
 	}, nil
 }
 
@@ -835,6 +889,55 @@ func (s *Service) Health() map[string]interface{} {
 	}
 
 	return health
+}
+
+// resolveDependencies resolves the dependencies for an agent by finding healthy agents with the required capabilities
+func (s *Service) resolveDependencies(agentID string, dependencies []string) (map[string]*DependencyResolution, error) {
+	resolved := make(map[string]*DependencyResolution)
+
+	// If no dependencies, return empty map
+	if len(dependencies) == 0 {
+		return resolved, nil
+	}
+
+	// For each dependency, find the first healthy agent with that capability
+	for _, dep := range dependencies {
+		// Query for healthy agents with the required capability
+		rows, err := s.db.DB.Query(`
+			SELECT DISTINCT a.id, a.endpoint, a.status
+			FROM agents a
+			JOIN capabilities c ON c.agent_id = a.id
+			WHERE c.name = ? AND a.status = 'healthy'
+			ORDER BY a.updated_at DESC
+			LIMIT 1`, dep)
+
+		if err != nil {
+			log.Printf("Error querying for dependency %s: %v", dep, err)
+			resolved[dep] = nil
+			continue
+		}
+
+		var found bool
+		if rows.Next() {
+			var depAgentID, endpoint, status string
+			if err := rows.Scan(&depAgentID, &endpoint, &status); err == nil {
+				resolved[dep] = &DependencyResolution{
+					AgentID:  depAgentID,
+					Endpoint: endpoint,
+					Status:   status,
+				}
+				found = true
+			}
+		}
+		rows.Close()
+
+		if !found {
+			// No healthy provider found
+			resolved[dep] = nil
+		}
+	}
+
+	return resolved, nil
 }
 
 // Helper methods

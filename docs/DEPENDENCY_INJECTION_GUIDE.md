@@ -1,5 +1,7 @@
 # Dependency Injection Guide
 
+> **Important**: For decorator usage patterns and what works vs. what doesn't, see [DECORATOR_USAGE_PATTERNS.md](./DECORATOR_USAGE_PATTERNS.md)
+
 This guide explains how MCP Mesh's dependency injection system works, including decorator order flexibility, dynamic updates, and best practices.
 
 ## Overview

@@ -43,6 +43,7 @@ class MeshAgentProcessor:
         self.logger = logging.getLogger(__name__)
         self._processed_agents: dict[str, bool] = {}
         self._health_tasks: dict[str, asyncio.Task] = {}
+        self._last_dependencies_resolved: dict[str, dict[str, Any]] = {}
 
     async def process_agents(
         self, agents: dict[str, DecoratedFunction]
@@ -115,7 +116,7 @@ class MeshAgentProcessor:
                 self._processed_agents[func_name] = True
 
                 # Set up dependency injection for the function
-                await self._setup_dependency_injection(decorated_func)
+                await self._setup_dependency_injection(decorated_func, response)
             else:
                 self.logger.warning(
                     f"⚠️  Initial registration failed for {func_name}, will retry via heartbeat monitor"
@@ -253,7 +254,9 @@ class MeshAgentProcessor:
             return None
 
     async def _setup_dependency_injection(
-        self, decorated_func: DecoratedFunction
+        self,
+        decorated_func: DecoratedFunction,
+        registry_response: dict[str, Any] | None = None,
     ) -> None:
         """
         Set up dependency injection for the decorated function.
@@ -264,29 +267,120 @@ class MeshAgentProcessor:
 
         Args:
             decorated_func: DecoratedFunction to enhance
+            registry_response: Optional registry response containing dependencies_resolved
         """
-        # For now, we'll add the dependency injection setup hook
-        # This is where we would integrate with the existing dependency injection system
-
         metadata = decorated_func.metadata
         dependencies = metadata.get("dependencies", [])
 
-        if dependencies:
-            self.logger.info(
-                f"Setting up dependency injection for {decorated_func.function.__name__} "
-                f"with dependencies: {dependencies}"
-            )
+        if not dependencies:
+            self.logger.debug(f"No dependencies for {decorated_func.function.__name__}")
+            return
 
-            # Add a marker to the function indicating it's been processed
+        self.logger.info(
+            f"Setting up dependency injection for {decorated_func.function.__name__} "
+            f"with dependencies: {dependencies}"
+        )
+
+        # Get the dependency injector
+        try:
+            from .dependency_injector import get_global_injector
+
+            injector = get_global_injector()
+
+            # Process dependencies_resolved from registry response
+            if registry_response and "dependencies_resolved" in registry_response:
+                dependencies_resolved = registry_response.get(
+                    "dependencies_resolved", {}
+                )
+
+                for dep_name in dependencies:
+                    dep_info = dependencies_resolved.get(dep_name)
+
+                    if dep_info is None:
+                        self.logger.warning(
+                            f"No healthy provider found for dependency '{dep_name}'"
+                        )
+                        # Unregister if previously registered
+                        await injector.unregister_dependency(dep_name)
+                        continue
+
+                    # Create proxy using endpoint from registry
+                    try:
+                        self.logger.info(
+                            f"Creating proxy for '{dep_name}' using endpoint: {dep_info.get('endpoint')}"
+                        )
+
+                        # Create a dynamic proxy using a factory function to capture variables properly
+                        def create_proxy(service_name, endpoint, agent_id, status):
+                            class DynamicServiceProxy:
+                                def __init__(self):
+                                    self._service_name = service_name
+                                    self._endpoint = endpoint
+                                    self._agent_id = agent_id
+                                    self._status = status
+                                    self._call_chain = []
+
+                                def __getattr__(self, name: str) -> Any:
+                                    """Intercept attribute access and return self for chaining."""
+                                    # Clone the proxy with extended call chain
+                                    new_proxy = DynamicServiceProxy()
+                                    new_proxy._call_chain = self._call_chain + [name]
+                                    return new_proxy
+
+                                def __call__(self, *args, **kwargs):
+                                    """Execute the remote call when proxy is invoked."""
+                                    method_name = (
+                                        ".".join(self._call_chain)
+                                        if self._call_chain
+                                        else "invoke"
+                                    )
+
+                                    # TODO: When HTTP transport is available, make actual HTTP call here
+                                    # For now with stdio, we can't make remote calls
+                                    raise RuntimeError(
+                                        f"Cannot invoke {self._service_name}.{method_name}() - "
+                                        f"stdio transport doesn't support HTTP calls to {self._endpoint}"
+                                    )
+
+                                def __repr__(self):
+                                    if self._call_chain:
+                                        return f"<{self._service_name}.{'.'.join(self._call_chain)} proxy>"
+                                    return f"<{self._service_name} proxy to {self._endpoint}>"
+
+                            return DynamicServiceProxy()
+
+                        proxy = create_proxy(
+                            dep_name,
+                            dep_info.get("endpoint"),
+                            dep_info.get("agent_id"),
+                            dep_info.get("status"),
+                        )
+
+                        # Register with injector
+                        await injector.register_dependency(dep_name, proxy)
+                        self.logger.info(
+                            f"Successfully registered proxy for dependency '{dep_name}'"
+                        )
+
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to create proxy for dependency '{dep_name}': {e}"
+                        )
+                        await injector.unregister_dependency(dep_name)
+
+            # Add markers to the function
             decorated_func.function._mesh_processor_enhanced = True
             decorated_func.function._mesh_processor_dependencies = dependencies
 
-            # TODO: Integrate with existing dependency injection system
-            # This would involve:
-            # 1. Setting up parameter injection hooks
-            # 2. Monitoring registry for dependency availability
-            # 3. Updating function signatures dynamically
-            # 4. Handling dependency lifecycle (add/remove)
+            # Store the resolved dependencies for comparison in heartbeat
+            if registry_response and "dependencies_resolved" in registry_response:
+                func_name = decorated_func.function.__name__
+                self._last_dependencies_resolved[func_name] = dependencies_resolved
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to setup dependency injection for {decorated_func.function.__name__}: {e}"
+            )
 
         self.logger.debug(
             f"Dependency injection setup complete for {decorated_func.function.__name__}"
@@ -332,7 +426,9 @@ class MeshAgentProcessor:
                 # Set up dependency injection for late registration
                 mesh_agents = DecoratorRegistry.get_mesh_agents()
                 if agent_name in mesh_agents:
-                    await self._setup_dependency_injection(mesh_agents[agent_name])
+                    await self._setup_dependency_injection(
+                        mesh_agents[agent_name], response
+                    )
 
         while True:
             try:
@@ -362,7 +458,7 @@ class MeshAgentProcessor:
                         mesh_agents = DecoratorRegistry.get_mesh_agents()
                         if agent_name in mesh_agents:
                             await self._setup_dependency_injection(
-                                mesh_agents[agent_name]
+                                mesh_agents[agent_name], response
                             )
 
             except asyncio.CancelledError:
@@ -373,7 +469,7 @@ class MeshAgentProcessor:
                 # Continue monitoring even on errors
 
     async def _send_heartbeat(self, agent_name: str, metadata: dict[str, Any]) -> bool:
-        """Send a heartbeat to the registry.
+        """Send a heartbeat to the registry and handle dependency updates.
 
         Returns:
             True if heartbeat was sent successfully, False otherwise
@@ -389,10 +485,36 @@ class MeshAgentProcessor:
             )
 
             self.logger.info(f"💗 Sending heartbeat for {agent_name} to registry")
-            success = await self.registry_client.send_heartbeat(health_status)
 
-            if success:
+            # Get the full response with dependencies_resolved
+            response = await self.registry_client.send_heartbeat_with_response(
+                health_status
+            )
+
+            if response and response.get("status") == "success":
                 self.logger.info(f"💚 Heartbeat sent successfully for {agent_name}")
+
+                # Check if dependencies have changed
+                if "dependencies_resolved" in response:
+                    current_deps = response.get("dependencies_resolved", {})
+                    last_deps = self._last_dependencies_resolved.get(agent_name, {})
+
+                    if current_deps != last_deps:
+                        self.logger.info(
+                            f"🔄 Dependencies changed for {agent_name}, updating proxies..."
+                        )
+
+                        # Get the decorated function to update dependency injection
+                        mesh_agents = DecoratorRegistry.get_mesh_agents()
+                        if agent_name in mesh_agents:
+                            await self._setup_dependency_injection(
+                                mesh_agents[agent_name], response
+                            )
+                        else:
+                            self.logger.warning(
+                                f"Could not find decorated function for {agent_name}"
+                            )
+
                 return True
             else:
                 self.logger.error(f"💔 Failed to send heartbeat for {agent_name}")
