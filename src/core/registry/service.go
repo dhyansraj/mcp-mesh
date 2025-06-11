@@ -429,7 +429,7 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	if req.Status != "" {
 		updates["status"] = req.Status
 	}
-	
+
 	// Check if endpoint is provided in metadata and update it
 	var endpointUpdate string
 	var hasEndpointUpdate bool
@@ -444,7 +444,7 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	// Update agent heartbeat in database
 	var result sql.Result
 	var err error
-	
+
 	if hasEndpointUpdate {
 		// Update including endpoint
 		result, err = s.db.DB.Exec(`

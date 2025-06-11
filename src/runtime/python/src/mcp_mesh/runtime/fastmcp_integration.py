@@ -6,11 +6,17 @@ This module monkey-patches FastMCP's tool execution to support our dependency in
 
 import asyncio
 import logging
+import signal
+import sys
 from typing import Any
 
 from mcp.server.fastmcp.tools import ToolManager
 
 from .dependency_injector import get_global_injector
+from .logging_config import configure_logging
+
+# Ensure logging is configured
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -153,14 +159,14 @@ def _trigger_decorator_processing():
                             "Starting decorator processing in background thread"
                         )
                         result = await _runtime_processor.process_all_decorators()
-                        logger.info(f"Background processing result: {result}")
+                        logger.debug(f"Background processing result: {result}")
 
                         # Check if any health monitors were created
                         if hasattr(_runtime_processor, "mesh_agent_processor"):
                             health_tasks = (
                                 _runtime_processor.mesh_agent_processor._health_tasks
                             )
-                            logger.info(
+                            logger.debug(
                                 f"Health monitoring tasks created: {len(health_tasks)}"
                             )
 
@@ -169,7 +175,7 @@ def _trigger_decorator_processing():
                     loop.run_until_complete(process())
                     # Keep the loop running for health monitoring
                     logger.info(
-                        "Background decorator processing completed, keeping health monitors active"
+                        "🏁 Background decorator processing completed, keeping health monitors active"
                     )
 
                     # Only run forever if we have health tasks
@@ -177,13 +183,35 @@ def _trigger_decorator_processing():
                         hasattr(_runtime_processor, "mesh_agent_processor")
                         and _runtime_processor.mesh_agent_processor._health_tasks
                     ):
-                        logger.info("Running event loop forever for health monitoring")
-                        loop.run_forever()
+                        logger.info(
+                            "📍 Running event loop forever for health monitoring"
+                        )
+                        
+                        # Set up signal handlers for graceful shutdown
+                        shutdown_event = asyncio.Event()
+                        
+                        def signal_handler(sig, frame):
+                            logger.info("🛑 Received shutdown signal, stopping health monitoring...")
+                            shutdown_event.set()
+                            # Schedule cleanup on the event loop
+                            asyncio.run_coroutine_threadsafe(
+                                _runtime_processor.cleanup(), loop
+                            )
+                        
+                        # Register signal handlers
+                        signal.signal(signal.SIGINT, signal_handler)
+                        signal.signal(signal.SIGTERM, signal_handler)
+                        
+                        # Run until shutdown signal
+                        loop.run_until_complete(shutdown_event.wait())
+                        logger.info("✅ Health monitoring stopped gracefully")
                     else:
                         logger.warning(
                             "No health tasks created, not running event loop"
                         )
-                        loop.close()
+                    
+                    # Clean shutdown
+                    loop.close()
 
             except Exception as e:
                 logger.error(

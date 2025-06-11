@@ -1,19 +1,32 @@
-"""Runtime-specific exceptions for MCP Mesh."""
+"""Runtime-specific exceptions for MCP Mesh.
+
+This module re-exports registry exceptions from the shared module
+for backward compatibility.
+"""
+
+from .shared.exceptions import (  # Re-export the comprehensive exception hierarchy
+    MCPError,
+    MCPErrorCode,
+    MeshAgentError,
+    RegistryConnectionError,
+    RegistryTimeoutError,
+)
 
 
-class RegistryError(Exception):
+# For backward compatibility, create a base RegistryError that's compatible
+# with the new exception hierarchy
+class RegistryError(MeshAgentError):
     """Base exception for registry-related errors."""
 
-    pass
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code=MCPErrorCode.REGISTRY_UNAVAILABLE, **kwargs)
 
 
-class RegistryConnectionError(RegistryError):
-    """Raised when connection to registry fails."""
-
-    pass
-
-
-class RegistryTimeoutError(RegistryError):
-    """Raised when registry operations timeout."""
-
-    pass
+__all__ = [
+    "RegistryError",
+    "RegistryConnectionError",
+    "RegistryTimeoutError",
+    "MCPError",
+    "MCPErrorCode",
+    "MeshAgentError",
+]

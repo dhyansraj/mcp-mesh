@@ -217,16 +217,19 @@ Each will follow the same pattern: single package with decorator/annotation and 
 ## Build Process Updates
 
 ### Go Builds
+
 - Update `go.mod` module paths if needed
 - Update Makefile targets to reference `src/core/`
 - Ensure `go build` commands use correct paths
 
 ### Python Package
+
 - Python package builds from `src/runtime/python/`
 - Update CI/CD to `cd src/runtime/python` before pip install
 - Ensure examples can find the package
 
 ### Installation Instructions
+
 ```bash
 # For development
 cd src/runtime/python

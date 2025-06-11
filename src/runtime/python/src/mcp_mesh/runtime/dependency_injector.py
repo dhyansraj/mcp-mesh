@@ -38,7 +38,7 @@ class DependencyInjector:
     async def register_dependency(self, name: str, instance: Any) -> None:
         """Register a new dependency or update existing one."""
         async with self._lock:
-            logger.info(f"Registering dependency: {name}")
+            logger.info(f"📦 Registering dependency: {name}")
             self._dependencies[name] = instance
 
             # Notify all functions that depend on this
@@ -52,7 +52,7 @@ class DependencyInjector:
     async def unregister_dependency(self, name: str) -> None:
         """Remove a dependency (e.g., service went down)."""
         async with self._lock:
-            logger.info(f"Unregistering dependency: {name}")
+            logger.info(f"📤 Unregistering dependency: {name}")
             if name in self._dependencies:
                 del self._dependencies[name]
 

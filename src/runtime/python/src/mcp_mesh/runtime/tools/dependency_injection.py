@@ -83,7 +83,7 @@ def resolve_dependency(
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # Create a task and run it
-                    task = loop.create_task(resolver.resolve_dependency(spec, context))
+                    loop.create_task(resolver.resolve_dependency(spec, context))
                     # Note: This is a limitation - we can't await in sync function
                     # For now, return None and log warning
                     logger.warning(
@@ -315,7 +315,7 @@ def validate_dependency_types(dependencies: list[Any]) -> ValidationResult:
 
                 # Validate that it's not a built-in type (unless it's a wrapper)
                 if dependency_type.__module__ == "builtins" and not isinstance(
-                    dependency, (str, int, float, bool)
+                    dependency, str | int | float | bool
                 ):
                     errors.append(
                         DependencyValidationError(

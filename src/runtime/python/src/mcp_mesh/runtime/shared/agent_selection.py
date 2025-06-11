@@ -181,10 +181,7 @@ class WeightedSelector:
         if agent.current_load > criteria.max_load_threshold:
             return False
 
-        if criteria.exclude_draining and agent.status == "draining":
-            return False
-
-        return True
+        return not (criteria.exclude_draining and agent.status == "draining")
 
     def _calculate_weighted_score(
         self, agent: AgentInfo, criteria: SelectionCriteria, state: SelectionState
@@ -226,7 +223,7 @@ class WeightedSelector:
         for metric, weight in weights.custom_weights.items():
             if hasattr(agent, metric):
                 value = getattr(agent, metric)
-                if isinstance(value, (int, float)):
+                if isinstance(value, int | float):
                     total_score += weight * min(value, 1.0)
 
         # Bonus for local preference
@@ -559,10 +556,7 @@ class AgentSelectionEngine:
         if agent.current_load > criteria.max_load_threshold:
             return False
 
-        if criteria.exclude_draining and agent.status == "draining":
-            return False
-
-        return True
+        return not (criteria.exclude_draining and agent.status == "draining")
 
 
 # Implement the protocol
@@ -590,10 +584,7 @@ class AgentSelector(AgentSelectionEngine, AgentSelectionProtocol):
             if not (0.0 <= criteria.max_load_threshold <= 1.0):
                 return False
 
-            if criteria.algorithm not in self.selectors:
-                return False
-
-            return True
+            return criteria.algorithm in self.selectors
 
         except Exception:
             return False

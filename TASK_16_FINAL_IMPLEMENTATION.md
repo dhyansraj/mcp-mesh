@@ -9,6 +9,7 @@ Task 16 has been successfully implemented, providing complete HTTP transport cap
 ### 1. HTTP Wrapper Core (`src/runtime/python/src/mcp_mesh/runtime/http_wrapper.py`)
 
 The `HttpMcpWrapper` class provides:
+
 - FastAPI-based HTTP server wrapping MCP servers
 - Health endpoints for container orchestration:
   - `/health` - Basic health check
@@ -27,6 +28,7 @@ The `HttpMcpWrapper` class provides:
 ### 2. Runtime Processor Integration
 
 Enhanced `processor.py` with:
+
 - Sequential HTTP wrapper creation (one wrapper per MCP server)
 - Dynamic dependency injection with HTTP client proxies
 - Sync HTTP client for cross-service calls (`sync_http_client.py`)
@@ -36,6 +38,7 @@ Enhanced `processor.py` with:
 ### 3. FastMCP Integration
 
 Patched FastMCP to:
+
 - Track server references for each decorated function
 - Enable proper server detection for HTTP wrapper creation
 - Maintain function-to-server mapping
@@ -43,12 +46,15 @@ Patched FastMCP to:
 ### 4. Architecture Improvements
 
 #### Flat Function Pattern
+
 Refactored to standard MCP architecture:
+
 - MCP only supports function-level tools (not class methods)
 - Each capability is a separate flat function
 - Example: `SystemAgent.getDate()` → `SystemAgent_getDate()`
 
 #### Dependency Injection Updates
+
 - Dependencies now reference flat functions directly
 - Support for multiple dependency injection
 - HTTP proxies use sync client to avoid async/sync boundary issues
@@ -56,6 +62,7 @@ Refactored to standard MCP architecture:
 ## Updated Examples
 
 ### system_agent.py
+
 ```python
 # Standard MCP flat functions
 @server.tool()
@@ -72,6 +79,7 @@ def SystemAgent_getUptime() -> str:
 ```
 
 ### hello_world.py
+
 ```python
 # Updated to use flat function dependencies
 @server.tool()
@@ -91,6 +99,7 @@ def greet_from_mcp_mesh(SystemAgent_getDate: Any | None = None) -> str:
 ## Testing
 
 ### Manual Testing
+
 1. Start hello_world: `mcp-mesh-dev start examples/hello_world.py`
 2. Test HTTP endpoint: `curl http://localhost:8889/health`
 3. Start system_agent: `mcp-mesh-dev start examples/system_agent.py`
@@ -98,7 +107,9 @@ def greet_from_mcp_mesh(SystemAgent_getDate: Any | None = None) -> str:
 5. Run test script: `./test_http_flow.py`
 
 ### Integration Tests
+
 Comprehensive test suite in `tests/integration/test_http_wrapper_integration.py`:
+
 - Health endpoint tests
 - MCP protocol handler tests
 - CORS header verification
@@ -109,6 +120,7 @@ Comprehensive test suite in `tests/integration/test_http_wrapper_integration.py`
 ## Kubernetes Support
 
 Added `examples/k8s-deployments.yaml` with:
+
 - Namespace configuration
 - Deployment specs for agents
 - Service definitions
@@ -116,6 +128,7 @@ Added `examples/k8s-deployments.yaml` with:
 - Resource limits
 
 Enhanced `Dockerfile.mcp-agent`:
+
 - HTTP port exposure
 - Health check configuration
 - Graceful shutdown handling
@@ -123,12 +136,14 @@ Enhanced `Dockerfile.mcp-agent`:
 ## Next Steps
 
 1. **Production Readiness**
+
    - Add authentication/authorization
    - Implement rate limiting
    - Add metrics/observability
    - SSL/TLS support
 
 2. **Advanced Features**
+
    - WebSocket support for streaming
    - gRPC transport option
    - Service mesh integration (Istio/Linkerd)

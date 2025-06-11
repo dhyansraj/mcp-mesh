@@ -211,9 +211,12 @@ func KillProcess(pid int, timeout time.Duration) error {
 		return err
 	}
 
-	// Try graceful shutdown first (SIGTERM)
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		return err
+	// Try graceful shutdown first (SIGINT for Python processes)
+	if err := process.Signal(os.Interrupt); err != nil {
+		// If SIGINT fails, try SIGTERM
+		if err := process.Signal(syscall.SIGTERM); err != nil {
+			return err
+		}
 	}
 
 	// Wait for graceful shutdown

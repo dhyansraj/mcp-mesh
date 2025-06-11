@@ -6,6 +6,7 @@ Registry Integration for Service Discovery implementation for Phase 2.
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -148,10 +149,9 @@ class ServiceDiscovery:
                 if (
                     compatibility_score.overall_score
                     >= requirements.compatibility_threshold
-                ):
-                    if compatibility_score.overall_score > best_score:
-                        best_score = compatibility_score.overall_score
-                        best_agent = agent
+                ) and compatibility_score.overall_score > best_score:
+                    best_score = compatibility_score.overall_score
+                    best_agent = agent
 
             if best_agent:
                 self.logger.info(
@@ -878,10 +878,8 @@ class HealthMonitor:
         self._monitoring = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
             self._monitor_task = None
 
         self.logger.info(f"Stopped health monitoring for {self.service_name}")

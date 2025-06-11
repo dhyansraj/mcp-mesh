@@ -14,8 +14,12 @@ from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
 
+from .logging_config import configure_logging
 from .registry_client import RegistryClient
 from .shared.types import HealthStatus, HealthStatusType
+
+# Ensure logging is configured
+configure_logging()
 
 
 class DecoratorProcessorError(Exception):
@@ -38,16 +42,20 @@ class MeshAgentProcessor:
     registrations with the mesh registry service.
     """
 
-    def __init__(self, registry_client: RegistryClient):
-        self.registry_client = registry_client
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, registry_client: RegistryClient) -> None:
+        self.registry_client: RegistryClient = registry_client
+        self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_agents: dict[str, bool] = {}
-        self._health_tasks: dict[str, asyncio.Task] = {}
+        self._health_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_dependencies_resolved: dict[str, dict[str, Any]] = {}
         self._http_wrappers: dict[str, Any] = {}  # Store HTTP wrappers per server
         self._mcp_servers: dict[str, Any] = {}  # Cache MCP servers
-        self._server_http_config: dict[str, dict] = {}  # Track HTTP config per server
-        self._agent_metadata: dict[str, dict[str, Any]] = {}  # Store agent metadata for updates
+        self._server_http_config: dict[str, dict[str, Any]] = (
+            {}
+        )  # Track HTTP config per server
+        self._agent_metadata: dict[str, dict[str, Any]] = (
+            {}
+        )  # Store agent metadata for updates
 
     async def process_agents(
         self, agents: dict[str, DecoratedFunction]
@@ -70,7 +78,7 @@ class MeshAgentProcessor:
 
                 if success:
                     # Don't mark as processed here - let process_single_agent handle it
-                    self.logger.info(f"Successfully processed agent: {func_name}")
+                    self.logger.debug(f"Successfully processed agent: {func_name}")
                 else:
                     self.logger.warning(f"Failed to process agent: {func_name}")
 
@@ -102,21 +110,23 @@ class MeshAgentProcessor:
             metadata = decorated_func.metadata
 
             # Build registration request
-            registration_data = self._build_registration_data(func_name, metadata)
+            registration_data: dict[str, Any] = self._build_registration_data(
+                func_name, metadata
+            )
 
-            self.logger.info(
+            self.logger.debug(
                 f"🎯🎯🎯 ABOUT TO REGISTER {func_name} WITH MESH REGISTRY 🎯🎯🎯"
             )
 
             # Store the metadata BEFORE processing (needed for HTTP wrapper updates)
             self._agent_metadata[func_name] = metadata.copy()
-            
+
             # Register with mesh registry
             response = await self._register_with_mesh_registry(registration_data)
 
             if response and response.get("status") == "success":
                 self.logger.info(
-                    f"♥♥♥♥♥ CORRECT CODE! Agent {func_name} registered successfully with mesh registry ♥♥♥♥♥"
+                    f"🎉 Agent {func_name} registered successfully with mesh registry"
                 )
 
                 # Mark as successfully processed
@@ -126,17 +136,17 @@ class MeshAgentProcessor:
                 await self._setup_dependency_injection(decorated_func, response)
 
                 # Check if HTTP wrapper should be enabled
-                http_enabled = self._should_enable_http(metadata)
-                self.logger.info(
+                http_enabled: bool = self._should_enable_http(metadata)
+                self.logger.debug(
                     f"🔍 Checking HTTP for {func_name}: enable_http={metadata.get('enable_http')}, should_enable={http_enabled}"
                 )
                 if http_enabled:
-                    self.logger.info(
+                    self.logger.debug(
                         f"🌐 HTTP wrapper should be enabled for {func_name}"
                     )
                     await self._setup_http_wrapper(func_name, decorated_func)
                 else:
-                    self.logger.info(
+                    self.logger.debug(
                         f"📡 HTTP wrapper not enabled for {func_name} (enable_http={metadata.get('enable_http', False)})"
                     )
             else:
@@ -148,10 +158,10 @@ class MeshAgentProcessor:
             # ALWAYS start health monitoring regardless of registration success
             # This allows agents to work standalone and connect when registry comes online
             health_interval = metadata.get("health_interval", 30)
-            self.logger.info(
+            self.logger.debug(
                 f"💓💓💓 Starting heartbeat monitoring for {func_name} with interval {health_interval}s"
             )
-            
+
             # Create and start the health monitoring task
             # The health monitor will handle registration retries if needed
             task = asyncio.create_task(
@@ -300,7 +310,7 @@ class MeshAgentProcessor:
             return
 
         self.logger.info(
-            f"Setting up dependency injection for {decorated_func.function.__name__} "
+            f"🔧 Setting up dependency injection for {decorated_func.function.__name__} "
             f"with dependencies: {dependencies}"
         )
 
@@ -321,7 +331,7 @@ class MeshAgentProcessor:
 
                     if dep_info is None:
                         self.logger.warning(
-                            f"No healthy provider found for dependency '{dep_name}'"
+                            f"⚠️  No healthy provider found for dependency '{dep_name}'"
                         )
                         # Unregister if previously registered
                         await injector.unregister_dependency(dep_name)
@@ -330,7 +340,7 @@ class MeshAgentProcessor:
                     # Create proxy using endpoint from registry
                     try:
                         endpoint = dep_info.get("endpoint", "")
-                        self.logger.info(
+                        self.logger.debug(
                             f"Creating proxy for '{dep_name}' using endpoint: {endpoint}"
                         )
 
@@ -347,7 +357,7 @@ class MeshAgentProcessor:
                         # Register with injector
                         await injector.register_dependency(dep_name, proxy)
                         self.logger.info(
-                            f"Successfully registered proxy for dependency '{dep_name}'"
+                            f"🔗 Successfully registered proxy for dependency '{dep_name}'"
                         )
 
                     except Exception as e:
@@ -506,7 +516,7 @@ class MeshAgentProcessor:
             metadata: Agent metadata
             interval: Health check interval in seconds
         """
-        self.logger.info(
+        self.logger.debug(
             f"💓 Health monitor started for {agent_name} (interval: {interval}s)"
         )
 
@@ -514,7 +524,7 @@ class MeshAgentProcessor:
         needs_registration = agent_name not in self._processed_agents
 
         # Send initial heartbeat immediately (may fail if not registered)
-        self.logger.info(f"💓 Sending initial heartbeat for {agent_name}")
+        self.logger.debug(f"💓 Sending initial heartbeat for {agent_name}")
         heartbeat_success = await self._send_heartbeat(agent_name, metadata)
 
         # If heartbeat failed and we need registration, try to register
@@ -538,7 +548,7 @@ class MeshAgentProcessor:
         while True:
             try:
                 await asyncio.sleep(interval)
-                self.logger.info(f"💓 Sending heartbeat for {agent_name}")
+                self.logger.debug(f"💓 Sending heartbeat for {agent_name}")
                 heartbeat_success = await self._send_heartbeat(agent_name, metadata)
 
                 # If not registered yet and heartbeat failed, retry registration
@@ -582,7 +592,7 @@ class MeshAgentProcessor:
         try:
             # Use the latest metadata which may have been updated with HTTP endpoint
             current_metadata = self._agent_metadata.get(agent_name, metadata)
-            
+
             health_status = HealthStatus(
                 agent_name=agent_name,
                 status=HealthStatusType.HEALTHY,
@@ -592,9 +602,13 @@ class MeshAgentProcessor:
                 metadata=current_metadata,
             )
 
-            self.logger.info(f"💗 Sending heartbeat for {agent_name} to registry")
-            self.logger.info(f"   Endpoint in metadata: {current_metadata.get('endpoint', 'NOT SET')}")
-            self.logger.info(f"   Transport in metadata: {current_metadata.get('transport', 'NOT SET')}")
+            self.logger.debug(f"💗 Sending heartbeat for {agent_name} to registry")
+            self.logger.debug(
+                f"   Endpoint in metadata: {current_metadata.get('endpoint', 'NOT SET')}"
+            )
+            self.logger.debug(
+                f"   Transport in metadata: {current_metadata.get('transport', 'NOT SET')}"
+            )
 
             # Get the full response with dependencies_resolved
             response = await self.registry_client.send_heartbeat_with_response(
@@ -602,7 +616,7 @@ class MeshAgentProcessor:
             )
 
             if response and response.get("status") == "success":
-                self.logger.info(f"💚 Heartbeat sent successfully for {agent_name}")
+                self.logger.debug(f"💚 Heartbeat sent successfully for {agent_name}")
 
                 # Check if dependencies have changed
                 if "dependencies_resolved" in response:
@@ -610,7 +624,7 @@ class MeshAgentProcessor:
                     last_deps = self._last_dependencies_resolved.get(agent_name, {})
 
                     if current_deps != last_deps:
-                        self.logger.info(
+                        self.logger.debug(
                             f"🔄 Dependencies changed for {agent_name}, updating proxies..."
                         )
 
@@ -652,7 +666,7 @@ class MeshAgentProcessor:
         try:
             from .http_wrapper import HttpConfig, HttpMcpWrapper
 
-            self.logger.info(f"🔍 Looking for MCP server for function {func_name}")
+            self.logger.debug(f"🔍 Looking for MCP server for function {func_name}")
 
             # Get or create MCP server for this function
             mcp_server = self._get_mcp_server_for_function(func_name, decorated_func)
@@ -662,7 +676,7 @@ class MeshAgentProcessor:
                 )
                 return
 
-            self.logger.info(
+            self.logger.debug(
                 f"✅ Found MCP server '{mcp_server.name}' for function {func_name}"
             )
 
@@ -674,13 +688,13 @@ class MeshAgentProcessor:
                 # Reuse existing wrapper
                 wrapper = self._http_wrappers[server_name]
                 http_endpoint = wrapper.get_endpoint()
-                self.logger.info(
+                self.logger.debug(
                     f"♻️  Reusing existing HTTP wrapper for server '{server_name}' at {http_endpoint}"
                 )
-                self.logger.info(
+                self.logger.debug(
                     f"📍 Function {func_name} is accessible via existing HTTP endpoint:"
                 )
-                self.logger.info(
+                self.logger.debug(
                     f'   Call function: curl -X POST {http_endpoint}/mcp -H \'Content-Type: application/json\' -d \'{{"method": "tools/call", "params": {{"name": "{func_name}", "arguments": {{}}}}}}\''
                 )
 
@@ -689,7 +703,9 @@ class MeshAgentProcessor:
                 return
 
             # First HTTP-enabled function for this server - create new wrapper
-            self.logger.info(f"🆕 Creating new HTTP wrapper for server '{server_name}'")
+            self.logger.debug(
+                f"🆕 Creating new HTTP wrapper for server '{server_name}'"
+            )
 
             # Create HTTP wrapper config
             config = HttpConfig(
@@ -707,20 +723,22 @@ class MeshAgentProcessor:
 
             # Update registration with HTTP endpoint for all functions in this server
             http_endpoint = wrapper.get_endpoint()
-            await self._update_all_server_functions_with_http(server_name, http_endpoint)
+            await self._update_all_server_functions_with_http(
+                server_name, http_endpoint
+            )
 
-            self.logger.info(
+            self.logger.debug(
                 f"🌐 HTTP wrapper started for server '{server_name}' at {http_endpoint}"
             )
-            self.logger.info(
+            self.logger.debug(
                 f"📍 All functions in server '{server_name}' are now accessible via HTTP:"
             )
-            self.logger.info(f"   Health check: curl {http_endpoint}/health")
-            self.logger.info(f"   Mesh info: curl {http_endpoint}/mesh/info")
-            self.logger.info(
+            self.logger.debug(f"   Health check: curl {http_endpoint}/health")
+            self.logger.debug(f"   Mesh info: curl {http_endpoint}/mesh/info")
+            self.logger.debug(
                 f"   List tools: curl -X POST {http_endpoint}/mcp -H 'Content-Type: application/json' -d '{{\"method\": \"tools/list\"}}'"
             )
-            self.logger.info(
+            self.logger.debug(
                 f'   Call {func_name}: curl -X POST {http_endpoint}/mcp -H \'Content-Type: application/json\' -d \'{{"method": "tools/call", "params": {{"name": "{func_name}", "arguments": {{}}}}}}\''
             )
 
@@ -774,22 +792,24 @@ class MeshAgentProcessor:
             # The registry doesn't have a PUT endpoint for updates
             # Instead, we need to re-register with the new HTTP endpoint
             # or let the next heartbeat include the updated endpoint
-            
+
             # Update the stored registration data for this agent
             if agent_name in self._agent_metadata:
                 self._agent_metadata[agent_name]["endpoint"] = http_endpoint
                 self._agent_metadata[agent_name]["transport"] = ["stdio", "http"]
-                
+
                 # The next heartbeat will automatically include the updated endpoint
-                self.logger.info(
+                self.logger.debug(
                     f"✅ Updated local registration data for {agent_name} with HTTP endpoint {http_endpoint}"
                 )
-                self.logger.info(
-                    f"📍 HTTP endpoint will be propagated to registry on next heartbeat"
+                self.logger.debug(
+                    "📍 HTTP endpoint will be propagated to registry on next heartbeat"
                 )
-                
+
                 # Send an immediate heartbeat to update the registry
-                self.logger.info(f"💗 Sending immediate heartbeat to update registry with HTTP endpoint")
+                self.logger.debug(
+                    "💗 Sending immediate heartbeat to update registry with HTTP endpoint"
+                )
                 await self._send_heartbeat(agent_name, self._agent_metadata[agent_name])
             else:
                 self.logger.warning(
@@ -801,8 +821,10 @@ class MeshAgentProcessor:
 
         except Exception as e:
             self.logger.error(f"Error updating registration with HTTP endpoint: {e}")
-    
-    async def _update_all_server_functions_with_http(self, server_name: str, http_endpoint: str):
+
+    async def _update_all_server_functions_with_http(
+        self, server_name: str, http_endpoint: str
+    ):
         """Update all functions from a server with the HTTP endpoint."""
         try:
             # Find all functions that belong to this server
@@ -812,21 +834,21 @@ class MeshAgentProcessor:
                 # We can check by seeing if they share the same MCP server instance
                 if func_name in self._mcp_servers:
                     func_server = self._mcp_servers[func_name]
-                    if hasattr(func_server, 'name') and func_server.name == server_name:
+                    if hasattr(func_server, "name") and func_server.name == server_name:
                         # Update this function's metadata
                         metadata["endpoint"] = http_endpoint
                         metadata["transport"] = ["stdio", "http"]
                         updated_count += 1
-                        
-                        self.logger.info(
+
+                        self.logger.debug(
                             f"✅ Updated {func_name} with HTTP endpoint {http_endpoint}"
                         )
-                        
+
                         # Send immediate heartbeat for this function
                         await self._send_heartbeat(func_name, metadata)
-            
+
             if updated_count > 0:
-                self.logger.info(
+                self.logger.debug(
                     f"📍 Updated {updated_count} functions from server '{server_name}' with HTTP endpoint"
                 )
             else:
@@ -839,15 +861,17 @@ class MeshAgentProcessor:
                 self.logger.warning(
                     f"Current _mcp_servers: {list(self._mcp_servers.keys())}"
                 )
-                
+
                 # Let's also check if we can find functions by looking at all metadata
-                for func_name, metadata in self._agent_metadata.items():
+                for func_name, _metadata in self._agent_metadata.items():
                     self.logger.warning(
                         f"  Function {func_name}: has server? {func_name in self._mcp_servers}"
                     )
-                
+
         except Exception as e:
-            self.logger.error(f"Error updating server functions with HTTP endpoint: {e}")
+            self.logger.error(
+                f"Error updating server functions with HTTP endpoint: {e}"
+            )
 
 
 class DecoratorProcessor:
@@ -894,7 +918,7 @@ class DecoratorProcessor:
         """Register a function with its metadata for processing."""
         # Store function registration for later processing
         func_name = func.__name__
-        self.logger.info(f"Registered function {func_name} with mesh capabilities")
+        self.logger.debug(f"Registered function {func_name} with mesh capabilities")
 
         # Try to process immediately if possible
         try:
@@ -930,7 +954,7 @@ class DecoratorProcessor:
         Returns:
             Processing results summary
         """
-        self.logger.info("Starting decorator processing...")
+        self.logger.debug("Starting decorator processing...")
 
         results = {
             "mesh_agents": {},
@@ -945,7 +969,7 @@ class DecoratorProcessor:
             # Process @mesh_agent decorators
             mesh_agents = DecoratorRegistry.get_mesh_agents()
             if mesh_agents:
-                self.logger.info(
+                self.logger.debug(
                     f"Processing {len(mesh_agents)} @mesh_agent decorators"
                 )
                 agent_results = await self.mesh_agent_processor.process_agents(
@@ -969,7 +993,7 @@ class DecoratorProcessor:
             self._processing_complete = True
             self._last_processed_count = results["total_processed"]
 
-            self.logger.info(
+            self.logger.debug(
                 f"Decorator processing complete: {results['total_successful']}/{results['total_processed']} successful"
             )
 
@@ -986,7 +1010,7 @@ class DecoratorProcessor:
             hasattr(self, "mesh_agent_processor")
             and self.mesh_agent_processor._http_wrappers
         ):
-            self.logger.info(
+            self.logger.debug(
                 f"Stopping {len(self.mesh_agent_processor._http_wrappers)} HTTP wrappers"
             )
             for (
@@ -1009,7 +1033,7 @@ class DecoratorProcessor:
             hasattr(self, "mesh_agent_processor")
             and self.mesh_agent_processor._health_tasks
         ):
-            self.logger.info(
+            self.logger.debug(
                 f"Cancelling {len(self.mesh_agent_processor._health_tasks)} health monitoring tasks"
             )
             for agent_name, task in self.mesh_agent_processor._health_tasks.items():
@@ -1017,12 +1041,19 @@ class DecoratorProcessor:
                     task.cancel()
                     self.logger.debug(f"Cancelled health monitoring for {agent_name}")
 
-            # Wait for all tasks to complete cancellation
-            await asyncio.gather(
-                *self.mesh_agent_processor._health_tasks.values(),
-                return_exceptions=True,
-            )
-            self.mesh_agent_processor._health_tasks.clear()
+            # Wait for all tasks to complete cancellation with timeout
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *self.mesh_agent_processor._health_tasks.values(),
+                        return_exceptions=True,
+                    ),
+                    timeout=5.0  # 5 second timeout for cleanup
+                )
+            except asyncio.TimeoutError:
+                self.logger.warning("Some health monitoring tasks did not stop in time")
+            finally:
+                self.mesh_agent_processor._health_tasks.clear()
 
         if self.registry_client:
             try:

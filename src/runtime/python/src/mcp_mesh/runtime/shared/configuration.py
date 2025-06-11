@@ -146,13 +146,7 @@ class FileConfigProvider(ConfigurationProvider):
                     return False
 
             # Security validation
-            if (
-                config.security.mode == SecurityMode.JWT
-                and not config.security.jwt_secret
-            ):
-                return False
-
-            return True
+            return not (config.security.mode == SecurityMode.JWT and not config.security.jwt_secret)
 
         except Exception:
             return False

@@ -18,6 +18,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 
+from .logging_config import configure_logging
+
+# Ensure logging is configured
+configure_logging()
+
 logger = logging.getLogger(__name__)
 
 
@@ -210,12 +215,22 @@ class HttpMcpWrapper:
             f"{self.config.host}:{self.actual_port}"
         )
 
-        # Configure uvicorn
+        # Configure uvicorn with same log level as MCP_MESH_LOG_LEVEL
+        log_level_map = {
+            "DEBUG": "debug",
+            "INFO": "info",
+            "WARNING": "warning",
+            "ERROR": "error",
+            "CRITICAL": "critical",
+        }
+        mesh_log_level = os.environ.get("MCP_MESH_LOG_LEVEL", "INFO").upper()
+        uvicorn_log_level = log_level_map.get(mesh_log_level, "info").lower()
+
         config = uvicorn.Config(
             app=self.app,
             host=self.config.host,
             port=self.actual_port,
-            log_level="info",
+            log_level=uvicorn_log_level,
             access_log=False,  # Reduce noise
         )
         self.server = uvicorn.Server(config)
@@ -241,8 +256,12 @@ class HttpMcpWrapper:
         if self.server:
             logger.info(f"Stopping HTTP server for {self.mcp_server.name}")
             self.server.should_exit = True
-            if self._setup_task:
-                await self._setup_task
+            if self._setup_task and not self._setup_task.done():
+                try:
+                    await asyncio.wait_for(self._setup_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"HTTP server for {self.mcp_server.name} did not stop in time")
+                    self._setup_task.cancel()
 
     def _find_available_port(self) -> int:
         """Find an available port to bind to."""
@@ -313,7 +332,7 @@ class HttpMcpWrapper:
         """Register HTTP endpoint with mesh registry."""
         # This will be called by the processor when it updates registration
         logger.info(
-            f"HTTP endpoint ready: http://{self._get_host_ip()}:{self.actual_port}"
+            f"🌐 HTTP endpoint ready: http://{self._get_host_ip()}:{self.actual_port}"
         )
 
     def get_endpoint(self) -> str:

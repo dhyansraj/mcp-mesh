@@ -352,6 +352,7 @@ class LifecycleManager(LifecycleProtocol):
         message: str,
         old_status: LifecycleStatus | None = None,
         new_status: LifecycleStatus | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Emit a lifecycle event to all subscribers."""
         event_data = LifecycleEventData(
@@ -362,6 +363,7 @@ class LifecycleManager(LifecycleProtocol):
             message=message,
             old_status=old_status,
             new_status=new_status,
+            metadata=metadata or {},
         )
 
         # Send to all subscribers
@@ -376,7 +378,10 @@ class LifecycleManager(LifecycleProtocol):
             except Exception as e:
                 # Remove failed subscribers
                 self._event_subscribers.remove(subscriber)
-                print(f"Removed failed lifecycle event subscriber: {e}")
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to emit lifecycle event to subscriber: {e}")
 
     def subscribe_to_lifecycle_events(self, subscriber: Any) -> None:
         """Subscribe to lifecycle events."""

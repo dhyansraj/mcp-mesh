@@ -140,7 +140,7 @@ class BasicDependencyValidator(DependencyValidator):
         for spec in specifications:
             if spec.parameter_name:
                 if spec.parameter_name in param_names:
-                    conflict_spec = param_names[spec.parameter_name]
+                    param_names[spec.parameter_name]
                     error = DependencyValidationError(
                         specification=spec,
                         error_type="duplicate_parameter_name",

@@ -1,45 +1,55 @@
 # Task 9: Cross-Platform Build System and Production Deployment (2 hours)
 
 ## Overview: Critical Architecture Preservation
+
 **⚠️ IMPORTANT**: This migration only replaces the registry service and CLI with Go. ALL Python decorator functionality must remain unchanged:
+
 - `@mesh_agent` decorator analysis and metadata extraction (Python)
-- Dependency injection and resolution (Python) 
+- Dependency injection and resolution (Python)
 - Service discovery and proxy creation (Python)
 - Auto-registration and heartbeat mechanisms (Python)
 
 **Reference Documents**:
+
 - `ARCHITECTURAL_CONCEPTS_AND_DEVELOPER_RULES.md` - Complete architecture overview
 - `packages/mcp_mesh_runtime/src/mcp_mesh_runtime/decorators/mesh_agent.py` - Core decorator implementation
 - `packages/mcp_mesh_runtime/src/mcp_mesh_runtime/server/registry_server.py` - Current registry API
 
 ## CRITICAL PRESERVATION REQUIREMENT
+
 **MANDATORY**: This build system must preserve all Python code as reference and ensure complete validation.
 
 **Reference Preservation**:
+
 - **DO NOT DELETE** any Python packages during migration
 - Keep ALL Python CLI, registry, and decorator code intact for reference
 - Build system must validate Go implementation against Python reference
 - Ensure Python packages remain functional during and after migration
 
 **Code Preservation During Migration**:
+
 - **KEEP** all Python CLI code as reference implementation
-- **KEEP** all Python registry code for behavior validation  
+- **KEEP** all Python registry code for behavior validation
 - **KEEP** all Python decorator code (unchanged functionality)
 - **DOCUMENT** any unavoidable behavior differences
 
 ## Registry Deployment Flexibility
+
 The build system must support the registry deployment architecture:
+
 - ✅ `mcp-mesh-registry` - Standalone binary for production (Docker/K8s)
 - ✅ `mcp-mesh-dev` - CLI tool with embedded registry capability
 - ✅ Same registry codebase works in both deployment modes
 - ✅ Future K8s/Docker deployment ready without code changes
 
 ## Objective
+
 Set up production-ready build pipeline while preserving all Python reference code
 
 ## Detailed Sub-tasks
 
 ### 9.1: Create comprehensive Makefile with reference preservation
+
 ```makefile
 .PHONY: build-all build-registry build-cli test clean validate-python-reference
 
@@ -93,6 +103,7 @@ clean:
 ```
 
 ### 9.2: Create Docker images with deployment flexibility
+
 ```dockerfile
 # docker/registry.Dockerfile - Standalone registry for production
 FROM golang:1.21-alpine AS builder
@@ -128,6 +139,7 @@ CMD ["mcp-mesh-dev", "start", "--registry-only"]
 ```
 
 ### 9.3: Create integration test suite for Go + Python validation
+
 ```bash
 #!/bin/bash
 # test/integration/test_go_python_integration.sh
@@ -160,6 +172,7 @@ echo "✅ Integration test passed: Go registry + Python decorators work together
 ```
 
 ### 9.4: Create deployment mode validation
+
 ```bash
 #!/bin/bash
 # test/deployment/test_deployment_flexibility.sh
@@ -200,103 +213,105 @@ echo "✅ Deployment flexibility validated: same registry code works in both mod
 ```
 
 ### 9.5: Create CI/CD pipeline configuration
+
 ```yaml
 # .github/workflows/go-migration-validation.yml
 name: Go Migration Validation
 
 on:
   push:
-    branches: [ main, alpha-* ]
+    branches: [main, alpha-*]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   validate-python-reference:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    - name: Install Python dependencies
-      run: |
-        pip install -e packages/mcp_mesh/
-        pip install -e packages/mcp_mesh_runtime/
-        pip install pytest
-    - name: Validate Python reference still works
-      run: |
-        python -c "import packages.mcp_mesh.src.mcp_mesh; print('✅ mcp_mesh import success')"
-        python -c "import packages.mcp_mesh_runtime.src.mcp_mesh_runtime; print('✅ mcp_mesh_runtime import success')"
-        cd packages/mcp_mesh && python -m pytest
-        cd ../mcp_mesh_runtime && python -m pytest
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: |
+          pip install -e packages/mcp_mesh/
+          pip install -e packages/mcp_mesh_runtime/
+          pip install pytest
+      - name: Validate Python reference still works
+        run: |
+          python -c "import packages.mcp_mesh.src.mcp_mesh; print('✅ mcp_mesh import success')"
+          python -c "import packages.mcp_mesh_runtime.src.mcp_mesh_runtime; print('✅ mcp_mesh_runtime import success')"
+          cd packages/mcp_mesh && python -m pytest
+          cd ../mcp_mesh_runtime && python -m pytest
 
   build-go-binaries:
     runs-on: ubuntu-latest
     needs: validate-python-reference
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
-    - name: Build cross-platform binaries
-      run: |
-        make build-all
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: go-binaries
-        path: bin/
+      - uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+      - name: Build cross-platform binaries
+        run: |
+          make build-all
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: go-binaries
+          path: bin/
 
   integration-testing:
     runs-on: ubuntu-latest
     needs: build-go-binaries
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
-    - name: Download Go binaries
-      uses: actions/download-artifact@v3
-      with:
-        name: go-binaries
-        path: bin/
-    - name: Make binaries executable
-      run: chmod +x bin/*
-    - name: Install Python dependencies
-      run: |
-        pip install -e packages/mcp_mesh/
-        pip install -e packages/mcp_mesh_runtime/
-    - name: Run integration tests
-      run: |
-        make test
-        ./test/integration/test_go_python_integration.sh
-        ./test/deployment/test_deployment_flexibility.sh
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+      - name: Download Go binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: go-binaries
+          path: bin/
+      - name: Make binaries executable
+        run: chmod +x bin/*
+      - name: Install Python dependencies
+        run: |
+          pip install -e packages/mcp_mesh/
+          pip install -e packages/mcp_mesh_runtime/
+      - name: Run integration tests
+        run: |
+          make test
+          ./test/integration/test_go_python_integration.sh
+          ./test/deployment/test_deployment_flexibility.sh
 
   docker-build:
     runs-on: ubuntu-latest
     needs: integration-testing
     steps:
-    - uses: actions/checkout@v3
-    - name: Build Docker images
-      run: |
-        docker build -f docker/registry.Dockerfile -t mcp-mesh-registry:latest .
-        docker build -f docker/cli.Dockerfile -t mcp-mesh-cli:latest .
-    - name: Test Docker images
-      run: |
-        docker run --rm -d --name test-registry -p 8080:8080 mcp-mesh-registry:latest
-        sleep 5
-        curl -f http://localhost:8080/health
-        docker stop test-registry
+      - uses: actions/checkout@v3
+      - name: Build Docker images
+        run: |
+          docker build -f docker/registry.Dockerfile -t mcp-mesh-registry:latest .
+          docker build -f docker/cli.Dockerfile -t mcp-mesh-cli:latest .
+      - name: Test Docker images
+        run: |
+          docker run --rm -d --name test-registry -p 8080:8080 mcp-mesh-registry:latest
+          sleep 5
+          curl -f http://localhost:8080/health
+          docker stop test-registry
 ```
 
 ### 9.6: Create load testing and performance validation
+
 ```bash
 #!/bin/bash
 # test/performance/test_load_performance.sh
@@ -358,6 +373,7 @@ echo "✅ Load testing completed"
 ```
 
 ## Success Criteria
+
 - [ ] Cross-platform binaries build successfully for all target platforms (Linux, macOS, Windows)
 - [ ] Makefile provides easy build automation for development and CI/CD
 - [ ] Docker images are optimized and production-ready (<50MB for registry)

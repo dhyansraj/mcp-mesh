@@ -102,12 +102,17 @@ def create_hello_world_server() -> FastMCP:
     @server.tool()
     @mesh_agent(
         capability="greeting",  # Single capability (new pattern)
-        dependencies=["SystemAgent_getDate", "SystemAgent_getInfo"],  # Multiple flat functions
+        dependencies=[
+            "SystemAgent_getDate",
+            "SystemAgent_getInfo",
+        ],  # Multiple flat functions
         version="2.0.0",
         tags=["demo", "kubernetes", "single-capability"],
         description="Single-capability greeting function optimized for Kubernetes",
     )
-    def greet_single_capability(SystemAgent_getDate: Any | None = None, SystemAgent_getInfo: Any | None = None) -> str:
+    def greet_single_capability(
+        SystemAgent_getDate: Any | None = None, SystemAgent_getInfo: Any | None = None
+    ) -> str:
         """
         Greeting function using new single-capability pattern.
 
@@ -128,21 +133,21 @@ def create_hello_world_server() -> FastMCP:
 
         # Demonstrate using multiple flat function dependencies
         parts = [base_greeting]
-        
+
         if SystemAgent_getDate is not None:
             try:
                 current_date = SystemAgent_getDate()
                 parts.append(f"Date: {current_date}")
             except Exception as e:
                 parts.append(f"Date error: {e}")
-        
+
         if SystemAgent_getInfo is not None:
             try:
                 info = SystemAgent_getInfo()
                 parts.append(f"Uptime: {info.get('uptime_formatted', 'unknown')}")
             except Exception as e:
                 parts.append(f"Info error: {e}")
-        
+
         return " - ".join(parts)
 
     # ===== ADDITIONAL DEMO TOOLS =====
@@ -186,7 +191,9 @@ def create_hello_world_server() -> FastMCP:
         dependencies=["SystemAgent_getDate"],
         fallback_mode=True,
     )
-    def test_dependency_injection(SystemAgent_getDate: Any | None = None) -> dict[str, Any]:
+    def test_dependency_injection(
+        SystemAgent_getDate: Any | None = None,
+    ) -> dict[str, Any]:
         """
         Test and report current dependency injection status.
 
@@ -296,13 +303,15 @@ def main():
                         if hasattr(func, "_injected_deps"):
                             deps = func._injected_deps
                             # Check for any injected dependencies (flat functions)
-                            injected_deps = [k for k, v in deps.items() if v is not None]
-                            
+                            injected_deps = [
+                                k for k, v in deps.items() if v is not None
+                            ]
+
                             if injected_deps:
                                 result["injection_status"] = "injected"
                                 result["injected_dependencies"] = injected_deps
                                 result["proxy_details"] = {}
-                                
+
                                 # Show details for each injected dependency
                                 for dep_name in injected_deps:
                                     proxy = deps[dep_name]

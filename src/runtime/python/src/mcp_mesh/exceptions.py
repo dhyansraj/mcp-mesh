@@ -1,4 +1,8 @@
-"""Exception classes for MCP Mesh operations."""
+"""Exception classes for MCP Mesh operations.
+
+This module provides basic exception classes for file operations.
+Additional exception types are available in runtime.shared.exceptions.
+"""
 
 
 class FileOperationError(Exception):

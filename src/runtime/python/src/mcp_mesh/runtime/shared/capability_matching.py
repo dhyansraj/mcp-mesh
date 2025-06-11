@@ -366,8 +366,8 @@ class CapabilityMatchingEngine:
         if not tags1 or not tags2:
             return 0.0
 
-        set1 = set(tag.lower() for tag in tags1)
-        set2 = set(tag.lower() for tag in tags2)
+        set1 = {tag.lower() for tag in tags1}
+        set2 = {tag.lower() for tag in tags2}
 
         intersection = set1.intersection(set2)
         union = set1.union(set2)

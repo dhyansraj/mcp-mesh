@@ -159,7 +159,7 @@ class MeshLocalInstanceResolver(LocalInstanceResolver):
                 return False
 
             # Check if constructor is accessible
-            signature = inspect.signature(dependency_type.__init__)
+            inspect.signature(dependency_type.__init__)
             return True
 
         except Exception:
@@ -468,7 +468,7 @@ class MeshFallbackChain(FallbackChainInterface):
         # Sort resolvers by priority (descending)
         sorted_resolvers = sorted(self._resolvers, key=lambda x: x[1], reverse=True)
 
-        for resolver, priority in sorted_resolvers:
+        for resolver, _priority in sorted_resolvers:
             if not resolver.can_resolve(dependency_type):
                 continue
 
@@ -681,7 +681,7 @@ class MeshFallbackChain(FallbackChainInterface):
         healthy_resolvers = []
         unhealthy_resolvers = []
 
-        for resolver, priority in self._resolvers:
+        for resolver, _priority in self._resolvers:
             try:
                 # Basic health check - see if resolver can handle a simple type
                 can_resolve = resolver.can_resolve(str)

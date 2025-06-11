@@ -713,3 +713,19 @@ SuccessResponse = MCPResponse
 ErrorResponse = MCPResponse
 AsyncOperation = asyncio.Future[T]
 RetryableOperation = Union[Coroutine[Any, Any, T], Callable[[], Awaitable[T]]]
+
+
+class MockHTTPResponse:
+    """Mock HTTP response for fallback scenarios."""
+
+    def __init__(self, data: Any, status: int = 200):
+        self.status = status
+        self._data = data
+
+    async def json(self) -> Any:
+        """Return JSON data."""
+        return self._data
+
+    async def text(self) -> str:
+        """Return text representation."""
+        return str(self._data)

@@ -14,10 +14,11 @@ try:
 except ImportError:
     aiohttp = None
 
-from mcp_mesh import MeshAgentMetadata
+# Import at function level to avoid circular import
+# from mcp_mesh import MeshAgentMetadata
 
 from .exceptions import RegistryConnectionError, RegistryTimeoutError
-from .types import HealthStatus
+from .types import HealthStatus, MockHTTPResponse
 
 
 class RegistryClient:
@@ -30,6 +31,10 @@ class RegistryClient:
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self._session: Any | None = None
+        self._response_cache: dict[str, tuple[Any, float]] = (
+            {}
+        )  # Simple cache with timestamps
+        self._cache_ttl = 60.0  # Cache responses for 60 seconds
 
     async def _get_session(self) -> Any:
         """Get or create HTTP session."""
@@ -37,8 +42,16 @@ class RegistryClient:
             raise RegistryConnectionError("aiohttp is required for registry client")
 
         if not self._session:
+            # Create session with connection pooling
+            connector = aiohttp.TCPConnector(
+                limit=100,  # Total connection pool size
+                limit_per_host=30,  # Per-host connection limit
+                ttl_dns_cache=300,  # DNS cache TTL
+                enable_cleanup_closed=True,
+            )
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
             )
         return self._session
 
@@ -95,7 +108,7 @@ class RegistryClient:
         return response.get("value") if response else None
 
     async def register_agent_with_metadata(
-        self, agent_id: str, metadata: MeshAgentMetadata
+        self, agent_id: str, metadata: Any  # MeshAgentMetadata
     ) -> bool:
         """Register agent with enhanced metadata for capability discovery."""
         # Convert capability metadata to dict format
@@ -155,7 +168,15 @@ class RegistryClient:
 
     async def get_all_agents(self) -> list[dict[str, Any]]:
         """Get all registered agents."""
+        # Check cache first
+        cache_key = "GET:/agents"
+        cached_result = self._get_cached_response(cache_key)
+        if cached_result is not None:
+            return cached_result.get("agents", [])
+
         response = await self._make_request("GET", "/agents")
+        if response:
+            self._cache_response(cache_key, response)
         return response.get("agents", []) if response else []
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
@@ -185,30 +206,29 @@ class RegistryClient:
         self, method: str, endpoint: str, payload: dict | None = None
     ) -> dict | None:
         """Make HTTP request to registry with retry logic."""
-        print(f"🐛 DEBUG (Python): Making {method} request to {endpoint}")
-        print(f"🐛 DEBUG (Python): Payload: {payload}")
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Making {method} request to {endpoint}")
+        logger.debug(f"Payload: {payload}")
 
         if aiohttp is None:
             # Fallback mode: simulate successful requests
-            print("🐛 DEBUG (Python): aiohttp is None, using fallback mode")
+            logger.warning("aiohttp is None, using fallback mode")
             return {"status": "ok", "message": "fallback mode"}
 
         try:
             session = await self._get_session()
             url = f"{self.url}{endpoint}"
-            print(f"🐛 DEBUG (Python): Full URL: {url}")
+            logger.debug(f"Full URL: {url}")
 
             for attempt in range(self.retry_attempts):
                 try:
-                    print(
-                        f"🐛 DEBUG (Python): Attempt {attempt + 1}/{self.retry_attempts}"
-                    )
+                    logger.debug(f"Attempt {attempt + 1}/{self.retry_attempts}")
 
                     if method == "GET":
                         async with session.get(url) as response:
-                            print(
-                                f"🐛 DEBUG (Python): GET response status: {response.status}"
-                            )
+                            logger.debug(f"GET response status: {response.status}")
                             if response.status == 200:
                                 return await response.json()
                             else:
@@ -217,7 +237,7 @@ class RegistryClient:
                                 )
 
                     elif method == "POST":
-                        print("🐛 DEBUG (Python): Sending POST request...")
+                        logger.debug("Sending POST request...")
                         async with session.post(url, json=payload) as response:
                             if response.status in [200, 201]:
                                 return (
@@ -254,38 +274,12 @@ class RegistryClient:
         """Make a POST request to the registry."""
         try:
             result = await self._make_request("POST", endpoint, json)
-
-            # Create a mock response object that has status and json() method
-            class MockResponse:
-                def __init__(self, data, status=201):
-                    self.status = status
-                    self._data = data
-
-                async def json(self):
-                    return self._data
-
-                async def text(self):
-                    return str(self._data)
-
             if result:
-                return MockResponse(result, 201)
+                return MockHTTPResponse(result, 201)
             else:
-                return MockResponse({"error": "Failed to connect to registry"}, 500)
-
+                return MockHTTPResponse({"error": "Failed to connect to registry"}, 500)
         except Exception as e:
-
-            class MockResponse:
-                def __init__(self, error, status=500):
-                    self.status = status
-                    self._error = error
-
-                async def json(self):
-                    return {"error": str(self._error)}
-
-                async def text(self):
-                    return str(self._error)
-
-            return MockResponse(e, 500)
+            return MockHTTPResponse({"error": str(e)}, 500)
 
     def _get_registry_url_from_env(self) -> str:
         """Get registry URL from environment variables."""
@@ -295,3 +289,28 @@ class RegistryClient:
         """Close the HTTP session."""
         if self._session:
             await self._session.close()
+            self._session = None
+        self._response_cache.clear()
+
+    def _get_cached_response(self, key: str) -> Any | None:
+        """Get cached response if still valid."""
+        import time
+
+        if key in self._response_cache:
+            response, timestamp = self._response_cache[key]
+            if time.time() - timestamp < self._cache_ttl:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.debug(f"Cache hit for {key}")
+                return response
+            else:
+                # Remove expired entry
+                del self._response_cache[key]
+        return None
+
+    def _cache_response(self, key: str, response: Any) -> None:
+        """Cache a response with current timestamp."""
+        import time
+
+        self._response_cache[key] = (response, time.time())

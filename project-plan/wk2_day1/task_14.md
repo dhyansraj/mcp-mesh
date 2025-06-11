@@ -1,40 +1,49 @@
 # Task 14: Process Management and Monitoring (30 minutes)
 
 ## Overview: Critical Architecture Preservation
+
 **⚠️ IMPORTANT**: This migration only replaces the registry service and CLI with Go. ALL Python decorator functionality must remain unchanged:
+
 - `@mesh_agent` decorator analysis and metadata extraction (Python)
-- Dependency injection and resolution (Python) 
+- Dependency injection and resolution (Python)
 - Service discovery and proxy creation (Python)
 - Auto-registration and heartbeat mechanisms (Python)
 
 **Reference Documents**:
+
 - `ARCHITECTURAL_CONCEPTS_AND_DEVELOPER_RULES.md` - Complete architecture overview
 - `packages/mcp_mesh_runtime/src/mcp_mesh_runtime/decorators/mesh_agent.py` - Core decorator implementation
 - `packages/mcp_mesh_runtime/src/mcp_mesh_runtime/server/registry_server.py` - Current registry API
 
 ## CRITICAL PRESERVATION REQUIREMENT
+
 **MANDATORY**: This Go implementation must preserve 100% of existing Python CLI process management and monitoring functionality.
 
 **Reference Preservation**:
+
 - Keep ALL Python CLI process management code as reference during migration
 - Test EVERY existing process monitoring and lifecycle management feature
 - Maintain IDENTICAL behavior for all process management operations
 - Preserve ALL health monitoring and status reporting functionality
 
 **Implementation Validation**:
+
 - Each Go process management feature must pass Python CLI behavior tests
 - Process lifecycle management must work identically to Python version
 - Health monitoring must match Python implementation exactly
 
 ## Objective
+
 Implement complete process management and monitoring system maintaining identical behavior to Python
 
 ## Reference
+
 `packages/mcp_mesh_runtime/src/mcp_mesh_runtime/cli/` directory
 
 ## Detailed Implementation
 
 ### 8.1: Complete process management system
+
 ```go
 // Process tracking and management
 type ProcessManager struct {
@@ -65,7 +74,7 @@ func NewProcessManager() *ProcessManager {
 func (pm *ProcessManager) RegisterProcess(name, command string, process *os.Process) {
     pm.mutex.Lock()
     defer pm.mutex.Unlock()
-    
+
     pm.processes[name] = &ProcessInfo{
         PID:         process.Pid,
         Name:        name,
@@ -77,19 +86,19 @@ func (pm *ProcessManager) RegisterProcess(name, command string, process *os.Proc
         Restarts:    0,
         Process:     process,
     }
-    
+
     pm.logger.Printf("Registered process: %s (PID: %d)", name, process.Pid)
 }
 
 func (pm *ProcessManager) GetProcessStatus(name string) (*ProcessInfo, bool) {
     pm.mutex.RLock()
     defer pm.mutex.RUnlock()
-    
+
     info, exists := pm.processes[name]
     if !exists {
         return nil, false
     }
-    
+
     // Update process status
     if info.Process != nil {
         if err := info.Process.Signal(syscall.Signal(0)); err != nil {
@@ -98,37 +107,37 @@ func (pm *ProcessManager) GetProcessStatus(name string) (*ProcessInfo, bool) {
             info.Status = "running"
         }
     }
-    
+
     return info, true
 }
 
 func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error {
     pm.mutex.Lock()
     defer pm.mutex.Unlock()
-    
+
     info, exists := pm.processes[name]
     if !exists {
         return fmt.Errorf("process %s not found", name)
     }
-    
+
     if info.Process == nil {
         return fmt.Errorf("process %s has no associated OS process", name)
     }
-    
+
     pm.logger.Printf("Stopping process: %s (PID: %d)", name, info.PID)
-    
+
     // Send SIGTERM for graceful shutdown
     if err := info.Process.Signal(os.Interrupt); err != nil {
         return fmt.Errorf("failed to send SIGTERM to process %s: %w", name, err)
     }
-    
+
     // Wait for graceful shutdown
     done := make(chan error, 1)
     go func() {
         _, err := info.Process.Wait()
         done <- err
     }()
-    
+
     select {
     case err := <-done:
         info.Status = "stopped"
@@ -148,30 +157,30 @@ func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error 
 func (pm *ProcessManager) RestartProcess(name string, command string, env []string) error {
     pm.mutex.Lock()
     defer pm.mutex.Unlock()
-    
+
     info, exists := pm.processes[name]
     if !exists {
         return fmt.Errorf("process %s not found", name)
     }
-    
+
     pm.logger.Printf("Restarting process: %s", name)
-    
+
     // Stop existing process
     if info.Process != nil {
         info.Process.Signal(os.Interrupt)
         info.Process.Wait()
     }
-    
+
     // Start new process
     cmd := exec.Command("python", command)
     cmd.Env = env
     cmd.Stdout = os.Stdout
     cmd.Stderr = os.Stderr
-    
+
     if err := cmd.Start(); err != nil {
         return fmt.Errorf("failed to restart process %s: %w", name, err)
     }
-    
+
     // Update process info
     info.Process = cmd.Process
     info.PID = cmd.Process.Pid
@@ -179,7 +188,7 @@ func (pm *ProcessManager) RestartProcess(name string, command string, env []stri
     info.Status = "running"
     info.Restarts++
     info.LastSeen = time.Now()
-    
+
     pm.logger.Printf("Process %s restarted (PID: %d, Restarts: %d)", name, info.PID, info.Restarts)
     return nil
 }
@@ -187,7 +196,7 @@ func (pm *ProcessManager) RestartProcess(name string, command string, env []stri
 func (pm *ProcessManager) GetAllProcesses() map[string]*ProcessInfo {
     pm.mutex.RLock()
     defer pm.mutex.RUnlock()
-    
+
     // Create a copy to avoid race conditions
     result := make(map[string]*ProcessInfo)
     for name, info := range pm.processes {
@@ -201,7 +210,7 @@ func (pm *ProcessManager) GetAllProcesses() map[string]*ProcessInfo {
         }
         result[name] = info
     }
-    
+
     return result
 }
 
@@ -217,12 +226,12 @@ func (pm *ProcessManager) StartHealthMonitoring(interval time.Duration) {
 func (pm *ProcessManager) performHealthChecks() {
     pm.mutex.Lock()
     defer pm.mutex.Unlock()
-    
+
     for name, info := range pm.processes {
         if info.Process == nil {
             continue
         }
-        
+
         // Check if process is still running
         if err := info.Process.Signal(syscall.Signal(0)); err != nil {
             pm.logger.Printf("Process %s is no longer running", name)
@@ -230,7 +239,7 @@ func (pm *ProcessManager) performHealthChecks() {
             info.HealthCheck = "failed"
             continue
         }
-        
+
         // Perform registry health check for agents
         if strings.Contains(info.Command, ".py") {
             if pm.checkAgentHealth(name) {
@@ -251,7 +260,7 @@ func (pm *ProcessManager) checkAgentHealth(agentName string) bool {
         return false
     }
     defer resp.Body.Close()
-    
+
     var result struct {
         Agents []struct {
             Name      string    `json:"name"`
@@ -259,19 +268,19 @@ func (pm *ProcessManager) checkAgentHealth(agentName string) bool {
             LastSeen  time.Time `json:"last_seen"`
         } `json:"agents"`
     }
-    
+
     if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
         return false
     }
-    
+
     // Check if agent is registered and recently active
     for _, agent := range result.Agents {
         if agent.Name == agentName {
-            return agent.Status == "active" && 
+            return agent.Status == "active" &&
                    time.Since(agent.LastSeen) < 2*time.Minute
         }
     }
-    
+
     return false
 }
 
@@ -283,11 +292,11 @@ func NewStatusMonitorCommand() *cobra.Command {
         Long:  "Continuously monitor MCP Mesh processes and display real-time status",
         RunE:  runStatusMonitor,
     }
-    
+
     cmd.Flags().Int("interval", 5, "Status update interval in seconds")
     cmd.Flags().Bool("json", false, "Output status in JSON format")
     cmd.Flags().Bool("continuous", false, "Continuous monitoring mode")
-    
+
     return cmd
 }
 
@@ -295,20 +304,20 @@ func runStatusMonitor(cmd *cobra.Command, args []string) error {
     interval, _ := cmd.Flags().GetInt("interval")
     jsonOutput, _ := cmd.Flags().GetBool("json")
     continuous, _ := cmd.Flags().GetBool("continuous")
-    
+
     pm := GetGlobalProcessManager()
-    
+
     if continuous {
         return runContinuousMonitoring(pm, time.Duration(interval)*time.Second, jsonOutput)
     }
-    
+
     return displayCurrentStatus(pm, jsonOutput)
 }
 
 func runContinuousMonitoring(pm *ProcessManager, interval time.Duration, jsonOutput bool) error {
     ticker := time.NewTicker(interval)
     defer ticker.Stop()
-    
+
     for {
         if !jsonOutput {
             // Clear screen for terminal display
@@ -316,15 +325,15 @@ func runContinuousMonitoring(pm *ProcessManager, interval time.Duration, jsonOut
             fmt.Printf("MCP Mesh Process Monitor - %s\n", time.Now().Format("2006-01-02 15:04:05"))
             fmt.Println(strings.Repeat("=", 80))
         }
-        
+
         if err := displayCurrentStatus(pm, jsonOutput); err != nil {
             return err
         }
-        
+
         if !jsonOutput {
             fmt.Printf("\nRefreshing every %v seconds. Press Ctrl+C to exit.\n", interval)
         }
-        
+
         select {
         case <-ticker.C:
             continue
@@ -336,7 +345,7 @@ func runContinuousMonitoring(pm *ProcessManager, interval time.Duration, jsonOut
 
 func displayCurrentStatus(pm *ProcessManager, jsonOutput bool) error {
     processes := pm.GetAllProcesses()
-    
+
     if jsonOutput {
         data, err := json.MarshalIndent(processes, "", "  ")
         if err != nil {
@@ -345,18 +354,18 @@ func displayCurrentStatus(pm *ProcessManager, jsonOutput bool) error {
         fmt.Println(string(data))
         return nil
     }
-    
+
     // Text format output
-    fmt.Printf("%-20s %-8s %-10s %-12s %-10s %-8s\n", 
+    fmt.Printf("%-20s %-8s %-10s %-12s %-10s %-8s\n",
         "NAME", "PID", "STATUS", "HEALTH", "UPTIME", "RESTARTS")
     fmt.Println(strings.Repeat("-", 80))
-    
+
     for name, info := range processes {
         uptime := time.Since(info.StartTime).Truncate(time.Second)
         fmt.Printf("%-20s %-8d %-10s %-12s %-10s %-8d\n",
             name, info.PID, info.Status, info.HealthCheck, uptime, info.Restarts)
     }
-    
+
     return nil
 }
 
@@ -367,12 +376,12 @@ func NewLogsAggregatorCommand() *cobra.Command {
         Short: "Aggregate and display logs from all processes",
         RunE:  runLogsAggregator,
     }
-    
+
     cmd.Flags().Bool("follow", false, "Follow log output in real-time")
     cmd.Flags().String("filter", "", "Filter logs by keyword")
     cmd.Flags().String("level", "INFO", "Minimum log level")
     cmd.Flags().Int("lines", 100, "Number of recent lines to show")
-    
+
     return cmd
 }
 
@@ -381,16 +390,17 @@ func runLogsAggregator(cmd *cobra.Command, args []string) error {
     filter, _ := cmd.Flags().GetString("filter")
     level, _ := cmd.Flags().GetString("level")
     lines, _ := cmd.Flags().GetInt("lines")
-    
+
     if follow {
         return followAggregatedLogs(filter, level)
     }
-    
+
     return displayRecentLogs(filter, level, lines)
 }
 ```
 
 ## Success Criteria
+
 - [ ] **CRITICAL**: Complete process management system matching Python CLI exactly
 - [ ] **CRITICAL**: Process lifecycle management works identically to Python version
 - [ ] **CRITICAL**: Health monitoring functionality preserved with same behavior

@@ -229,7 +229,7 @@ class DynamicProxyGenerator:
             if name.startswith("_"):
                 continue
 
-            if isinstance(method, (classmethod, staticmethod)):
+            if isinstance(method, classmethod | staticmethod):
                 class_dict[name] = method
             elif hasattr(method, "__func__") and isinstance(
                 method.__func__, types.FunctionType
@@ -313,7 +313,7 @@ class DynamicProxyGenerator:
                         loop = asyncio.get_event_loop()
                         if loop.is_running():
                             # Create a task for concurrent execution
-                            task = loop.create_task(
+                            loop.create_task(
                                 base_proxy._invoke_remote_method(
                                     method_name, args, kwargs, metadata
                                 )
@@ -510,7 +510,7 @@ class EnhancedProxyFactory:
 
             # Verify type hints preservation
             if hasattr(proxy, "__annotations__"):
-                proxy_hints = proxy.__annotations__
+                pass
                 # Additional type hint validation could be added here
 
             return True
@@ -545,19 +545,11 @@ class EnhancedProxyFactory:
                 if (
                     proxy_param.annotation != inspect.Parameter.empty
                     and contract_param.annotation != inspect.Parameter.empty
-                ):
-                    if proxy_param.annotation != contract_param.annotation:
-                        return False
-
-            # Check return annotations
-            if (
-                proxy_sig.return_annotation != inspect.Signature.empty
-                and contract_sig.return_annotation != inspect.Signature.empty
-            ):
-                if proxy_sig.return_annotation != contract_sig.return_annotation:
+                ) and proxy_param.annotation != contract_param.annotation:
                     return False
 
-            return True
+            # Check return annotations
+            return not ((proxy_sig.return_annotation != inspect.Signature.empty and contract_sig.return_annotation != inspect.Signature.empty) and proxy_sig.return_annotation != contract_sig.return_annotation)
 
         except Exception:
             return False

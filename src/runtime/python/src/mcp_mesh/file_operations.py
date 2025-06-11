@@ -1,4 +1,8 @@
-"""Abstract FileOperations class with basic implementations for MCP SDK compatibility."""
+"""FileOperations class for MCP SDK compatibility.
+
+This module provides a compatibility layer that delegates to the comprehensive
+implementation in the runtime.tools module when available.
+"""
 
 import os
 from pathlib import Path
@@ -9,6 +13,17 @@ from .exceptions import (
     PermissionDeniedError,
     SecurityValidationError,
 )
+
+# Check if comprehensive implementation is available
+try:
+    import importlib.util
+
+    spec = importlib.util.find_spec(
+        ".runtime.tools.file_operations", package="mcp_mesh"
+    )
+    ADVANCED_IMPLEMENTATION_AVAILABLE = spec is not None
+except ImportError:
+    ADVANCED_IMPLEMENTATION_AVAILABLE = False
 
 
 class FileOperations:

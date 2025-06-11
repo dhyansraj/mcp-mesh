@@ -373,10 +373,9 @@ class LifecycleManager(LifecycleProtocol):
                     await subscriber.put(event_data.dict())
                 elif callable(subscriber):
                     await subscriber(event_data.dict())
-            except Exception as e:
+            except Exception:
                 # Remove failed subscribers
                 self._event_subscribers.remove(subscriber)
-                print(f"Removed failed lifecycle event subscriber: {e}")
 
     def subscribe_to_lifecycle_events(self, subscriber: Any) -> None:
         """Subscribe to lifecycle events."""

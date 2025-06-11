@@ -47,10 +47,10 @@ def create_system_agent_server() -> FastMCP:
     def SystemAgent_getDate() -> str:
         """
         Get the current system date and time.
-        
+
         This is a flat function following standard MCP patterns.
         In MCP, tools are always functions, not class methods.
-        
+
         Returns:
             Formatted date and time string
         """
@@ -69,7 +69,7 @@ def create_system_agent_server() -> FastMCP:
     def SystemAgent_getUptime() -> str:
         """
         Get agent uptime information.
-        
+
         Returns:
             String describing how long the agent has been running
         """
@@ -88,7 +88,7 @@ def create_system_agent_server() -> FastMCP:
     def SystemAgent_getInfo() -> dict[str, Any]:
         """
         Get comprehensive system information.
-        
+
         Returns:
             Dictionary containing system date, uptime, and other info
         """
@@ -99,7 +99,11 @@ def create_system_agent_server() -> FastMCP:
             "uptime_formatted": f"{uptime.total_seconds():.1f} seconds",
             "server_name": server.name,
             "version": "1.0.0",
-            "capabilities": ["SystemAgent_getDate", "SystemAgent_getUptime", "SystemAgent_getInfo"]
+            "capabilities": [
+                "SystemAgent_getDate",
+                "SystemAgent_getUptime",
+                "SystemAgent_getInfo",
+            ],
         }
 
     return server

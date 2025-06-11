@@ -1,9 +1,21 @@
 """Enhanced mesh agent decorator for MCP SDK compatibility with full metadata support."""
 
+import logging
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from .decorator_registry import DecoratorRegistry
+
+# Import logging config if runtime is available
+try:
+    from .runtime.logging_config import configure_logging
+
+    configure_logging()
+except ImportError:
+    # Runtime module not available, skip logging configuration
+    pass
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -132,21 +144,15 @@ def mesh_agent(
                     try:
                         _runtime_processor.register_function(wrapped, metadata)
                     except Exception as e:
-                        import sys
-
-                        print(
-                            f"Runtime registration failed for {target.__name__}: {e}",
-                            file=sys.stderr,
+                        logger.error(
+                            f"Runtime registration failed for {target.__name__}: {e}"
                         )
 
                 return wrapped
             except Exception as e:
                 # Log but don't fail - graceful degradation
-                import sys
-
-                print(
-                    f"Dependency injection setup failed for {target.__name__}: {e}",
-                    file=sys.stderr,
+                logger.error(
+                    f"Dependency injection setup failed for {target.__name__}: {e}"
                 )
 
         # No dependencies - just register with runtime if available
@@ -154,12 +160,7 @@ def mesh_agent(
             try:
                 _runtime_processor.register_function(target, metadata)
             except Exception as e:
-                import sys
-
-                print(
-                    f"Runtime registration failed for {target.__name__}: {e}",
-                    file=sys.stderr,
-                )
+                logger.error(f"Runtime registration failed for {target.__name__}: {e}")
 
         return target
 

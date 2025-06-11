@@ -11,6 +11,7 @@ MCP Mesh is a service mesh that enhances the Model Context Protocol (MCP) with a
 **Concept**: The registry operates like a Kubernetes API server + etcd - it's a passive data store that only responds to requests, never initiates communication.
 
 **Key Principles**:
+
 - **Pull-Based Architecture**: Agents initiate ALL communication with the registry
 - **No Outbound Connections**: Registry never calls agents directly
 - **Resource Versioning**: Conflict detection and optimistic concurrency control
@@ -18,12 +19,14 @@ MCP Mesh is a service mesh that enhances the Model Context Protocol (MCP) with a
 - **Horizontal Scalability**: Registry instances can be load balanced and scaled independently
 
 **Implementation Details**:
+
 - FastAPI server with both REST (`/agents`, `/capabilities`, `/heartbeat`) and MCP endpoints
 - SQLite/PostgreSQL storage with in-memory caching (30-second TTL)
 - Kubernetes-style watch events for real-time updates
 - Advanced query capabilities: fuzzy matching, version constraints, label selectors
 
 **What Happens When**:
+
 1. **Agent Startup**: Agent POST to `/agents/register_with_metadata` with full capability metadata
 2. **Health Monitoring**: Agent POST to `/heartbeat` every 30 seconds (configurable)
 3. **Service Discovery**: Agent GET from `/agents?capabilities=greeting&status=healthy`
@@ -34,6 +37,7 @@ MCP Mesh is a service mesh that enhances the Model Context Protocol (MCP) with a
 **Concept**: The revolutionary feature that allows the same code to work in both mesh (remote proxies) and standalone (local instances) environments without requiring Protocol definitions.
 
 **Key Innovation**: Three dependency patterns supported simultaneously:
+
 ```python
 @mesh_agent(
     capabilities=["auth", "file_operations"],
@@ -52,12 +56,14 @@ async def flexible_function(
 ```
 
 **Runtime Flow**:
+
 1. **Design Time**: `@mesh_agent` decorator analyzes function signatures and dependency specifications
 2. **Registration**: `DecoratorProcessor` registers enhanced metadata with mesh registry
 3. **First Call**: `MeshAgentDecorator._initialize()` sets up dependency resolution chain
 4. **Every Call**: `_inject_dependencies()` resolves parameters via `MeshUnifiedDependencyResolver`
 
 **Fallback Chain Resolution** (Target: <200ms remote→local transition):
+
 1. **Remote Proxy Resolver**: Try service discovery + proxy creation
 2. **Local Instance Resolver**: Fall back to local class instantiation
 3. **Circuit Breaker**: Prevent repeated failures with exponential backoff
@@ -67,6 +73,7 @@ async def flexible_function(
 **Concept**: Agents operate like Kubernetes pods - they function independently and can survive registry failures.
 
 **Independence Principles**:
+
 - **Registry is Optional**: Agents start successfully when no registry is available at startup
 - **Graceful Degradation**: If registry goes down after connection, agents continue working
 - **Self-Healing**: Agents keep trying to reconnect but never die due to registry failure
@@ -74,11 +81,12 @@ async def flexible_function(
 - **Mesh Connectivity**: Agents that found each other via registry remain connected after registry failure
 
 **Startup Patterns**:
+
 ```bash
 # Scenario 1: No registry at startup
 mcp_mesh_dev start examples/hello_world.py  # Works standalone with local dependencies
 
-# Scenario 2: Registry dies after connection  
+# Scenario 2: Registry dies after connection
 mcp_mesh_dev start --registry-only &
 mcp_mesh_dev start examples/hello_world.py  # Connects to registry
 # Kill registry → hello_world continues working with cached/local dependencies
@@ -88,6 +96,7 @@ mcp_mesh_dev start examples/hello_world.py  # Connects to registry
 ```
 
 **Agent Lifecycle Management**:
+
 1. **Environment Setup**: Registry connection details via environment variables
 2. **Auto-Registration**: Enhanced capability metadata registration on first function call
 3. **Health Monitoring**: Background heartbeat loop (30s intervals)
@@ -98,6 +107,7 @@ mcp_mesh_dev start examples/hello_world.py  # Connects to registry
 **Concept**: Perfect compatibility between vanilla MCP SDK and MCP Mesh enhancements through dual decorators.
 
 **Pattern**:
+
 ```python
 @server.tool()  # Vanilla MCP SDK - always required
 @mesh_agent(    # MCP Mesh enhancement - optional
@@ -111,6 +121,7 @@ def enhanced_function(SystemAgent: Any | None = None) -> str:
 ```
 
 **Compatibility Matrix**:
+
 - **Vanilla MCP Only**: `@server.tool()` → Standard MCP functionality
 - **Mesh Enhanced**: `@server.tool() + @mesh_agent()` → Enhanced with dependency injection
 - **Backwards Compatible**: Mesh-decorated functions work in vanilla MCP environments
@@ -132,6 +143,7 @@ from mcp_mesh_runtime.shared.registry_client import RegistryClient
 ```
 
 **Architecture**:
+
 - `mcp_mesh/`: Types-only package with public APIs, Protocol definitions, and imports
 - `mcp_mesh_runtime/`: Full implementation with FastAPI, SQLite, async operations
 
@@ -140,6 +152,7 @@ from mcp_mesh_runtime.shared.registry_client import RegistryClient
 **RULE**: All examples MUST be valid MCP SDK host/client implementations.
 
 **Required Patterns**:
+
 ```python
 # ✅ CORRECT - FastMCP Server Pattern
 from mcp.server.fastmcp import FastMCP
@@ -156,6 +169,7 @@ server.run(transport="stdio")  # Standard MCP transport
 ```
 
 **Validation**:
+
 - Must work with vanilla MCP clients
 - Must use stdio transport (MCP standard)
 - Must follow FastMCP server patterns
@@ -169,19 +183,20 @@ server.run(transport="stdio")  # Standard MCP transport
 @mesh_agent(
     dependencies=[
         "legacy_service",     # STRING: For existing services, simple lookup
-        NewServiceProtocol,   # PROTOCOL: For interfaces, future-proof design  
+        NewServiceProtocol,   # PROTOCOL: For interfaces, future-proof design
         ConcreteService,      # CONCRETE: For classes, direct instantiation
     ]
 )
 def my_function(
     legacy_service: Any = None,           # STRING pattern
-    new_service: NewServiceProtocol = None,  # PROTOCOL pattern  
+    new_service: NewServiceProtocol = None,  # PROTOCOL pattern
     concrete: ConcreteService = None,     # CONCRETE pattern
 ):
     pass
 ```
 
 **Guidelines**:
+
 - Use STRING pattern for legacy compatibility and simple cases
 - Use PROTOCOL pattern for interface-based design and future flexibility
 - Use CONCRETE pattern for specific class requirements and hybrid scenarios
@@ -192,12 +207,14 @@ def my_function(
 **RULE**: Never poll or push to agents from registry code.
 
 **Registry Behavior** (Passive):
+
 - Only respond to incoming HTTP requests
 - Never make outbound connections to agents
 - Use timer-based health assessment, not active polling
 - Provide REST and MCP endpoints for agent consumption
 
 **Agent Behavior** (Active):
+
 - Initiate all communication with registry
 - Send periodic heartbeats
 - Pull service discovery information
@@ -216,7 +233,7 @@ def secure_operation(AuthService: Any = None) -> str:
     if AuthService is None:
         # Graceful degradation - reduced functionality
         return "Operating in basic mode (no auth)"
-    
+
     try:
         # Enhanced functionality with dependency
         return f"Authenticated operation: {AuthService.authenticate()}"
@@ -226,6 +243,7 @@ def secure_operation(AuthService: Any = None) -> str:
 ```
 
 **Patterns**:
+
 - Always provide fallback behavior when dependencies are unavailable
 - Use `fallback_mode=True` in decorator configuration
 - Handle dependency injection failures gracefully
@@ -246,7 +264,7 @@ def critical_function():
     pass
 
 @mesh_agent(
-    capabilities=["background_task"],  
+    capabilities=["background_task"],
     health_interval=60,    # Less frequent for background tasks
 )
 def background_function():
@@ -254,6 +272,7 @@ def background_function():
 ```
 
 **Guidelines**:
+
 - Critical services: 10-30 second heartbeat intervals
 - Background services: 60+ second heartbeat intervals
 - Configure timeouts based on service SLA requirements
@@ -281,6 +300,7 @@ def well_documented_function():
 ```
 
 **Guidelines**:
+
 - Use hierarchical capabilities: `auth.oauth2`, `file.read`, `data.transform`
 - Provide semantic version for compatibility checking
 - Include performance expectations for SLA monitoring
@@ -317,13 +337,13 @@ def well_documented_function():
 ### Agent Startup without Registry
 
 ```
-1. Agent Process Start  
+1. Agent Process Start
    ├─ Environment setup (no registry URLs)
    ├─ FastMCP server initialization
    └─ @mesh_agent decorator analysis
 
 2. First Function Call
-   ├─ MeshAgentDecorator._initialize() 
+   ├─ MeshAgentDecorator._initialize()
    ├─ Registry connection fails → Enable fallback mode
    ├─ Setup local-only MeshFallbackChain
    └─ Skip background health monitoring
@@ -363,7 +383,7 @@ def well_documented_function():
 
 2. Multi-Pattern Resolution (Concurrent)
    ├─ STRING pattern: registry_client.get_dependency("ServiceName")
-   ├─ PROTOCOL pattern: fallback_chain.resolve_dependency(ServiceProtocol)  
+   ├─ PROTOCOL pattern: fallback_chain.resolve_dependency(ServiceProtocol)
    └─ CONCRETE pattern: fallback_chain.resolve_dependency(ConcreteClass)
 
 3. Fallback Chain (Per Pattern)
