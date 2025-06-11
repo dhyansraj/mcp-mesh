@@ -257,6 +257,20 @@ class RegistryClient:
                                     f"Registry returned {response.status}"
                                 )
 
+                    elif method == "PUT":
+                        self.logger.debug("Sending PUT request...")
+                        async with session.put(url, json=payload) as response:
+                            if response.status in [200, 201]:
+                                return (
+                                    await response.json()
+                                    if response.content_length
+                                    else {"status": "ok"}
+                                )
+                            else:
+                                raise RegistryConnectionError(
+                                    f"Registry returned {response.status}"
+                                )
+
                 except asyncio.TimeoutError:
                     if attempt == self.retry_attempts - 1:
                         raise RegistryTimeoutError(
@@ -296,6 +310,43 @@ class RegistryClient:
 
             if result:
                 return MockResponse(result, 201)
+            else:
+                return MockResponse({"error": "Failed to connect to registry"}, 500)
+
+        except Exception as e:
+
+            class MockResponse:
+                def __init__(self, error, status=500):
+                    self.status = status
+                    self._error = error
+
+                async def json(self):
+                    return {"error": str(self._error)}
+
+                async def text(self):
+                    return str(self._error)
+
+            return MockResponse(e, 500)
+
+    async def put(self, endpoint: str, json: dict | None = None) -> Any:
+        """Make a PUT request to the registry."""
+        try:
+            result = await self._make_request("PUT", endpoint, json)
+
+            # Create a mock response object that has status and json() method
+            class MockResponse:
+                def __init__(self, data, status=200):
+                    self.status = status
+                    self._data = data
+
+                async def json(self):
+                    return self._data
+
+                async def text(self):
+                    return str(self._data)
+
+            if result:
+                return MockResponse(result, 200)
             else:
                 return MockResponse({"error": "Failed to connect to registry"}, 500)
 

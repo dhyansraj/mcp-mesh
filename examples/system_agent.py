@@ -31,44 +31,76 @@ def create_system_agent_server() -> FastMCP:
     # Store start time for uptime calculation
     start_time = datetime.now()
 
-    # ===== SYSTEM AGENT CAPABILITY =====
-    # This function provides the "SystemAgent" capability that other functions depend on
+    # ===== SYSTEM AGENT CAPABILITIES =====
+    # In standard MCP, we provide flat functions, not class methods
+    # Each function is a separate tool that can be called independently
 
+    @server.tool()
     @mesh_agent(
-        capability="SystemAgent",  # This matches the dependency name in hello_world.py
+        capability="SystemAgent_getDate",  # Flat function naming convention
+        enable_http=True,
         health_interval=30,
         version="1.0.0",
-        description="System information provider for dependency injection",
-        tags=["system", "demo", "dependency_provider"],
+        description="Get current system date and time",
+        tags=["system", "date", "time"],
     )
-    @server.tool()
-    def SystemAgent() -> Any:
+    def SystemAgent_getDate() -> str:
         """
-        Provide SystemAgent functionality as a capability.
-
-        This function returns an object-like structure that other mesh functions
-        can use when they declare SystemAgent as a dependency. The returned object
-        has getDate() method that dependent functions expect.
-
+        Get the current system date and time.
+        
+        This is a flat function following standard MCP patterns.
+        In MCP, tools are always functions, not class methods.
+        
         Returns:
-            Object with system agent methods
+            Formatted date and time string
         """
+        now = datetime.now()
+        return now.strftime("%B %d, %Y at %I:%M %p")
 
-        class _SystemAgent:
-            """Internal SystemAgent implementation."""
+    @server.tool()
+    @mesh_agent(
+        capability="SystemAgent_getUptime",  # Flat function naming convention
+        enable_http=True,
+        health_interval=30,
+        version="1.0.0",
+        description="Get system agent uptime",
+        tags=["system", "uptime", "monitoring"],
+    )
+    def SystemAgent_getUptime() -> str:
+        """
+        Get agent uptime information.
+        
+        Returns:
+            String describing how long the agent has been running
+        """
+        uptime = datetime.now() - start_time
+        return f"Agent running for {uptime.total_seconds():.1f} seconds"
 
-            def getDate(self) -> str:
-                """Get the current system date and time."""
-                now = datetime.now()
-                return now.strftime("%B %d, %Y at %I:%M %p")
-
-            def getUptime(self) -> str:
-                """Get agent uptime information."""
-                uptime = datetime.now() - start_time
-                return f"Agent running for {uptime.total_seconds():.1f} seconds"
-
-        # Return an instance that dependent functions can use
-        return _SystemAgent()
+    @server.tool()
+    @mesh_agent(
+        capability="SystemAgent_getInfo",  # Additional useful function
+        enable_http=True,
+        health_interval=30,
+        version="1.0.0",
+        description="Get comprehensive system information",
+        tags=["system", "info"],
+    )
+    def SystemAgent_getInfo() -> dict[str, Any]:
+        """
+        Get comprehensive system information.
+        
+        Returns:
+            Dictionary containing system date, uptime, and other info
+        """
+        uptime = datetime.now() - start_time
+        return {
+            "date": datetime.now().strftime("%B %d, %Y at %I:%M %p"),
+            "uptime_seconds": uptime.total_seconds(),
+            "uptime_formatted": f"{uptime.total_seconds():.1f} seconds",
+            "server_name": server.name,
+            "version": "1.0.0",
+            "capabilities": ["SystemAgent_getDate", "SystemAgent_getUptime", "SystemAgent_getInfo"]
+        }
 
     return server
 
@@ -104,15 +136,18 @@ def main():
     server = create_system_agent_server()
 
     print(f"📡 Server name: {server.name}")
-    print("🔧 Capability: SystemAgent")
+    print("🔧 Capabilities provided (standard MCP flat functions):")
+    print("• SystemAgent_getDate - Get current date and time")
+    print("• SystemAgent_getUptime - Get agent uptime")
+    print("• SystemAgent_getInfo - Get comprehensive system info")
     print("")
-    print("🎯 This agent provides:")
-    print("• SystemAgent capability for dependency injection")
-    print("• getDate() method that returns formatted date/time")
-    print("• Automatic injection into functions declaring SystemAgent dependency")
+    print("🎯 This demonstrates standard MCP architecture:")
+    print("• Flat functions (no class methods)")
+    print("• Each capability is a separate tool")
+    print("• HTTP-enabled for cross-process communication")
     print("")
     print("📝 Server ready on stdio transport...")
-    print("💡 Functions in hello_world.py will automatically receive this capability!")
+    print("💡 Other agents can now call these functions via HTTP!")
     print("🛑 Press Ctrl+C to stop.")
     print("")
 

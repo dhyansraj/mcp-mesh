@@ -1,100 +1,151 @@
 #!/usr/bin/env python3
 """
-Hello World with HTTP - Working Version
+Working example of Hello World with HTTP wrapper.
 
-This version ensures mcp_mesh_runtime is imported to enable HTTP features.
+This demonstrates the proper way to enable HTTP transport for MCP agents.
 """
 
+import asyncio
+import logging
+import signal
 import sys
-
-# WORKAROUND: Force import of mcp_mesh_runtime to enable HTTP features
-# This should happen automatically but currently doesn't
-try:
-    import mcp_mesh_runtime
-
-    print("✅ mcp_mesh_runtime imported - HTTP features enabled")
-except ImportError:
-    print("❌ mcp_mesh_runtime not available - HTTP features disabled")
-    print("   Install with: pip install -e packages/mcp_mesh_runtime")
-    sys.exit(1)
-
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp_mesh import mesh_agent
+from mcp_mesh.runtime.http_wrapper import HttpConfig, HttpMcpWrapper
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create the FastMCP server
+server = FastMCP(name="hello-world-http-working")
 
 
-def create_hello_world_server() -> FastMCP:
-    """Create a Hello World server with HTTP endpoints."""
+@server.tool()
+@mesh_agent(
+    capability="greeting",
+    dependencies=["SystemAgent"],
+    enable_http=True,
+    http_port=8889,
+    description="Greeting service with HTTP transport",
+)
+def greet_with_http(name: str = "World", SystemAgent: Any = None) -> dict[str, Any]:
+    """Generate a greeting, optionally with system date."""
+    result = {"greeting": f"Hello, {name}!", "transport": "http"}
 
-    server = FastMCP(
-        name="hello-world-http-demo",
-        instructions="Hello World with working HTTP endpoints",
+    if SystemAgent:
+        try:
+            date_info = SystemAgent.getDate()
+            result["system_date"] = date_info
+            result["dependency_status"] = "connected"
+        except Exception as e:
+            result["dependency_error"] = str(e)
+            result["dependency_status"] = "error"
+    else:
+        result["dependency_status"] = "not_available"
+
+    return result
+
+
+@server.tool()
+def get_status() -> dict[str, Any]:
+    """Get server status."""
+    return {
+        "server": server.name,
+        "status": "healthy",
+        "transport": ["stdio", "http"],
+        "http_port": 8889,
+    }
+
+
+async def run_with_http_wrapper():
+    """Run the server with HTTP wrapper enabled."""
+    # Create HTTP wrapper configuration
+    config = HttpConfig(host="0.0.0.0", port=8889, cors_enabled=True)
+
+    # Create and start HTTP wrapper
+    logger.info("Creating HTTP wrapper...")
+    http_wrapper = HttpMcpWrapper(server, config)
+
+    logger.info("Setting up HTTP wrapper...")
+    await http_wrapper.setup()
+
+    logger.info("Starting HTTP wrapper...")
+    await http_wrapper.start()
+
+    logger.info(f"🌐 HTTP wrapper started at {http_wrapper.get_endpoint()}")
+    logger.info("📍 Test endpoints:")
+    logger.info("  curl http://localhost:8889/health")
+    logger.info("  curl http://localhost:8889/mesh/info")
+    logger.info("  curl http://localhost:8889/mesh/tools")
+    logger.info(
+        '  curl -X POST http://localhost:8889/mcp -H "Content-Type: application/json" -d \'{"method": "tools/list"}\''
     )
-
-    @server.tool()
-    @mesh_agent(
-        capability="greeting",
-        dependencies=["SystemAgent"],
-        enable_http=True,
-        http_port=8081,
-        health_interval=30,
-        version="1.0.0",
-        description="HTTP-enabled greeting with dependency injection",
+    logger.info("")
+    logger.info("🔧 Call the greeting function:")
+    logger.info(
+        '  curl -X POST http://localhost:8889/mcp -H "Content-Type: application/json" -d \'{"method": "tools/call", "params": {"name": "greet_with_http", "arguments": {"name": "HTTP User"}}}\''
     )
-    def greet_from_mcp_mesh(SystemAgent: Any | None = None) -> str:
-        """HTTP-enabled greeting function."""
-        if SystemAgent is None:
-            return "Hello from MCP Mesh (HTTP enabled)"
-        else:
-            try:
-                current_date = SystemAgent.getDate()
-                return f"Hello, its {current_date} here, what about you?"
-            except Exception as e:
-                return f"Hello from MCP Mesh (Error: {e})"
+    logger.info("")
 
-    @server.tool()
-    def get_status() -> dict[str, Any]:
-        """Get server status."""
-        return {
-            "server": "hello-world-http-demo",
-            "http_endpoint": "http://localhost:8081",
-            "health_check": "http://localhost:8081/health",
-            "mcp_endpoint": "http://localhost:8081/mcp",
-        }
+    # Setup signal handlers
+    stop_event = asyncio.Event()
 
-    return server
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, shutting down...")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Run both stdio server and HTTP wrapper
+    logger.info("Starting stdio server in parallel...")
+
+    # Create tasks for both transports
+    stdio_task = asyncio.create_task(run_stdio_server(stop_event))
+
+    try:
+        # Wait for shutdown signal
+        await stop_event.wait()
+    finally:
+        # Clean shutdown
+        logger.info("Shutting down...")
+        stdio_task.cancel()
+        await http_wrapper.stop()
+
+        # Wait for stdio task to complete
+        try:
+            await stdio_task
+        except asyncio.CancelledError:
+            pass
+
+        logger.info("Shutdown complete")
+
+
+async def run_stdio_server(stop_event: asyncio.Event):
+    """Run the stdio server in a separate task."""
+    try:
+        # This would normally be server.run(transport="stdio")
+        # but we need it to be async-compatible
+        logger.info("Stdio transport ready (simulated)")
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        logger.info("Stdio server cancelled")
 
 
 def main():
-    """Run the server."""
-    print("🚀 Starting Hello World with HTTP Endpoints (Working Version)")
-    print("=" * 60)
-
-    server = create_hello_world_server()
-
-    print(f"📡 Server: {server.name}")
-    print("\n⏳ Waiting for HTTP server to start...")
-    print("   (The HTTP server starts in a background thread)")
-
-    # Give the HTTP server time to start
-    import time
-
-    time.sleep(2)
-
-    print("\n🌐 HTTP Endpoints (if successfully started):")
-    print("• Health check: http://localhost:8081/health")
-    print("• MCP endpoint: http://localhost:8081/mcp")
-    print("\n🔧 Test with:")
-    print("curl http://localhost:8081/health")
-
-    print("\n📝 Starting stdio server...")
-    print("🛑 Press Ctrl+C to stop.\n")
+    """Main entry point."""
+    logger.info("🚀 Starting Hello World server with HTTP transport...")
 
     try:
-        server.run(transport="stdio")
+        asyncio.run(run_with_http_wrapper())
     except KeyboardInterrupt:
-        print("\n🛑 Server stopped.")
+        logger.info("Interrupted by user")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

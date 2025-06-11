@@ -206,8 +206,32 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 
 	// Create endpoint (matches Python logic for stdio agents)
 	endpoint := getStringFromMap(metadata, "endpoint", "")
-	if endpoint == "" || (!strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://")) {
-		endpoint = fmt.Sprintf("http://localhost:0/%s", agentName)
+
+	// Handle HTTP endpoint if provided
+	httpEndpoint := ""
+	if ep, ok := metadata["endpoint"].(string); ok && (strings.HasPrefix(ep, "http://") || strings.HasPrefix(ep, "https://")) {
+		httpEndpoint = ep
+	}
+
+	// Store transport type information
+	transports := []string{"stdio"}
+	if httpEndpoint != "" {
+		transports = append(transports, "http")
+	}
+
+	// Store transport info in metadata
+	if _, exists := metadata["transport"]; !exists {
+		metadata["transport"] = transports
+	}
+	// Keep stdio:// endpoints as-is, they will be updated when HTTP wrapper starts
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("stdio://%s", agentName)
+	} else if strings.HasPrefix(endpoint, "stdio://") {
+		// Keep stdio:// prefix as-is
+		endpoint = endpoint
+	} else if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		// For backward compatibility, convert other formats to stdio://
+		endpoint = fmt.Sprintf("stdio://%s", agentName)
 	}
 
 	// Convert labels and annotations to JSON strings (matches Python storage format)
@@ -405,16 +429,44 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	if req.Status != "" {
 		updates["status"] = req.Status
 	}
+	
+	// Check if endpoint is provided in metadata and update it
+	var endpointUpdate string
+	var hasEndpointUpdate bool
+	if req.Metadata != nil {
+		if endpoint, ok := req.Metadata["endpoint"].(string); ok && endpoint != "" {
+			endpointUpdate = endpoint
+			hasEndpointUpdate = true
+			log.Printf("Updating endpoint for agent %s to: %s", req.AgentID, endpoint)
+		}
+	}
 
 	// Update agent heartbeat in database
-	result, err := s.db.DB.Exec(`
-		UPDATE agents SET
-			last_heartbeat = ?,
-			status = ?,
-			updated_at = ?,
-			resource_version = ?
-		WHERE id = ?`,
-		updates["last_heartbeat"], updates["status"], updates["updated_at"], updates["resource_version"], req.AgentID)
+	var result sql.Result
+	var err error
+	
+	if hasEndpointUpdate {
+		// Update including endpoint
+		result, err = s.db.DB.Exec(`
+			UPDATE agents SET
+				last_heartbeat = ?,
+				status = ?,
+				updated_at = ?,
+				resource_version = ?,
+				endpoint = ?
+			WHERE id = ?`,
+			updates["last_heartbeat"], updates["status"], updates["updated_at"], updates["resource_version"], endpointUpdate, req.AgentID)
+	} else {
+		// Update without endpoint
+		result, err = s.db.DB.Exec(`
+			UPDATE agents SET
+				last_heartbeat = ?,
+				status = ?,
+				updated_at = ?,
+				resource_version = ?
+			WHERE id = ?`,
+			updates["last_heartbeat"], updates["status"], updates["updated_at"], updates["resource_version"], req.AgentID)
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to update heartbeat: %w", err)

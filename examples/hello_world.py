@@ -60,14 +60,16 @@ def create_hello_world_server() -> FastMCP:
     @server.tool()
     @mesh_agent(
         capability="greeting",  # Single capability
-        dependencies=["SystemAgent"],  # Will be automatically injected when available
+        dependencies=["SystemAgent_getDate"],  # Depend on flat function
         health_interval=30,
         fallback_mode=True,
         version="1.0.0",
-        description="Greeting function with automatic SystemAgent dependency injection",
+        description="Greeting function with automatic date function dependency injection",
         tags=["demo", "dependency_injection"],
+        enable_http=True,  # Enable HTTP transport
+        http_port=8889,  # Different port from FastAPI DI tester
     )
-    def greet_from_mcp_mesh(SystemAgent: Any | None = None) -> str:
+    def greet_from_mcp_mesh(SystemAgent_getDate: Any | None = None) -> str:
         """
         MCP Mesh greeting function with automatic dependency injection.
 
@@ -78,17 +80,18 @@ def create_hello_world_server() -> FastMCP:
         - Falls back gracefully when dependencies are not available
 
         Args:
-            SystemAgent: Optional system agent (automatically injected by mesh)
+            SystemAgent_getDate: Optional date function (automatically injected by mesh)
 
         Returns:
-            Enhanced greeting with system information if agent is available
+            Enhanced greeting with system information if date function is available
         """
-        if SystemAgent is None:
+        if SystemAgent_getDate is None:
             return "Hello from MCP Mesh"
         else:
-            # SystemAgent was automatically injected by mesh when system_agent.py started
+            # SystemAgent_getDate was automatically injected by mesh when system_agent.py started
             try:
-                current_date = SystemAgent.getDate()
+                # In flat function style, we call the function directly
+                current_date = SystemAgent_getDate()
                 return f"Hello, its {current_date} here, what about you?"
             except Exception as e:
                 return f"Hello from MCP Mesh (Error getting date: {e})"
@@ -99,12 +102,12 @@ def create_hello_world_server() -> FastMCP:
     @server.tool()
     @mesh_agent(
         capability="greeting",  # Single capability (new pattern)
-        dependencies=["SystemAgent"],
+        dependencies=["SystemAgent_getDate", "SystemAgent_getInfo"],  # Multiple flat functions
         version="2.0.0",
         tags=["demo", "kubernetes", "single-capability"],
         description="Single-capability greeting function optimized for Kubernetes",
     )
-    def greet_single_capability(SystemAgent: Any | None = None) -> str:
+    def greet_single_capability(SystemAgent_getDate: Any | None = None, SystemAgent_getInfo: Any | None = None) -> str:
         """
         Greeting function using new single-capability pattern.
 
@@ -115,21 +118,32 @@ def create_hello_world_server() -> FastMCP:
         - More efficient service discovery
 
         Args:
-            SystemAgent: Optional system agent (automatically injected by mesh)
+            SystemAgent_getDate: Optional date function (automatically injected by mesh)
+            SystemAgent_getInfo: Optional info function (automatically injected by mesh)
 
         Returns:
             Greeting message with system info if available
         """
         base_greeting = "Hello from single-capability function"
 
-        if SystemAgent is not None:
+        # Demonstrate using multiple flat function dependencies
+        parts = [base_greeting]
+        
+        if SystemAgent_getDate is not None:
             try:
-                current_date = SystemAgent.getDate()
-                return f"{base_greeting} - Date from SystemAgent: {current_date}"
+                current_date = SystemAgent_getDate()
+                parts.append(f"Date: {current_date}")
             except Exception as e:
-                return f"{base_greeting} - SystemAgent error: {e}"
-        else:
-            return f"{base_greeting} - No SystemAgent available"
+                parts.append(f"Date error: {e}")
+        
+        if SystemAgent_getInfo is not None:
+            try:
+                info = SystemAgent_getInfo()
+                parts.append(f"Uptime: {info.get('uptime_formatted', 'unknown')}")
+            except Exception as e:
+                parts.append(f"Info error: {e}")
+        
+        return " - ".join(parts)
 
     # ===== ADDITIONAL DEMO TOOLS =====
 
@@ -169,42 +183,42 @@ def create_hello_world_server() -> FastMCP:
     @server.tool()
     @mesh_agent(
         capability="dependency_validation",  # Single capability
-        dependencies=["SystemAgent"],
+        dependencies=["SystemAgent_getDate"],
         fallback_mode=True,
     )
-    def test_dependency_injection(SystemAgent: Any | None = None) -> dict[str, Any]:
+    def test_dependency_injection(SystemAgent_getDate: Any | None = None) -> dict[str, Any]:
         """
         Test and report current dependency injection status.
 
         Args:
-            SystemAgent: Optional system agent for testing
+            SystemAgent_getDate: Optional date function for testing
 
         Returns:
             Dictionary containing dependency injection test results
         """
-        if SystemAgent is None:
+        if SystemAgent_getDate is None:
             return {
                 "dependency_injection_status": "inactive",
-                "SystemAgent_available": False,
-                "message": "No SystemAgent dependency injected",
+                "SystemAgent_getDate_available": False,
+                "message": "No date function dependency injected",
                 "recommendation": "Start system_agent.py to see dependency injection in action",
             }
         else:
             try:
-                date_result = SystemAgent.getDate()
+                date_result = SystemAgent_getDate()
                 return {
                     "dependency_injection_status": "active",
-                    "SystemAgent_available": True,
-                    "SystemAgent_response": date_result,
+                    "SystemAgent_getDate_available": True,
+                    "date_function_response": date_result,
                     "message": "Dependency injection working perfectly!",
-                    "mesh_magic": "SystemAgent was automatically discovered and injected",
+                    "mesh_magic": "SystemAgent_getDate was automatically discovered and injected",
                 }
             except Exception as e:
                 return {
                     "dependency_injection_status": "error",
-                    "SystemAgent_available": True,
+                    "SystemAgent_getDate_available": True,
                     "error": str(e),
-                    "message": "SystemAgent injected but method call failed",
+                    "message": "Date function injected but call failed",
                 }
 
     return server
@@ -281,16 +295,24 @@ def main():
 
                         if hasattr(func, "_injected_deps"):
                             deps = func._injected_deps
-                            if "SystemAgent" in deps and deps["SystemAgent"]:
-                                proxy = deps["SystemAgent"]
+                            # Check for any injected dependencies (flat functions)
+                            injected_deps = [k for k, v in deps.items() if v is not None]
+                            
+                            if injected_deps:
                                 result["injection_status"] = "injected"
-                                result["proxy_details"] = {
-                                    "type": str(type(proxy).__name__),
-                                    "endpoint": getattr(proxy, "_endpoint", "N/A"),
-                                    "agent_id": getattr(proxy, "_agent_id", "N/A"),
-                                    "status": getattr(proxy, "_status", "N/A"),
-                                    "repr": str(proxy),
-                                }
+                                result["injected_dependencies"] = injected_deps
+                                result["proxy_details"] = {}
+                                
+                                # Show details for each injected dependency
+                                for dep_name in injected_deps:
+                                    proxy = deps[dep_name]
+                                    result["proxy_details"][dep_name] = {
+                                        "type": str(type(proxy).__name__),
+                                        "endpoint": getattr(proxy, "_endpoint", "N/A"),
+                                        "agent_id": getattr(proxy, "_agent_id", "N/A"),
+                                        "status": getattr(proxy, "_status", "N/A"),
+                                        "repr": str(proxy),
+                                    }
                             else:
                                 result["injection_status"] = "waiting_for_provider"
 

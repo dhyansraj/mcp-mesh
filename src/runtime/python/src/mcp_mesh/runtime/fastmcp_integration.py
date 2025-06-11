@@ -16,18 +16,30 @@ logger = logging.getLogger(__name__)
 
 # Store original methods
 _original_call_tool = None
+_original_add_tool = None
 _patched = False
+
+# Map function to server for HTTP wrapper creation
+_function_to_server = {}
 
 
 def patch_fastmcp():
     """Monkey-patch FastMCP to support dependency injection."""
-    global _original_call_tool, _patched
+    global _original_call_tool, _original_add_tool, _patched
 
     if _patched:
         return
 
-    # Store original method
+    # Import FastMCP class
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:
+        logger.warning("FastMCP not available, skipping patches")
+        return
+
+    # Store original methods
     _original_call_tool = ToolManager.call_tool
+    _original_add_tool = FastMCP.tool
 
     # Create patched version
     async def patched_call_tool(
@@ -58,10 +70,31 @@ def patch_fastmcp():
         # Call original with potentially modified arguments
         return await _original_call_tool(self, name, arguments, context=context)
 
-    # Apply patch
+    # Create patched tool decorator
+    def patched_tool(self, *args, **kwargs):
+        """Patched tool decorator that tracks server references."""
+        # Call original to get the decorator
+        decorator = _original_add_tool(self, *args, **kwargs)
+
+        # Create wrapper that stores server reference
+        def wrapper(func):
+            # Apply original decorator
+            decorated = decorator(func)
+            # Store server reference
+            _function_to_server[func.__name__] = self
+            _function_to_server[id(func)] = self
+            # Also store on function itself
+            func._mcp_server = self
+            logger.debug(f"Registered function {func.__name__} with server {self.name}")
+            return decorated
+
+        return wrapper
+
+    # Apply patches
     ToolManager.call_tool = patched_call_tool
+    FastMCP.tool = patched_tool
     _patched = True
-    logger.info("FastMCP patched for dependency injection support")
+    logger.info("FastMCP patched for dependency injection and server tracking")
 
     # Trigger decorator processing when FastMCP is patched (i.e., when server starts)
     _trigger_decorator_processing()
@@ -76,6 +109,14 @@ def unpatch_fastmcp():
 
     if _original_call_tool:
         ToolManager.call_tool = _original_call_tool
+
+    if _original_add_tool:
+        try:
+            from mcp.server.fastmcp import FastMCP
+
+            FastMCP.tool = _original_add_tool
+        except ImportError:
+            pass
 
     _patched = False
     logger.info("FastMCP patches removed")
@@ -170,3 +211,8 @@ async def _async_trigger_processing():
 
     except Exception as e:
         logger.error(f"Async decorator processing failed: {e}")
+
+
+def get_server_for_function(func_name: str) -> Any:
+    """Get the FastMCP server instance for a function."""
+    return _function_to_server.get(func_name)

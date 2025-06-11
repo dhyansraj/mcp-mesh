@@ -2,7 +2,6 @@
 
 import os
 import sys
-from typing import Optional
 
 # Import all the existing exports
 from .agent_selection import (
@@ -131,7 +130,7 @@ from .versioning import (
 __version__ = "0.2.0"
 
 # Store reference to runtime processor if initialized
-_runtime_processor: Optional["DecoratorProcessor"] = None
+_runtime_processor = None
 
 
 def initialize_runtime():
@@ -145,6 +144,9 @@ def initialize_runtime():
         from .runtime.fastmcp_integration import patch_fastmcp
         from .runtime.processor import DecoratorProcessor
 
+        # Patch FastMCP FIRST before any decorators are used
+        patch_fastmcp()
+
         # Create and start the processor
         _runtime_processor = DecoratorProcessor()
         _runtime_processor.start()
@@ -155,13 +157,10 @@ def initialize_runtime():
         if hasattr(decorators, "_enhance_mesh_agent"):
             decorators._enhance_mesh_agent(_runtime_processor)
 
-        # Patch FastMCP for dependency injection
-        patch_fastmcp()
-
-        print("MCP Mesh runtime initialized", file=sys.stderr)
+        sys.stderr.write("MCP Mesh runtime initialized\n")
     except Exception as e:
         # Log but don't fail - allows graceful degradation
-        print(f"MCP Mesh runtime initialization failed: {e}", file=sys.stderr)
+        sys.stderr.write(f"MCP Mesh runtime initialization failed: {e}\n")
 
 
 # Auto-initialize runtime if enabled
