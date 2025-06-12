@@ -28,6 +28,10 @@ _patched = False
 # Map function to server for HTTP wrapper creation
 _function_to_server = {}
 
+# Background thread event loop for cleanup coordination
+_background_loop = None
+_background_thread = None
+
 
 def patch_fastmcp():
     """Monkey-patch FastMCP to support dependency injection."""
@@ -142,6 +146,7 @@ def _trigger_decorator_processing():
 
         def background_processor():
             """Run decorator processing in background thread."""
+            global _background_loop
             time.sleep(2)  # Give time for all decorators to be registered
             try:
                 # Import here to avoid circular imports
@@ -149,8 +154,17 @@ def _trigger_decorator_processing():
 
                 if _runtime_processor is not None:
                     # Create new event loop for background processing
+                    # Temporarily disable asyncio debug logging to avoid stdout issues
+                    asyncio_logger = logging.getLogger("asyncio")
+                    original_level = asyncio_logger.level
+                    asyncio_logger.setLevel(logging.WARNING)
+                    
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
+                    _background_loop = loop  # Store for shutdown coordination
+                    
+                    # Restore asyncio logging level
+                    asyncio_logger.setLevel(original_level)
 
                     logger.info("Background processor starting with new event loop")
 
@@ -187,24 +201,22 @@ def _trigger_decorator_processing():
                             "📍 Running event loop forever for health monitoring"
                         )
                         
-                        # Set up signal handlers for graceful shutdown
-                        shutdown_event = asyncio.Event()
-                        
-                        def signal_handler(sig, frame):
+                        # Since we're in a background thread, we can't use signal handlers
+                        # Instead, we'll just run the event loop and let the main thread
+                        # handle signals and cleanup
+                        try:
+                            loop.run_forever()
+                        except KeyboardInterrupt:
                             logger.info("🛑 Received shutdown signal, stopping health monitoring...")
-                            shutdown_event.set()
+                        finally:
                             # Schedule cleanup on the event loop
-                            asyncio.run_coroutine_threadsafe(
-                                _runtime_processor.cleanup(), loop
-                            )
-                        
-                        # Register signal handlers
-                        signal.signal(signal.SIGINT, signal_handler)
-                        signal.signal(signal.SIGTERM, signal_handler)
-                        
-                        # Run until shutdown signal
-                        loop.run_until_complete(shutdown_event.wait())
-                        logger.info("✅ Health monitoring stopped gracefully")
+                            if not loop.is_closed():
+                                try:
+                                    loop.run_until_complete(_runtime_processor.cleanup())
+                                    logger.info("✅ Health monitoring stopped gracefully")
+                                except Exception:
+                                    # Ignore errors during shutdown (e.g., closed stdout)
+                                    pass
                     else:
                         logger.warning(
                             "No health tasks created, not running event loop"
@@ -219,10 +231,33 @@ def _trigger_decorator_processing():
                 )
 
         # Start background thread
-        thread = threading.Thread(target=background_processor, daemon=True)
-        thread.start()
+        global _background_thread
+        _background_thread = threading.Thread(target=background_processor, daemon=True)
+        _background_thread.start()
         logger.info("Started background decorator processing thread")
+        
+        # Register shutdown handler in main thread
+        import atexit
+        atexit.register(_cleanup_background_thread)
 
+
+def _cleanup_background_thread():
+    """Clean up the background thread and event loop."""
+    global _background_loop, _background_thread
+    
+    try:
+        if _background_loop and not _background_loop.is_closed():
+            logger.info("Stopping background event loop...")
+            # Stop the event loop from the main thread
+            _background_loop.call_soon_threadsafe(_background_loop.stop)
+            
+        if _background_thread and _background_thread.is_alive():
+            # Wait a bit for thread to finish
+            _background_thread.join(timeout=2.0)
+    except Exception:
+        # Ignore errors during shutdown
+        pass
+        
 
 async def _async_trigger_processing():
     """Trigger processing asynchronously when event loop is available."""
