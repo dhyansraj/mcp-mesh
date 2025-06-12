@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world-agent
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: hello-world-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: mcp-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world-agent
+  template:
+    metadata:
+      labels:
+        app: hello-world-agent
+        app.kubernetes.io/name: hello-world-agent
+        app.kubernetes.io/component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: agent
+          image: localhost:5000/mcp-mesh-agent:hello-world
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: AGENT_NAME
+              value: "hello-world-demo"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: MCP_MESH_REGISTRY_URL
+              value: "http://mcp-mesh-registry:8080"
+            - name: MCP_MESH_HTTP_HOST
+              value: "0.0.0.0"
+            - name: MCP_MESH_HTTP_PORT
+              value: "8080"
+            - name: MCP_MESH_HTTP_ENABLED
+              value: "true"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: MCP_MESH_LOG_LEVEL
+              value: "DEBUG"
+            - name: ENABLE_MONITORING
+              value: "true"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: agent-data
+              mountPath: /data
+            - name: agent-config
+              mountPath: /etc/mcp-mesh
+      volumes:
+        - name: agent-data
+          emptyDir: {}
+        - name: agent-config
+          configMap:
+            name: mcp-agent-config
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-agent
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: hello-world-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: mcp-mesh
+spec:
+  selector:
+    app: hello-world-agent
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+    - port: 9090
+      targetPort: 9090
+      protocol: TCP
+      name: metrics

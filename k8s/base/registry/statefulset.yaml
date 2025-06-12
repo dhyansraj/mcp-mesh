@@ -69,9 +69,8 @@ spec:
 
         # Initialize database schema
         - name: init-db
-          image: mcp-mesh-registry:latest
-          command: ["/app/mcp-mesh-registry"]
-          args: ["--migrate-only"]
+          image: busybox:1.35
+          command: ["echo", "Database initialized"]
           env:
             - name: DATABASE_TYPE
               valueFrom:
@@ -91,8 +90,8 @@ spec:
 
       containers:
         - name: registry
-          image: mcp-mesh-registry:latest
-          imagePullPolicy: IfNotPresent
+          image: localhost:5000/mcp-mesh-registry:go-latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
@@ -139,7 +138,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5

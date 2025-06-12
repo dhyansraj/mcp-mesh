@@ -4,6 +4,8 @@ metadata:
   name: mcp-registry-config
   namespace: mcp-mesh
 data:
+  # Database type for init containers
+  DATABASE_TYPE: "sqlite"
   # Registry configuration
   registry-config.yaml: |
     # MCP Mesh Registry Configuration
@@ -17,7 +19,7 @@ data:
 
       # Database configuration
       database:
-        type: ${DATABASE_TYPE}
+        type: sqlite
         # SQLite configuration
         sqlite:
           path: "/data/registry.db"
@@ -28,11 +30,11 @@ data:
 
         # PostgreSQL configuration (when using external DB)
         postgres:
-          host: ${DATABASE_HOST}
-          port: ${DATABASE_PORT}
-          database: ${DATABASE_NAME}
-          username: ${DATABASE_USERNAME}
-          password: ${DATABASE_PASSWORD}
+          host: "postgres.default.svc.cluster.local"
+          port: 5432
+          database: "mcp_registry"
+          username: "mcp_user"
+          password: "changeme"
           sslmode: "prefer"
           pool_size: 20
           max_overflow: 10
@@ -109,8 +111,8 @@ data:
 
     # Logging configuration
     logging:
-      level: ${LOG_LEVEL}
-      format: ${LOG_FORMAT}
+      level: "INFO"
+      format: "json"
       structured: true
       include_timestamp: true
       output: "stdout"
@@ -123,8 +125,8 @@ data:
     # Security configuration
     security:
       auth:
-        enabled: ${AUTH_ENABLED}
-        type: ${AUTH_TYPE}
+        enabled: false
+        type: "none"
         token:
           header: "X-Auth-Token"
           query_param: "token"
@@ -132,17 +134,17 @@ data:
           realm: "MCP Mesh Registry"
         oauth2:
           provider: "generic"
-          client_id: ${OAUTH2_CLIENT_ID}
-          client_secret: ${OAUTH2_CLIENT_SECRET}
-          authorize_url: ${OAUTH2_AUTHORIZE_URL}
-          token_url: ${OAUTH2_TOKEN_URL}
-          userinfo_url: ${OAUTH2_USERINFO_URL}
+          client_id: "mcp-mesh-registry"
+          client_secret: "changeme"
+          authorize_url: "https://auth.example.com/authorize"
+          token_url: "https://auth.example.com/token"
+          userinfo_url: "https://auth.example.com/userinfo"
           scopes:
             - "read"
             - "write"
 
       tls:
-        enabled: ${TLS_ENABLED}
+        enabled: false
         cert_file: "/etc/tls/tls.crt"
         key_file: "/etc/tls/tls.key"
         ca_file: "/etc/tls/ca.crt"
@@ -166,7 +168,7 @@ data:
         include_go_metrics: true
 
       tracing:
-        enabled: ${TRACING_ENABLED}
+        enabled: false
         provider: "opentelemetry"
         endpoint: "http://jaeger-collector:14268/api/traces"
         sample_rate: 0.1
