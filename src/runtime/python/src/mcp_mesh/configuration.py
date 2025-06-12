@@ -54,7 +54,7 @@ class ServerConfig:
         ssl_cert_path: str | None = None,
         ssl_key_path: str | None = None,
         enable_cors: bool = True,
-        cors_origins: list[str] = None,
+        cors_origins: list[str] | None = None,
         rate_limit_enabled: bool = False,
         rate_limit_requests: int = 100,
         rate_limit_window: int = 60,
@@ -116,12 +116,12 @@ class SecurityConfig:
     def __init__(
         self,
         mode: SecurityMode = SecurityMode.NONE,
-        api_keys: list[str] = None,
+        api_keys: list[str] | None = None,
         jwt_secret: str | None = None,
         jwt_expiration: int = 3600,
         tls_ca_cert: str | None = None,
         require_client_cert: bool = False,
-        allowed_hosts: list[str] = None,
+        allowed_hosts: list[str] | None = None,
         enable_audit_log: bool = False,
         audit_log_path: str | None = None,
     ):
@@ -234,7 +234,7 @@ class RegistryConfig:
         performance: PerformanceConfig | None = None,
         environment: str = "development",
         debug: bool = False,
-        feature_flags: dict[str, bool] = None,
+        feature_flags: dict[str, bool] | None = None,
     ):
         self.mode = mode
         self.server = server or ServerConfig()

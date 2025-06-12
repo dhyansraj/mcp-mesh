@@ -1,0 +1,251 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-registry-config
+  namespace: mcp-mesh
+data:
+  # Registry configuration
+  registry-config.yaml: |
+    # MCP Mesh Registry Configuration
+    registry:
+      # Server configuration
+      server:
+        host: "0.0.0.0"
+        port: 8080
+        workers: 4
+        keep_alive: 75
+
+      # Database configuration
+      database:
+        type: ${DATABASE_TYPE}
+        # SQLite configuration
+        sqlite:
+          path: "/data/registry.db"
+          journal_mode: "WAL"
+          synchronous: "NORMAL"
+          cache_size: -64000  # 64MB
+          busy_timeout: 5000
+
+        # PostgreSQL configuration (when using external DB)
+        postgres:
+          host: ${DATABASE_HOST}
+          port: ${DATABASE_PORT}
+          database: ${DATABASE_NAME}
+          username: ${DATABASE_USERNAME}
+          password: ${DATABASE_PASSWORD}
+          sslmode: "prefer"
+          pool_size: 20
+          max_overflow: 10
+          pool_timeout: 30
+          pool_recycle: 3600
+
+        # Connection pool settings
+        pool:
+          min_size: 5
+          max_size: 20
+          acquire_timeout: 10
+          idle_timeout: 300
+
+      # Health check configuration
+      health:
+        enabled: true
+        interval: 30
+        timeout: 10
+        failure_threshold: 3
+        success_threshold: 1
+
+      # Performance configuration
+      performance:
+        max_connections: 1000
+        connection_timeout: 30
+        request_timeout: 60
+        rate_limit:
+          enabled: false
+          requests_per_minute: 1000
+          burst: 100
+
+      # Caching configuration
+      cache:
+        enabled: true
+        type: "memory"  # memory, redis
+        ttl: 300
+        max_size: 10000
+        eviction_policy: "lru"
+
+      # Agent management
+      agents:
+        stale_threshold: 300  # Mark agent as stale after 5 minutes
+        cleanup_interval: 600  # Clean up stale agents every 10 minutes
+        max_agents: 10000
+        heartbeat_timeout: 90
+
+      # Service discovery
+      discovery:
+        enabled: true
+        dns_ttl: 60
+        cache_dns: true
+        prefer_ipv4: true
+
+      # API configuration
+      api:
+        prefix: "/api/v1"
+        docs_enabled: true
+        docs_url: "/docs"
+        openapi_url: "/openapi.json"
+        cors:
+          enabled: true
+          allowed_origins:
+            - "*"
+          allowed_methods:
+            - "GET"
+            - "POST"
+            - "PUT"
+            - "DELETE"
+            - "OPTIONS"
+          allowed_headers:
+            - "*"
+          allow_credentials: true
+          max_age: 3600
+
+    # Logging configuration
+    logging:
+      level: ${LOG_LEVEL}
+      format: ${LOG_FORMAT}
+      structured: true
+      include_timestamp: true
+      output: "stdout"
+      rotate:
+        enabled: false
+        max_size: "100MB"
+        max_age: 7
+        max_backups: 5
+
+    # Security configuration
+    security:
+      auth:
+        enabled: ${AUTH_ENABLED}
+        type: ${AUTH_TYPE}
+        token:
+          header: "X-Auth-Token"
+          query_param: "token"
+        basic:
+          realm: "MCP Mesh Registry"
+        oauth2:
+          provider: "generic"
+          client_id: ${OAUTH2_CLIENT_ID}
+          client_secret: ${OAUTH2_CLIENT_SECRET}
+          authorize_url: ${OAUTH2_AUTHORIZE_URL}
+          token_url: ${OAUTH2_TOKEN_URL}
+          userinfo_url: ${OAUTH2_USERINFO_URL}
+          scopes:
+            - "read"
+            - "write"
+
+      tls:
+        enabled: ${TLS_ENABLED}
+        cert_file: "/etc/tls/tls.crt"
+        key_file: "/etc/tls/tls.key"
+        ca_file: "/etc/tls/ca.crt"
+        client_auth: false
+        min_version: "1.2"
+        ciphers: []
+
+      rate_limiting:
+        enabled: false
+        requests_per_minute: 100
+        burst: 20
+        by_ip: true
+        by_token: true
+
+    # Monitoring configuration
+    monitoring:
+      metrics:
+        enabled: true
+        port: 9090
+        path: "/metrics"
+        include_go_metrics: true
+
+      tracing:
+        enabled: ${TRACING_ENABLED}
+        provider: "opentelemetry"
+        endpoint: "http://jaeger-collector:14268/api/traces"
+        sample_rate: 0.1
+        propagator: "w3c"
+
+      profiling:
+        enabled: false
+        port: 6060
+
+  # Environment defaults
+  env.properties: |
+    # Database
+    DATABASE_TYPE=sqlite
+    DATABASE_HOST=
+    DATABASE_PORT=5432
+    DATABASE_NAME=mcp_mesh
+    DATABASE_USERNAME=
+    DATABASE_PASSWORD=
+
+    # Logging
+    LOG_LEVEL=INFO
+    LOG_FORMAT=json
+
+    # Security
+    AUTH_ENABLED=false
+    AUTH_TYPE=token
+    TLS_ENABLED=false
+
+    # OAuth2 (when using OAuth2 auth)
+    OAUTH2_CLIENT_ID=
+    OAUTH2_CLIENT_SECRET=
+    OAUTH2_AUTHORIZE_URL=
+    OAUTH2_TOKEN_URL=
+    OAUTH2_USERINFO_URL=
+
+    # Monitoring
+    TRACING_ENABLED=false
+
+  # Database migration scripts
+  migrations.sql: |
+    -- Initial schema creation
+    CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        namespace TEXT DEFAULT 'default',
+        endpoint TEXT NOT NULL,
+        status TEXT DEFAULT 'unknown',
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        metadata JSONB
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agents_namespace ON agents(namespace);
+    CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+    CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
+
+    CREATE TABLE IF NOT EXISTS capabilities (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        version TEXT NOT NULL,
+        description TEXT,
+        metadata JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_capabilities_agent ON capabilities(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_capabilities_name ON capabilities(name);
+
+    CREATE TABLE IF NOT EXISTS dependencies (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+        dependency_name TEXT NOT NULL,
+        version_constraint TEXT,
+        optional BOOLEAN DEFAULT FALSE,
+        resolved_to TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dependencies_agent ON dependencies(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_dependencies_name ON dependencies(dependency_name);

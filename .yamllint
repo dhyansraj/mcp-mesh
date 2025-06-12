@@ -1,0 +1,17 @@
+---
+extends: default
+
+ignore: |
+  # Ignore Helm chart templates
+  helm/**/templates/*
+
+rules:
+  line-length:
+    max: 120
+  comments:
+    min-spaces-from-content: 1
+  document-start:
+    present: false
+  comments-indentation: disable
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']

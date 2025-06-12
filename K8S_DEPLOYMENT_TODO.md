@@ -38,29 +38,29 @@
 - [ ] Service mesh integration (Istio/Linkerd) examples (SKIP)
 - [ ] Headless service support for direct pod-to-pod communication
 - [ ] DNS-based service discovery documentation
-- [ ] Endpoint slices support for large deployments  (SKIP IF TOO MUCH WORK)
+- [ ] Endpoint slices support for large deployments (SKIP IF TOO MUCH WORK)
 
 ### 2. **ConfigMaps and Secrets**
 
 - [ ] ConfigMap templates for agent configuration
 - [ ] Secret management for API keys and credentials
-- [ ] External secrets operator integration guide  (SKIP)
+- [ ] External secrets operator integration guide (SKIP)
 - [ ] Environment-specific configuration overlays
-- [ ] Hot-reload configuration without pod restart  (SKIP)
+- [ ] Hot-reload configuration without pod restart (SKIP)
 
 ### 3. **Persistent Storage for Registry**
 
 - [ ] PersistentVolumeClaim templates for registry data
 - [ ] StatefulSet for registry (instead of Deployment)
-- [ ] Backup and restore mechanisms with CronJobs  (SKIP)
-- [ ] High availability setup with leader election  (SKIP)
-- [ ] Database migration strategy  (SKIP)
+- [ ] Backup and restore mechanisms with CronJobs (SKIP)
+- [ ] High availability setup with leader election (SKIP)
+- [ ] Database migration strategy (SKIP)
 
 ### 4. **Observability Stack**
 
 - [ ] Prometheus ServiceMonitor definitions
 - [ ] Grafana dashboard templates for MCP metrics
-- [ ] OpenTelemetry integration for distributed tracing  (SKIP)
+- [ ] OpenTelemetry integration for distributed tracing (SKIP)
 - [ ] Structured logging with correlation IDs
 - [ ] Custom metrics for MCP protocol operations
 - [ ] Alert rules for common failure scenarios
@@ -70,40 +70,41 @@
 - [ ] NetworkPolicies for zero-trust networking
 - [ ] PodSecurityStandards enforcement
 - [ ] Service mesh mTLS configuration
-- [ ] RBAC for service accounts with least privilege  (SKIP)
-- [ ] Image vulnerability scanning in CI/CD  (SKIP)
-- [ ] Admission webhooks for agent validation  (SKIP)
-- [ ] Secrets encryption at rest  (SKIP)
+- [ ] RBAC for service accounts with least privilege (SKIP)
+- [ ] Image vulnerability scanning in CI/CD (SKIP)
+- [ ] Admission webhooks for agent validation (SKIP)
+- [ ] Secrets encryption at rest (SKIP)
 
 ### 6. **Advanced Deployment Patterns**
 
-- [ ] Blue-green deployment strategies  (SKIP)
-- [ ] Canary deployments with Flagger integration  (SKIP)
-- [ ] Progressive rollouts with traffic splitting  (SKIP)
-- [ ] Circuit breaker configuration for resilience  (SKIP)
+- [ ] Blue-green deployment strategies (SKIP)
+- [ ] Canary deployments with Flagger integration (SKIP)
+- [ ] Progressive rollouts with traffic splitting (SKIP)
+- [ ] Circuit breaker configuration for resilience (SKIP)
 - [ ] Retry and timeout policies per service
-- [ ] A/B testing framework for capabilities  (SKIP)
+- [ ] A/B testing framework for capabilities (SKIP)
 
 ### 7. **Registry High Availability**
 
-- [ ] Multi-replica registry with leader election  (SKIP)
-- [ ] Redis/etcd backend for distributed state  (SKIP)
+- [ ] Multi-replica registry with leader election (SKIP)
+- [ ] Redis/etcd backend for distributed state (SKIP)
 - [ ] Load balancing across registry instances
-- [ ] Registry federation for multi-cluster setups  (SKIP)
-- [ ] Disaster recovery procedures  (SKIP)
+- [ ] Registry federation for multi-cluster setups (SKIP)
+- [ ] Disaster recovery procedures (SKIP)
 
 ### 8. **Kubernetes-Native Features**
 
 - [ ] Custom Resource Definitions (CRDs) for MCP agents
-- [ ] Operator for agent lifecycle management  (SKIP)
-- [ ] Validating webhooks for configuration  (SKIP)
-- [ ] Service catalog integration  (SKIP)
-- [ ] Horizontal Pod Autoscaler configurations  (SKIP)
-- [ ] Vertical Pod Autoscaler recommendations  (SKIP)
+- [ ] Operator for agent lifecycle management (SKIP)
+- [ ] Validating webhooks for configuration (SKIP)
+- [ ] Service catalog integration (SKIP)
+- [ ] Horizontal Pod Autoscaler configurations (SKIP)
+- [ ] Vertical Pod Autoscaler recommendations (SKIP)
 
 ### 8. **Helm Chart**
-- [ ] Helm Chart for Registry
-- [ ] Helm Chart for Agents (Python runtime)
+
+- [ ] Helm Chart for Registry with all configuration flags and evn variables
+- [ ] Helm Chart for Agents (Python runtime) with all configuration flags and evn variables and mcp_mesh decoration meta
 
 ## 🔧 Implementation Phases
 
@@ -351,15 +352,15 @@ spec:
 - [ ] Build basic operator for agent management
 - [ ] Create service mesh integration examples
 - [ ] Add distributed tracing instrumentation
-- [ ] Implement multi-cluster registry federation  (SKIP)
+- [ ] Implement multi-cluster registry federation (SKIP)
 
 ### Long Term (Month 2-3)
 
-- [ ] Production hardening with security policies  (SKIP)
-- [ ] Advanced deployment strategies (blue-green, canary)  (SKIP)
+- [ ] Production hardening with security policies (SKIP)
+- [ ] Advanced deployment strategies (blue-green, canary) (SKIP)
 - [ ] Complete observability stack integration
-- [ ] Performance optimization for large clusters  (SKIP)
-- [ ] Disaster recovery and backup automation  (SKIP)
+- [ ] Performance optimization for large clusters (SKIP)
+- [ ] Disaster recovery and backup automation (SKIP)
 
 ## 🚀 Success Criteria
 

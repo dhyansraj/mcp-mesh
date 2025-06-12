@@ -1,0 +1,25 @@
+apiVersion: v2
+name: mcp-mesh-agent
+description: MCP Mesh Agent - Python runtime for MCP agents with mesh capabilities
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - mesh
+  - agent
+  - microservices
+  - python
+home: https://github.com/your-org/mcp-mesh
+sources:
+  - https://github.com/your-org/mcp-mesh
+maintainers:
+  - name: MCP Mesh Team
+    email: team@example.com
+icon: https://example.com/mcp-mesh-icon.png
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Initial release of MCP Mesh Agent Helm chart
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies: []

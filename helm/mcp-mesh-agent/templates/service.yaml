@@ -1,0 +1,24 @@
+{{- if .Values.agent.http.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-mesh-agent.fullname" . }}
+  labels:
+    {{- include "mcp-mesh-agent.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with (merge .Values.service.annotations .Values.commonAnnotations) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "mcp-mesh-agent.selectorLabels" . | nindent 4 }}
+{{- end }}

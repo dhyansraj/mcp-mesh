@@ -10,13 +10,21 @@ import json
 import logging
 import os
 import socket
+import time
 from contextlib import closing
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 
 from .logging_config import configure_logging
 
@@ -24,6 +32,45 @@ from .logging_config import configure_logging
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+# Prometheus metrics
+mcp_requests_total = Counter(
+    "mcp_requests_total", "Total number of MCP requests", ["method", "status", "agent"]
+)
+
+mcp_request_duration_seconds = Histogram(
+    "mcp_request_duration_seconds",
+    "MCP request latency in seconds",
+    ["method", "agent"],
+)
+
+mcp_active_connections = Gauge(
+    "mcp_active_connections", "Number of active connections", ["agent"]
+)
+
+mcp_tools_total = Gauge(
+    "mcp_tools_total", "Total number of registered tools", ["agent"]
+)
+
+mcp_capabilities_total = Gauge(
+    "mcp_capabilities_total", "Total number of capabilities", ["agent"]
+)
+
+mcp_dependencies_total = Gauge(
+    "mcp_dependencies_total", "Total number of dependencies", ["agent"]
+)
+
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total number of HTTP requests",
+    ["method", "endpoint", "status"],
+)
+
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency in seconds",
+    ["method", "endpoint"],
+)
 
 
 class HttpConfig:
@@ -58,7 +105,41 @@ class HttpMcpWrapper:
 
     async def setup(self):
         """Set up HTTP endpoints and middleware."""
-        # 1. Add CORS middleware if enabled
+
+        # 1. Add metrics middleware
+        @self.app.middleware("http")
+        async def track_requests(request: Request, call_next):
+            """Track HTTP request metrics."""
+            start_time = time.time()
+
+            # Extract endpoint for metrics
+            endpoint = request.url.path
+            method = request.method
+
+            # Track active connections
+            mcp_active_connections.labels(agent=self.mcp_server.name).inc()
+
+            try:
+                response = await call_next(request)
+                status = response.status_code
+
+                # Track request metrics
+                http_requests_total.labels(
+                    method=method, endpoint=endpoint, status=status
+                ).inc()
+
+                return response
+            finally:
+                # Track request duration
+                duration = time.time() - start_time
+                http_request_duration_seconds.labels(
+                    method=method, endpoint=endpoint
+                ).observe(duration)
+
+                # Decrement active connections
+                mcp_active_connections.labels(agent=self.mcp_server.name).dec()
+
+        # 2. Add CORS middleware if enabled
         if self.config.cors_enabled:
             self.app.add_middleware(
                 CORSMiddleware,
@@ -68,7 +149,7 @@ class HttpMcpWrapper:
                 allow_headers=["*"],
             )
 
-        # 2. Mount MCP endpoints
+        # 3. Mount MCP endpoints
         try:
             from mcp.server.fastapi import create_app
 
@@ -80,7 +161,7 @@ class HttpMcpWrapper:
             )
             self._setup_fallback_mcp_endpoints()
 
-        # 3. Add health endpoints for K8s
+        # 4. Add health endpoints for K8s
         @self.app.get("/health")
         async def health():
             """Basic health check endpoint."""
@@ -109,14 +190,25 @@ class HttpMcpWrapper:
             """Liveness check for K8s."""
             return {"alive": True, "agent": self.mcp_server.name}
 
-        # 4. Add mesh-specific endpoints
+        # 5. Add mesh-specific endpoints
         @self.app.get("/mesh/info")
         async def mesh_info():
             """Get mesh agent information."""
+            capabilities = self._get_capabilities()
+            dependencies = self._get_dependencies()
+
+            # Update metrics gauges
+            mcp_capabilities_total.labels(agent=self.mcp_server.name).set(
+                len(capabilities)
+            )
+            mcp_dependencies_total.labels(agent=self.mcp_server.name).set(
+                len(dependencies)
+            )
+
             return {
                 "agent_id": self.mcp_server.name,
-                "capabilities": self._get_capabilities(),
-                "dependencies": self._get_dependencies(),
+                "capabilities": capabilities,
+                "dependencies": dependencies,
                 "transport": ["stdio", "http"],
                 "http_endpoint": f"http://{self._get_host_ip()}:{self.actual_port}",
             }
@@ -133,7 +225,17 @@ class HttpMcpWrapper:
                             "description": getattr(tool, "description", ""),
                             "parameters": self._extract_tool_params(tool),
                         }
+
+            # Update tools gauge
+            mcp_tools_total.labels(agent=self.mcp_server.name).set(len(tools))
+
             return {"tools": tools}
+
+        # 6. Add Prometheus metrics endpoint
+        @self.app.get("/metrics")
+        async def metrics():
+            """Prometheus metrics endpoint."""
+            return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     def _setup_fallback_mcp_endpoints(self):
         """Set up fallback MCP endpoints if official server not available."""
@@ -141,66 +243,96 @@ class HttpMcpWrapper:
         @self.app.post("/mcp")
         async def mcp_handler(request: dict):
             """Fallback MCP protocol handler."""
+            start_time = time.time()
             method = request.get("method")
             params = request.get("params", {})
+            status = "success"
 
-            if method == "tools/list":
-                # List available tools
-                tools = []
-                if hasattr(self.mcp_server, "_tool_manager"):
-                    for name, tool in self.mcp_server._tool_manager._tools.items():
-                        tools.append(
-                            {
-                                "name": name,
-                                "description": getattr(tool, "description", ""),
-                                "inputSchema": self._extract_tool_params(tool),
-                            }
+            try:
+                if method == "tools/list":
+                    # List available tools
+                    tools = []
+                    if hasattr(self.mcp_server, "_tool_manager"):
+                        for name, tool in self.mcp_server._tool_manager._tools.items():
+                            tools.append(
+                                {
+                                    "name": name,
+                                    "description": getattr(tool, "description", ""),
+                                    "inputSchema": self._extract_tool_params(tool),
+                                }
+                            )
+                    return {"tools": tools}
+
+                elif method == "tools/call":
+                    # Call a tool
+                    tool_name = params.get("name")
+                    arguments = params.get("arguments", {})
+
+                    if not hasattr(self.mcp_server, "_tool_manager"):
+                        raise HTTPException(
+                            status_code=500, detail="No tools available"
                         )
-                return {"tools": tools}
 
-            elif method == "tools/call":
-                # Call a tool
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
+                    tools = self.mcp_server._tool_manager._tools
+                    if tool_name not in tools:
+                        raise HTTPException(
+                            status_code=404, detail=f"Tool '{tool_name}' not found"
+                        )
 
-                if not hasattr(self.mcp_server, "_tool_manager"):
-                    raise HTTPException(status_code=500, detail="No tools available")
+                    # Execute tool
+                    tool = tools[tool_name]
+                    try:
+                        # Check if function is async
+                        import inspect
 
-                tools = self.mcp_server._tool_manager._tools
-                if tool_name not in tools:
+                        if inspect.iscoroutinefunction(tool.fn):
+                            result = await tool.fn(**arguments)
+                        else:
+                            result = tool.fn(**arguments)
+
+                        # Convert result to JSON string
+                        if isinstance(result, str):
+                            result_text = result
+                        else:
+                            result_text = json.dumps(result)
+
+                        result = {
+                            "content": [{"type": "text", "text": result_text}],
+                            "isError": False,
+                        }
+                        return result
+                    except Exception as e:
+                        status = "error"
+                        result = {
+                            "content": [{"type": "text", "text": str(e)}],
+                            "isError": True,
+                        }
+                        return result
+
+                else:
+                    status = "error"
                     raise HTTPException(
-                        status_code=404, detail=f"Tool '{tool_name}' not found"
+                        status_code=400, detail=f"Unknown method: {method}"
                     )
 
-                # Execute tool
-                tool = tools[tool_name]
-                try:
-                    # Check if function is async
-                    import inspect
-
-                    if inspect.iscoroutinefunction(tool.fn):
-                        result = await tool.fn(**arguments)
-                    else:
-                        result = tool.fn(**arguments)
-
-                    # Convert result to JSON string
-                    if isinstance(result, str):
-                        result_text = result
-                    else:
-                        result_text = json.dumps(result)
-
-                    return {
-                        "content": [{"type": "text", "text": result_text}],
-                        "isError": False,
-                    }
-                except Exception as e:
-                    return {
-                        "content": [{"type": "text", "text": str(e)}],
-                        "isError": True,
-                    }
-
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown method: {method}")
+            except HTTPException:
+                status = "error"
+                raise
+            except Exception as e:
+                status = "error"
+                logger.error(f"MCP handler error: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+            finally:
+                # Track MCP metrics
+                duration = time.time() - start_time
+                mcp_requests_total.labels(
+                    method=method or "unknown",
+                    status=status,
+                    agent=self.mcp_server.name,
+                ).inc()
+                mcp_request_duration_seconds.labels(
+                    method=method or "unknown", agent=self.mcp_server.name
+                ).observe(duration)
 
     async def start(self):
         """Start HTTP server with auto port assignment."""
@@ -260,7 +392,9 @@ class HttpMcpWrapper:
                 try:
                     await asyncio.wait_for(self._setup_task, timeout=2.0)
                 except asyncio.TimeoutError:
-                    logger.warning(f"HTTP server for {self.mcp_server.name} did not stop in time")
+                    logger.warning(
+                        f"HTTP server for {self.mcp_server.name} did not stop in time"
+                    )
                     self._setup_task.cancel()
 
     def _find_available_port(self) -> int:
@@ -272,21 +406,39 @@ class HttpMcpWrapper:
 
     def _get_host_ip(self) -> str:
         """Get the host IP address."""
-        # In K8s, use pod IP
-        if os.environ.get("KUBERNETES_SERVICE_HOST"):
-            # Try to get pod IP from environment
-            pod_ip = os.environ.get("POD_IP")
-            if pod_ip:
-                return pod_ip
+        # Priority 1: Explicitly set POD_IP (Kubernetes)
+        pod_ip = os.environ.get("POD_IP")
+        if pod_ip:
+            logger.debug(f"Using POD_IP from environment: {pod_ip}")
+            return pod_ip
 
-        # For Docker or local, try to get external IP
+        # Priority 2: Check if running in Kubernetes (even without POD_IP set)
+        if os.environ.get("KUBERNETES_SERVICE_HOST"):
+            logger.warning(
+                "Running in Kubernetes but POD_IP not set. Using hostname IP."
+            )
+            try:
+                # In K8s, hostname usually resolves to pod IP
+                import socket
+
+                hostname = socket.gethostname()
+                pod_ip = socket.gethostbyname(hostname)
+                if pod_ip and not pod_ip.startswith("127."):
+                    return pod_ip
+            except Exception as e:
+                logger.debug(f"Failed to resolve hostname to IP: {e}")
+
+        # Priority 3: For Docker or local, try to get external IP
         try:
             # Connect to a public DNS server to find our IP
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
+                ip = s.getsockname()[0]
+                logger.debug(f"Using detected external IP: {ip}")
+                return ip
         except Exception:
             # Fallback to localhost
+            logger.debug("Fallback to localhost")
             return "127.0.0.1"
 
     def _get_capabilities(self) -> list[str]:

@@ -1,0 +1,213 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mcp-mesh-registry
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: registry
+spec:
+  serviceName: mcp-mesh-registry-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-mesh-registry
+      app.kubernetes.io/component: registry
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: OrderedReady
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-mesh-registry
+        app.kubernetes.io/component: registry
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: mcp-mesh-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      initContainers:
+        # Wait for database (if using external DB)
+        - name: wait-for-db
+          image: busybox:1.35
+          command: ["sh", "-c"]
+          args:
+            - |
+              if [ "$DATABASE_TYPE" != "sqlite" ]; then
+                echo "Waiting for database at $DATABASE_HOST:$DATABASE_PORT..."
+                until nc -z $DATABASE_HOST $DATABASE_PORT; do
+                  echo "Database not ready, waiting..."
+                  sleep 2
+                done
+                echo "Database is ready!"
+              else
+                echo "Using SQLite, no external database to wait for"
+              fi
+          env:
+            - name: DATABASE_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: mcp-registry-config
+                  key: DATABASE_TYPE
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: mcp-registry-config
+                  key: DATABASE_HOST
+                  optional: true
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: mcp-registry-config
+                  key: DATABASE_PORT
+                  optional: true
+
+        # Initialize database schema
+        - name: init-db
+          image: mcp-mesh-registry:latest
+          command: ["/app/mcp-mesh-registry"]
+          args: ["--migrate-only"]
+          env:
+            - name: DATABASE_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: mcp-registry-config
+                  key: DATABASE_TYPE
+          envFrom:
+            - configMapRef:
+                name: mcp-registry-config
+            - secretRef:
+                name: mcp-registry-secret
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/mcp-mesh
+
+      containers:
+        - name: registry
+          image: mcp-mesh-registry:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # Pod information for leader election
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Registry instance ID (for multi-replica setup)
+            - name: REGISTRY_INSTANCE_ID
+              value: "$(POD_NAME)"
+            # Leader election configuration
+            - name: ENABLE_LEADER_ELECTION
+              value: "true"
+            - name: LEADER_ELECTION_NAMESPACE
+              value: "$(POD_NAMESPACE)"
+            - name: LEADER_ELECTION_NAME
+              value: "mcp-mesh-registry-leader"
+          envFrom:
+            - configMapRef:
+                name: mcp-registry-config
+            - secretRef:
+                name: mcp-registry-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/mcp-mesh
+              readOnly: true
+            - name: tls
+              mountPath: /etc/tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+
+      volumes:
+        - name: config
+          configMap:
+            name: mcp-registry-config
+        - name: tls
+          secret:
+            secretName: mcp-registry-tls
+            optional: true
+
+      # Anti-affinity to spread replicas across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mcp-mesh-registry
+                    app.kubernetes.io/component: registry
+                topologyKey: kubernetes.io/hostname
+
+  # Volume claim templates for persistent storage
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: mcp-mesh-registry
+          app.kubernetes.io/component: registry
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+        # Uncomment to use a specific storage class
+        # storageClassName: fast-ssd

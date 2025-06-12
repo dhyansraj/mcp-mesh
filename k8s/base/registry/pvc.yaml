@@ -1,0 +1,93 @@
+---
+# Standalone PVC for single-instance registry deployment
+# (Use this when not using StatefulSet)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-mesh-registry-data
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: registry
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # Uncomment to use a specific storage class
+  # storageClassName: standard
+
+---
+# Shared PVC for registry backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-mesh-registry-backup
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: backup
+spec:
+  accessModes:
+    - ReadWriteMany # Allow multiple pods to mount for backup operations
+  resources:
+    requests:
+      storage: 50Gi
+  # Use a storage class that supports ReadWriteMany
+  # storageClassName: nfs-client
+
+---
+# PVC for agent workspaces
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-mesh-agent-workspace
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-agent
+    app.kubernetes.io/component: workspace
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName: nfs-client
+
+---
+# PVC for shared cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-mesh-shared-cache
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  # Use fast storage for cache
+  # storageClassName: fast-ssd
+
+---
+# PVC for logs (optional - for persistent log storage)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-mesh-logs
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh
+    app.kubernetes.io/component: logging
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  # storageClassName: standard

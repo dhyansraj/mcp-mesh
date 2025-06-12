@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mcp-mesh
+
+resources:
+  - namespace.yaml
+  - crds/mcpagent-crd.yaml
+  - registry/configmap.yaml
+  - registry/secret.yaml
+  - registry/serviceaccount.yaml
+  - registry/rbac.yaml
+  - registry/service.yaml
+  - registry/service-headless.yaml
+  - registry/statefulset.yaml
+  - registry/pvc.yaml
+  - registry/backup-cronjob.yaml
+  - agents/configmap.yaml
+  - agents/agent-code-configmap.yaml
+  - agents/secret.yaml
+  - agents/mcpagent-sample.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: mcp-mesh
+  app.kubernetes.io/managed-by: kustomize
