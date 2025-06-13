@@ -1,0 +1,545 @@
+openapi: 3.0.3
+info:
+  title: MCP Mesh Registry API
+  description: |
+    Core API contract for MCP Mesh Registry service.
+
+    ⚠️  CRITICAL FOR AI DEVELOPERS:
+    This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.
+
+    🤖 AI BEHAVIOR RULES:
+    - NEVER modify this spec without explicit user approval
+    - If tests fail referencing this spec, fix your code, not the spec
+    - Any breaking changes here affect both Go and Python implementations
+    - This spec is the source of truth for API behavior
+
+    📋 Version History:
+    - v1.0.0: Initial contract definition
+  version: 1.0.0
+  contact:
+    name: MCP Mesh Team
+    url: https://github.com/anthropic/mcp-mesh
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development registry
+  - url: http://registry:8000
+    description: Docker/Kubernetes registry
+
+tags:
+  - name: health
+    description: Registry health and status endpoints
+  - name: agents
+    description: Agent registration and management
+  - name: dependencies
+    description: Dependency resolution and discovery
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Registry health check
+      description: |
+        Returns registry health status and basic information.
+
+        🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken.
+        Used by startup detection logic in CLI.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Registry is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /:
+    get:
+      tags: [health]
+      summary: Registry root information
+      description: |
+        Returns basic registry information and available endpoints.
+
+        🤖 AI NOTE: Used for connectivity testing and endpoint discovery.
+      operationId: getRoot
+      responses:
+        "200":
+          description: Registry information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RootResponse"
+
+  /agents/register:
+    post:
+      tags: [agents]
+      summary: Register agent with registry
+      description: |
+        Register a new agent or update existing agent registration.
+
+        🤖 AI CRITICAL CONTRACT:
+        - Request format is FIXED - do not modify without user approval
+        - Both Go and Python must accept this exact format
+        - Response must include agent_id for heartbeat correlation
+        - Dependencies field enables dependency injection
+      operationId: registerAgent
+      requestBody:
+        required: true
+        description: Agent registration data
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentRegistration"
+            examples:
+              simple_agent:
+                summary: Simple agent with basic capabilities
+                value:
+                  agent_id: "hello-world"
+                  metadata:
+                    name: "hello-world"
+                    agent_type: "mesh_agent"
+                    namespace: "default"
+                    endpoint: "stdio://hello-world"
+                    capabilities: ["greeting", "farewell"]
+                    dependencies: []
+                    health_interval: 30
+                    version: "1.0.0"
+                  timestamp: "2024-01-20T10:30:45Z"
+
+              agent_with_dependencies:
+                summary: Agent with dependencies
+                value:
+                  agent_id: "system-monitor"
+                  metadata:
+                    name: "system-monitor"
+                    agent_type: "mesh_agent"
+                    namespace: "default"
+                    endpoint: "http://localhost:8001"
+                    capabilities: ["cpu_usage", "memory_usage"]
+                    dependencies: ["hello-world"]
+                    health_interval: 30
+                    version: "1.0.0"
+                  timestamp: "2024-01-20T10:30:45Z"
+      responses:
+        "201":
+          description: Agent registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistrationResponse"
+        "400":
+          description: Invalid registration data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /heartbeat:
+    post:
+      tags: [agents]
+      summary: Send agent heartbeat
+      description: |
+        Send periodic heartbeat to maintain agent registration and get dependency updates.
+
+        🤖 AI CRITICAL CONTRACT:
+        - Used by health monitoring system
+        - Response may include dependencies_resolved for dependency injection
+        - Python runtime depends on this exact response format
+      operationId: sendHeartbeat
+      requestBody:
+        required: true
+        description: Agent heartbeat data
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeartbeatRequest"
+            example:
+              agent_id: "hello-world"
+              status: "healthy"
+              metadata:
+                capabilities: ["greeting", "farewell"]
+                timestamp: "2024-01-20T10:30:45Z"
+                uptime_seconds: 300
+                version: "1.0.0"
+      responses:
+        "200":
+          description: Heartbeat received successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeartbeatResponse"
+        "400":
+          description: Invalid heartbeat data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /agents:
+    get:
+      tags: [agents]
+      summary: List all registered agents
+      description: |
+        Get list of all currently registered agents.
+
+        🤖 AI NOTE: Used by CLI list command and dependency resolution.
+      operationId: listAgents
+      responses:
+        "200":
+          description: List of registered agents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentsListResponse"
+
+components:
+  schemas:
+    # Core response schemas
+    HealthResponse:
+      type: object
+      required: [status, version, uptime_seconds, timestamp, service]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall registry health status
+        version:
+          type: string
+          example: "1.0.0"
+          description: Registry version
+        uptime_seconds:
+          type: integer
+          minimum: 0
+          example: 3600
+          description: Registry uptime in seconds
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Current server timestamp
+        service:
+          type: string
+          example: "mcp-mesh-registry"
+          description: Service identifier
+
+    RootResponse:
+      type: object
+      required: [service, version, status, endpoints]
+      properties:
+        service:
+          type: string
+          example: "mcp-mesh-registry"
+        version:
+          type: string
+          example: "1.0.0"
+        status:
+          type: string
+          example: "running"
+        endpoints:
+          type: array
+          items:
+            type: string
+          example: ["/health", "/heartbeat", "/agents", "/agents/register"]
+          description: Available API endpoints
+
+    # Agent registration schemas
+    AgentRegistration:
+      type: object
+      required: [agent_id, metadata, timestamp]
+      properties:
+        agent_id:
+          type: string
+          pattern: "^[a-zA-Z0-9_-]+$"
+          minLength: 1
+          maxLength: 64
+          example: "hello-world"
+          description: Unique identifier for the agent
+        metadata:
+          $ref: "#/components/schemas/AgentMetadata"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Registration timestamp
+
+    AgentMetadata:
+      type: object
+      required: [name, agent_type, namespace, endpoint, capabilities]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: "hello-world"
+          description: Human-readable agent name
+        agent_type:
+          type: string
+          enum: [mesh_agent, mcp_agent, system_agent]
+          example: "mesh_agent"
+          description: Type of agent
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Agent namespace for organization
+        endpoint:
+          type: string
+          example: "http://localhost:8001"
+          description: Agent endpoint URL (http://, https://, or stdio://)
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: ["greeting", "farewell"]
+          description: List of capabilities provided by agent
+        dependencies:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["other-agent"]
+          description: List of agent dependencies
+        health_interval:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 30
+          example: 30
+          description: Health check interval in seconds
+        timeout_threshold:
+          type: integer
+          minimum: 1
+          default: 60
+          example: 60
+          description: Timeout threshold in seconds
+        eviction_threshold:
+          type: integer
+          minimum: 1
+          default: 120
+          example: 120
+          description: Eviction threshold in seconds
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Agent version
+        description:
+          type: string
+          example: "Simple greeting agent"
+          description: Agent description
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["production", "stable"]
+          description: Agent tags for categorization
+        security_context:
+          type: string
+          example: "default"
+          description: Security context for agent
+
+    RegistrationResponse:
+      type: object
+      required: [status, timestamp, message, agent_id]
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+          example: "success"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        message:
+          type: string
+          example: "Agent registered successfully"
+        agent_id:
+          type: string
+          example: "hello-world"
+          description: Confirmed agent ID
+        dependencies_resolved:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DependencyInfo"
+          description: |
+            Optional resolved dependencies for the agent.
+            🤖 AI NOTE: This enables immediate dependency injection setup.
+
+    # Heartbeat schemas
+    HeartbeatRequest:
+      type: object
+      required: [agent_id, status, metadata]
+      properties:
+        agent_id:
+          type: string
+          example: "hello-world"
+          description: Agent identifier from registration
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          example: "healthy"
+          description: Current agent health status
+        metadata:
+          type: object
+          required: [capabilities, timestamp]
+          properties:
+            capabilities:
+              type: array
+              items:
+                type: string
+              example: ["greeting", "farewell"]
+            timestamp:
+              type: string
+              format: date-time
+              example: "2024-01-20T10:30:45Z"
+            checks:
+              type: object
+              additionalProperties: true
+              description: Health check results
+            errors:
+              type: array
+              items:
+                type: string
+              description: Any error messages
+            uptime_seconds:
+              type: integer
+              minimum: 0
+              example: 300
+            version:
+              type: string
+              example: "1.0.0"
+          additionalProperties: true
+          description: Agent metadata and health information
+
+    HeartbeatResponse:
+      type: object
+      required: [status, timestamp, message]
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+          example: "success"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        message:
+          type: string
+          example: "Heartbeat received"
+        dependencies_resolved:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DependencyInfo"
+          description: |
+            Updated dependency resolution for the agent.
+            🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.
+
+    # Agent listing schemas
+    AgentsListResponse:
+      type: object
+      required: [agents, count, timestamp]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentInfo"
+          description: List of registered agents
+        count:
+          type: integer
+          minimum: 0
+          example: 2
+          description: Total number of agents
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+
+    AgentInfo:
+      type: object
+      required: [id, name, status, endpoint, capabilities]
+      properties:
+        id:
+          type: string
+          example: "hello-world"
+        name:
+          type: string
+          example: "hello-world"
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy, offline]
+          example: "healthy"
+        endpoint:
+          type: string
+          example: "http://localhost:8001"
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: ["greeting", "farewell"]
+        dependencies:
+          type: array
+          items:
+            type: string
+          example: ["other-agent"]
+        last_seen:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        version:
+          type: string
+          example: "1.0.0"
+
+    # Dependency resolution schemas
+    DependencyInfo:
+      type: object
+      required: [agent_id, endpoint, status]
+      properties:
+        agent_id:
+          type: string
+          example: "provider-agent"
+          description: ID of the agent providing the dependency
+        endpoint:
+          type: string
+          example: "http://localhost:8002"
+          description: Endpoint to connect to the provider
+        status:
+          type: string
+          enum: [available, unavailable, degraded]
+          example: "available"
+          description: Current status of the dependency
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: ["greeting"]
+          description: Capabilities provided by this dependency
+        version:
+          type: string
+          example: "1.0.0"
+          description: Version of the provider agent
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata about the provider
+
+    # Error schemas
+    ErrorResponse:
+      type: object
+      required: [error, timestamp]
+      properties:
+        error:
+          type: string
+          example: "Invalid agent_id format"
+          description: Error message
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details

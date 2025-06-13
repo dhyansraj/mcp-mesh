@@ -1,0 +1,425 @@
+openapi: 3.0.3
+info:
+  title: MCP Mesh Agent API
+  description: |
+    API contract for MCP Mesh Agent HTTP endpoints.
+
+    ⚠️  CRITICAL FOR AI DEVELOPERS:
+    This OpenAPI specification defines the AGENT-SIDE CONTRACT for Python agent HTTP wrappers.
+
+    🤖 AI BEHAVIOR RULES:
+    - NEVER modify this spec without explicit user approval
+    - This is SEPARATE from the registry API contract
+    - Only applies to Python agent HTTP wrapper endpoints
+    - Used for agent-to-external and agent health monitoring
+
+    📋 Scope:
+    - Agent health and readiness endpoints
+    - Agent capability and tool discovery
+    - Agent metrics and monitoring
+    - MCP protocol HTTP transport
+  version: 1.0.0
+  contact:
+    name: MCP Mesh Team
+    url: https://github.com/anthropic/mcp-mesh
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:{port}
+    description: Agent HTTP wrapper
+    variables:
+      port:
+        default: "8001"
+        description: Dynamic port assigned to agent
+
+tags:
+  - name: health
+    description: Agent health and readiness endpoints
+  - name: mesh
+    description: Agent mesh integration endpoints
+  - name: mcp
+    description: MCP protocol endpoints
+  - name: monitoring
+    description: Metrics and monitoring endpoints
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Agent health check
+      description: |
+        Returns agent health status and basic information.
+
+        🤖 AI NOTE: This is AGENT health, not registry health.
+        Used by Kubernetes health checks and external monitoring.
+      operationId: getAgentHealth
+      responses:
+        "200":
+          description: Agent is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentHealthResponse"
+        "503":
+          description: Agent is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentHealthResponse"
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Agent readiness check
+      description: |
+        Returns agent readiness status for Kubernetes readiness probes.
+
+        🤖 AI NOTE: Kubernetes-specific readiness endpoint.
+      operationId: getAgentReadiness
+      responses:
+        "200":
+          description: Agent is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: Agent is not ready
+
+  /livez:
+    get:
+      tags: [health]
+      summary: Agent liveness check
+      description: |
+        Returns agent liveness status for Kubernetes liveness probes.
+
+        🤖 AI NOTE: Kubernetes-specific liveness endpoint.
+      operationId: getAgentLiveness
+      responses:
+        "200":
+          description: Agent is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "OK"
+        "503":
+          description: Agent is not alive
+
+  /mesh/info:
+    get:
+      tags: [mesh]
+      summary: Agent mesh information
+      description: |
+        Returns agent capabilities, dependencies, and mesh integration info.
+
+        🤖 AI CRITICAL: This provides agent discovery information for mesh routing.
+      operationId: getAgentMeshInfo
+      responses:
+        "200":
+          description: Agent mesh information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMeshInfo"
+
+  /mesh/tools:
+    get:
+      tags: [mesh]
+      summary: List agent tools
+      description: |
+        Returns list of tools available from this agent.
+
+        🤖 AI NOTE: Used for tool discovery in mesh routing.
+      operationId: listAgentTools
+      responses:
+        "200":
+          description: Agent tools list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentToolsList"
+
+  /metrics:
+    get:
+      tags: [monitoring]
+      summary: Agent metrics
+      description: |
+        Returns Prometheus metrics for agent monitoring.
+
+        🤖 AI NOTE: Standard Prometheus metrics endpoint.
+      operationId: getAgentMetrics
+      responses:
+        "200":
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP mcp_requests_total Total number of MCP requests
+                  # TYPE mcp_requests_total counter
+                  mcp_requests_total{method="tools/list",status="success",agent="hello-world"} 5
+
+  /mcp:
+    post:
+      tags: [mcp]
+      summary: MCP protocol handler
+      description: |
+        HTTP transport endpoint for MCP protocol messages.
+
+        🤖 AI CRITICAL CONTRACT:
+        - This endpoint handles MCP JSON-RPC protocol over HTTP
+        - Request/response format must match MCP specification
+        - Used for agent communication in HTTP transport mode
+      operationId: handleMcpMessage
+      requestBody:
+        required: true
+        description: MCP JSON-RPC message
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpRequest"
+            examples:
+              tools_list:
+                summary: List tools request
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: "tools/list"
+                  params: {}
+              tools_call:
+                summary: Call tool request
+                value:
+                  jsonrpc: "2.0"
+                  id: 2
+                  method: "tools/call"
+                  params:
+                    name: "file_operations"
+                    arguments:
+                      operation: "read"
+                      path: "/tmp/test.txt"
+      responses:
+        "200":
+          description: MCP response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpResponse"
+        "400":
+          description: Invalid MCP request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpErrorResponse"
+
+components:
+  schemas:
+    # Agent Health Schemas
+    AgentHealthResponse:
+      type: object
+      required: [status, agent_id, timestamp, transport]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall agent health status
+        agent_id:
+          type: string
+          example: "hello-world"
+          description: Agent identifier
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Current timestamp
+        transport:
+          type: array
+          items:
+            type: string
+          example: ["stdio", "http"]
+          description: Available transport methods
+        version:
+          type: string
+          example: "1.0.0"
+          description: Agent version
+        uptime_seconds:
+          type: integer
+          minimum: 0
+          example: 3600
+          description: Agent uptime in seconds
+        mcp_server_status:
+          type: string
+          enum: [connected, disconnected, error]
+          example: "connected"
+          description: MCP server connection status
+
+    ReadinessResponse:
+      type: object
+      required: [ready, timestamp]
+      properties:
+        ready:
+          type: boolean
+          example: true
+          description: Whether agent is ready to serve requests
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [pass, fail]
+              message:
+                type: string
+          example:
+            mcp_server: {status: "pass", message: "Connected"}
+            registry: {status: "pass", message: "Registered"}
+
+    # Agent Mesh Schemas
+    AgentMeshInfo:
+      type: object
+      required: [agent_id, capabilities, dependencies, transport, http_endpoint]
+      properties:
+        agent_id:
+          type: string
+          example: "hello-world"
+          description: Agent identifier
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: ["greeting", "farewell"]
+          description: Agent capabilities
+        dependencies:
+          type: array
+          items:
+            type: string
+          example: ["file-system"]
+          description: Agent dependencies
+        transport:
+          type: array
+          items:
+            type: string
+          example: ["stdio", "http"]
+          description: Available transport methods
+        http_endpoint:
+          type: string
+          example: "http://192.168.1.100:8001"
+          description: Agent HTTP endpoint URL
+
+    AgentToolsList:
+      type: object
+      required: [tools]
+      properties:
+        tools:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ToolInfo"
+          description: Available tools mapping
+          example:
+            file_operations:
+              description: "File system operations"
+              parameters:
+                operation: {type: "string", enum: ["read", "write", "list"]}
+                path: {type: "string"}
+
+    ToolInfo:
+      type: object
+      required: [description]
+      properties:
+        description:
+          type: string
+          example: "File system operations"
+          description: Tool description
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Tool parameter schema
+          example:
+            operation: {type: "string", enum: ["read", "write"]}
+            path: {type: "string"}
+
+    # MCP Protocol Schemas
+    McpRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+          example: "2.0"
+          description: JSON-RPC version
+        id:
+          type: integer
+          example: 1
+          description: Request ID
+        method:
+          type: string
+          example: "tools/list"
+          description: MCP method name
+        params:
+          type: object
+          additionalProperties: true
+          description: Method parameters
+          example: {}
+
+    McpResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+          example: "2.0"
+        id:
+          type: integer
+          example: 1
+          description: Request ID
+        result:
+          type: object
+          additionalProperties: true
+          description: Method result
+          example:
+            tools:
+              - name: "file_operations"
+                description: "File system operations"
+        error:
+          $ref: "#/components/schemas/McpError"
+
+    McpErrorResponse:
+      type: object
+      required: [jsonrpc, id, error]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+          example: "2.0"
+        id:
+          type: integer
+          example: 1
+        error:
+          $ref: "#/components/schemas/McpError"
+
+    McpError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          example: -32600
+          description: JSON-RPC error code
+        message:
+          type: string
+          example: "Invalid Request"
+          description: Error message
+        data:
+          type: object
+          additionalProperties: true
+          description: Additional error data

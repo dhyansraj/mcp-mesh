@@ -1,0 +1,64 @@
+# YAML Lint Configuration for Contract-First Development
+# Ensures consistent YAML formatting across OpenAPI specs and configs
+
+extends: default
+
+rules:
+  # Line length - more permissive for OpenAPI docs
+  line-length:
+    max: 120
+    level: warning
+
+  # Comments - allow for extensive AI guidance
+  comments:
+    min-spaces-from-content: 1
+    require-starting-space: true
+
+  # Indentation - consistent with pre-commit
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  # Document start/end - optional for config files
+  document-start:
+    present: false
+
+  # Truthy values - be flexible for boolean configs
+  truthy:
+    allowed-values: ["true", "false", "yes", "no"]
+    check-keys: false
+
+  # Empty lines - flexible for readability
+  empty-lines:
+    max: 2
+    max-start: 1
+    max-end: 1
+
+  # Brackets and braces - flexible for inline arrays
+  brackets:
+    max-spaces-inside: 1
+    max-spaces-inside-empty: 0
+
+  braces:
+    max-spaces-inside: 1
+    max-spaces-inside-empty: 0
+
+# File-specific overrides
+ignore: |
+  # Generated files
+  **/generated/**
+  **/*generated*
+
+  # Helm templates (have special syntax)
+  helm/**/templates/**
+
+  # Kubernetes manifests with special requirements
+  k8s/base/registry/rbac.yaml
+  k8s/base/registry/pvc.yaml
+  k8s/base/agents/mcpagent-sample.yaml
+
+  # Node modules and build artifacts
+  node_modules/**
+  dist/**
+  build/**

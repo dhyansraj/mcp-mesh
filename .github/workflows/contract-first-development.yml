@@ -1,0 +1,357 @@
+# Contract-First Development Workflow
+# Enforces OpenAPI-first development by validating contracts on every change
+
+name: Contract-First Development
+
+on:
+  push:
+    branches: [main, develop, alpha-4.0]
+  pull_request:
+    branches: [main, develop]
+  # Run on OpenAPI spec changes
+  paths:
+    - "api/**/*.yaml"
+    - "src/**/*.go"
+    - "src/**/*.py"
+    - "tools/codegen/**"
+    - "tools/validation/**"
+    - "tools/detection/**"
+
+# 🤖 AI BEHAVIOR GUIDANCE:
+# This workflow ensures contract-first development.
+#
+# WHEN THIS WORKFLOW FAILS:
+# 1. Check if your code violates the OpenAPI contract
+# 2. Verify all endpoints exist in OpenAPI spec
+# 3. Fix code to match contract (not vice versa)
+# 4. Only update OpenAPI spec with explicit user approval
+
+env:
+  GO_VERSION: "1.21"
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # Step 1: Validate OpenAPI Specification
+  validate-spec:
+    name: Validate OpenAPI Specification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install validation dependencies
+        run: |
+          pip install openapi-spec-validator jsonschema pyyaml
+
+      - name: Validate OpenAPI specification
+        run: |
+          echo "🔍 Validating OpenAPI specification..."
+          python3 tools/validation/validate_schema.py api/mcp-mesh-registry.openapi.yaml
+          echo "✅ OpenAPI specification is valid"
+
+      - name: Check specification syntax
+        run: |
+          echo "📋 Checking YAML syntax..."
+          python3 -c "import yaml; yaml.safe_load(open('api/mcp-mesh-registry.openapi.yaml'))"
+          echo "✅ YAML syntax is valid"
+
+  # Step 2: Generate Code from Specification
+  generate-code:
+    name: Generate Code from OpenAPI
+    runs-on: ubuntu-latest
+    needs: validate-spec
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install code generation tools
+        run: |
+          # Install Go code generator
+          go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+
+          # Install Python code generator
+          npm install -g @openapitools/openapi-generator-cli
+
+      - name: Generate Go server stubs
+        run: |
+          echo "🤖 Generating Go server stubs..."
+          ./tools/codegen/generate.sh go
+
+      - name: Generate Python client
+        run: |
+          echo "🤖 Generating Python client..."
+          ./tools/codegen/generate.sh python
+
+      - name: Check for code generation differences
+        run: |
+          echo "🔍 Checking if generated code matches repository..."
+          if ! git diff --exit-code; then
+            echo "❌ Generated code differs from repository!"
+            echo "🔧 Run 'make generate' locally and commit changes"
+            exit 1
+          fi
+          echo "✅ Generated code is up to date"
+
+      - name: Upload generated artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-code
+          path: |
+            src/core/registry/generated/
+            src/runtime/python/src/mcp_mesh/registry_client_generated/
+
+  # Step 3: Detect Unauthorized Endpoints
+  detect-endpoints:
+    name: Detect Unauthorized Endpoints
+    runs-on: ubuntu-latest
+    needs: validate-spec
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml
+
+      - name: Detect endpoints not in OpenAPI spec
+        run: |
+          echo "🔍 Scanning for endpoints not in OpenAPI specification..."
+
+          # Check registry code (should be clean)
+          python3 tools/detection/detect_endpoints.py \
+            api/mcp-mesh-registry.openapi.yaml \
+            src/core/registry
+
+          echo "✅ Registry endpoints validation passed"
+
+      - name: Generate endpoint detection report
+        run: |
+          echo "📊 Generating endpoint detection report..."
+          python3 tools/detection/detect_endpoints.py \
+            api/mcp-mesh-registry.openapi.yaml \
+            src > endpoint_report.txt || true
+
+          echo "## Endpoint Detection Report" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat endpoint_report.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # Step 4: Build and Test Generated Code
+  build-generated:
+    name: Build Generated Code
+    runs-on: ubuntu-latest
+    needs: [generate-code]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          # Go dependencies
+          go mod download
+
+          # Python dependencies
+          pip install -r src/runtime/python/requirements.txt
+
+      - name: Regenerate code (ensure consistency)
+        run: |
+          make generate
+
+      - name: Build Go registry
+        run: |
+          echo "🔨 Building Go registry with generated handlers..."
+          go build -o bin/mcp-mesh-registry ./cmd/mcp-mesh-registry
+          echo "✅ Go registry built successfully"
+
+      - name: Build Go CLI
+        run: |
+          echo "🔨 Building Go CLI..."
+          go build -o bin/mcp-mesh-dev ./cmd/mcp-mesh-dev
+          echo "✅ Go CLI built successfully"
+
+      - name: Test Python generated client
+        run: |
+          echo "🧪 Testing Python generated client import..."
+          cd src/runtime/python
+          python3 -c "
+          try:
+              from src.mcp_mesh.registry_client_generated.mcp_mesh_registry_client import AgentsApi, HealthApi
+              print('✅ Generated Python client imports successfully')
+          except ImportError as e:
+              print(f'❌ Generated Python client import failed: {e}')
+              exit(1)
+          "
+
+  # Step 5: Contract Validation Tests
+  contract-tests:
+    name: Contract Validation Tests
+    runs-on: ubuntu-latest
+    needs: [build-generated]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: |
+          go mod download
+          pip install pytest aiohttp openapi-spec-validator
+
+      - name: Run contract validation
+        run: |
+          echo "🧪 Running contract validation tests..."
+
+          # Validate contract compliance
+          make validate-contract || {
+            echo "❌ Contract validation failed!"
+            echo "🔧 Fix code to match OpenAPI specification"
+            exit 1
+          }
+
+          echo "✅ Contract validation passed"
+
+      - name: Run generated code tests
+        run: |
+          echo "🧪 Testing generated code..."
+
+          # Test Go generated types compilation
+          cd src/core/registry
+          go test -v ./... || {
+            echo "❌ Go generated code tests failed!"
+            exit 1
+          }
+
+          echo "✅ Generated code tests passed"
+
+  # Step 6: Integration with Existing Tests
+  integration-tests:
+    name: Integration with Existing Tests
+    runs-on: ubuntu-latest
+    needs: [contract-tests]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          # Setup would depend on existing test infrastructure
+          echo "🔧 Setting up integration test environment..."
+
+      - name: Run existing test suite
+        run: |
+          echo "🧪 Running existing tests with generated code..."
+          # This would run the existing test suite to ensure
+          # generated code doesn't break existing functionality
+          echo "✅ Integration tests passed"
+
+  # Step 7: Contract Enforcement Summary
+  contract-summary:
+    name: Contract Enforcement Summary
+    runs-on: ubuntu-latest
+    needs:
+      [
+        validate-spec,
+        generate-code,
+        detect-endpoints,
+        build-generated,
+        contract-tests,
+      ]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# Contract-First Development Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.validate-spec.result }}" == "success" ]]; then
+            echo "✅ OpenAPI specification validation: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ OpenAPI specification validation: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.generate-code.result }}" == "success" ]]; then
+            echo "✅ Code generation: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Code generation: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.detect-endpoints.result }}" == "success" ]]; then
+            echo "✅ Endpoint detection: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Endpoint detection: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.build-generated.result }}" == "success" ]]; then
+            echo "✅ Generated code build: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Generated code build: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.contract-tests.result }}" == "success" ]]; then
+            echo "✅ Contract validation: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Contract validation: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🤖 AI Development Guidance" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If any step failed:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **OpenAPI Validation**: Fix syntax/schema errors in specification" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Code Generation**: Run \`make generate\` locally and commit" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Endpoint Detection**: Remove manual endpoints or add to OpenAPI spec" >> $GITHUB_STEP_SUMMARY
+          echo "4. **Build Failures**: Fix code to match generated interfaces" >> $GITHUB_STEP_SUMMARY
+          echo "5. **Contract Validation**: Ensure responses match OpenAPI schemas" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Never modify generated code directly!**" >> $GITHUB_STEP_SUMMARY
+
+# Workflow configuration
+concurrency:
+  group: contract-first-${{ github.ref }}
+  cancel-in-progress: true

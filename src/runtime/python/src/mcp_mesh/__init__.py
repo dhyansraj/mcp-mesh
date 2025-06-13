@@ -3,6 +3,9 @@
 import os
 import sys
 
+# Type alias for mesh agent proxy injections - use Any for Pydantic compatibility
+from typing import Any
+
 # Import all the existing exports
 from .agent_selection import (
     AgentHealthInfo,
@@ -103,6 +106,8 @@ from .service_proxy import (
     ServiceContractError,
     ServiceProxyProtocol,
 )
+
+McpMeshAgent = Any
 from .unified_dependencies import (
     DependencyAnalyzer,
     DependencyContext,
@@ -171,6 +176,7 @@ if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
 __all__ = [
     "mesh_agent",
     "mesh_tool",
+    "McpMeshAgent",
     "initialize_runtime",
     "DecoratedFunction",
     "DecoratorRegistry",

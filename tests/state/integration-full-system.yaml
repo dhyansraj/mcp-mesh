@@ -1,0 +1,261 @@
+# MCP Mesh Integration Test State Definition
+# This file defines the expected state of a fully functional MCP Mesh system
+
+meta:
+  test_type: "INTEGRATION_FULL_SYSTEM"
+  breaking_change_policy: "FLEXIBLE"
+  description: "Full system integration test - can evolve with requirements"
+  created: "2024-01-20"
+  last_updated: "2024-01-20"
+
+  # 🤖 AI BEHAVIOR GUIDANCE
+  guidance_for_ai: |
+    CRITICAL INSTRUCTIONS FOR AI DEVELOPERS:
+
+    When this integration test fails:
+
+    1. FIRST: Check if your changes broke expected system behavior
+       - Compare actual vs expected state carefully
+       - Look at the error messages and stack traces
+
+    2. IF YOU CHANGED CORE FUNCTIONALITY:
+       - This state file may need updating to match new requirements
+       - But think carefully: is the change intentional or a bug?
+
+    3. UPDATING THIS FILE:
+       - ONLY update if the user explicitly changed requirements
+       - NEVER update just to make tests pass
+       - When in doubt, discuss with user first
+
+    4. COMMON SCENARIOS:
+       - Port numbers changed? Update expected_state.registry.port
+       - New agent added? Add to expected_state.agents
+       - API contract changed? This might be a breaking change - discuss first
+       - Dependencies changed? Update expected_state.dependencies_resolved
+
+    5. DEBUGGING APPROACH:
+       - Check if registry is running on expected port
+       - Verify agents can register successfully
+       - Ensure dependency resolution works as expected
+       - Look for timing issues in async operations
+
+# Expected system state when integration test passes
+expected_state:
+  # Registry service expectations
+  registry:
+    status: "healthy"
+    host: "localhost"
+    port: 8000
+    endpoints:
+      - "/health"
+      - "/"
+      - "/agents/register"
+      - "/heartbeat"
+      - "/agents"
+    health_response:
+      status: "healthy"
+      service: "mcp-mesh-registry"
+      version: "1.0.0"
+      # uptime_seconds: any positive integer
+      # timestamp: current time
+
+    # Registry should list these agents after full startup
+    expected_agent_count: 2
+
+  # Agent expectations
+  agents:
+    hello-world:
+      status: "healthy"
+      agent_type: "mesh_agent"
+      capabilities: ["greeting"]
+      dependencies: []
+      endpoint_type: "stdio" # starts as stdio, may upgrade to http
+      # endpoint: "stdio://hello-world" or "http://localhost:XXXX"
+      registration_success: true
+      heartbeat_success: true
+
+    system-monitor:
+      status: "healthy"
+      agent_type: "mesh_agent"
+      capabilities: ["cpu_usage", "memory_usage"]
+      dependencies: ["hello-world"]
+      endpoint_type: "stdio" # starts as stdio, may upgrade to http
+      registration_success: true
+      heartbeat_success: true
+
+  # Dependency resolution expectations
+  dependencies_resolved:
+    # system-monitor should get hello-world dependency resolved
+    system-monitor:
+      hello-world:
+        status: "available"
+        # agent_id: "hello-world"
+        # endpoint: varies (stdio or http)
+        capabilities: ["greeting"]
+
+  # CLI command expectations
+  cli_commands:
+    # mcp-mesh-dev start --registry-only
+    start_registry_only:
+      exit_code: 0
+      registry_starts: true
+      port_binding_success: true
+
+    # mcp-mesh-dev list
+    list_agents:
+      exit_code: 0
+      shows_registry_info: true
+      shows_agents: true
+      agent_count: 2
+
+    # mcp-mesh-dev status
+    status_check:
+      exit_code: 0
+      shows_registry_status: true
+      shows_agent_status: true
+
+  # System behavior expectations
+  system_behavior:
+    # Registry startup detection
+    startup_detection:
+      http_health_check_works: true
+      port_availability_check_works: true
+      localhost_vs_remote_detection_works: true
+
+    # Agent registration flow
+    agent_registration:
+      registration_endpoint_works: true
+      heartbeat_endpoint_works: true
+      dependency_resolution_works: true
+      simultaneous_registration_works: true
+
+    # Graceful shutdown
+    shutdown:
+      registry_stops_cleanly: true
+      agents_stop_cleanly: true
+      no_resource_leaks: true
+
+# Test execution parameters
+test_parameters:
+  # Timeouts for various operations
+  timeouts:
+    registry_startup: 10 # seconds
+    agent_registration: 5 # seconds
+    heartbeat_response: 2 # seconds
+    graceful_shutdown: 5 # seconds
+
+  # Retry parameters
+  retries:
+    max_registration_attempts: 3
+    max_heartbeat_attempts: 3
+    registry_connection_attempts: 5
+
+  # Environment setup
+  environment:
+    clean_start: true # Clean any existing processes/files
+    isolated_ports: true # Use isolated port range for testing
+    temporary_directories: true # Use temp dirs for databases/logs
+
+# Validation rules
+validation:
+  # Critical validations that must pass
+  critical_checks:
+    - registry_responds_to_health_check
+    - agents_can_register
+    - heartbeat_mechanism_works
+    - dependency_resolution_basic
+    - api_contract_compliance
+
+  # Important but not critical
+  important_checks:
+    - performance_within_bounds
+    - no_memory_leaks
+    - log_output_reasonable
+    - graceful_error_handling
+
+  # Nice to have
+  optional_checks:
+    - http_wrapper_functionality
+    - advanced_dependency_features
+    - detailed_metrics_collection
+
+# Test data and fixtures
+test_data:
+  # Sample agent configurations for testing
+  hello_world_agent:
+    source_file: "examples/hello_world.py"
+    expected_capabilities: ["greeting"]
+    expected_dependencies: []
+
+  system_monitor_agent:
+    source_file: "examples/system_agent.py"
+    expected_capabilities: ["cpu_usage", "memory_usage"]
+    expected_dependencies: ["hello-world"]
+
+  # Registry configuration
+  registry_config:
+    host: "localhost"
+    port: 8000
+    database_path: ":memory:" # Use in-memory database for tests
+    log_level: "INFO"
+
+# Expected API responses (for contract testing)
+api_responses:
+  health_check:
+    status_code: 200
+    required_fields:
+      ["status", "version", "uptime_seconds", "timestamp", "service"]
+    status_values: ["healthy", "degraded", "unhealthy"]
+
+  agent_registration:
+    status_code: 201
+    required_fields: ["status", "timestamp", "message", "agent_id"]
+    success_status: "success"
+
+  heartbeat:
+    status_code: 200
+    required_fields: ["status", "timestamp", "message"]
+    may_include: ["dependencies_resolved"]
+
+  list_agents:
+    status_code: 200
+    required_fields: ["agents", "count", "timestamp"]
+    agent_fields: ["id", "name", "status", "endpoint", "capabilities"]
+
+# Performance expectations
+performance:
+  registry_startup_time: "< 2 seconds"
+  agent_registration_time: "< 500ms"
+  heartbeat_response_time: "< 100ms"
+  memory_usage: "< 100MB total"
+  cpu_usage: "< 10% sustained"
+
+# Logging expectations
+logging:
+  registry_logs:
+    - "Registry started on"
+    - "Agent registered successfully"
+    - "Heartbeat received"
+
+  agent_logs:
+    - "registered successfully with mesh registry"
+    - "Heartbeat sent successfully"
+    - "Dependencies resolved"
+
+# Error conditions to test
+error_scenarios:
+  registry_not_running:
+    expected_behavior: "CLI should show helpful error message"
+    recovery_action: "Start registry automatically if localhost"
+
+  port_already_in_use:
+    expected_behavior: "Clear error message about port conflict"
+    recovery_action: "Suggest alternative port or show conflicting process"
+
+  invalid_agent_configuration:
+    expected_behavior: "Validation error with specific details"
+    recovery_action: "Show configuration format help"
+
+  network_connectivity_issues:
+    expected_behavior: "Retry with exponential backoff"
+    recovery_action: "Fallback to offline mode if possible"

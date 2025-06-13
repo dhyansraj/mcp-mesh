@@ -221,8 +221,8 @@ func (db *Database) initializeSchemaManual() error {
 			method_id INTEGER NOT NULL,
 			capability_name TEXT NOT NULL,
 			capability_id INTEGER,
-			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE,
-			FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE SET NULL
+			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE
+			-- Note: Removed FK to capabilities table since we use tools table instead
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS capability_method_mapping (
@@ -232,7 +232,7 @@ func (db *Database) initializeSchemaManual() error {
 			mapping_type TEXT DEFAULT 'direct',
 			priority INTEGER DEFAULT 0,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE CASCADE,
+			-- Note: Removed FK to capabilities table since we use tools table instead
 			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE
 		)`,
 	}
@@ -363,9 +363,9 @@ func (db *Database) GetStats() (map[string]interface{}, error) {
 	}
 	stats["agents_by_status"] = agentsByStatus
 
-	// Unique capabilities count
+	// Unique capabilities count (using tools table instead of capabilities)
 	var uniqueCapabilities int64
-	err = db.QueryRow("SELECT COUNT(DISTINCT name) FROM capabilities").Scan(&uniqueCapabilities)
+	err = db.QueryRow("SELECT COUNT(DISTINCT capability) FROM tools").Scan(&uniqueCapabilities)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unique capabilities count: %w", err)
 	}

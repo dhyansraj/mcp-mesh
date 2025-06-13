@@ -52,12 +52,20 @@ class RegistryClient:
         security_context: str | None = None,
     ) -> bool:
         """Register agent with the registry."""
+        # Format according to OpenAPI AgentRegistration schema
         payload = {
-            "agent_name": agent_name,
-            "capabilities": capabilities,
-            "dependencies": dependencies,
-            "security_context": security_context,
-            "timestamp": datetime.now().isoformat(),
+            "agent_id": agent_name,  # Use agent_name as agent_id
+            "metadata": {
+                "name": agent_name,
+                "agent_type": "mcp_agent",  # Required field
+                "namespace": "default",  # Required field
+                "endpoint": "stdio://localhost",  # Default for MCP agents
+                "capabilities": capabilities,  # Simple string array
+                "dependencies": dependencies,  # Simple string array
+                "security_context": security_context,
+            },
+            "timestamp": datetime.now().isoformat()
+            + "Z",  # RFC3339 format required by Go
         }
 
         result = await self._make_request("POST", "/agents/register", payload)
@@ -147,36 +155,33 @@ class RegistryClient:
                 }
             )
 
+        # Convert complex capabilities to simple string array for OpenAPI compliance
+        simple_capabilities = (
+            [cap.name for cap in capabilities_data] if capabilities_data else []
+        )
+
+        # Format according to OpenAPI AgentRegistration schema - only valid fields
         payload = {
             "agent_id": agent_id,
             "metadata": {
-                # Required fields for Agent model
-                "id": agent_id,
-                "name": metadata.name or agent_id,  # Use agent_id as fallback name
-                "endpoint": metadata.endpoint
-                or "stdio://localhost",  # Default endpoint for MCP
-                "namespace": "default",  # Default namespace
-                "status": "healthy",  # Initial status
-                # Health configuration
-                "health_interval": metadata.health_interval,
-                "timeout_threshold": 60,  # Default 60 seconds
-                "eviction_threshold": 120,  # Default 120 seconds
-                "agent_type": "mcp_agent",  # Default agent type
-                # Optional security context
-                "security_context": metadata.security_context,
-                # Enhanced metadata
-                "version": metadata.version,
-                "description": metadata.description,
-                "capabilities": capabilities_data,
+                # Required fields per OpenAPI AgentMetadata schema
+                "name": metadata.name or agent_id,
+                "agent_type": "mcp_agent",  # Required: enum value
+                "namespace": "default",  # Required: agent namespace
+                "endpoint": metadata.endpoint or "stdio://localhost",  # Required
+                "capabilities": simple_capabilities,  # Required: simple string array
+                # Optional fields per OpenAPI schema
                 "dependencies": metadata.dependencies,
+                "description": metadata.description,
+                "version": metadata.version,
                 "tags": metadata.tags,
-                "performance_profile": metadata.performance_profile,
-                "resource_usage": metadata.resource_usage,
-                "created_at": metadata.created_at.isoformat(),
-                "last_seen": metadata.last_seen.isoformat(),
-                "metadata": metadata.metadata,
+                "security_context": metadata.security_context,
+                "health_interval": metadata.health_interval,
+                "timeout_threshold": 60,
+                "eviction_threshold": 120,
             },
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat()
+            + "Z",  # RFC3339 format required by Go
         }
 
         result = await self._make_request("POST", "/agents/register", payload)
@@ -199,7 +204,8 @@ class RegistryClient:
         payload = {
             "agent_id": agent_id,
             "health_data": health_data,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat()
+            + "Z",  # RFC3339 format required by Go
         }
 
         result = await self._make_request("POST", f"/agents/{agent_id}/health", payload)
@@ -361,7 +367,8 @@ class RegistryClient:
         payload = {
             "agent_id": agent_id,
             "metadata": metadata,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat()
+            + "Z",  # RFC3339 format required by Go
         }
 
         self.logger.info(

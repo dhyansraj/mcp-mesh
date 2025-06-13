@@ -8,13 +8,66 @@ BUILD_DIR = bin
 REGISTRY_CMD_DIR = cmd/mcp-mesh-registry
 DEV_CMD_DIR = cmd/mcp-mesh-dev
 
+# OpenAPI and code generation (dual-contract support)
+REGISTRY_OPENAPI_SPEC = api/mcp-mesh-registry.openapi.yaml
+AGENT_OPENAPI_SPEC = api/mcp-mesh-agent.openapi.yaml
+CODEGEN_SCRIPT = tools/codegen/generate.sh
+VALIDATION_SCRIPT = tools/validation/validate_schema.py
+DETECTION_SCRIPT = tools/detection/detect_endpoints.py
+
 # Go build flags
 LDFLAGS = -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_FLAGS = $(LDFLAGS)
 
 # Default target
 .PHONY: all
-all: build
+all: generate build
+
+# 🤖 AI CONTRACT-FIRST DEVELOPMENT TARGETS
+# These targets enforce OpenAPI-first development workflow
+
+# Generate all code from OpenAPI specification
+.PHONY: generate
+generate: generate-go generate-python
+
+# Generate Go server stubs from OpenAPI spec
+.PHONY: generate-go
+generate-go:
+	@echo "🤖 Generating Go server stubs from OpenAPI specification..."
+	@$(CODEGEN_SCRIPT) go
+	@echo "✅ Go code generation completed"
+
+# Generate Python client from OpenAPI spec
+.PHONY: generate-python
+generate-python:
+	@echo "🤖 Generating Python client from OpenAPI specification..."
+	@$(CODEGEN_SCRIPT) python
+	@echo "✅ Python code generation completed"
+
+# Validate contract compliance
+.PHONY: validate-contract
+validate-contract: validate-schema detect-endpoints
+	@echo "✅ Contract validation completed"
+
+# Validate OpenAPI schemas (dual-contract)
+.PHONY: validate-schema
+validate-schema:
+	@echo "🔍 Validating Registry OpenAPI specification..."
+	@python3 $(VALIDATION_SCRIPT) $(REGISTRY_OPENAPI_SPEC)
+	@echo "🔍 Validating Agent OpenAPI specification..."
+	@python3 $(VALIDATION_SCRIPT) $(AGENT_OPENAPI_SPEC)
+	@echo "✅ Dual-contract schema validation passed"
+
+# Detect unauthorized endpoints (dual-contract)
+.PHONY: detect-endpoints
+detect-endpoints:
+	@echo "🔍 Detecting endpoints not in OpenAPI specifications..."
+	@python3 $(DETECTION_SCRIPT) $(REGISTRY_OPENAPI_SPEC) $(AGENT_OPENAPI_SPEC) src
+
+# Contract-first build (validates before building)
+.PHONY: build-safe
+build-safe: validate-contract build
+	@echo "✅ Safe build completed with contract validation"
 
 # Build for current platform
 .PHONY: build
@@ -92,6 +145,22 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "📊 Coverage report generated: coverage.html"
 
+# Run comprehensive integration tests
+.PHONY: test-integration
+test-integration: clean-test build
+	@echo "🧪 Running comprehensive E2E integration tests..."
+	@echo "⚠️  This will start/stop registry and agent processes"
+	@echo "⏱️  Expected duration: ~8-10 minutes"
+	cd tests/integration && python3 -m pytest test_comprehensive_e2e_workflow.py -v -s --tb=short
+	@echo "✅ Integration tests completed"
+
+# Quick integration test (single workflow)
+.PHONY: test-integration-quick
+test-integration-quick: clean-test build
+	@echo "🧪 Running quick integration test..."
+	cd tests/integration && python3 test_comprehensive_e2e_workflow.py
+	@echo "✅ Quick integration test completed"
+
 # Run tests in race condition detection mode
 .PHONY: test-race
 test-race:
@@ -160,6 +229,32 @@ clean:
 	# Clean database files (SQLite main + WAL/SHM files)
 	rm -f *.db *.db-shm *.db-wal
 	@echo "✅ Cleaned build artifacts"
+
+# Integration test cleanup - kills processes and cleans test state
+.PHONY: clean-test
+clean-test:
+	@echo "🧹 Cleaning integration test environment..."
+	# Kill any running mcp-mesh processes (registry and dev)
+	@pkill -f "mcp-mesh-registry" 2>/dev/null || true
+	@pkill -f "mcp-mesh-dev" 2>/dev/null || true
+	# Kill any Python processes running our examples
+	@pkill -f "hello_world.py" 2>/dev/null || true
+	@pkill -f "system_agent.py" 2>/dev/null || true
+	@pkill -f "python.*examples/" 2>/dev/null || true
+	# Wait a moment for graceful shutdown
+	@sleep 2
+	# Clean database files from current and subdirectories
+	find . -name "*.db" -type f -delete 2>/dev/null || true
+	find . -name "*.db-shm" -type f -delete 2>/dev/null || true
+	find . -name "*.db-wal" -type f -delete 2>/dev/null || true
+	# Clean any log files created during testing
+	find . -name "*.log" -type f -delete 2>/dev/null || true
+	# Clean Python cache that may interfere with tests
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	# Clean pytest cache
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	@echo "✅ Test environment cleaned"
 
 # Deep clean - removes all generated files, Python cache, and databases
 .PHONY: clean-all
@@ -316,12 +411,15 @@ help:
 	@echo "  test          - Run tests"
 	@echo "  test-coverage - Run tests with coverage report"
 	@echo "  test-race     - Run tests with race detection"
+	@echo "  test-integration - Run comprehensive E2E integration tests (~8-10 min)"
+	@echo "  test-integration-quick - Run quick integration test"
 	@echo "  lint          - Lint code (requires golangci-lint)"
 	@echo "  fmt           - Format code"
 	@echo "  fmt-check     - Check code formatting"
 	@echo "  mod-tidy      - Tidy Go modules"
 	@echo "  deps          - Download dependencies"
 	@echo "  clean         - Clean build artifacts and database files"
+	@echo "  clean-test    - Clean integration test environment (kill processes, clean DBs)"
 	@echo "  clean-all     - Deep clean (removes Python cache, DBs, logs) - asks for confirmation"
 	@echo "  clean-all-force - Deep clean without confirmation"
 	@echo "  install       - Quick install for users (binaries + Python package)"

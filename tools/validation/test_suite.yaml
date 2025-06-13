@@ -1,0 +1,165 @@
+# Contract Validation Test Suite
+# Defines test cases for validating API responses against OpenAPI specification
+
+name: "MCP Mesh Registry Contract Tests"
+base_url: "http://localhost:8000"
+description: |
+  Comprehensive test suite for validating MCP Mesh Registry API
+  against the OpenAPI specification.
+
+  🤖 AI BEHAVIOR GUIDANCE:
+  These tests ensure that all endpoints match the OpenAPI contract.
+
+  WHEN TESTS FAIL:
+  1. Check if response format changed
+  2. Verify OpenAPI spec is correct
+  3. Fix implementation to match contract
+  4. DO NOT modify tests to pass
+
+  TO ADD NEW TESTS:
+  1. Update OpenAPI specification first
+  2. Add test case here
+  3. Run contract validation
+
+# Test configuration
+config:
+  timeout_seconds: 10
+  retry_attempts: 3
+  validate_schema: true
+  validate_examples: true
+
+# Endpoint test cases
+endpoints:
+  - method: "GET"
+    path: "/health"
+    expected_code: 200
+    description: "Health check endpoint returns valid HealthResponse schema"
+    validation_rules:
+      - "response contains all required fields: status, version, uptime_seconds, timestamp, service"
+      - "status field is one of: healthy, degraded, unhealthy"
+      - "uptime_seconds is a positive integer"
+      - "timestamp is valid RFC3339 format"
+      - "service equals 'mcp-mesh-registry'"
+
+  - method: "GET"
+    path: "/"
+    expected_code: 200
+    description: "Root endpoint returns valid RootResponse schema"
+    validation_rules:
+      - "response contains all required fields: service, version, status, endpoints"
+      - "endpoints is an array of strings"
+      - "contains expected endpoints: /health, /heartbeat, /agents, /agents/register"
+
+  - method: "GET"
+    path: "/agents"
+    expected_code: 200
+    description: "Agent listing returns valid AgentsListResponse schema"
+    validation_rules:
+      - "response contains all required fields: agents, count, timestamp"
+      - "agents is an array of AgentInfo objects"
+      - "count matches length of agents array"
+      - "timestamp is valid RFC3339 format"
+
+  - method: "POST"
+    path: "/agents/register"
+    expected_code: 201
+    description: "Agent registration returns valid RegistrationResponse schema"
+    request_body:
+      agent_id: "test-agent-contract"
+      metadata:
+        name: "test-agent-contract"
+        agent_type: "mesh_agent"
+        namespace: "default"
+        endpoint: "stdio://test-agent-contract"
+        capabilities: ["test_capability"]
+        dependencies: []
+        health_interval: 30
+        version: "1.0.0"
+      timestamp: "2024-01-20T10:30:45Z"
+    validation_rules:
+      - "response contains all required fields: status, timestamp, message, agent_id"
+      - "status equals 'success'"
+      - "agent_id matches request agent_id"
+      - "timestamp is valid RFC3339 format"
+      - "message is a non-empty string"
+
+  - method: "POST"
+    path: "/heartbeat"
+    expected_code: 200
+    description: "Heartbeat returns valid HeartbeatResponse schema"
+    request_body:
+      agent_id: "test-agent-contract"
+      status: "healthy"
+      metadata:
+        capabilities: ["test_capability"]
+        timestamp: "2024-01-20T10:30:45Z"
+        uptime_seconds: 300
+        version: "1.0.0"
+    validation_rules:
+      - "response contains all required fields: status, timestamp, message"
+      - "status equals 'success'"
+      - "timestamp is valid RFC3339 format"
+      - "message is a non-empty string"
+      - "dependencies_resolved field is optional but valid if present"
+
+# Error test cases
+error_tests:
+  - method: "POST"
+    path: "/agents/register"
+    expected_code: 400
+    description: "Invalid registration request returns valid ErrorResponse schema"
+    request_body:
+      agent_id: "" # Invalid: empty agent_id
+      metadata: {} # Invalid: missing required metadata
+    validation_rules:
+      - "response contains all required fields: error, timestamp"
+      - "error is a non-empty string"
+      - "timestamp is valid RFC3339 format"
+
+  - method: "POST"
+    path: "/heartbeat"
+    expected_code: 400
+    description: "Invalid heartbeat request returns valid ErrorResponse schema"
+    request_body:
+      agent_id: "" # Invalid: empty agent_id
+    validation_rules:
+      - "response contains all required fields: error, timestamp"
+      - "error is a non-empty string"
+
+# Performance expectations
+performance:
+  max_response_time_ms: 1000
+  health_check_max_ms: 100
+  registration_max_ms: 500
+  heartbeat_max_ms: 200
+
+# AI development guidance
+ai_guidance: |
+  CRITICAL CONTRACT VALIDATION RULES:
+
+  1. RESPONSE SCHEMA VALIDATION:
+     - Every response MUST match OpenAPI schema exactly
+     - All required fields MUST be present
+     - Field types MUST match specification
+     - Enum values MUST be from allowed set
+
+  2. FAILURE HANDLING:
+     - Test failure = contract violation
+     - Fix server code, not test expectations
+     - Update OpenAPI spec only with user approval
+
+  3. ADDING NEW TESTS:
+     - First update OpenAPI specification
+     - Then add test case to this file
+     - Ensure generated handlers comply
+
+  4. DEBUGGING FAILURES:
+     - Check actual vs expected response format
+     - Verify OpenAPI spec defines correct schema
+     - Look for missing or incorrectly typed fields
+     - Validate enum values and constraints
+
+  5. MAINTENANCE:
+     - Keep test cases synchronized with OpenAPI spec
+     - Update validation rules when API evolves
+     - Ensure both Go and Python clients are tested

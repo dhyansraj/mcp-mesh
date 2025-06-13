@@ -1,0 +1,166 @@
+# Code Generation Configuration for MCP Mesh
+# This file controls automatic generation of Go server stubs and Python clients
+
+# 🤖 AI BEHAVIOR GUIDANCE:
+# This configuration enforces contract-first development for BOTH:
+# - Registry API (Go server + Python client)
+# - Agent API (Python server for HTTP wrapper)
+#
+# NEVER modify generated code directly:
+# - Generated Go handlers → Only add business logic to stubs
+# - Generated Python client → Use as-is, extend through composition
+# - Generated Python agent server → Only add business logic to handlers
+#
+# TO ADD NEW ENDPOINTS:
+# 1. Update the appropriate OpenAPI spec:
+#    - Registry API: api/mcp-mesh-registry.openapi.yaml
+#    - Agent API: api/mcp-mesh-agent.openapi.yaml
+# 2. Run code generation: make generate
+# 3. Implement business logic in generated stubs
+# 4. Update tests to match new contract
+
+# OpenAPI Specifications
+specs:
+  registry:
+    file: "api/mcp-mesh-registry.openapi.yaml"
+    description: "Registry service API - used by agents to register and communicate"
+
+  agent:
+    file: "api/mcp-mesh-agent.openapi.yaml"
+    description: "Agent HTTP wrapper API - endpoints served by Python agents"
+
+# Go server generation using oapi-codegen
+go:
+  generator: "oapi-codegen"
+  version: "v1.16.0"
+
+  # Registry server stub generation (Go service)
+  registry_server:
+    input: "api/mcp-mesh-registry.openapi.yaml"
+    output: "src/core/registry/generated/server.go"
+    package: "generated"
+    config:
+      package: "generated"
+      generate:
+        - "gin-server"
+        - "types"
+        - "spec"
+      output-options:
+        skip-fmt: false
+        skip-prune: false
+      gin:
+        echo-server: false
+        strict-server: true
+
+# Python client/server generation using openapi-generator
+python:
+  generator: "openapi-generator"
+  version: "7.1.0"
+
+  # Registry client (for agents to communicate with registry)
+  registry_client:
+    input: "api/mcp-mesh-registry.openapi.yaml"
+    output: "src/runtime/python/src/mcp_mesh/registry_client_generated"
+    generator_name: "python"
+    config:
+      packageName: "mcp_mesh_registry_client"
+      packageVersion: "1.0.0"
+      projectName: "mcp-mesh-registry-client"
+      packageUrl: "https://github.com/anthropic/mcp-mesh"
+      modelPropertyNaming: "snake_case"
+      generateSourceCodeOnly: true
+      supportPython: ">=3.10"
+
+  # Agent server (for agent HTTP wrapper endpoints)
+  agent_server:
+    input: "api/mcp-mesh-agent.openapi.yaml"
+    output: "src/runtime/python/src/mcp_mesh/agent_server_generated"
+    generator_name: "python-fastapi"
+    config:
+      packageName: "mcp_mesh_agent_server"
+      packageVersion: "1.0.0"
+      projectName: "mcp-mesh-agent-server"
+      packageUrl: "https://github.com/anthropic/mcp-mesh"
+      modelPropertyNaming: "snake_case"
+      generateSourceCodeOnly: true
+      supportPython: ">=3.10"
+
+# Contract validation configuration
+validation:
+  # Schema validation against OpenAPI spec
+  schema_validation:
+    enabled: true
+    fail_on_error: true
+    validate_requests: true
+    validate_responses: true
+
+  # Endpoint detection and validation
+  endpoint_detection:
+    enabled: true
+    scan_paths:
+      go:
+        - "src/core/registry/*.go"
+        - "cmd/mcp-mesh-registry/*.go"
+      python:
+        - "src/runtime/python/src/mcp_mesh/runtime/shared/*.py"
+    allowed_manual_endpoints: [] # Should be empty for strict contract enforcement
+    fail_on_extra_endpoints: true
+
+# CI/CD Integration
+ci_cd:
+  pre_commit_hooks:
+    - "contract-validation"
+    - "endpoint-detection"
+    - "schema-validation"
+
+  github_actions:
+    - "generate-and-validate"
+    - "contract-tests"
+
+  makefile_targets:
+    - "generate"
+    - "validate-contract"
+    - "detect-endpoints"
+
+# Development workflow enforcement
+workflow:
+  # Require spec update before code changes
+  spec_first: true
+
+  # Auto-generate during development
+  auto_generate_on_spec_change: true
+
+  # Validation strictness
+  strict_validation: true
+  allow_additional_properties: false
+
+  # Documentation generation
+  generate_docs: true
+  docs_output: "docs/api"
+
+# File generation templates
+templates:
+  go_business_logic: "tools/codegen/templates/go_handler_stub.go.tmpl"
+  python_client_wrapper: "tools/codegen/templates/python_client_wrapper.py.tmpl"
+  contract_tests: "tools/codegen/templates/contract_test.go.tmpl"
+# 🤖 AI DEVELOPMENT PATTERN:
+#
+# ADDING NEW ENDPOINTS:
+# 1. Update OpenAPI spec with new endpoint
+# 2. Run: make generate
+# 3. Implement business logic in generated stubs
+# 4. Write tests against generated contracts
+# 5. Validate: make validate-contract
+#
+# MODIFYING EXISTING ENDPOINTS:
+# 1. Update OpenAPI spec (breaking change policy applies)
+# 2. Run: make generate (will update stubs)
+# 3. Update business logic if needed
+# 4. Update tests to match new contract
+# 5. Validate: make validate-contract
+#
+# GUARDRAILS ACTIVE:
+# - No manual endpoint creation allowed
+# - All endpoints must exist in OpenAPI spec
+# - Contract validation runs on every commit
+# - Schema validation prevents API drift

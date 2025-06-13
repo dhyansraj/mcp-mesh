@@ -1,4 +1,18 @@
-package registry
+// DEPRECATED: Manual handlers replaced by generated OpenAPI handlers
+// This file is kept for reference only - DO NOT USE
+//
+// 🤖 AI BEHAVIOR GUIDANCE:
+// These were manually implemented handlers that are now replaced by generated ones.
+// They are kept for comparison and migration reference only.
+//
+// NEW APPROACH:
+// 1. Update api/mcp-mesh-registry.openapi.yaml
+// 2. Run: make generate
+// 3. Implement business logic in handlers_impl.go
+//
+// DO NOT revert to using these manual handlers.
+
+package registry_deprecated
 
 import (
 	"net/http"

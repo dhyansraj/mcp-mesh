@@ -219,71 +219,90 @@ func (v *AgentRegistrationValidator) validateEndpoint(endpoint string) error {
 }
 
 // validateCapabilities validates capability definitions
-// MUST match Python capability validation exactly
+// Supports both simple string arrays and complex capability objects for backward compatibility
 func (v *AgentRegistrationValidator) validateCapabilities(capabilities interface{}) error {
 	capList, ok := capabilities.([]interface{})
 	if !ok {
-		return ValidationError{Field: "capabilities", Message: "capabilities must be an array"}
+		// Try to handle []string type as well
+		if strSlice, ok := capabilities.([]string); ok {
+			// Convert []string to []interface{}
+			capList = make([]interface{}, len(strSlice))
+			for i, s := range strSlice {
+				capList[i] = s
+			}
+		} else {
+			return ValidationError{Field: "capabilities", Message: fmt.Sprintf("capabilities must be an array, got %T", capabilities)}
+		}
 	}
 
 	for i, capItem := range capList {
-		capMap, ok := capItem.(map[string]interface{})
-		if !ok {
-			return ValidationError{
-				Field:   fmt.Sprintf("capabilities[%d]", i),
-				Message: "capability must be an object",
-			}
-		}
-
-		// Validate capability name (required)
-		name, exists := capMap["name"]
-		if !exists {
-			return ValidationError{
-				Field:   fmt.Sprintf("capabilities[%d].name", i),
-				Message: "capability name is required",
-			}
-		}
-
-		nameStr, ok := name.(string)
-		if !ok {
-			return ValidationError{
-				Field:   fmt.Sprintf("capabilities[%d].name", i),
-				Message: "capability name must be a string",
-			}
-		}
-
-		if err := v.validateCapabilityName(nameStr); err != nil {
-			return ValidationError{
-				Field:   fmt.Sprintf("capabilities[%d].name", i),
-				Message: err.Error(),
-			}
-		}
-
-		// Validate version (if provided)
-		if version, exists := capMap["version"]; exists {
-			versionStr, ok := version.(string)
-			if !ok {
+		// Support both string and object formats
+		switch cap := capItem.(type) {
+		case string:
+			// Simple string format: ["greeting", "farewell"]
+			if err := v.validateCapabilityName(cap); err != nil {
 				return ValidationError{
-					Field:   fmt.Sprintf("capabilities[%d].version", i),
-					Message: "capability version must be a string",
-				}
-			}
-
-			if err := v.validateSemanticVersion(versionStr); err != nil {
-				return ValidationError{
-					Field:   fmt.Sprintf("capabilities[%d].version", i),
+					Field:   fmt.Sprintf("capabilities[%d]", i),
 					Message: err.Error(),
 				}
 			}
-		}
-
-		// Validate description (if provided)
-		if description, exists := capMap["description"]; exists {
-			if _, ok := description.(string); !ok {
+		case map[string]interface{}:
+			// Complex object format: [{"name": "greeting", "version": "1.0.0"}]
+			// Validate capability name (required)
+			name, exists := cap["name"]
+			if !exists {
 				return ValidationError{
-					Field:   fmt.Sprintf("capabilities[%d].description", i),
-					Message: "capability description must be a string",
+					Field:   fmt.Sprintf("capabilities[%d].name", i),
+					Message: "capability name is required",
 				}
+			}
+
+			nameStr, ok := name.(string)
+			if !ok {
+				return ValidationError{
+					Field:   fmt.Sprintf("capabilities[%d].name", i),
+					Message: "capability name must be a string",
+				}
+			}
+
+			if err := v.validateCapabilityName(nameStr); err != nil {
+				return ValidationError{
+					Field:   fmt.Sprintf("capabilities[%d].name", i),
+					Message: err.Error(),
+				}
+			}
+
+			// Validate version (if provided)
+			if version, exists := cap["version"]; exists {
+				versionStr, ok := version.(string)
+				if !ok {
+					return ValidationError{
+						Field:   fmt.Sprintf("capabilities[%d].version", i),
+						Message: "capability version must be a string",
+					}
+				}
+
+				if err := v.validateSemanticVersion(versionStr); err != nil {
+					return ValidationError{
+						Field:   fmt.Sprintf("capabilities[%d].version", i),
+						Message: err.Error(),
+					}
+				}
+			}
+
+			// Validate description (if provided)
+			if description, exists := cap["description"]; exists {
+				if _, ok := description.(string); !ok {
+					return ValidationError{
+						Field:   fmt.Sprintf("capabilities[%d].description", i),
+						Message: "capability description must be a string",
+					}
+				}
+			}
+		default:
+			return ValidationError{
+				Field:   fmt.Sprintf("capabilities[%d]", i),
+				Message: "capability must be a string or an object with 'name' property",
 			}
 		}
 	}

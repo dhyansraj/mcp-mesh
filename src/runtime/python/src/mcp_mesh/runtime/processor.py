@@ -238,7 +238,7 @@ class MeshAgentProcessor:
             "agent_id": agent_name,
             "metadata": {
                 "name": agent_name,
-                "agent_type": "mesh_agent",
+                "agent_type": "mcp_agent",  # Correct enum value per OpenAPI spec
                 "namespace": "default",
                 "endpoint": agent_endpoint,
                 "capabilities": capabilities,
@@ -248,18 +248,12 @@ class MeshAgentProcessor:
                 "tags": metadata.get("tags", []),
                 "version": metadata.get("version", "1.0.0"),
                 "description": metadata.get("description"),
-                "timeout": metadata.get("timeout", 30),
-                "retry_attempts": metadata.get("retry_attempts", 3),
-                "enable_caching": metadata.get("enable_caching", True),
-                "fallback_mode": metadata.get("fallback_mode", True),
-                "performance_profile": metadata.get("performance_profile", {}),
-                "resource_requirements": metadata.get("resource_requirements", {}),
-                "metadata": {
-                    "function_name": func_name,
-                    "decorator_type": "mesh_agent",
-                    "registered_at": datetime.now(timezone.utc).isoformat(),
-                    "processor_version": "1.0.0",
-                },
+                "timeout_threshold": metadata.get(
+                    "timeout", 30
+                ),  # Map to correct field name
+                "eviction_threshold": metadata.get("eviction_threshold", 120),
+                # Remove invalid fields: retry_attempts, enable_caching, fallback_mode,
+                # performance_profile, resource_requirements, nested metadata
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -279,18 +273,49 @@ class MeshAgentProcessor:
             Registry response or None if failed
         """
         try:
-            # Use the standard /agents/register endpoint
+            # Use the properly formatted registration method instead of generic post
+            agent_id = registration_data["agent_id"]
+            metadata = registration_data["metadata"]
+
+            # Create proper registration payload for REST API (following OpenAPI schema)
+            registration_payload = {
+                "agent_id": agent_id,
+                "metadata": {
+                    "name": metadata["name"],
+                    "agent_type": "mcp_agent",  # Required: Type of agent
+                    "namespace": "default",  # Required: Agent namespace
+                    "endpoint": metadata["endpoint"],
+                    "capabilities": metadata["capabilities"],
+                    "dependencies": metadata.get("dependencies", []),
+                    "health_interval": metadata.get("health_interval", 30),
+                    "security_context": metadata.get("security_context"),
+                    "tags": metadata.get("tags", []),
+                    "version": metadata.get("version", "1.0.0"),
+                    "description": metadata.get("description"),
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Call the registration endpoint directly
             response = await self.registry_client.post(
-                "/agents/register", json=registration_data
+                "/agents/register", registration_payload
             )
 
-            if response.status == 201:
-                return await response.json()
-            else:
-                error_text = await response.text()
-                self.logger.error(
-                    f"Registry registration failed: {response.status} - {error_text}"
+            if (
+                response
+                and hasattr(response, "status_code")
+                and response.status_code == 201
+            ):
+                response_data = (
+                    await response.json() if hasattr(response, "json") else {}
                 )
+                return {
+                    "status": "success",
+                    "agent_id": agent_id,
+                    "response": response_data,
+                }
+            else:
+                self.logger.error("Registry registration failed")
                 return None
 
         except Exception as e:

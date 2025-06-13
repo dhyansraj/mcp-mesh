@@ -69,3 +69,72 @@ repos:
     rev: v1.37.0
     hooks:
       - id: yamllint
+
+  # 🤖 CONTRACT-FIRST DEVELOPMENT HOOKS
+  # These hooks enforce OpenAPI-first development
+
+  # 1. Validate OpenAPI specification
+  - repo: local
+    hooks:
+      - id: validate-openapi-spec
+        name: Validate OpenAPI Specification
+        entry: python3 tools/validation/validate_schema.py api/mcp-mesh-registry.openapi.yaml
+        language: system
+        files: ^api/.*\.yaml$
+        description: "🤖 Validates OpenAPI specification syntax and schema"
+
+  # 2. Detect unauthorized endpoints in registry core
+  - repo: local
+    hooks:
+      - id: detect-unauthorized-endpoints
+        name: Detect Unauthorized Endpoints
+        entry: bash -c 'python3 tools/detection/detect_endpoints.py api/mcp-mesh-registry.openapi.yaml api/mcp-mesh-agent.openapi.yaml src/core/registry'
+        language: system
+        files: ^(src/core/registry/.*\.(go|py)|api/.*\.yaml)$
+        description: "🤖 Ensures all endpoints exist in OpenAPI specification"
+
+  # 3. Validate generated code is up to date
+  - repo: local
+    hooks:
+      - id: check-generated-code
+        name: Check Generated Code Up to Date
+        entry: bash
+        args:
+          [
+            -c,
+            'echo "Checking if generated code is up to date..."; make generate > /dev/null 2>&1; if ! git diff --exit-code src/core/registry/generated/ src/runtime/python/src/mcp_mesh/registry_client_generated/ > /dev/null 2>&1; then echo "Generated code is out of date!"; echo "Run: make generate"; exit 1; fi; echo "Generated code is up to date"',
+          ]
+        language: system
+        files: ^api/.*\.yaml$
+        description: "🤖 Ensures generated code matches OpenAPI specification"
+
+  # 4. Prevent direct modification of generated code
+  - repo: local
+    hooks:
+      - id: prevent-generated-code-modification
+        name: Prevent Generated Code Modification
+        entry: bash
+        args:
+          [
+            -c,
+            'echo "Direct modification of generated code is not allowed!"; echo "To make changes:"; echo "1. Update api/mcp-mesh-registry.openapi.yaml"; echo "2. Run: make generate"; echo "3. Implement business logic in handlers_impl.go"; exit 1',
+          ]
+        language: system
+        files: ^src/core/registry/generated/.*$
+        description: "🤖 Prevents direct modification of generated code"
+
+  # 5. Contract validation for Go code
+  - repo: local
+    hooks:
+      - id: validate-go-contract
+        name: Validate Go Contract Compliance
+        entry: bash
+        args:
+          [
+            -c,
+            'echo "Validating Go code contract compliance..."; if ! go build -o /tmp/registry ./src/core/registry > /dev/null 2>&1; then echo "Go code does not compile with generated handlers!"; echo "Fix compilation errors in business logic"; exit 1; fi; echo "Go contract validation passed"',
+          ]
+        language: system
+        files: ^src/core/registry/.*\.go$
+        exclude: ^src/core/registry/generated/.*$
+        description: "🤖 Validates Go code compiles with generated handlers"

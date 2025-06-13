@@ -250,29 +250,52 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 	}
 	defer tx.Rollback()
 
-	// Delete existing capabilities for this agent
-	_, err = tx.Exec("DELETE FROM capabilities WHERE agent_id = ?", req.AgentID)
+	// Delete existing tools for this agent (tools replace the old capabilities table)
+	_, err = tx.Exec("DELETE FROM tools WHERE agent_id = ?", req.AgentID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to delete existing capabilities: %w", err)
+		return nil, fmt.Errorf("failed to delete existing tools: %w", err)
 	}
 
 	// Insert or update agent using direct SQL that matches database schema
+	resourceVersion := fmt.Sprintf("%d", now.UnixMilli())
 	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO agents (
-			id, name, namespace, endpoint, status, labels,
-			created_at, updated_at, last_heartbeat,
-			timeout_threshold, eviction_threshold
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, name, namespace, endpoint, status, labels, annotations,
+			created_at, updated_at, resource_version, last_heartbeat,
+			health_interval, timeout_threshold, eviction_threshold,
+			agent_type, config, dependencies
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		agent.ID, agent.Name, agent.Namespace, agent.BaseEndpoint, agent.Status,
-		agent.Labels, agent.CreatedAt, agent.UpdatedAt, agent.LastHeartbeat,
-		agent.TimeoutThreshold, agent.EvictionThreshold)
+		agent.Labels, "{}", // annotations
+		agent.CreatedAt, agent.UpdatedAt, resourceVersion, agent.LastHeartbeat,
+		30, // health_interval
+		agent.TimeoutThreshold, agent.EvictionThreshold,
+		"mesh-agent", // agent_type
+		agent.Metadata, // config
+		"[]") // dependencies
 	if err != nil {
 		return nil, fmt.Errorf("failed to save agent: %w", err)
 	}
 
-	// Skip legacy capabilities - we focus on new tools format
+	// Convert simple capabilities array to tools format for backward compatibility
+	if capabilities, exists := metadata["capabilities"]; exists {
+		if capSlice, ok := capabilities.([]string); ok {
+			// Convert simple string capabilities to tools format
+			tools := make([]interface{}, len(capSlice))
+			for i, cap := range capSlice {
+				tools[i] = map[string]interface{}{
+					"function_name": cap,
+					"capability":    cap,
+					"version":       "1.0.0",
+					"dependencies":  []interface{}{},
+					"config":        map[string]interface{}{},
+				}
+			}
+			metadata["tools"] = tools
+		}
+	}
 
-	// Process tools (new multi-tool format)
+	// Process tools (multi-tool format, including converted capabilities)
 	if err := s.ProcessTools(req.AgentID, metadata, tx); err != nil {
 		return nil, fmt.Errorf("failed to process tools: %w", err)
 	}
@@ -504,7 +527,7 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 			}
 		}
 
-		capabilitySubquery := fmt.Sprintf("id IN (SELECT DISTINCT agent_id FROM capabilities WHERE %s)", strings.Join(capabilityConditions, " OR "))
+		capabilitySubquery := fmt.Sprintf("id IN (SELECT DISTINCT agent_id FROM tools WHERE %s)", strings.Join(capabilityConditions, " OR "))
 		conditions = append(conditions, capabilitySubquery)
 		args = append(args, capabilityArgs...)
 	}
@@ -834,10 +857,10 @@ func (s *Service) resolveDependencies(agentID string, dependencies []string) (ma
 	for _, dep := range dependencies {
 		// Query for healthy agents with the required capability
 		rows, err := s.db.DB.Query(`
-			SELECT DISTINCT a.id, a.endpoint, a.status
+			SELECT DISTINCT a.id, a.base_endpoint, a.status
 			FROM agents a
-			JOIN capabilities c ON c.agent_id = a.id
-			WHERE c.name = ? AND a.status = 'healthy'
+			JOIN tools t ON t.agent_id = a.id
+			WHERE t.capability = ? AND a.status = 'healthy'
 			ORDER BY a.updated_at DESC
 			LIMIT 1`, dep)
 
