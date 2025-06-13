@@ -31,9 +31,9 @@ type ProcessCleanupManager struct {
 func NewSignalHandler() *SignalHandler {
 	return &SignalHandler{
 		shutdownCallbacks: make([]func() error, 0),
-		logger:           log.New(os.Stdout, "[SignalHandler] ", log.LstdFlags),
-		shutdownTimeout:  30 * time.Second,
-		shutdownChan:     make(chan struct{}),
+		logger:            log.New(os.Stdout, "[SignalHandler] ", log.LstdFlags),
+		shutdownTimeout:   30 * time.Second,
+		shutdownChan:      make(chan struct{}),
 	}
 }
 
@@ -41,7 +41,7 @@ func NewSignalHandler() *SignalHandler {
 func NewProcessCleanupManager(pm *ProcessManager) *ProcessCleanupManager {
 	return &ProcessCleanupManager{
 		processManager: pm,
-		logger:        log.New(os.Stdout, "[ProcessCleanup] ", log.LstdFlags),
+		logger:         log.New(os.Stdout, "[ProcessCleanup] ", log.LstdFlags),
 		cleanupTimeout: 30 * time.Second,
 	}
 }

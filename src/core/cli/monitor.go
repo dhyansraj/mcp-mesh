@@ -304,13 +304,13 @@ func truncateString(s string, maxLen int) string {
 
 // ProcessStats represents aggregated process statistics
 type ProcessStats struct {
-	TotalProcesses   int                    `json:"total_processes"`
-	StatusBreakdown  map[string]int         `json:"status_breakdown"`
-	HealthBreakdown  map[string]int         `json:"health_breakdown"`
-	ServiceBreakdown map[string]int         `json:"service_breakdown"`
-	TotalRestarts    int                    `json:"total_restarts"`
-	AvgUptime        time.Duration          `json:"avg_uptime"`
-	SystemLoad       *SystemLoadInfo        `json:"system_load,omitempty"`
+	TotalProcesses   int             `json:"total_processes"`
+	StatusBreakdown  map[string]int  `json:"status_breakdown"`
+	HealthBreakdown  map[string]int  `json:"health_breakdown"`
+	ServiceBreakdown map[string]int  `json:"service_breakdown"`
+	TotalRestarts    int             `json:"total_restarts"`
+	AvgUptime        time.Duration   `json:"avg_uptime"`
+	SystemLoad       *SystemLoadInfo `json:"system_load,omitempty"`
 }
 
 // SystemLoadInfo represents system resource information

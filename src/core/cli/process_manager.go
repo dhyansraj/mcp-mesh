@@ -16,33 +16,33 @@ import (
 
 // ProcessInfo represents detailed information about a managed process
 type ProcessInfo struct {
-	PID             int                    `json:"pid"`
-	Name            string                 `json:"name"`
-	Command         string                 `json:"command"`
-	StartTime       time.Time              `json:"start_time"`
-	Status          string                 `json:"status"`
-	HealthCheck     string                 `json:"health_check"`
-	LastSeen        time.Time              `json:"last_seen"`
-	Restarts        int                    `json:"restarts"`
-	ServiceType     string                 `json:"service_type"`
-	Type            string                 `json:"type"` // Alias for ServiceType for backward compatibility
-	WorkingDir      string                 `json:"working_dir"`
-	RegistryURL     string                 `json:"registry_url"`
-	Environment     map[string]string      `json:"environment"`
-	Metadata        map[string]interface{} `json:"metadata"`
-	ConsecutiveFails int                   `json:"consecutive_fails"`
-	LastRestart     time.Time              `json:"last_restart"`
-	AutoRestart     bool                   `json:"auto_restart"`
-	FilePath        string                 `json:"file_path,omitempty"` // Added for backward compatibility
-	Process         *os.Process            `json:"-"`
+	PID              int                    `json:"pid"`
+	Name             string                 `json:"name"`
+	Command          string                 `json:"command"`
+	StartTime        time.Time              `json:"start_time"`
+	Status           string                 `json:"status"`
+	HealthCheck      string                 `json:"health_check"`
+	LastSeen         time.Time              `json:"last_seen"`
+	Restarts         int                    `json:"restarts"`
+	ServiceType      string                 `json:"service_type"`
+	Type             string                 `json:"type"` // Alias for ServiceType for backward compatibility
+	WorkingDir       string                 `json:"working_dir"`
+	RegistryURL      string                 `json:"registry_url"`
+	Environment      map[string]string      `json:"environment"`
+	Metadata         map[string]interface{} `json:"metadata"`
+	ConsecutiveFails int                    `json:"consecutive_fails"`
+	LastRestart      time.Time              `json:"last_restart"`
+	AutoRestart      bool                   `json:"auto_restart"`
+	FilePath         string                 `json:"file_path,omitempty"` // Added for backward compatibility
+	Process          *os.Process            `json:"-"`
 }
 
 // ProcessState represents the persistent state of all processes
 type ProcessState struct {
-	Processes      map[string]*ProcessInfo `json:"processes"`
-	LastUpdated    time.Time               `json:"last_updated"`
-	RegistryState  *RegistryState          `json:"registry_state"`
-	ConfigVersion  int                     `json:"config_version"`
+	Processes     map[string]*ProcessInfo `json:"processes"`
+	LastUpdated   time.Time               `json:"last_updated"`
+	RegistryState *RegistryState          `json:"registry_state"`
+	ConfigVersion int                     `json:"config_version"`
 }
 
 // RegistryState tracks registry connection information
@@ -66,14 +66,14 @@ type MonitoringPolicy struct {
 
 // ProcessManager handles lifecycle management of MCP Mesh processes
 type ProcessManager struct {
-	processes       map[string]*ProcessInfo
-	mutex           sync.RWMutex
-	logger          *log.Logger
-	stateFile       string
+	processes        map[string]*ProcessInfo
+	mutex            sync.RWMutex
+	logger           *log.Logger
+	stateFile        string
 	monitoringTicker *time.Ticker
-	monitorPolicy   *MonitoringPolicy
-	shutdownChan    chan struct{}
-	config          *CLIConfig
+	monitorPolicy    *MonitoringPolicy
+	shutdownChan     chan struct{}
+	config           *CLIConfig
 }
 
 // Global process manager instance
@@ -131,25 +131,25 @@ func (pm *ProcessManager) TrackProcess(name, command, serviceType string, proces
 	workingDir, _ := os.Getwd()
 
 	processInfo := &ProcessInfo{
-		PID:             process.Pid,
-		Name:            name,
-		Command:         command,
-		StartTime:       time.Now(),
-		Status:          "running",
-		HealthCheck:     "unknown",
-		LastSeen:        time.Now(),
-		Restarts:        0,
-		ServiceType:     serviceType,
-		Type:            serviceType, // Set alias for backward compatibility
-		WorkingDir:      workingDir,
-		RegistryURL:     pm.config.GetRegistryURL(),
-		Environment:     make(map[string]string),
-		Metadata:        metadata,
+		PID:              process.Pid,
+		Name:             name,
+		Command:          command,
+		StartTime:        time.Now(),
+		Status:           "running",
+		HealthCheck:      "unknown",
+		LastSeen:         time.Now(),
+		Restarts:         0,
+		ServiceType:      serviceType,
+		Type:             serviceType, // Set alias for backward compatibility
+		WorkingDir:       workingDir,
+		RegistryURL:      pm.config.GetRegistryURL(),
+		Environment:      make(map[string]string),
+		Metadata:         metadata,
 		ConsecutiveFails: 0,
-		LastRestart:     time.Time{},
-		AutoRestart:     true,
-		FilePath:        command, // Set filepath for agents
-		Process:         process,
+		LastRestart:      time.Time{},
+		AutoRestart:      true,
+		FilePath:         command, // Set filepath for agents
+		Process:          process,
 	}
 
 	// Copy relevant environment variables
@@ -401,7 +401,7 @@ func (pm *ProcessManager) checkAgentRegistryHealth(agentName string) bool {
 	for _, agent := range result.Agents {
 		if agent.Name == agentName {
 			return agent.Status == "active" &&
-				   time.Since(agent.LastSeen) < 2*time.Minute
+				time.Since(agent.LastSeen) < 2*time.Minute
 		}
 	}
 

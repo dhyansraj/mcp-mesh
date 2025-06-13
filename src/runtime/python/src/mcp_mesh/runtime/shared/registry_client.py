@@ -161,9 +161,7 @@ class RegistryClient:
             "timestamp": datetime.now().isoformat(),
         }
 
-        result = await self._make_request(
-            "POST", "/agents/register_with_metadata", payload
-        )
+        result = await self._make_request("POST", "/agents/register", payload)
         return result is not None
 
     async def get_all_agents(self) -> list[dict[str, Any]]:
@@ -254,12 +252,12 @@ class RegistryClient:
                     if attempt == self.retry_attempts - 1:
                         raise RegistryTimeoutError(
                             f"Registry request timed out after {self.retry_attempts} attempts"
-                        )
+                        ) from None
                 except Exception as e:
                     if attempt == self.retry_attempts - 1:
                         raise RegistryConnectionError(
                             f"Failed to connect to registry: {e}"
-                        )
+                        ) from e
 
                 # Exponential backoff
                 await asyncio.sleep(2**attempt)

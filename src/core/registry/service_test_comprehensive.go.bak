@@ -1,0 +1,578 @@
+package registry
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"mcp-mesh/src/core/database"
+)
+
+// TestDependencyResolutionLifecycle tests how dependencies are resolved as agents come and go
+func TestDependencyResolutionLifecycle(t *testing.T) {
+	t.Run("DependencyResolutionWithAgentLifecycle", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Start health monitor with fast intervals for testing
+		service.healthMonitor = &HealthMonitor{
+			service:  service,
+			interval: 100 * time.Millisecond,
+		}
+		go service.healthMonitor.Start()
+		defer service.healthMonitor.Stop()
+
+		// Step 1: Register consumer that needs date_service
+		consumerReq := &AgentRegistrationRequest{
+			AgentID:   "consumer-123",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "consumer-123",
+				"endpoint": "http://consumer:8080",
+				"timeout_threshold": 1,  // 1 second for testing
+				"eviction_threshold": 2, // 2 seconds for testing
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "process_data",
+						"capability":    "data_processor",
+						"version":       "1.0.0",
+						"dependencies": []map[string]interface{}{
+							{
+								"capability": "date_service",
+								"version":    ">=1.0.0",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		resp, err := service.RegisterAgent(consumerReq)
+		require.NoError(t, err)
+
+		// Should have no date_service resolved yet
+		deps := resp.Metadata["dependencies_resolved"].(map[string]interface{})
+		processDeps := deps["process_data"].(map[string]interface{})
+		assert.Empty(t, processDeps)
+
+		// Step 2: Register date service provider
+		providerReq := &AgentRegistrationRequest{
+			AgentID:   "provider-456",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "provider-456",
+				"endpoint": "http://provider:8081",
+				"timeout_threshold": 1,
+				"eviction_threshold": 2,
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "get_current_date",
+						"capability":    "date_service",
+						"version":       "1.5.0",
+					},
+				},
+			},
+		}
+
+		_, err = service.RegisterAgent(providerReq)
+		require.NoError(t, err)
+
+		// Step 3: Consumer heartbeat should now resolve dependency
+		heartbeatResp, err := service.SendHeartbeat("consumer-123", nil)
+		require.NoError(t, err)
+
+		deps = heartbeatResp["dependencies_resolved"].(map[string]interface{})
+		processDeps = deps["process_data"].(map[string]interface{})
+		dateSvc := processDeps["date_service"].(map[string]interface{})
+		assert.Equal(t, "provider-456", dateSvc["agent_id"])
+		assert.Equal(t, "get_current_date", dateSvc["tool_name"])
+
+		// Step 4: Wait for provider to become degraded (no heartbeat)
+		time.Sleep(1200 * time.Millisecond)
+
+		// Consumer heartbeat should not resolve to degraded agent
+		heartbeatResp, err = service.SendHeartbeat("consumer-123", nil)
+		require.NoError(t, err)
+
+		deps = heartbeatResp["dependencies_resolved"].(map[string]interface{})
+		processDeps = deps["process_data"].(map[string]interface{})
+		assert.Empty(t, processDeps) // No healthy providers
+
+		// Step 5: Provider sends heartbeat, becomes healthy again
+		_, err = service.SendHeartbeat("provider-456", nil)
+		require.NoError(t, err)
+
+		// Consumer should resolve dependency again
+		heartbeatResp, err = service.SendHeartbeat("consumer-123", nil)
+		require.NoError(t, err)
+
+		deps = heartbeatResp["dependencies_resolved"].(map[string]interface{})
+		processDeps = deps["process_data"].(map[string]interface{})
+		dateSvc = processDeps["date_service"].(map[string]interface{})
+		assert.Equal(t, "provider-456", dateSvc["agent_id"])
+
+		// Step 6: Wait for provider to expire
+		time.Sleep(2500 * time.Millisecond)
+
+		// Expired agents should not be resolved
+		heartbeatResp, err = service.SendHeartbeat("consumer-123", nil)
+		require.NoError(t, err)
+
+		deps = heartbeatResp["dependencies_resolved"].(map[string]interface{})
+		processDeps = deps["process_data"].(map[string]interface{})
+		assert.Empty(t, processDeps)
+	})
+}
+
+// TestDependencyResolutionWithMultipleProviders tests selection when multiple providers exist
+func TestDependencyResolutionWithMultipleProviders(t *testing.T) {
+	t.Run("PreferHealthyOverDegraded", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Register two providers - one healthy, one degraded
+		providers := []struct {
+			agentID string
+			status  string
+		}{
+			{"provider-healthy", "healthy"},
+			{"provider-degraded", "degraded"},
+		}
+
+		for _, p := range providers {
+			req := &AgentRegistrationRequest{
+				AgentID:   p.agentID,
+				Timestamp: time.Now().Format(time.RFC3339),
+				Metadata: map[string]interface{}{
+					"name":     p.agentID,
+					"endpoint": "http://" + p.agentID + ":8080",
+					"tools": []map[string]interface{}{
+						{
+							"function_name": "auth",
+							"capability":    "auth_service",
+							"version":       "1.0.0",
+						},
+					},
+				},
+			}
+			_, err := service.RegisterAgent(req)
+			require.NoError(t, err)
+
+			// Set status
+			service.db.Model(&database.Agent{}).
+				Where("id = ?", p.agentID).
+				Update("status", p.status)
+		}
+
+		// Register consumer
+		consumerReq := &AgentRegistrationRequest{
+			AgentID:   "consumer-789",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "consumer-789",
+				"endpoint": "http://consumer:8080",
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "secure_api",
+						"capability":    "api",
+						"dependencies": []map[string]interface{}{
+							{"capability": "auth_service"},
+						},
+					},
+				},
+			},
+		}
+
+		resp, err := service.RegisterAgent(consumerReq)
+		require.NoError(t, err)
+
+		// Should resolve to healthy provider only
+		deps := resp.Metadata["dependencies_resolved"].(map[string]interface{})
+		apiDeps := deps["secure_api"].(map[string]interface{})
+		authSvc := apiDeps["auth_service"].(map[string]interface{})
+		assert.Equal(t, "provider-healthy", authSvc["agent_id"])
+	})
+}
+
+// TestVersionConstraintResolution tests version-based dependency resolution
+func TestVersionConstraintResolution(t *testing.T) {
+	t.Run("RespectVersionConstraints", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Register providers with different versions
+		versions := []string{"0.9.0", "1.0.0", "1.5.0", "2.0.0", "3.0.0-beta"}
+		for _, v := range versions {
+			req := &AgentRegistrationRequest{
+				AgentID:   "cache-v" + v,
+				Timestamp: time.Now().Format(time.RFC3339),
+				Metadata: map[string]interface{}{
+					"name":     "cache-v" + v,
+					"endpoint": "http://cache-" + v + ":8080",
+					"tools": []map[string]interface{}{
+						{
+							"function_name": "cache_ops",
+							"capability":    "cache_service",
+							"version":       v,
+						},
+					},
+				},
+			}
+			_, err := service.RegisterAgent(req)
+			require.NoError(t, err)
+		}
+
+		// Test different version constraints
+		testCases := []struct {
+			constraint string
+			expected   []string
+		}{
+			{">=1.0.0", []string{"1.0.0", "1.5.0", "2.0.0", "3.0.0-beta"}},
+			{">1.0.0", []string{"1.5.0", "2.0.0", "3.0.0-beta"}},
+			{"<2.0.0", []string{"0.9.0", "1.0.0", "1.5.0"}},
+			{">=1.0.0,<2.0.0", []string{"1.0.0", "1.5.0"}},
+			{"~1.5", []string{"1.5.0"}}, // ~1.5 means >=1.5.0, <1.6.0
+			{"1.0.0", []string{"1.0.0"}}, // Exact match
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.constraint, func(t *testing.T) {
+				consumerReq := &AgentRegistrationRequest{
+					AgentID:   "consumer-" + tc.constraint,
+					Timestamp: time.Now().Format(time.RFC3339),
+					Metadata: map[string]interface{}{
+						"name":     "consumer-" + tc.constraint,
+						"endpoint": "http://consumer:8080",
+						"tools": []map[string]interface{}{
+							{
+								"function_name": "app",
+								"capability":    "application",
+								"dependencies": []map[string]interface{}{
+									{
+										"capability": "cache_service",
+										"version":    tc.constraint,
+									},
+								},
+							},
+						},
+					},
+				}
+
+				resp, err := service.RegisterAgent(consumerReq)
+				require.NoError(t, err)
+
+				deps := resp.Metadata["dependencies_resolved"].(map[string]interface{})
+				appDeps := deps["app"].(map[string]interface{})
+
+				if len(tc.expected) > 0 {
+					cacheSvc := appDeps["cache_service"].(map[string]interface{})
+					agentID := cacheSvc["agent_id"].(string)
+
+					// Extract version from agent ID
+					version := agentID[len("cache-v"):]
+					assert.Contains(t, tc.expected, version)
+				} else {
+					assert.Empty(t, appDeps)
+				}
+			})
+		}
+	})
+}
+
+// TestTagBasedDependencyResolution tests tag filtering in dependency resolution
+func TestTagBasedDependencyResolution(t *testing.T) {
+	t.Run("AllTagsMustMatch", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Register providers with different tag combinations
+		providers := []struct {
+			agentID string
+			tags    []string
+		}{
+			{"db-prod-east", []string{"production", "US-EAST", "mysql"}},
+			{"db-prod-west", []string{"production", "US-WEST", "mysql"}},
+			{"db-dev-east", []string{"development", "US-EAST", "mysql"}},
+			{"db-staging", []string{"staging", "US-EAST", "postgres"}},
+		}
+
+		for _, p := range providers {
+			req := &AgentRegistrationRequest{
+				AgentID:   p.agentID,
+				Timestamp: time.Now().Format(time.RFC3339),
+				Metadata: map[string]interface{}{
+					"name":     p.agentID,
+					"endpoint": "http://" + p.agentID + ":5432",
+					"tools": []map[string]interface{}{
+						{
+							"function_name": "query",
+							"capability":    "database",
+							"version":       "1.0.0",
+							"tags":          p.tags,
+						},
+					},
+				},
+			}
+			_, err := service.RegisterAgent(req)
+			require.NoError(t, err)
+		}
+
+		// Test different tag requirements
+		testCases := []struct {
+			requiredTags []string
+			expectedID   string
+		}{
+			{[]string{"production", "US-EAST"}, "db-prod-east"},
+			{[]string{"production", "US-WEST"}, "db-prod-west"},
+			{[]string{"development"}, "db-dev-east"},
+			{[]string{"mysql"}, ""}, // Multiple matches, could be any mysql provider
+			{[]string{"production", "postgres"}, ""}, // No match
+		}
+
+		for _, tc := range testCases {
+			consumerReq := &AgentRegistrationRequest{
+				AgentID:   "app-" + tc.expectedID,
+				Timestamp: time.Now().Format(time.RFC3339),
+				Metadata: map[string]interface{}{
+					"name":     "app-" + tc.expectedID,
+					"endpoint": "http://app:8080",
+					"tools": []map[string]interface{}{
+						{
+							"function_name": "data_processor",
+							"capability":    "processor",
+							"dependencies": []map[string]interface{}{
+								{
+									"capability": "database",
+									"tags":       tc.requiredTags,
+								},
+							},
+						},
+					},
+				},
+			}
+
+			resp, err := service.RegisterAgent(consumerReq)
+			require.NoError(t, err)
+
+			deps := resp.Metadata["dependencies_resolved"].(map[string]interface{})
+			procDeps := deps["data_processor"].(map[string]interface{})
+
+			if tc.expectedID != "" {
+				dbSvc := procDeps["database"].(map[string]interface{})
+				assert.Equal(t, tc.expectedID, dbSvc["agent_id"])
+			} else if len(procDeps) > 0 {
+				// If we got a result, verify it has all required tags
+				dbSvc := procDeps["database"].(map[string]interface{})
+				agentID := dbSvc["agent_id"].(string)
+
+				// Find the provider and check tags
+				for _, p := range providers {
+					if p.agentID == agentID {
+						for _, tag := range tc.requiredTags {
+							assert.Contains(t, p.tags, tag)
+						}
+					}
+				}
+			}
+		}
+	})
+}
+
+// TestHealthMonitorIntegration tests the health monitoring system
+func TestHealthMonitorIntegration(t *testing.T) {
+	t.Run("AgentStateTransitions", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Configure fast timeouts for testing
+		agentID := "test-agent"
+		req := &AgentRegistrationRequest{
+			AgentID:   agentID,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":               agentID,
+				"endpoint":           "http://test:8080",
+				"timeout_threshold":  1,  // 1 second
+				"eviction_threshold": 2,  // 2 seconds
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "test_func",
+						"capability":    "test_cap",
+					},
+				},
+			},
+		}
+
+		_, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+
+		// Start health monitor
+		monitor := &HealthMonitor{
+			service:  service,
+			interval: 100 * time.Millisecond,
+		}
+		go monitor.Start()
+		defer monitor.Stop()
+
+		// Helper to get agent status
+		getStatus := func() string {
+			var agent database.Agent
+			service.db.First(&agent, "id = ?", agentID)
+			return agent.Status
+		}
+
+		// Initially healthy (just registered)
+		assert.Equal(t, "healthy", getStatus())
+
+		// Wait for timeout threshold
+		time.Sleep(1200 * time.Millisecond)
+		assert.Equal(t, "degraded", getStatus())
+
+		// Send heartbeat to restore health
+		_, err = service.SendHeartbeat(agentID, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "healthy", getStatus())
+
+		// Wait for eviction threshold
+		time.Sleep(2200 * time.Millisecond)
+		assert.Equal(t, "expired", getStatus())
+
+		// Expired agents can become healthy again with heartbeat
+		_, err = service.SendHeartbeat(agentID, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "healthy", getStatus())
+	})
+}
+
+// TestComplexDependencyChains tests multi-level dependency resolution
+func TestComplexDependencyChains(t *testing.T) {
+	t.Run("TransitiveDependencies", func(t *testing.T) {
+		service, cleanup := setupComprehensiveTestService(t)
+		defer cleanup()
+
+		// Create a chain: App -> Cache -> Database
+
+		// 1. Register database
+		dbReq := &AgentRegistrationRequest{
+			AgentID:   "database-001",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "database-001",
+				"endpoint": "http://db:5432",
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "query",
+						"capability":    "database",
+						"version":       "2.0.0",
+						"tags":          []string{"primary", "production"},
+					},
+				},
+			},
+		}
+		_, err := service.RegisterAgent(dbReq)
+		require.NoError(t, err)
+
+		// 2. Register cache that depends on database
+		cacheReq := &AgentRegistrationRequest{
+			AgentID:   "cache-001",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "cache-001",
+				"endpoint": "http://cache:6379",
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "get_set",
+						"capability":    "cache",
+						"version":       "1.0.0",
+						"dependencies": []map[string]interface{}{
+							{
+								"capability": "database",
+								"version":    ">=2.0.0",
+								"tags":       []string{"primary"},
+							},
+						},
+					},
+				},
+			},
+		}
+		cacheResp, err := service.RegisterAgent(cacheReq)
+		require.NoError(t, err)
+
+		// Cache should resolve database dependency
+		deps := cacheResp.Metadata["dependencies_resolved"].(map[string]interface{})
+		cacheDeps := deps["get_set"].(map[string]interface{})
+		dbDep := cacheDeps["database"].(map[string]interface{})
+		assert.Equal(t, "database-001", dbDep["agent_id"])
+
+		// 3. Register app that depends on cache
+		appReq := &AgentRegistrationRequest{
+			AgentID:   "app-001",
+			Timestamp: time.Now().Format(time.RFC3339),
+			Metadata: map[string]interface{}{
+				"name":     "app-001",
+				"endpoint": "http://app:8080",
+				"tools": []map[string]interface{}{
+					{
+						"function_name": "process",
+						"capability":    "application",
+						"dependencies": []map[string]interface{}{
+							{
+								"capability": "cache",
+								"version":    ">=1.0.0",
+							},
+						},
+					},
+				},
+			},
+		}
+		appResp, err := service.RegisterAgent(appReq)
+		require.NoError(t, err)
+
+		// App should resolve cache dependency
+		deps = appResp.Metadata["dependencies_resolved"].(map[string]interface{})
+		appDeps := deps["process"].(map[string]interface{})
+		cacheDep := appDeps["cache"].(map[string]interface{})
+		assert.Equal(t, "cache-001", cacheDep["agent_id"])
+
+		// If database goes down, cache might still be available
+		// but app's dependency on cache remains resolved
+		service.db.Model(&database.Agent{}).
+			Where("id = ?", "database-001").
+			Update("status", "expired")
+
+		// App heartbeat should still resolve cache
+		heartbeat, err := service.SendHeartbeat("app-001", nil)
+		require.NoError(t, err)
+		deps = heartbeat["dependencies_resolved"].(map[string]interface{})
+		appDeps = deps["process"].(map[string]interface{})
+		assert.NotEmpty(t, appDeps["cache"])
+	})
+}
+
+// setupComprehensiveTestService creates a test service for comprehensive tests
+func setupComprehensiveTestService(t *testing.T) (*Service, func()) {
+	// Create in-memory database
+	db, err := database.Initialize(&database.Config{
+		DatabaseURL: ":memory:",
+	})
+	require.NoError(t, err)
+
+	// Create service with no cache (per user requirement)
+	config := &RegistryConfig{
+		CacheTTL:                 30,
+		DefaultTimeoutThreshold:  60,
+		DefaultEvictionThreshold: 120,
+		EnableResponseCache:      false, // NO CACHE - Multiple registry instances
+	}
+
+	service := NewService(db, config)
+
+	cleanup := func() {
+		// Clean up database
+		db.Close()
+	}
+
+	return service, cleanup
+}

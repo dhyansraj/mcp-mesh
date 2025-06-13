@@ -101,7 +101,6 @@ func Initialize(config *Config) (*Database, error) {
 	return database, nil
 }
 
-
 // initializeSchema creates all tables and indexes (OLD - for reference)
 // MUST match Python DatabaseSchema.SCHEMA_SQL and INDEXES exactly
 func (db *Database) initializeSchemaManual() error {
@@ -133,17 +132,18 @@ func (db *Database) initializeSchemaManual() error {
 			dependencies TEXT DEFAULT '[]'
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS capabilities (
+		`CREATE TABLE IF NOT EXISTS tools (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,
 			name TEXT NOT NULL,
-			description TEXT,
+			capability TEXT NOT NULL,
 			version TEXT DEFAULT '1.0.0',
-			parameters_schema TEXT,
-			security_requirements TEXT,
+			dependencies TEXT DEFAULT '[]',
+			config TEXT DEFAULT '{}',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+			UNIQUE(agent_id, name)
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS agent_health (
@@ -252,9 +252,9 @@ func (db *Database) initializeSchemaManual() error {
 		"CREATE INDEX IF NOT EXISTS idx_agents_heartbeat ON agents(last_heartbeat)",
 
 		// Capability discovery optimization
-		"CREATE INDEX IF NOT EXISTS idx_capabilities_name ON capabilities(name)",
-		"CREATE INDEX IF NOT EXISTS idx_capabilities_agent ON capabilities(agent_id)",
-		"CREATE INDEX IF NOT EXISTS idx_capabilities_composite ON capabilities(name, agent_id)",
+		"CREATE INDEX IF NOT EXISTS idx_tools_capability ON tools(capability)",
+		"CREATE INDEX IF NOT EXISTS idx_tools_agent ON tools(agent_id)",
+		"CREATE INDEX IF NOT EXISTS idx_tools_composite ON tools(capability, agent_id)",
 
 		// Health monitoring optimization
 		"CREATE INDEX IF NOT EXISTS idx_health_agent ON agent_health(agent_id)",

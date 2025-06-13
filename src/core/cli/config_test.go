@@ -11,8 +11,8 @@ func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
 	// Test default values match the specification
-	if config.RegistryPort != 8080 {
-		t.Errorf("Expected RegistryPort 8080, got %d", config.RegistryPort)
+	if config.RegistryPort != 8000 {
+		t.Errorf("Expected RegistryPort 8000, got %d", config.RegistryPort)
 	}
 	if config.RegistryHost != "localhost" {
 		t.Errorf("Expected RegistryHost 'localhost', got '%s'", config.RegistryHost)
@@ -43,18 +43,18 @@ func TestDefaultConfig(t *testing.T) {
 func TestEnvironmentVariableLoading(t *testing.T) {
 	// Set test environment variables
 	envVars := map[string]string{
-		"MCP_MESH_REGISTRY_PORT":           "9090",
-		"MCP_MESH_REGISTRY_HOST":           "testhost",
-		"MCP_MESH_DB_PATH":                "/test/path.db",
-		"MCP_MESH_LOG_LEVEL":              "DEBUG",
-		"MCP_MESH_HEALTH_CHECK_INTERVAL":   "60",
-		"MCP_MESH_AUTO_RESTART":            "false",
-		"MCP_MESH_WATCH_FILES":             "false",
-		"MCP_MESH_DEBUG_MODE":              "true",
-		"MCP_MESH_STARTUP_TIMEOUT":         "45",
-		"MCP_MESH_SHUTDOWN_TIMEOUT":        "45",
-		"MCP_MESH_ENABLE_BACKGROUND":       "true",
-		"MCP_MESH_PID_FILE":               "/test/test.pid",
+		"MCP_MESH_REGISTRY_PORT":         "9090",
+		"MCP_MESH_REGISTRY_HOST":         "testhost",
+		"MCP_MESH_DB_PATH":               "/test/path.db",
+		"MCP_MESH_LOG_LEVEL":             "DEBUG",
+		"MCP_MESH_HEALTH_CHECK_INTERVAL": "60",
+		"MCP_MESH_AUTO_RESTART":          "false",
+		"MCP_MESH_WATCH_FILES":           "false",
+		"MCP_MESH_DEBUG_MODE":            "true",
+		"MCP_MESH_STARTUP_TIMEOUT":       "45",
+		"MCP_MESH_SHUTDOWN_TIMEOUT":      "45",
+		"MCP_MESH_ENABLE_BACKGROUND":     "true",
+		"MCP_MESH_PID_FILE":              "/test/test.pid",
 	}
 
 	// Set environment variables
@@ -164,7 +164,7 @@ func TestConfigValidation(t *testing.T) {
 	if err := config.Validate(); err == nil {
 		t.Error("Expected validation error for invalid port")
 	}
-	config.RegistryPort = 8080 // Reset
+	config.RegistryPort = 8000 // Reset
 
 	// Test invalid host
 	config.RegistryHost = ""

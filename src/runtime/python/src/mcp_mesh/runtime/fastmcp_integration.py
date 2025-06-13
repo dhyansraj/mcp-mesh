@@ -6,8 +6,6 @@ This module monkey-patches FastMCP's tool execution to support our dependency in
 
 import asyncio
 import logging
-import signal
-import sys
 from typing import Any
 
 from mcp.server.fastmcp.tools import ToolManager
@@ -158,11 +156,11 @@ def _trigger_decorator_processing():
                     asyncio_logger = logging.getLogger("asyncio")
                     original_level = asyncio_logger.level
                     asyncio_logger.setLevel(logging.WARNING)
-                    
+
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     _background_loop = loop  # Store for shutdown coordination
-                    
+
                     # Restore asyncio logging level
                     asyncio_logger.setLevel(original_level)
 
@@ -200,20 +198,26 @@ def _trigger_decorator_processing():
                         logger.info(
                             "📍 Running event loop forever for health monitoring"
                         )
-                        
+
                         # Since we're in a background thread, we can't use signal handlers
                         # Instead, we'll just run the event loop and let the main thread
                         # handle signals and cleanup
                         try:
                             loop.run_forever()
                         except KeyboardInterrupt:
-                            logger.info("🛑 Received shutdown signal, stopping health monitoring...")
+                            logger.info(
+                                "🛑 Received shutdown signal, stopping health monitoring..."
+                            )
                         finally:
                             # Schedule cleanup on the event loop
                             if not loop.is_closed():
                                 try:
-                                    loop.run_until_complete(_runtime_processor.cleanup())
-                                    logger.info("✅ Health monitoring stopped gracefully")
+                                    loop.run_until_complete(
+                                        _runtime_processor.cleanup()
+                                    )
+                                    logger.info(
+                                        "✅ Health monitoring stopped gracefully"
+                                    )
                                 except Exception:
                                     # Ignore errors during shutdown (e.g., closed stdout)
                                     pass
@@ -221,7 +225,7 @@ def _trigger_decorator_processing():
                         logger.warning(
                             "No health tasks created, not running event loop"
                         )
-                    
+
                     # Clean shutdown
                     loop.close()
 
@@ -235,29 +239,35 @@ def _trigger_decorator_processing():
         _background_thread = threading.Thread(target=background_processor, daemon=True)
         _background_thread.start()
         logger.info("Started background decorator processing thread")
-        
+
         # Register shutdown handler in main thread
         import atexit
+
         atexit.register(_cleanup_background_thread)
 
 
 def _cleanup_background_thread():
     """Clean up the background thread and event loop."""
     global _background_loop, _background_thread
-    
+
     try:
         if _background_loop and not _background_loop.is_closed():
             logger.info("Stopping background event loop...")
             # Stop the event loop from the main thread
             _background_loop.call_soon_threadsafe(_background_loop.stop)
-            
+
         if _background_thread and _background_thread.is_alive():
             # Wait a bit for thread to finish
             _background_thread.join(timeout=2.0)
     except Exception:
         # Ignore errors during shutdown
         pass
-        
+
+
+def stop_background_event_loop():
+    """Public function to stop the background event loop gracefully."""
+    _cleanup_background_thread()
+
 
 async def _async_trigger_processing():
     """Trigger processing asynchronously when event loop is available."""

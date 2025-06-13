@@ -146,12 +146,19 @@ deps:
 	@echo "📦 Downloading dependencies..."
 	go mod download
 
-# Clean build artifacts only
+# Clean build artifacts and database files
 .PHONY: clean
 clean:
 	@echo "🧹 Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
 	rm -f coverage.out coverage.html
+	# Clean binaries from project root (created by direct go build)
+	rm -f $(REGISTRY_NAME) $(DEV_NAME)
+	# Clean any stray binaries in cmd directories
+	rm -f $(REGISTRY_CMD_DIR)/$(REGISTRY_NAME)
+	rm -f $(DEV_CMD_DIR)/$(DEV_NAME)
+	# Clean database files (SQLite main + WAL/SHM files)
+	rm -f *.db *.db-shm *.db-wal
 	@echo "✅ Cleaned build artifacts"
 
 # Deep clean - removes all generated files, Python cache, and databases
@@ -159,6 +166,7 @@ clean:
 clean-all:
 	@echo "⚠️  WARNING: This will remove:"
 	@echo "  - Build artifacts ($(BUILD_DIR)/)"
+	@echo "  - Binaries from project root ($(REGISTRY_NAME), $(DEV_NAME))"
 	@echo "  - Python cache (__pycache__, *.pyc, .pytest_cache)"
 	@echo "  - Database files (*.db)"
 	@echo "  - Coverage reports"
@@ -174,6 +182,11 @@ clean-all-force:
 	@echo "🧹 Deep cleaning..."
 	# Go build artifacts
 	rm -rf $(BUILD_DIR)
+	# Binaries from project root (created by direct go build)
+	rm -f $(REGISTRY_NAME) $(DEV_NAME)
+	# Clean any stray binaries in cmd directories
+	rm -f $(REGISTRY_CMD_DIR)/$(REGISTRY_NAME)
+	rm -f $(DEV_CMD_DIR)/$(DEV_NAME)
 	# Python cache
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
@@ -308,7 +321,7 @@ help:
 	@echo "  fmt-check     - Check code formatting"
 	@echo "  mod-tidy      - Tidy Go modules"
 	@echo "  deps          - Download dependencies"
-	@echo "  clean         - Clean build artifacts"
+	@echo "  clean         - Clean build artifacts and database files"
 	@echo "  clean-all     - Deep clean (removes Python cache, DBs, logs) - asks for confirmation"
 	@echo "  clean-all-force - Deep clean without confirmation"
 	@echo "  install       - Quick install for users (binaries + Python package)"

@@ -2,192 +2,155 @@ package database
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 )
 
-// JSON helper functions for marshaling/unmarshaling
-func marshalJSON(v interface{}) string {
-	if v == nil {
-		return "{}"
-	}
-	if bytes, err := json.Marshal(v); err == nil {
-		return string(bytes)
-	}
-	return "{}"
-}
-
-func unmarshalJSON(data string, v interface{}) error {
-	if data == "" {
-		data = "{}"
-	}
-	return json.Unmarshal([]byte(data), v)
-}
-
-// Agent represents the agents table - matches Python SQLAlchemy schema exactly
+// Agent represents a process/container with multiple tools
 type Agent struct {
-	// Primary fields
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Endpoint  string `json:"endpoint"`
-	Status    string `json:"status"`
+	ID                string     `gorm:"primaryKey" json:"id"`
+	Name              string     `gorm:"not null" json:"name"`
+	Namespace         string     `gorm:"default:'default'" json:"namespace"`
+	BaseEndpoint      string     `gorm:"not null" json:"base_endpoint"`
+	Status            string     `gorm:"default:'healthy'" json:"status"`
+	Transport         string     `gorm:"default:'[\"stdio\"]'" json:"-"`
+	LastHeartbeat     *time.Time `json:"last_heartbeat,omitempty"`
+	TimeoutThreshold  int        `gorm:"default:60" json:"timeout_threshold"`
+	EvictionThreshold int        `gorm:"default:120" json:"eviction_threshold"`
+	Labels            string     `gorm:"default:'{}'" json:"-"`
+	Metadata          string     `gorm:"default:'{}'" json:"-"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 
-	// Kubernetes-style metadata (stored as JSON strings to match Python)
-	Labels      string `json:"labels"`      // JSON string
-	Annotations string `json:"annotations"` // JSON string
-
-	// Timestamps and versioning
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	ResourceVersion string     `json:"resource_version"`
-	LastHeartbeat   *time.Time `json:"last_heartbeat"`
-
-	// Health configuration (matching Python RegistryAgent model exactly)
-	HealthInterval    int    `json:"health_interval"`
-	TimeoutThreshold  int    `json:"timeout_threshold"`   // Seconds before marked as degraded
-	EvictionThreshold int    `json:"eviction_threshold"` // Seconds before marked as expired
-	AgentType         string `json:"agent_type"`         // For type-specific thresholds
-
-	// Configuration and security (stored as JSON strings to match Python)
-	Config          string  `json:"config"`           // JSON string
-	SecurityContext *string `json:"security_context"`
-	Dependencies    string  `json:"dependencies"` // JSON array string
+	// Relations
+	Tools []Tool `gorm:"foreignKey:AgentID" json:"tools,omitempty"`
 }
 
-// PrepareForInsert sets timestamps and resource version for new agents
-func (a *Agent) PrepareForInsert() {
-	now := time.Now().UTC()
-	a.CreatedAt = now
-	a.UpdatedAt = now
-	if a.ResourceVersion == "" {
-		a.ResourceVersion = generateResourceVersion()
-	}
+// GetTransport returns parsed transport array
+func (a *Agent) GetTransport() []string {
+	var transport []string
+	json.Unmarshal([]byte(a.Transport), &transport)
+	return transport
 }
 
-// PrepareForUpdate sets updated timestamp and new resource version
-func (a *Agent) PrepareForUpdate() {
-	a.UpdatedAt = time.Now().UTC()
-	a.ResourceVersion = generateResourceVersion()
+// SetTransport sets transport as JSON array
+func (a *Agent) SetTransport(transport []string) {
+	data, _ := json.Marshal(transport)
+	a.Transport = string(data)
 }
 
-// Capability represents the capabilities table - matches Python SQLAlchemy schema exactly
-type Capability struct {
-	ID                   int       `json:"id"`
-	AgentID              string    `json:"agent_id"`
-	Name                 string    `json:"name"`
-	Description          *string   `json:"description"`
-	Version              string    `json:"version"`
-	ParametersSchema     *string   `json:"parameters_schema"`     // JSON string
-	SecurityRequirements *string   `json:"security_requirements"` // JSON array string
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+// GetLabels returns parsed labels
+func (a *Agent) GetLabels() map[string]string {
+	var labels map[string]string
+	json.Unmarshal([]byte(a.Labels), &labels)
+	return labels
 }
 
-// AgentHealth represents the agent_health table
-type AgentHealth struct {
-	ID             int       `json:"id"`
-	AgentID        string    `json:"agent_id"`
-	Status         string    `json:"status"`
-	Timestamp      time.Time `json:"timestamp"`
-	Checks         string    `json:"checks"`         // JSON object string
-	Errors         string    `json:"errors"`         // JSON array string
-	UptimeSeconds  int       `json:"uptime_seconds"`
-	Metadata       string    `json:"metadata"` // JSON string
+// SetLabels sets labels as JSON
+func (a *Agent) SetLabels(labels map[string]string) {
+	data, _ := json.Marshal(labels)
+	a.Labels = string(data)
 }
 
-
-// RegistryEvent represents the registry_events table
-type RegistryEvent struct {
-	ID              int       `json:"id"`
-	EventType       string    `json:"event_type"`
-	AgentID         string    `json:"agent_id"`
-	Timestamp       time.Time `json:"timestamp"`
-	ResourceVersion string    `json:"resource_version"`
-	Data            *string   `json:"data"` // JSON string
-	Source          string    `json:"source"`
-	Metadata        string    `json:"metadata"` // JSON string
+// GetMetadata returns parsed metadata
+func (a *Agent) GetMetadata() map[string]interface{} {
+	var metadata map[string]interface{}
+	json.Unmarshal([]byte(a.Metadata), &metadata)
+	return metadata
 }
 
-
-// ServiceContract represents the service_contracts table
-type ServiceContract struct {
-	ID                 int       `json:"id"`
-	AgentID            string    `json:"agent_id"`
-	ServiceName        string    `json:"service_name"`
-	ServiceVersion     string    `json:"service_version"`
-	Description        *string   `json:"description"`
-	ContractVersion    string    `json:"contract_version"`
-	CompatibilityLevel string    `json:"compatibility_level"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+// SetMetadata sets metadata as JSON
+func (a *Agent) SetMetadata(metadata map[string]interface{}) {
+	data, _ := json.Marshal(metadata)
+	a.Metadata = string(data)
 }
 
-
-// MethodMetadata represents the method_metadata table
-type MethodMetadata struct {
-	ID                   int       `json:"id"`
-	ContractID           int       `json:"contract_id"`
-	MethodName           string    `json:"method_name"`
-	SignatureData        string    `json:"signature_data"` // JSON string
-	ReturnType           *string   `json:"return_type"`
-	IsAsync              bool      `json:"is_async"`
-	MethodType           string    `json:"method_type"`
-	Docstring            *string   `json:"docstring"`
-	ServiceVersion       string    `json:"service_version"`
-	StabilityLevel       string    `json:"stability_level"`
-	DeprecationWarning   *string   `json:"deprecation_warning"`
-	ExpectedComplexity   string    `json:"expected_complexity"`
-	TimeoutHint          int       `json:"timeout_hint"`
-	ResourceRequirements string    `json:"resource_requirements"` // JSON string
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
-}
-
-
-// MethodParameter represents the method_parameters table
-type MethodParameter struct {
-	ID            int     `json:"id"`
-	MethodID      int     `json:"method_id"`
-	ParameterName string  `json:"parameter_name"`
-	ParameterType string  `json:"parameter_type"`
-	ParameterKind string  `json:"parameter_kind"`
-	DefaultValue  *string `json:"default_value"` // JSON string
-	Annotation    *string `json:"annotation"`    // JSON string
-	HasDefault    bool    `json:"has_default"`
-	IsOptional    bool    `json:"is_optional"`
-	Position      int     `json:"position"`
-}
-
-
-// MethodCapability represents the method_capabilities table
-type MethodCapability struct {
-	ID             int    `json:"id"`
-	MethodID       int    `json:"method_id"`
-	CapabilityName string `json:"capability_name"`
-	CapabilityID   *int   `json:"capability_id"`
-}
-
-
-// CapabilityMethodMapping represents the capability_method_mapping table
-type CapabilityMethodMapping struct {
-	ID           int       `json:"id"`
-	CapabilityID int       `json:"capability_id"`
-	MethodID     int       `json:"method_id"`
-	MappingType  string    `json:"mapping_type"`
-	Priority     int       `json:"priority"`
+// Tool represents an individual function within an agent
+type Tool struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	AgentID      string    `gorm:"not null;index" json:"agent_id"`
+	Name         string    `gorm:"not null" json:"name"`
+	Capability   string    `gorm:"not null;index" json:"capability"`
+	Version      string    `gorm:"default:'1.0.0'" json:"version"`
+	Dependencies string    `gorm:"default:'[]'" json:"-"`
+	Config       string    `gorm:"default:'{}'" json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+
+	// Relations
+	Agent Agent `gorm:"foreignKey:AgentID;references:ID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
-
-// SchemaVersion represents the schema_version table
-type SchemaVersion struct {
-	Version   int       `json:"version"`
-	AppliedAt time.Time `json:"applied_at"`
+// Dependency represents a tool dependency with constraints
+type Dependency struct {
+	Capability string   `json:"capability"`
+	Version    string   `json:"version,omitempty"` // e.g., ">=1.0.0"
+	Tags       []string `json:"tags,omitempty"`    // e.g., ["production", "US_EAST"]
 }
 
+// GetDependencies returns parsed dependencies
+func (t *Tool) GetDependencies() []Dependency {
+	var deps []Dependency
+	json.Unmarshal([]byte(t.Dependencies), &deps)
+	return deps
+}
 
-// Helper function to generate resource version (timestamp in milliseconds)
-func generateResourceVersion() string {
-	return fmt.Sprintf("%d", time.Now().UnixMilli())
+// SetDependencies sets dependencies as JSON
+func (t *Tool) SetDependencies(deps []Dependency) {
+	data, _ := json.Marshal(deps)
+	t.Dependencies = string(data)
+}
+
+// ToolConfig represents tool-specific configuration
+type ToolConfig struct {
+	Description          string                 `json:"description,omitempty"`
+	Tags                 []string               `json:"tags,omitempty"`
+	Endpoint             string                 `json:"endpoint,omitempty"`
+	EnableHTTP           bool                   `json:"enable_http"`
+	HTTPHost             string                 `json:"http_host,omitempty"`
+	HTTPPort             int                    `json:"http_port,omitempty"`
+	HealthInterval       int                    `json:"health_interval"`
+	Timeout              int                    `json:"timeout"`
+	RetryAttempts        int                    `json:"retry_attempts"`
+	EnableCaching        bool                   `json:"enable_caching"`
+	FallbackMode         bool                   `json:"fallback_mode"`
+	SecurityContext      string                 `json:"security_context,omitempty"`
+	PerformanceProfile   map[string]interface{} `json:"performance_profile,omitempty"`
+	ResourceRequirements map[string]interface{} `json:"resource_requirements,omitempty"`
+	Parameters           map[string]interface{} `json:"parameters,omitempty"`
+}
+
+// GetConfig returns parsed config
+func (t *Tool) GetConfig() ToolConfig {
+	var config ToolConfig
+	json.Unmarshal([]byte(t.Config), &config)
+	return config
+}
+
+// SetConfig sets config as JSON
+func (t *Tool) SetConfig(config ToolConfig) {
+	data, _ := json.Marshal(config)
+	t.Config = string(data)
+}
+
+// RegistryEvent represents an audit trail event
+type RegistryEvent struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	EventType string    `gorm:"not null" json:"event_type"`
+	AgentID   string    `gorm:"not null;index" json:"agent_id"`
+	ToolName  *string   `json:"tool_name,omitempty"`
+	Timestamp time.Time `gorm:"index" json:"timestamp"`
+	Data      string    `gorm:"default:'{}'" json:"-"`
+}
+
+// GetData returns parsed event data
+func (e *RegistryEvent) GetData() map[string]interface{} {
+	var data map[string]interface{}
+	json.Unmarshal([]byte(e.Data), &data)
+	return data
+}
+
+// SetData sets data as JSON
+func (e *RegistryEvent) SetData(data map[string]interface{}) {
+	bytes, _ := json.Marshal(data)
+	e.Data = string(bytes)
 }

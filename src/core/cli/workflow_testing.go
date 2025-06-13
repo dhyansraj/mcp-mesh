@@ -17,24 +17,24 @@ import (
 
 // WorkflowTester provides comprehensive development workflow testing
 type WorkflowTester struct {
-	testResults   map[string]*TestResult
-	mutex         sync.RWMutex
-	logger        *log.Logger
-	cleanup       []func() error
-	registryHost  string
-	registryPort  int
-	registryURL   string
+	testResults  map[string]*TestResult
+	mutex        sync.RWMutex
+	logger       *log.Logger
+	cleanup      []func() error
+	registryHost string
+	registryPort int
+	registryURL  string
 }
 
 // TestResult represents the result of a workflow test
 type TestResult struct {
-	TestName    string        `json:"test_name"`
-	Status      string        `json:"status"`
-	Duration    time.Duration `json:"duration"`
-	Error       string        `json:"error,omitempty"`
-	Details     []string      `json:"details"`
-	StartTime   time.Time     `json:"start_time"`
-	EndTime     time.Time     `json:"end_time"`
+	TestName  string        `json:"test_name"`
+	Status    string        `json:"status"`
+	Duration  time.Duration `json:"duration"`
+	Error     string        `json:"error,omitempty"`
+	Details   []string      `json:"details"`
+	StartTime time.Time     `json:"start_time"`
+	EndTime   time.Time     `json:"end_time"`
 }
 
 // TestProcessInfo tracks test processes for cleanup

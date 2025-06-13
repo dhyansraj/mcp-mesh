@@ -95,10 +95,8 @@ func main() {
 		EnableResponseCache:      cfg.EnableResponseCache,
 	}
 
-	service := registry.NewService(db, registryConfig)
-
 	// Create and configure server
-	server := registry.NewServer(service, cfg)
+	server := registry.NewServer(db, registryConfig)
 
 	// Setup graceful shutdown
 	go func() {
@@ -119,7 +117,8 @@ func main() {
 
 	// Start server
 	log.Printf("🚀 Starting MCP Mesh Registry Service on %s:%d", cfg.Host, cfg.Port)
-	if err := server.Start(); err != nil {
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	if err := server.Run(addr); err != nil {
 		log.Fatalf("❌ Failed to start server: %v", err)
 	}
 }

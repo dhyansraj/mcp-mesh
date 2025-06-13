@@ -78,7 +78,10 @@ class MeshAgentProcessor:
 
                 if success:
                     # Don't mark as processed here - let process_single_agent handle it
-                    self.logger.debug(f"Successfully processed agent: {func_name}")
+                    agent_name = decorated_func.metadata.get("agent_name", func_name)
+                    self.logger.debug(
+                        f"Successfully processed multi-tool agent: {agent_name}"
+                    )
                 else:
                     self.logger.warning(f"Failed to process agent: {func_name}")
 
@@ -102,12 +105,13 @@ class MeshAgentProcessor:
             True if processing succeeded, False otherwise
         """
         try:
-            # Skip if already processed
-            if func_name in self._processed_agents:
-                self.logger.debug(f"Agent {func_name} already processed, skipping")
-                return True
-
             metadata = decorated_func.metadata
+            agent_name = metadata.get("agent_name", func_name)
+
+            # Skip if already processed
+            if agent_name in self._processed_agents:
+                self.logger.debug(f"Agent {agent_name} already processed, skipping")
+                return True
 
             # Build registration request
             registration_data: dict[str, Any] = self._build_registration_data(
@@ -119,18 +123,23 @@ class MeshAgentProcessor:
             )
 
             # Store the metadata BEFORE processing (needed for HTTP wrapper updates)
-            self._agent_metadata[func_name] = metadata.copy()
+            # Use agent_name as key for consistency with heartbeat
+            stored_metadata = metadata.copy()
+            stored_metadata["function_name"] = (
+                func_name  # Store function name for later reference
+            )
+            self._agent_metadata[agent_name] = stored_metadata
 
             # Register with mesh registry
             response = await self._register_with_mesh_registry(registration_data)
 
             if response and response.get("status") == "success":
                 self.logger.info(
-                    f"🎉 Agent {func_name} registered successfully with mesh registry"
+                    f"🎉 Agent {agent_name} registered successfully with mesh registry"
                 )
 
                 # Mark as successfully processed
-                self._processed_agents[func_name] = True
+                self._processed_agents[agent_name] = True
 
                 # Set up dependency injection for the function
                 await self._setup_dependency_injection(decorated_func, response)
@@ -164,12 +173,14 @@ class MeshAgentProcessor:
 
             # Create and start the health monitoring task
             # The health monitor will handle registration retries if needed
+            # Use the agent_id from registration_data to ensure consistency
+            agent_id = registration_data["agent_id"]
             task = asyncio.create_task(
                 self._health_monitor(
-                    func_name, metadata, health_interval, registration_data
+                    agent_id, metadata, health_interval, registration_data
                 )
             )
-            self._health_tasks[func_name] = task
+            self._health_tasks[agent_name] = task
 
             # Return True even if registration failed - agent can work standalone
             return True
@@ -268,9 +279,9 @@ class MeshAgentProcessor:
             Registry response or None if failed
         """
         try:
-            # Use the new /agents/register_with_metadata endpoint
+            # Use the standard /agents/register endpoint
             response = await self.registry_client.post(
-                "/agents/register_with_metadata", json=registration_data
+                "/agents/register", json=registration_data
             )
 
             if response.status == 201:
@@ -373,7 +384,8 @@ class MeshAgentProcessor:
             # Store the resolved dependencies for comparison in heartbeat
             if registry_response and "dependencies_resolved" in registry_response:
                 func_name = decorated_func.function.__name__
-                self._last_dependencies_resolved[func_name] = dependencies_resolved
+                agent_name = metadata.get("agent_name", func_name)
+                self._last_dependencies_resolved[agent_name] = dependencies_resolved
 
         except Exception as e:
             self.logger.error(
@@ -540,10 +552,14 @@ class MeshAgentProcessor:
 
                 # Set up dependency injection for late registration
                 mesh_agents = DecoratorRegistry.get_mesh_agents()
-                if agent_name in mesh_agents:
-                    await self._setup_dependency_injection(
-                        mesh_agents[agent_name], response
-                    )
+                # Find the function by checking agent_name in metadata
+                for func_name, decorated_func in mesh_agents.items():
+                    if (
+                        decorated_func.metadata.get("agent_name", func_name)
+                        == agent_name
+                    ):
+                        await self._setup_dependency_injection(decorated_func, response)
+                        break
 
         while True:
             try:
@@ -571,10 +587,16 @@ class MeshAgentProcessor:
 
                         # Get the decorated function to set up dependency injection
                         mesh_agents = DecoratorRegistry.get_mesh_agents()
-                        if agent_name in mesh_agents:
-                            await self._setup_dependency_injection(
-                                mesh_agents[agent_name], response
-                            )
+                        # Find the function by checking agent_name in metadata
+                        for func_name, decorated_func in mesh_agents.items():
+                            if (
+                                decorated_func.metadata.get("agent_name", func_name)
+                                == agent_name
+                            ):
+                                await self._setup_dependency_injection(
+                                    decorated_func, response
+                                )
+                                break
 
             except asyncio.CancelledError:
                 self.logger.info(f"Health monitor cancelled for {agent_name}")
@@ -630,11 +652,19 @@ class MeshAgentProcessor:
 
                         # Get the decorated function to update dependency injection
                         mesh_agents = DecoratorRegistry.get_mesh_agents()
-                        if agent_name in mesh_agents:
-                            await self._setup_dependency_injection(
-                                mesh_agents[agent_name], response
-                            )
-                        else:
+                        # Find the function by checking agent_name in metadata
+                        found = False
+                        for func_name, decorated_func in mesh_agents.items():
+                            if (
+                                decorated_func.metadata.get("agent_name", func_name)
+                                == agent_name
+                            ):
+                                await self._setup_dependency_injection(
+                                    decorated_func, response
+                                )
+                                found = True
+                                break
+                        if not found:
                             self.logger.warning(
                                 f"Could not find decorated function for {agent_name}"
                             )
@@ -682,6 +712,7 @@ class MeshAgentProcessor:
 
             server_name = mcp_server.name
             metadata = decorated_func.metadata
+            agent_name = metadata.get("agent_name", func_name)
 
             # Check if we already have an HTTP wrapper for this server
             if server_name in self._http_wrappers:
@@ -699,7 +730,7 @@ class MeshAgentProcessor:
                 )
 
                 # Update registration with HTTP endpoint for this function
-                await self._update_registration_with_http(func_name, http_endpoint)
+                await self._update_registration_with_http(agent_name, http_endpoint)
                 return
 
             # First HTTP-enabled function for this server - create new wrapper
@@ -829,7 +860,10 @@ class MeshAgentProcessor:
         try:
             # Find all functions that belong to this server
             updated_count = 0
-            for func_name, metadata in self._agent_metadata.items():
+            for agent_name, metadata in self._agent_metadata.items():
+                # Get the actual function name from the metadata
+                func_name = metadata.get("function_name", agent_name)
+
                 # Check if this function belongs to the server
                 # We can check by seeing if they share the same MCP server instance
                 if func_name in self._mcp_servers:
@@ -841,11 +875,11 @@ class MeshAgentProcessor:
                         updated_count += 1
 
                         self.logger.debug(
-                            f"✅ Updated {func_name} with HTTP endpoint {http_endpoint}"
+                            f"✅ Updated {agent_name} (function: {func_name}) with HTTP endpoint {http_endpoint}"
                         )
 
-                        # Send immediate heartbeat for this function
-                        await self._send_heartbeat(func_name, metadata)
+                        # Send immediate heartbeat for this agent
+                        await self._send_heartbeat(agent_name, metadata)
 
             if updated_count > 0:
                 self.logger.debug(
@@ -1048,7 +1082,7 @@ class DecoratorProcessor:
                         *self.mesh_agent_processor._health_tasks.values(),
                         return_exceptions=True,
                     ),
-                    timeout=5.0  # 5 second timeout for cleanup
+                    timeout=5.0,  # 5 second timeout for cleanup
                 )
             except asyncio.TimeoutError:
                 self.logger.warning("Some health monitoring tasks did not stop in time")

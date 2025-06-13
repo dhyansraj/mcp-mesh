@@ -1,0 +1,238 @@
+package registry
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"mcp-mesh/src/core/database"
+)
+
+// SetupRoutes configures all registry endpoints
+func (s *Server) SetupRoutes() {
+	// Core endpoints (used by Python runtime)
+	s.engine.POST("/agents/register", s.handleRegisterAgent)
+	s.engine.POST("/heartbeat", s.handleHeartbeat)
+	s.engine.GET("/agents/:id", s.handleGetAgent)
+
+	// Discovery endpoints (used by Dashboard/CLI)
+	s.engine.GET("/capabilities", s.handleSearchCapabilities)
+	s.engine.GET("/agents", s.handleListAgents)
+
+	// Health check
+	s.engine.GET("/health", s.handleHealth)
+}
+
+// handleRegisterAgent handles agent registration with dependency resolution
+func (s *Server) handleRegisterAgent(c *gin.Context) {
+	var req RegisterAgentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	resp, err := s.service.RegisterAgent(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, resp)
+}
+
+// handleHeartbeat handles agent heartbeat and returns full dependency state
+func (s *Server) handleHeartbeat(c *gin.Context) {
+	var reqMap map[string]interface{}
+	if err := c.ShouldBindJSON(&reqMap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Convert to HeartbeatRequest
+	agentID, _ := reqMap["agent_id"].(string)
+	status, _ := reqMap["status"].(string)
+	metadata, _ := reqMap["metadata"].(map[string]interface{})
+
+	req := &HeartbeatRequest{
+		AgentID:  agentID,
+		Status:   status,
+		Metadata: metadata,
+	}
+
+	// Update heartbeat
+	_, err := s.service.UpdateHeartbeat(req)
+	if err != nil {
+		if strings.Contains(err.Error(), "agent not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": err.Error(),
+			})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err.Error(),
+			})
+		}
+		return
+	}
+
+	// Always resolve and return full dependency state
+	// Python will handle comparing with its cached state
+	dependenciesResolved := s.service.resolveAllDependencies(agentID)
+
+	response := gin.H{
+		"status": "success",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"dependencies_resolved": dependenciesResolved,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// handleGetAgent returns agent details with resolved dependencies
+func (s *Server) handleGetAgent(c *gin.Context) {
+	agentID := c.Param("id")
+
+	agent, err := s.service.GetAgentWithTools(agentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": fmt.Sprintf("agent not found: %s", agentID),
+		})
+		return
+	}
+
+	// Build tool list with resolved dependencies
+	toolList := make([]map[string]interface{}, len(tools))
+	for i, tool := range tools {
+		config := tool.GetConfig()
+		deps := tool.GetDependencies()
+
+		// Resolve dependencies for this tool
+		resolvedDeps := make(map[string]interface{})
+		for _, dep := range deps {
+			provider := s.service.findBestProvider(dep)
+			if provider != nil {
+				resolvedDeps[dep.Capability] = provider
+			}
+		}
+
+		toolList[i] = map[string]interface{}{
+			"name":                   tool.Name,
+			"capability":             tool.Capability,
+			"version":                tool.Version,
+			"dependencies":           deps,
+			"dependencies_resolved":  resolvedDeps,
+			"config":                 config,
+		}
+	}
+
+	response := gin.H{
+		"agent_id":       agent.ID,
+		"name":           agent.Name,
+		"status":         agent.Status,
+		"endpoint":       agent.BaseEndpoint,
+		"namespace":      agent.Namespace,
+		"transport":      agent.GetTransport(),
+		"last_heartbeat": agent.LastHeartbeat,
+		"labels":         agent.GetLabels(),
+		"tools":          toolList,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// handleSearchCapabilities searches for tools by capability
+func (s *Server) handleSearchCapabilities(c *gin.Context) {
+	params := &CapabilityQueryParams{
+		Name:         c.Query("name"),
+		Version:      c.Query("version"),
+		AgentStatus:  c.DefaultQuery("status", "healthy"),
+		FuzzyMatch:   c.Query("fuzzy") == "true",
+	}
+
+	// Parse tags
+	if tags := c.Query("tags"); tags != "" {
+		params.Tags = strings.Split(tags, ",")
+	}
+
+	resp, err := s.service.SearchCapabilities(params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// handleListAgents lists all agents with summary info
+func (s *Server) handleListAgents(c *gin.Context) {
+	query := s.service.db.Model(&database.Agent{})
+
+	// Apply filters
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if namespace := c.Query("namespace"); namespace != "" {
+		query = query.Where("namespace = ?", namespace)
+	}
+
+	var agents []database.Agent
+	if err := query.Find(&agents).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Build response with tool counts
+	agentList := make([]map[string]interface{}, len(agents))
+	for i, agent := range agents {
+		var toolCount int64
+		s.service.db.Model(&database.Tool{}).Where("agent_id = ?", agent.ID).Count(&toolCount)
+
+		agentList[i] = map[string]interface{}{
+			"agent_id":       agent.ID,
+			"name":           agent.Name,
+			"status":         agent.Status,
+			"endpoint":       agent.BaseEndpoint,
+			"namespace":      agent.Namespace,
+			"transport":      agent.GetTransport(),
+			"tool_count":     toolCount,
+			"last_heartbeat": agent.LastHeartbeat,
+			"labels":         agent.GetLabels(),
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"agents": agentList,
+		"count":  len(agentList),
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleHealth returns registry health status
+func (s *Server) handleHealth(c *gin.Context) {
+	var agentCount, toolCount int64
+	s.service.db.Model(&database.Agent{}).Count(&agentCount)
+	s.service.db.Model(&database.Tool{}).Count(&toolCount)
+
+	uptime := time.Since(s.startTime).Seconds()
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":           "healthy",
+		"version":          "1.0.0",
+		"uptime_seconds":   int(uptime),
+		"agent_count":      agentCount,
+		"tool_count":       toolCount,
+		"database_status":  "connected",
+		"cache_enabled":    true,
+	})
+}

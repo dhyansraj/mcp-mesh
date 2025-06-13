@@ -250,6 +250,56 @@ class DecoratorRegistry:
         stats["total"] = sum(stats.values())
         return stats
 
+    @classmethod
+    def get_all_agents(cls) -> list[tuple[Any, dict[str, Any]]]:
+        """
+        Get all registered agents in a format compatible with tests.
+
+        Returns:
+            List of (agent_object, metadata) tuples
+        """
+        agents = []
+        for decorated_func in cls._mesh_agents.values():
+            agents.append((decorated_func.function, decorated_func.metadata))
+        return agents
+
+    @classmethod
+    def build_registry_metadata(cls, agent_class: Any) -> dict[str, Any]:
+        """
+        Build registry metadata for a specific agent class.
+
+        This method formats the decorator metadata for registry registration.
+
+        Args:
+            agent_class: The decorated agent class
+
+        Returns:
+            Metadata dictionary formatted for registry registration
+        """
+        # Find the agent in our registry
+        for decorated_func in cls._mesh_agents.values():
+            if decorated_func.function == agent_class:
+                metadata = decorated_func.metadata.copy()
+
+                # Format for registry
+                registry_metadata = {
+                    "name": metadata.get("agent_name"),
+                    "tools": metadata.get("tools", []),
+                    "enable_http": metadata.get("enable_http"),
+                    "http_host": metadata.get("http_host", "0.0.0.0"),
+                    "http_port": metadata.get("http_port", 0),
+                }
+
+                # Build endpoint from HTTP config if enabled
+                if metadata.get("enable_http"):
+                    registry_metadata["endpoint"] = (
+                        f"http://{metadata.get('http_host', '0.0.0.0')}:{metadata.get('http_port', 8080)}"
+                    )
+
+                return registry_metadata
+
+        return {}
+
 
 # Convenience functions for external access
 def get_all_mesh_agents() -> dict[str, DecoratedFunction]:

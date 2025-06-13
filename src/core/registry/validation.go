@@ -21,8 +21,8 @@ func (e ValidationError) Error() string {
 // MUST match Python validation logic exactly
 type AgentRegistrationValidator struct {
 	// Regex patterns matching Python validation
-	agentNamePattern     *regexp.Regexp
-	capabilityNamePattern *regexp.Regexp
+	agentNamePattern       *regexp.Regexp
+	capabilityNamePattern  *regexp.Regexp
 	semanticVersionPattern *regexp.Regexp
 }
 

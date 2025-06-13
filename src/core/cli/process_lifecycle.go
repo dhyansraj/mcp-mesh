@@ -473,8 +473,8 @@ func (pm *ProcessManager) checkAgentRegistryStatus(agentName string) map[string]
 	}
 
 	status := map[string]interface{}{
-		"connected":    false,
-		"registered":   false,
+		"connected":      false,
+		"registered":     false,
 		"last_heartbeat": nil,
 	}
 
@@ -487,8 +487,8 @@ func (pm *ProcessManager) checkAgentRegistryStatus(agentName string) map[string]
 
 	var result struct {
 		Agents []struct {
-			Name         string    `json:"name"`
-			Status       string    `json:"status"`
+			Name          string    `json:"name"`
+			Status        string    `json:"status"`
 			LastHeartbeat time.Time `json:"last_heartbeat"`
 		} `json:"agents"`
 	}

@@ -13,7 +13,6 @@ import (
 	"time"
 )
 
-
 // RegistryAgent represents an agent in the registry
 type RegistryAgent struct {
 	ID           string    `json:"id"`
@@ -291,7 +290,6 @@ func AbsolutePath(path string) (string, error) {
 	}
 	return filepath.Abs(path)
 }
-
 
 // ValidateLogLevel checks if a log level is valid
 func ValidateLogLevel(level string) bool {

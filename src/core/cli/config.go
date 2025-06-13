@@ -19,8 +19,8 @@ import (
 // MUST match Python CLI configuration behavior exactly
 type CLIConfig struct {
 	// Registry settings
-	RegistryPort int    `json:"registry_port"`      // default: 8080
-	RegistryHost string `json:"registry_host"`      // default: "localhost"
+	RegistryPort int    `json:"registry_port"` // default: 8080
+	RegistryHost string `json:"registry_host"` // default: "localhost"
 
 	// Database settings
 	DBPath string `json:"db_path"` // default: "./dev_registry.db"
@@ -40,9 +40,9 @@ type CLIConfig struct {
 	StartupTimeout  int `json:"startup_timeout"`  // default: 30
 	ShutdownTimeout int `json:"shutdown_timeout"` // default: 30
 
-	// Background service settings
-	EnableBackground bool   `json:"enable_background"` // default: false
-	PIDFile         string `json:"pid_file"`          // default: "./mcp_mesh_dev.pid"
+	// Detached service settings
+	EnableBackground bool   `json:"enable_background"` // default: false (detached mode)
+	PIDFile          string `json:"pid_file"`          // default: "./mcp_mesh_dev.pid"
 
 	// State management
 	StateDir string `json:"state_dir"` // default: "~/.mcp_mesh"
@@ -65,21 +65,21 @@ func DefaultConfig() *CLIConfig {
 	stateDir := filepath.Join(homeDir, ".mcp_mesh")
 
 	return &CLIConfig{
-		RegistryPort:        8080,
+		RegistryPort:        8000,
 		RegistryHost:        "localhost",
-		DBPath:             "./dev_registry.db",
-		LogLevel:           "INFO",
+		DBPath:              "./dev_registry.db",
+		LogLevel:            "INFO",
 		HealthCheckInterval: 30,
-		AutoRestart:        true,
-		WatchFiles:         true,
-		DebugMode:          false,
-		StartupTimeout:     30,
-		ShutdownTimeout:    30,
-		EnableBackground:   false,
-		PIDFile:            "./mcp_mesh_dev.pid",
-		StateDir:           stateDir,
-		Version:            ConfigVersion,
-		LastModified:       time.Now(),
+		AutoRestart:         true,
+		WatchFiles:          true,
+		DebugMode:           false,
+		StartupTimeout:      30,
+		ShutdownTimeout:     30,
+		EnableBackground:    false,
+		PIDFile:             "./mcp_mesh_dev.pid",
+		StateDir:            stateDir,
+		Version:             ConfigVersion,
+		LastModified:        time.Now(),
 	}
 }
 
@@ -748,18 +748,18 @@ func (c *CLIConfig) Clone() *CLIConfig {
 	return &CLIConfig{
 		RegistryPort:        c.RegistryPort,
 		RegistryHost:        c.RegistryHost,
-		DBPath:             c.DBPath,
-		LogLevel:           c.LogLevel,
+		DBPath:              c.DBPath,
+		LogLevel:            c.LogLevel,
 		HealthCheckInterval: c.HealthCheckInterval,
-		AutoRestart:        c.AutoRestart,
-		WatchFiles:         c.WatchFiles,
-		DebugMode:          c.DebugMode,
-		StartupTimeout:     c.StartupTimeout,
-		ShutdownTimeout:    c.ShutdownTimeout,
-		EnableBackground:   c.EnableBackground,
-		PIDFile:            c.PIDFile,
-		Version:            c.Version,
-		LastModified:       c.LastModified,
+		AutoRestart:         c.AutoRestart,
+		WatchFiles:          c.WatchFiles,
+		DebugMode:           c.DebugMode,
+		StartupTimeout:      c.StartupTimeout,
+		ShutdownTimeout:     c.ShutdownTimeout,
+		EnableBackground:    c.EnableBackground,
+		PIDFile:             c.PIDFile,
+		Version:             c.Version,
+		LastModified:        c.LastModified,
 	}
 }
 
@@ -887,8 +887,22 @@ func (c *CLIConfig) Load() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Copy new values
-	*c = *newConfig
+	// Copy new values (preserve the mutex)
+	c.RegistryPort = newConfig.RegistryPort
+	c.RegistryHost = newConfig.RegistryHost
+	c.DBPath = newConfig.DBPath
+	c.LogLevel = newConfig.LogLevel
+	c.HealthCheckInterval = newConfig.HealthCheckInterval
+	c.AutoRestart = newConfig.AutoRestart
+	c.WatchFiles = newConfig.WatchFiles
+	c.DebugMode = newConfig.DebugMode
+	c.StartupTimeout = newConfig.StartupTimeout
+	c.ShutdownTimeout = newConfig.ShutdownTimeout
+	c.EnableBackground = newConfig.EnableBackground
+	c.PIDFile = newConfig.PIDFile
+	c.StateDir = newConfig.StateDir
+	c.Version = newConfig.Version
+	c.LastModified = newConfig.LastModified
 
 	return nil
 }

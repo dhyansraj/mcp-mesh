@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -63,8 +64,8 @@ Examples:
 	cmd.Flags().Int("shutdown-timeout", 0, "Graceful shutdown timeout in seconds (default: 30)")
 
 	// Background service flags
-	cmd.Flags().Bool("background", false, "Run as background service")
-	cmd.Flags().String("pid-file", "./mcp_mesh_dev.pid", "PID file for background service")
+	cmd.Flags().BoolP("detach", "d", false, "Run in detached mode (detach)")
+	cmd.Flags().String("pid-file", "./mcp_mesh_dev.pid", "PID file for detached service")
 
 	// Advanced configuration flags
 	cmd.Flags().String("config-file", "", "Custom configuration file path")
@@ -115,7 +116,6 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-
 	// Load environment file if specified
 	envFile, _ := cmd.Flags().GetString("env-file")
 	if envFile != "" {
@@ -141,7 +141,7 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	registryOnly, _ := cmd.Flags().GetBool("registry-only")
 	registryURL, _ := cmd.Flags().GetString("registry-url")
 	connectOnly, _ := cmd.Flags().GetBool("connect-only")
-	background, _ := cmd.Flags().GetBool("background")
+	detach, _ := cmd.Flags().GetBool("detach")
 
 	// Validate flag combinations
 	if err := validateFlagCombinations(cmd); err != nil {
@@ -161,8 +161,8 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return startConnectOnlyMode(cmd, args, registryURL, config)
 	}
 
-	// Handle background mode
-	if background {
+	// Handle detach mode
+	if detach {
 		return startBackgroundMode(cmd, args, config)
 	}
 
@@ -309,9 +309,9 @@ func applyAllStartFlags(cmd *cobra.Command, config *CLIConfig) error {
 	}
 
 	// Background service configuration
-	if cmd.Flags().Changed("background") {
-		background, _ := cmd.Flags().GetBool("background")
-		config.EnableBackground = background
+	if cmd.Flags().Changed("detach") {
+		detach, _ := cmd.Flags().GetBool("detach")
+		config.EnableBackground = detach
 	}
 
 	return nil
@@ -326,14 +326,18 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		fmt.Printf("Starting MCP Mesh registry on %s:%d\n", config.RegistryHost, config.RegistryPort)
 	}
 
-	// Check if registry is already running
-	if info, exists := pm.GetProcess("registry"); exists && info.Status == "running" {
-		return fmt.Errorf("registry is already running (PID: %d)", info.PID)
+	// Check if registry is already running via HTTP (primary check)
+	registryURL := config.GetRegistryURL()
+	if IsRegistryRunning(registryURL) {
+		if !quiet {
+			fmt.Printf("Registry is already running at %s\n", registryURL)
+		}
+		return fmt.Errorf("registry is already running at %s", registryURL)
 	}
 
-	// Check if port is available
+	// Check if port is available (secondary check for better error messages)
 	if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
-		return fmt.Errorf("port %d is already in use on %s", config.RegistryPort, config.RegistryHost)
+		return fmt.Errorf("port %d is already in use on %s - another service may be using this port", config.RegistryPort, config.RegistryHost)
 	}
 
 	// Setup security if specified
@@ -357,10 +361,10 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return fmt.Errorf("failed to start registry: %w", err)
 	}
 
-	background, _ := cmd.Flags().GetBool("background")
-	if background {
+	detach, _ := cmd.Flags().GetBool("detach")
+	if detach {
 		if !quiet {
-			fmt.Printf("Registry started in background (PID: %d)\n", processInfo.PID)
+			fmt.Printf("Registry started in detach (PID: %d)\n", processInfo.PID)
 			fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
 		}
 		return nil
@@ -412,40 +416,54 @@ func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) e
 
 	// Check if already running
 	if isProcessRunning(pidFile) {
-		return fmt.Errorf("background service already running (PID file: %s)", pidFile)
+		return fmt.Errorf("detach service already running (PID file: %s)", pidFile)
 	}
 
-	// Fork to background
+	// Fork to detach
 	return forkToBackground(cmd, args, pidFile, config)
 }
 
 // Standard mode
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
-	registryURL := config.GetRegistryURL()
+	// Determine registry URL from flags or config
+	registryURL := determineStartRegistryURL(cmd, config)
 	autoRestart, _ := cmd.Flags().GetBool("auto-restart")
 	watchFiles, _ := cmd.Flags().GetBool("watch-files")
+	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	// Check if registry is running
 	if !IsRegistryRunning(registryURL) {
-		quiet, _ := cmd.Flags().GetBool("quiet")
-		if !quiet {
-			fmt.Printf("Registry not found at %s, starting embedded registry...\n", registryURL)
-		}
-
-		// Start registry in background
-		go func() {
-			if err := startRegistryWithOptions(config, true, cmd); err != nil {
-				fmt.Printf("Registry startup failed: %v\n", err)
+		// Only attempt to start registry if connecting to localhost
+		registryHost := getRegistryHostFromURL(registryURL, config.RegistryHost)
+		if isLocalhostRegistry(registryHost) {
+			if !quiet {
+				fmt.Printf("Registry not found at %s, starting embedded registry...\n", registryURL)
 			}
-		}()
 
-		// Wait for registry to be ready
-		startupTimeout, _ := cmd.Flags().GetInt("startup-timeout")
-		if startupTimeout == 0 {
-			startupTimeout = config.StartupTimeout
-		}
-		if err := WaitForRegistry(registryURL, time.Duration(startupTimeout)*time.Second); err != nil {
-			return fmt.Errorf("registry startup timeout: %w", err)
+			// Check if we can start a registry (port available)
+			registryPort := getRegistryPortFromURL(registryURL, config.RegistryPort)
+			if !IsPortAvailable(registryHost, registryPort) {
+				return fmt.Errorf("cannot start registry: port %d is already in use on %s", registryPort, registryHost)
+			}
+
+			// Start registry in detach
+			go func() {
+				if err := startRegistryWithOptions(config, true, cmd); err != nil {
+					fmt.Printf("Registry startup failed: %v\n", err)
+				}
+			}()
+
+			// Wait for registry to be ready
+			startupTimeout, _ := cmd.Flags().GetInt("startup-timeout")
+			if startupTimeout == 0 {
+				startupTimeout = config.StartupTimeout
+			}
+			if err := WaitForRegistry(registryURL, time.Duration(startupTimeout)*time.Second); err != nil {
+				return fmt.Errorf("registry startup timeout: %w", err)
+			}
+		} else {
+			// Remote registry - cannot start, must connect to existing
+			return fmt.Errorf("cannot connect to remote registry at %s - please ensure the registry is running", registryURL)
 		}
 	}
 
@@ -460,17 +478,80 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 	return startAgentsWithEnv(args, agentEnv, cmd, config)
 }
 
-func startRegistryWithOptions(config *CLIConfig, background bool, cmd *cobra.Command) error {
+// isLocalhostRegistry checks if the registry host is localhost/local
+func isLocalhostRegistry(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return true
+	default:
+		return false
+	}
+}
+
+// determineStartRegistryURL resolves the registry URL for start command based on flags and config
+func determineStartRegistryURL(cmd *cobra.Command, config *CLIConfig) string {
+	// Check if registry-url flag is provided
+	if registryURL, _ := cmd.Flags().GetString("registry-url"); registryURL != "" {
+		return registryURL
+	}
+
+	// Build URL from individual flags or config
+	host := config.RegistryHost
+	port := config.RegistryPort
+
+	// Override with flags if provided
+	if cmd.Flags().Changed("registry-host") {
+		if flagHost, _ := cmd.Flags().GetString("registry-host"); flagHost != "" {
+			host = flagHost
+		}
+	}
+	if cmd.Flags().Changed("registry-port") {
+		if flagPort, _ := cmd.Flags().GetInt("registry-port"); flagPort > 0 {
+			port = flagPort
+		}
+	}
+
+	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+// getRegistryHostFromURL extracts the host from a registry URL, fallback to config host
+func getRegistryHostFromURL(registryURL, fallbackHost string) string {
+	if parsed, err := url.Parse(registryURL); err == nil && parsed.Host != "" {
+		// Extract just the hostname (without port)
+		if colonIndex := strings.Index(parsed.Host, ":"); colonIndex != -1 {
+			return parsed.Host[:colonIndex]
+		}
+		return parsed.Host
+	}
+	return fallbackHost
+}
+
+// getRegistryPortFromURL extracts the port from a registry URL, fallback to config port
+func getRegistryPortFromURL(registryURL string, fallbackPort int) int {
+	if parsed, err := url.Parse(registryURL); err == nil && parsed.Host != "" {
+		// Extract port if present
+		if colonIndex := strings.Index(parsed.Host, ":"); colonIndex != -1 {
+			if portStr := parsed.Host[colonIndex+1:]; portStr != "" {
+				if port, err := strconv.Atoi(portStr); err == nil {
+					return port
+				}
+			}
+		}
+	}
+	return fallbackPort
+}
+
+func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command) error {
 	// Start the registry service
 	registryCmd, err := startRegistryService(config)
 	if err != nil {
 		return fmt.Errorf("failed to start registry: %w", err)
 	}
 
-	if background {
-		// Start in background
+	if detach {
+		// Start in detach
 		if err := registryCmd.Start(); err != nil {
-			return fmt.Errorf("failed to start registry in background: %w", err)
+			return fmt.Errorf("failed to start registry in detach: %w", err)
 		}
 
 		// Record the process
@@ -488,7 +569,7 @@ func startRegistryWithOptions(config *CLIConfig, background bool, cmd *cobra.Com
 
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		if !quiet {
-			fmt.Printf("Registry started in background (PID: %d)\n", registryCmd.Process.Pid)
+			fmt.Printf("Registry started in detach (PID: %d)\n", registryCmd.Process.Pid)
 			fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
 		}
 		return nil
@@ -550,7 +631,7 @@ func startRegistryWithOptions(config *CLIConfig, background bool, cmd *cobra.Com
 	return KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
 }
 
-func startAgents(agentPaths []string, config *CLIConfig, background bool) error {
+func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
 	// Ensure registry is running
 	if !IsRegistryRunning(config.GetRegistryURL()) {
 		fmt.Printf("Registry not found, starting local registry on %s:%d\n", config.RegistryHost, config.RegistryPort)
@@ -565,7 +646,7 @@ func startAgents(agentPaths []string, config *CLIConfig, background bool) error 
 			config.RegistryPort = availablePort
 		}
 
-		// Start registry in background
+		// Start registry in detach
 		registryCmd, err := startRegistryService(config)
 		if err != nil {
 			return fmt.Errorf("failed to start registry: %w", err)
@@ -612,7 +693,7 @@ func startAgents(agentPaths []string, config *CLIConfig, background bool) error 
 			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
 		}
 
-		if background {
+		if detach {
 			if err := cmd.Start(); err != nil {
 				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
 			}
@@ -637,8 +718,8 @@ func startAgents(agentPaths []string, config *CLIConfig, background bool) error 
 		fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), cmd.Process.Pid)
 	}
 
-	if background {
-		fmt.Printf("All agents started in background\n")
+	if detach {
+		fmt.Printf("All agents started in detach\n")
 		fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
 		return nil
 	}
@@ -681,12 +762,12 @@ func startAgents(agentPaths []string, config *CLIConfig, background bool) error 
 }
 
 func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
-	// Prepare the registry command
-	registryBinary := "./mcp-mesh-registry"
+	// Prepare the registry command - use bin/ directory for consistency with Makefile
+	registryBinary := "./bin/mcp-mesh-registry"
 
 	// Check if binary exists, if not try to build it
 	if _, err := os.Stat(registryBinary); os.IsNotExist(err) {
-		// Try building the registry
+		// Try building the registry using the same path as Makefile
 		fmt.Println("Building registry service...")
 		buildCmd := exec.Command("go", "build", "-o", registryBinary, "./cmd/mcp-mesh-registry")
 
@@ -775,7 +856,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	workingDir, _ := cmd.Flags().GetString("working-dir")
 	user, _ := cmd.Flags().GetString("user")
 	group, _ := cmd.Flags().GetString("group")
-	background, _ := cmd.Flags().GetBool("background")
+	detach, _ := cmd.Flags().GetBool("detach")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	for _, agentPath := range agentPaths {
@@ -795,7 +876,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
 		}
 
-		if background {
+		if detach {
 			if err := agentCmd.Start(); err != nil {
 				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
 			}
@@ -823,9 +904,9 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 	}
 
-	if background {
+	if detach {
 		if !quiet {
-			fmt.Printf("All agents started in background\n")
+			fmt.Printf("All agents started in detach\n")
 		}
 		return nil
 	}
@@ -1226,13 +1307,13 @@ func isProcessRunning(pidFile string) bool {
 }
 
 func forkToBackground(cobraCmd *cobra.Command, args []string, pidFile string, config *CLIConfig) error {
-	// Create a new command to run in background
+	// Create a new command to run in detach
 	cmdArgs := []string{os.Args[0], "start"}
 	cmdArgs = append(cmdArgs, args...)
 
-	// Add all the flags to the background command
+	// Add all the flags to the detach command
 	cobraCmd.Flags().Visit(func(flag *pflag.Flag) {
-		if flag.Name != "background" { // Don't pass background flag to avoid infinite loop
+		if flag.Name != "detach" { // Don't pass detach flag to avoid infinite loop
 			cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
 		}
 	})
@@ -1242,7 +1323,7 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, pidFile string, co
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start background process: %w", err)
+		return fmt.Errorf("failed to start detach process: %w", err)
 	}
 
 	// Write PID file
@@ -1252,7 +1333,7 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, pidFile string, co
 
 	quiet, _ := cobraCmd.Flags().GetBool("quiet")
 	if !quiet {
-		fmt.Printf("Started in background (PID: %d, PID file: %s)\n", cmd.Process.Pid, pidFile)
+		fmt.Printf("Started in detach (PID: %d, PID file: %s)\n", cmd.Process.Pid, pidFile)
 	}
 
 	return nil

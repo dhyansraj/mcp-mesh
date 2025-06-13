@@ -54,10 +54,10 @@ type LogEntry struct {
 
 // LogLevel mapping for filtering
 var logLevels = map[string]int{
-	"DEBUG":   0,
-	"INFO":    1,
-	"WARNING": 2,
-	"ERROR":   3,
+	"DEBUG":    0,
+	"INFO":     1,
+	"WARNING":  2,
+	"ERROR":    3,
 	"CRITICAL": 4,
 }
 
@@ -97,10 +97,10 @@ func runLogsCommand(cmd *cobra.Command, args []string) error {
 
 // LogSource represents a source of logs
 type LogSource struct {
-	Type     string // "file", "journalctl", "process"
-	Path     string
-	Source   string // Agent name or "registry"
-	Command  []string // For command-based sources
+	Type    string // "file", "journalctl", "process"
+	Path    string
+	Source  string   // Agent name or "registry"
+	Command []string // For command-based sources
 }
 
 // discoverLogSources finds all available log sources
@@ -187,8 +187,8 @@ func discoverProcessLogs(agentFilter string) ([]LogSource, error) {
 		if runtime.GOOS == "linux" {
 			// Use journalctl on Linux
 			sources = append(sources, LogSource{
-				Type:   "journalctl",
-				Source: proc.Name,
+				Type:    "journalctl",
+				Source:  proc.Name,
 				Command: []string{"journalctl", "--pid", strconv.Itoa(proc.PID), "--no-pager", "--output", "short"},
 			})
 		} else {

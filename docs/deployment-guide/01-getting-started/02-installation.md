@@ -2,16 +2,79 @@
 
 > Get MCP Mesh running in under 2 minutes
 
-## Quick Install (Recommended)
+## Quick Install (Recommended - When Available)
+
+Once MCP Mesh is open-sourced, you'll be able to install it directly:
 
 ```bash
-# Install MCP Mesh
+# Install MCP Mesh from PyPI (coming soon)
 pip install mcp-mesh
+
+# Download the CLI tool (coming soon)
+curl -sSL https://github.com/mcp-mesh/mcp-mesh/releases/latest/download/mcp-mesh-dev -o mcp-mesh-dev
+chmod +x mcp-mesh-dev
+sudo mv mcp-mesh-dev /usr/local/bin/
 
 # Verify installation
 mcp-mesh-dev --version
+```
 
-# That's it! You're ready to run agents
+## Current Installation (Build from Source)
+
+Until the public release, you'll need to build from source:
+
+### Prerequisites
+
+- Python 3.9 or higher
+- Go 1.23 or higher
+- Make (build tool)
+
+### Quick Install (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/mcp-mesh/mcp-mesh.git
+cd mcp-mesh
+
+# Install everything with one command
+make install
+
+# Activate the virtual environment that was created
+source .venv/bin/activate
+
+# Verify installation
+mcp-mesh-dev --version
+```
+
+That's it! The `make install` command:
+
+- Builds the Go binaries
+- Creates a Python virtual environment in `.venv` (if needed)
+- Installs the Python package with all dependencies
+- Installs binaries to `/usr/local/bin` (may prompt for sudo)
+
+> **Note**: MCP Mesh always uses `.venv` in the project root for consistency
+
+### Manual Installation
+
+If you prefer to control each step:
+
+```bash
+# Build Go binaries
+make build
+
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install Python package
+pip install src/runtime/python/
+
+# Install binaries (optional, requires sudo)
+sudo make install
+
+# Or add to PATH instead
+export PATH=$PATH:$(pwd)/bin
 ```
 
 ## What Gets Installed?
@@ -19,8 +82,8 @@ mcp-mesh-dev --version
 When you install MCP Mesh, you get:
 
 1. **Python Package** (`mcp_mesh`): The decorators and runtime for your agents
-2. **CLI Tool** (`mcp-mesh-dev`): Command-line tool for running agents
-3. **Registry Binary**: Go-based service registry (downloaded automatically)
+2. **CLI Tool** (`mcp-mesh-dev`): Go-based command-line tool for running agents
+3. **Registry Binary** (`mcp-mesh-registry`): Go-based service registry
 
 ## System Requirements
 
@@ -29,54 +92,39 @@ When you install MCP Mesh, you get:
 - **Memory**: 1GB free RAM
 - **Disk**: 500MB free space
 
-## Installation Options
+## For Developers
 
-### Virtual Environment (Recommended)
-
-```bash
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install MCP Mesh
-pip install mcp-mesh
-```
-
-### Global Installation
+If you're contributing to MCP Mesh:
 
 ```bash
-# Install globally (requires admin/sudo)
-pip install mcp-mesh
+# Development installation
+make install-dev
 
-# Or user-level installation
-pip install --user mcp-mesh
+# This creates symlinks instead of copying binaries
+# and installs the Python package in editable mode
 ```
 
-### Development Installation
-
-```bash
-# Clone and install from source
-git clone https://github.com/mcp-mesh/mcp-mesh.git
-cd mcp-mesh
-pip install -e src/runtime/python/
-
-# Build Go components (optional - for registry development)
-make build  # Builds mcp-mesh-registry and mcp-mesh-dev
-```
+See our [Contributing Guide](../contributing.md) for more details.
 
 ## Verify Installation
 
 Run a quick test to ensure everything is working:
 
 ```bash
+# Make sure you're in the virtual environment
+source .venv/bin/activate
+
 # Test the CLI
-mcp-mesh-dev --help
+mcp-mesh-dev --version
 
 # Test Python import
 python -c "from mcp_mesh import mesh_agent; print('✅ MCP Mesh is installed!')"
 
-# Run the built-in example
-mcp-mesh-dev test
+# Start the registry (in one terminal)
+mcp-mesh-dev start --registry-only
+
+# Run an example agent (in another terminal)
+mcp-mesh-dev start examples/hello_world.py
 ```
 
 ## Your First Agent in 30 Seconds
@@ -95,16 +143,14 @@ def say_hello(name: str = "World"):
     return f"Hello, {name}!"
 
 if __name__ == "__main__":
-    import asyncio
-    from mcp_mesh.server.runner import run_server
-    asyncio.run(run_server(server))
+    server.run(transport="stdio")
 ```
 
 Run it:
 
 ```bash
 # Start your agent (registry starts automatically)
-mcp-mesh-dev start hello.py
+mcp-mesh-dev start hello.py  # or ./bin/mcp-mesh-dev start hello.py
 
 # Test it
 curl http://localhost:8000/hello_say_hello
@@ -114,43 +160,55 @@ That's it! You've just created and deployed your first MCP Mesh agent.
 
 ## Common Installation Issues
 
-### 1. ImportError: No module named 'mcp_mesh'
+### 1. Command 'mcp-mesh-dev' not found
 
-**Solution**: Ensure virtual environment is activated and MCP Mesh is installed:
+**Solution**: Either add `/usr/local/bin` to your PATH or use the local binary:
 
 ```bash
-pip list | grep mcp-mesh
+# Option 1: Use full path
+/usr/local/bin/mcp-mesh-dev --version
+
+# Option 2: Add to PATH
+export PATH=$PATH:/usr/local/bin
+
+# Option 3: Use local binary
+./bin/mcp-mesh-dev --version
 ```
 
-### 2. Permission Denied
+### 2. ImportError: No module named 'mcp_mesh'
 
-**Solution**: Use virtual environments instead of system-wide installation:
+**Solution**: Activate the virtual environment:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install mcp-mesh
+source .venv/bin/activate  # or your custom venv
+python -c "import mcp_mesh"
 ```
 
-### 3. Version Conflicts
+### 3. Permission denied when installing to /usr/local/bin
 
-**Solution**: Upgrade pip and reinstall:
+**Solution**: The installer will prompt for sudo. Alternatively, use local binaries:
 
 ```bash
-pip install --upgrade pip
-pip install --upgrade mcp-mesh
+# Just build without installing
+make build
+
+# Add to PATH
+export PATH=$PATH:$(pwd)/bin
 ```
 
-### 4. Registry Connection Failed
+### 4. Port 8080 already in use
 
-**Solution**: Ensure registry is running and accessible:
+**Solution**: Another service is using port 8080:
 
 ```bash
-# Check if registry is running
-ps aux | grep mcp-mesh-registry
+# Find what's using port 8080
+lsof -i :8080
 
-# Check port availability
-lsof -i :8000
+# Kill the process (replace PID with actual process ID)
+kill <PID>
+
+# Or use a different port
+mcp-mesh-dev start --registry-port 8081
 ```
 
 ## Next Steps

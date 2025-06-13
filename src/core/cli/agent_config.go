@@ -9,12 +9,12 @@ import (
 )
 
 type AgentConfig struct {
-	Script           string            `yaml:"script"`
-	WorkingDirectory string            `yaml:"working_directory,omitempty"`
-	PythonInterpreter string           `yaml:"python_interpreter,omitempty"`
-	Environment      map[string]string `yaml:"environment,omitempty"`
-	Metadata         AgentMetadata     `yaml:"metadata,omitempty"`
-	Resources        ResourceLimits    `yaml:"resources,omitempty"`
+	Script            string            `yaml:"script"`
+	WorkingDirectory  string            `yaml:"working_directory,omitempty"`
+	PythonInterpreter string            `yaml:"python_interpreter,omitempty"`
+	Environment       map[string]string `yaml:"environment,omitempty"`
+	Metadata          AgentMetadata     `yaml:"metadata,omitempty"`
+	Resources         ResourceLimits    `yaml:"resources,omitempty"`
 }
 
 type AgentMetadata struct {

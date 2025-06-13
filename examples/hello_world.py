@@ -15,7 +15,7 @@ Key Demonstration:
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
+from mcp_mesh import mesh_agent, mesh_tool
 
 
 def create_hello_world_server() -> FastMCP:
@@ -228,15 +228,100 @@ def create_hello_world_server() -> FastMCP:
                     "message": "Date function injected but call failed",
                 }
 
+    # ===== NEW: MULTI-TOOL AGENT WITH @mesh_tool DECORATOR =====
+    # This demonstrates the new @mesh_tool decorator for auto-discovery
+
+    @mesh_agent(
+        auto_discover_tools=True,  # Enable auto-discovery of @mesh_tool methods
+        default_version="1.0.0",
+        health_interval=30,
+        description="Multi-tool greeting agent using @mesh_tool decorator",
+        tags=["demo", "multi-tool", "auto-discovery"],
+        enable_http=True,
+        http_port=8890,
+    )
+    class GreetingAgent:
+        """
+        Multi-tool agent demonstrating @mesh_tool decorator.
+
+        This showcases the new auto-discovery feature where tools are
+        automatically found and registered from @mesh_tool decorated methods.
+        """
+
+        @server.tool()
+        @mesh_tool(
+            capability="personalized_greeting",
+            version="2.0.0",
+            dependencies=["SystemAgent_getDate"],
+            tags=["greeting", "personalized"],
+        )
+        def greet_with_time(self, name: str, SystemAgent_getDate: Any = None) -> str:
+            """Personalized greeting with current time."""
+            if SystemAgent_getDate is None:
+                return f"Hello {name}! (Time service unavailable)"
+
+            try:
+                current_time = SystemAgent_getDate()
+                return f"Hello {name}! It's {current_time}"
+            except Exception as e:
+                return f"Hello {name}! (Time error: {e})"
+
+        @server.tool()
+        @mesh_tool(
+            capability="farewell_message",
+            dependencies=[],  # No dependencies
+            tags=["farewell", "simple"],
+        )
+        def farewell(self, name: str) -> str:
+            """Simple farewell message."""
+            return f"Goodbye {name}! Thanks for trying MCP Mesh!"
+
+        @server.tool()
+        @mesh_tool(
+            capability="greeting_stats",
+            dependencies=["SystemAgent_getInfo"],
+            tags=["stats", "info"],
+        )
+        def get_greeting_stats(self, SystemAgent_getInfo: Any = None) -> dict[str, Any]:
+            """Get greeting statistics with system info."""
+            stats = {
+                "greeting_agent": "multi-tool-demo",
+                "tools_available": [
+                    "greet_with_time",
+                    "farewell",
+                    "get_greeting_stats",
+                ],
+                "auto_discovery": True,
+                "mesh_tool_decorator": True,
+            }
+
+            if SystemAgent_getInfo is not None:
+                try:
+                    system_info = SystemAgent_getInfo()
+                    stats["system_uptime"] = system_info.get(
+                        "uptime_formatted", "unknown"
+                    )
+                    stats["system_date"] = system_info.get("date", "unknown")
+                except Exception as e:
+                    stats["system_error"] = str(e)
+            else:
+                stats["system_info"] = "SystemAgent not available"
+
+            return stats
+
     return server
 
 
 def main():
     """Run the Hello World demonstration server."""
+    import asyncio
     import signal
-    import sys
     import threading
     import time
+
+    # Global shutdown flag
+    _shutdown_event = threading.Event()
+    _fastapi_server = None
 
     # Setup signal handler
     def signal_handler(signum, frame):
@@ -244,9 +329,13 @@ def main():
         try:
             print(f"\n📍 Received signal {signum}")
             print("🛑 Shutting down gracefully...")
+            print("Shutting down all services...")
+
+            # Set shutdown flag
+            _shutdown_event.set()
+
         except Exception:
             pass
-        sys.exit(0)
 
     # Install signal handlers
     signal.signal(signal.SIGINT, signal_handler)
@@ -260,8 +349,12 @@ def main():
     # Start FastAPI server for DI testing in background thread
     def start_fastapi():
         """Start FastAPI server for dependency injection testing."""
+        import asyncio
+
         import uvicorn
         from fastapi import FastAPI
+
+        nonlocal _fastapi_server
 
         app = FastAPI(title="MCP Mesh DI Tester")
 
@@ -391,10 +484,20 @@ def main():
             "💡 Refresh the endpoint after starting system_agent.py to see injection!\n"
         )
 
-        uvicorn.run(app, host="0.0.0.0", port=8888, log_level="error")
+        # Create uvicorn config
+        config = uvicorn.Config(
+            app, host="0.0.0.0", port=8888, log_level="error", loop="asyncio"
+        )
+        _fastapi_server = uvicorn.Server(config)
+
+        # Run server with graceful shutdown support
+        try:
+            asyncio.run(_fastapi_server.serve())
+        except KeyboardInterrupt:
+            pass
 
     # Start FastAPI in background thread
-    fastapi_thread = threading.Thread(target=start_fastapi, daemon=True)
+    fastapi_thread = threading.Thread(target=start_fastapi, daemon=False)
     fastapi_thread.start()
 
     print(f"📡 Server name: {server.name}")
@@ -404,6 +507,9 @@ def main():
     print(
         "• greet_single_capability - Single capability function (Kubernetes-optimized)"
     )
+    print("• greet_with_time - NEW: Multi-tool agent with @mesh_tool decorator")
+    print("• farewell - NEW: Simple farewell from multi-tool agent")
+    print("• get_greeting_stats - NEW: Stats with auto-discovered tools")
     print("\n🔧 Test Workflow:")
     print("1. Check DI status: curl http://localhost:8888/check-di")
     print("2. Start system_agent.py to see automatic dependency injection")
@@ -417,17 +523,58 @@ def main():
 
     # Run the server with stdio transport
     try:
-        server.run(transport="stdio")
+        # Create a separate thread for the MCP server since it blocks
+        def run_mcp_server():
+            try:
+                server.run(transport="stdio")
+            except KeyboardInterrupt:
+                pass
+            except Exception as e:
+                if not _shutdown_event.is_set():
+                    print(f"❌ Server error: {e}")
+
+        mcp_thread = threading.Thread(target=run_mcp_server, daemon=False)
+        mcp_thread.start()
+
+        # Wait for shutdown signal
+        while not _shutdown_event.is_set():
+            time.sleep(0.1)
+
+        print("🛑 Shutdown signal received, stopping all services...")
+
+        # Gracefully shutdown FastAPI server
+        if _fastapi_server:
+            print("Stopping FastAPI server...")
+            try:
+                # Create a new event loop for shutdown since we're in main thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_fastapi_server.shutdown())
+                loop.close()
+                print("✅ FastAPI server stopped")
+            except Exception as e:
+                print(f"Error stopping FastAPI server: {e}")
+
+        # Wait for threads to complete with timeout
+        print("Waiting for background threads...")
+        if fastapi_thread.is_alive():
+            fastapi_thread.join(timeout=2)
+        if mcp_thread.is_alive():
+            mcp_thread.join(timeout=2)
+
+        print("✅ All services stopped gracefully")
+
     except KeyboardInterrupt:
-        try:
-            print("\n🛑 Hello World demo server stopped by user.")
-        except Exception:
-            pass
-    except SystemExit:
-        pass  # Clean exit
+        print("\n🛑 Hello World demo server stopped by user.")
     except Exception as e:
+        print(f"❌ Server error: {e}")
+    finally:
+        # Stop background event loop if still running
         try:
-            print(f"❌ Server error: {e}")
+            from mcp_mesh.runtime.fastmcp_integration import stop_background_event_loop
+
+            stop_background_event_loop()
+            print("INFO     Stopping background event loop...")
         except Exception:
             pass
 

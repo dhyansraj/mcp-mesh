@@ -37,13 +37,13 @@ func NewLogAggregator(pm *ProcessManager) *LogAggregator {
 	logPattern := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s*(\w+)?\s*(.*)$`)
 
 	levelOrder := map[string]int{
-		"DEBUG":   0,
-		"INFO":    1,
-		"WARNING": 2,
-		"WARN":    2,
-		"ERROR":   3,
+		"DEBUG":    0,
+		"INFO":     1,
+		"WARNING":  2,
+		"WARN":     2,
+		"ERROR":    3,
 		"CRITICAL": 4,
-		"FATAL":   4,
+		"FATAL":    4,
 	}
 
 	return &LogAggregator{

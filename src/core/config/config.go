@@ -24,7 +24,7 @@ type Config struct {
 	HealthCheckInterval int    `env:"HEALTH_CHECK_INTERVAL" envDefault:"30"`
 
 	// Cache configuration
-	CacheTTL           int  `env:"CACHE_TTL" envDefault:"30"`           // seconds
+	CacheTTL            int  `env:"CACHE_TTL" envDefault:"30"` // seconds
 	EnableResponseCache bool `env:"ENABLE_RESPONSE_CACHE" envDefault:"true"`
 
 	// Health monitoring configuration

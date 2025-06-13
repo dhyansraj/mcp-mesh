@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package cli
@@ -16,7 +17,7 @@ import (
 
 // Windows API constants
 const (
-	PROCESS_TERMINATE = 0x0001
+	PROCESS_TERMINATE         = 0x0001
 	PROCESS_QUERY_INFORMATION = 0x0400
 )
 

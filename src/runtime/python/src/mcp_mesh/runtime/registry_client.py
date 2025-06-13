@@ -179,9 +179,7 @@ class RegistryClient:
             "timestamp": datetime.now().isoformat(),
         }
 
-        result = await self._make_request(
-            "POST", "/agents/register_with_metadata", payload
-        )
+        result = await self._make_request("POST", "/agents/register", payload)
         return result is not None
 
     async def get_all_agents(self) -> list[dict[str, Any]]:
@@ -321,3 +319,153 @@ class RegistryClient:
         """Close the HTTP session."""
         if self._session:
             await self._session.close()
+
+    # NEW MULTI-TOOL METHODS (TDD Implementation)
+
+    async def register_multi_tool_agent(
+        self, agent_id: str, metadata: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """
+        Register agent using the new multi-tool format.
+
+        Args:
+            agent_id: Unique identifier for the agent
+            metadata: Agent metadata including tools array
+
+        Expected metadata format:
+        {
+            "name": "agent-name",
+            "endpoint": "http://localhost:8080",
+            "timeout_threshold": 60,
+            "eviction_threshold": 120,
+            "tools": [
+                {
+                    "function_name": "tool_name",
+                    "capability": "capability_name",
+                    "version": "1.0.0",
+                    "tags": ["tag1", "tag2"],
+                    "dependencies": [
+                        {
+                            "capability": "required_capability",
+                            "version": ">=1.0.0",
+                            "tags": ["production"]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        Returns:
+            Registration response with per-tool dependency resolution
+        """
+        payload = {
+            "agent_id": agent_id,
+            "metadata": metadata,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        self.logger.info(
+            f"Registering multi-tool agent {agent_id} with {len(metadata.get('tools', []))} tools"
+        )
+
+        result = await self._make_request("POST", "/agents/register", payload)
+        return result
+
+    def parse_tool_dependencies(
+        self, registry_response: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Parse per-tool dependency resolution from registry response.
+
+        Args:
+            registry_response: Response from registry registration or heartbeat
+
+        Returns:
+            Dict mapping tool names to their resolved dependencies:
+            {
+                "tool_name": {
+                    "dependency_capability": {
+                        "agent_id": "provider-id",
+                        "tool_name": "provider-tool",
+                        "endpoint": "http://provider:8080",
+                        "version": "1.0.0"
+                    }
+                }
+            }
+        """
+        try:
+            # Check for new per-tool format first
+            if (
+                "metadata" in registry_response
+                and "dependencies_resolved" in registry_response["metadata"]
+            ):
+                dependencies = registry_response["metadata"]["dependencies_resolved"]
+                if isinstance(dependencies, dict):
+                    return dependencies
+
+            # Fallback to root-level dependencies_resolved for backward compatibility
+            if "dependencies_resolved" in registry_response:
+                dependencies = registry_response["dependencies_resolved"]
+                if isinstance(dependencies, dict):
+                    # If it's old format, try to adapt it
+                    return {"legacy_tool": dependencies}
+
+            return {}
+        except Exception as e:
+            self.logger.warning(f"Failed to parse tool dependencies: {e}")
+            return {}
+
+    async def send_heartbeat_with_dependency_resolution(
+        self, health_status: HealthStatus
+    ) -> dict[str, Any] | None:
+        """
+        Send heartbeat and return full dependency resolution for all tools.
+
+        This is the core method for getting updated dependency information.
+        The Go registry always returns the full dependency state, and Python
+        handles comparing with previous state.
+
+        Args:
+            health_status: Current health status of the agent
+
+        Returns:
+            Heartbeat response including full dependency resolution:
+            {
+                "status": "success",
+                "timestamp": "2023-12-20T10:30:45Z",
+                "dependencies_resolved": {
+                    "tool1": {"dep1": {...}},
+                    "tool2": {"dep2": {...}}
+                }
+            }
+        """
+        # Convert to Go registry format - same as existing heartbeat
+        payload = {
+            "agent_id": health_status.agent_name,
+            "status": (
+                health_status.status.value
+                if hasattr(health_status.status, "value")
+                else health_status.status
+            ),
+            "metadata": {
+                "capabilities": health_status.capabilities,
+                "timestamp": (
+                    health_status.timestamp.isoformat()
+                    if health_status.timestamp
+                    else None
+                ),
+                "checks": health_status.checks,
+                "errors": health_status.errors,
+                "uptime_seconds": health_status.uptime_seconds,
+                "version": health_status.version,
+                **health_status.metadata,
+            },
+        }
+
+        self.logger.debug(
+            f"Sending heartbeat for {health_status.agent_name} with dependency resolution"
+        )
+
+        # Use /heartbeat endpoint - Go registry returns full dependency state
+        result = await self._make_request("POST", "/heartbeat", payload)
+        return result

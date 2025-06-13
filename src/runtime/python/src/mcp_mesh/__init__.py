@@ -43,7 +43,7 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-from .decorators import mesh_agent
+from .decorators import mesh_agent, mesh_tool
 from .exceptions import (
     FileOperationError,
     PermissionDeniedError,
@@ -170,6 +170,7 @@ if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
 
 __all__ = [
     "mesh_agent",
+    "mesh_tool",
     "initialize_runtime",
     "DecoratedFunction",
     "DecoratorRegistry",

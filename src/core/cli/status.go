@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,7 +51,7 @@ type OverallStatus struct {
 
 // AgentStatus represents detailed agent status
 type AgentStatus struct {
-	AgentInfo
+	EnhancedAgent
 	Health       string        `json:"health"`
 	ResponseTime time.Duration `json:"response_time,omitempty"`
 	Uptime       time.Duration `json:"uptime,omitempty"`
@@ -59,10 +60,10 @@ type AgentStatus struct {
 // ProcessStatus represents detailed process status
 type ProcessStatus struct {
 	ProcessInfo
-	Uptime        time.Duration `json:"uptime"`
-	IsResponding  bool         `json:"is_responding"`
-	MemoryUsage   string       `json:"memory_usage,omitempty"`
-	CPUUsage      string       `json:"cpu_usage,omitempty"`
+	Uptime       time.Duration `json:"uptime"`
+	IsResponding bool          `json:"is_responding"`
+	MemoryUsage  string        `json:"memory_usage,omitempty"`
+	CPUUsage     string        `json:"cpu_usage,omitempty"`
 }
 
 // SystemStatus represents system-level information
@@ -159,8 +160,8 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 
 	for i, agent := range combinedAgents {
 		agentStatus := AgentStatus{
-			AgentInfo: agent,
-			Health:    determineAgentHealth(agent),
+			EnhancedAgent: agent,
+			Health:        determineAgentHealth(agent),
 		}
 
 		if !agent.StartTime.IsZero() {
@@ -186,7 +187,7 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 	return outputStatusHuman(status, verbose)
 }
 
-func determineAgentHealth(agent AgentInfo) string {
+func determineAgentHealth(agent EnhancedAgent) string {
 	if agent.PID > 0 && !IsProcessAlive(agent.PID) {
 		return "dead"
 	}
@@ -283,17 +284,18 @@ func outputStatusHuman(status StatusOutput, verbose bool) error {
 			fmt.Printf("\n")
 
 			if verbose {
-				if len(agent.Capabilities) > 0 {
-					fmt.Printf("    Capabilities: %s\n", agent.Capabilities)
-				}
-				if agent.Description != "" {
-					fmt.Printf("    Description: %s\n", agent.Description)
+				if len(agent.Tools) > 0 {
+					var toolNames []string
+					for _, tool := range agent.Tools {
+						toolNames = append(toolNames, tool.Name)
+					}
+					fmt.Printf("    Tools: %s\n", strings.Join(toolNames, ", "))
 				}
 				if agent.FilePath != "" {
 					fmt.Printf("    File: %s\n", agent.FilePath)
 				}
-				if !agent.LastSeen.IsZero() {
-					fmt.Printf("    Last seen: %s ago\n", formatDuration(time.Since(agent.LastSeen)))
+				if agent.LastHeartbeat != nil {
+					fmt.Printf("    Last heartbeat: %s ago\n", formatDuration(time.Since(*agent.LastHeartbeat)))
 				}
 			}
 		}
@@ -339,17 +341,15 @@ func outputStatusHuman(status StatusOutput, verbose bool) error {
 }
 
 // combineAgentInfoFromPM combines registry and process manager information
-func combineAgentInfoFromPM(registryAgents []RegistryAgent, processes map[string]*ProcessInfo) []AgentInfo {
-	agentMap := make(map[string]AgentInfo)
+func combineAgentInfoFromPM(registryAgents []RegistryAgent, processes map[string]*ProcessInfo) []EnhancedAgent {
+	agentMap := make(map[string]EnhancedAgent)
 
 	// Add registry agents
 	for _, regAgent := range registryAgents {
-		agentMap[regAgent.Name] = AgentInfo{
-			Name:         regAgent.Name,
-			Status:       regAgent.Status,
-			Capabilities: regAgent.Capabilities,
-			Description:  regAgent.Description,
-			LastSeen:     regAgent.LastSeen,
+		agentMap[regAgent.Name] = EnhancedAgent{
+			Name:   regAgent.Name,
+			Status: regAgent.Status,
+			Tools:  []ToolInfo{}, // Convert capabilities if needed
 		}
 	}
 
@@ -372,7 +372,7 @@ func combineAgentInfoFromPM(registryAgents []RegistryAgent, processes map[string
 	}
 
 	// Convert to slice
-	var agents []AgentInfo
+	var agents []EnhancedAgent
 	for _, agent := range agentMap {
 		agents = append(agents, agent)
 	}
