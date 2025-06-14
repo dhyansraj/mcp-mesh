@@ -18,6 +18,7 @@ type Agent struct {
 	EvictionThreshold int        `gorm:"default:120" json:"eviction_threshold"`
 	Labels            string     `gorm:"default:'{}'" json:"-"`
 	Metadata          string     `gorm:"default:'{}'" json:"-"`
+	Dependencies      string     `gorm:"default:'[]'" json:"-"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 
@@ -62,6 +63,19 @@ func (a *Agent) GetMetadata() map[string]interface{} {
 func (a *Agent) SetMetadata(metadata map[string]interface{}) {
 	data, _ := json.Marshal(metadata)
 	a.Metadata = string(data)
+}
+
+// GetDependencies returns parsed dependencies
+func (a *Agent) GetDependencies() []interface{} {
+	var dependencies []interface{}
+	json.Unmarshal([]byte(a.Dependencies), &dependencies)
+	return dependencies
+}
+
+// SetDependencies sets dependencies as JSON
+func (a *Agent) SetDependencies(dependencies []interface{}) {
+	data, _ := json.Marshal(dependencies)
+	a.Dependencies = string(data)
 }
 
 // Tool represents an individual function within an agent

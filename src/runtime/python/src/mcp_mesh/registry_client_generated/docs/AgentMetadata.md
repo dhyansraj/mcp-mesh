@@ -9,8 +9,8 @@ Name | Type | Description | Notes
 **agent_type** | **str** | Type of agent | 
 **namespace** | **str** | Agent namespace for organization | [default to 'default']
 **endpoint** | **str** | Agent endpoint URL (http://, https://, or stdio://) | 
-**capabilities** | **List[str]** | List of capabilities provided by agent | 
-**dependencies** | **List[str]** | List of agent dependencies | [optional] [default to []]
+**capabilities** | **List[str]** | List of capabilities provided by agent (0 or more) | [optional] 
+**dependencies** | [**List[AgentMetadataDependenciesInner]**](AgentMetadataDependenciesInner.md) | List of agent dependencies (0 or more) - supports both simple strings and rich objects | [optional] [default to []]
 **health_interval** | **int** | Health check interval in seconds | [optional] [default to 30]
 **timeout_threshold** | **int** | Timeout threshold in seconds | [optional] [default to 60]
 **eviction_threshold** | **int** | Eviction threshold in seconds | [optional] [default to 120]

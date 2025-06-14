@@ -24,6 +24,7 @@ TEST METADATA:
 """
 
 import asyncio
+import copy
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -122,11 +123,13 @@ class MockRegistryClient:
     """
 
     def __init__(
-        self, config: MockRegistryConfig = None, url: str = "http://mock-registry:8000"
+        self, config: MockRegistryConfig = None, url: str = "http://mock-registry:8000",
+        go_compatibility_mode: bool = False
     ):
         self.config = config or MockRegistryConfig()
         self.url = url
         self.logger = logging.getLogger(__name__)
+        self.go_compatibility_mode = go_compatibility_mode
 
         # Mock state
         self.agents: dict[str, MockAgent] = {}
@@ -137,6 +140,141 @@ class MockRegistryClient:
         # Request history for test verification
         self._request_count = 0
         self._last_heartbeat_response: dict[str, Any] | None = None
+        
+        # Go-compatible response templates
+        self._go_responses = {}
+        if go_compatibility_mode:
+            self._load_go_response_templates()
+
+    def _load_go_response_templates(self) -> None:
+        """Load captured Go response templates for exact compatibility."""
+        # These are captured from actual Go registry responses
+        self._go_responses = {
+            "register_decorators": {
+                "agent_id": "agent-hello-world-123",
+                "status": "success", 
+                "message": "Agent registered successfully",
+                "timestamp": "2025-06-14T01:01:45-04:00",
+                "dependencies_resolved": [
+                    {
+                        "function_name": "hello_mesh_simple",
+                        "capability": "greeting",
+                        "dependencies": [
+                            {
+                                "capability": "date_service",
+                                "mcp_tool_info": {
+                                    "agent_id": "date-agent-456",
+                                    "endpoint": "http://date-agent:8000",
+                                    "name": "get_current_date"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "hello_mesh_typed", 
+                        "capability": "advanced_greeting",
+                        "dependencies": [
+                            {
+                                "capability": "info",
+                                "mcp_tool_info": {
+                                    "agent_id": "system-agent-789",
+                                    "endpoint": "http://system-agent:8000",
+                                    "name": "get_system_info"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "test_dependencies",
+                        "capability": "dependency_test", 
+                        "dependencies": [
+                            {
+                                "capability": "date_service",
+                                "mcp_tool_info": {
+                                    "agent_id": "date-agent-456",
+                                    "endpoint": "http://date-agent:8000", 
+                                    "name": "get_current_date"
+                                },
+                                "status": "resolved"
+                            },
+                            {
+                                "capability": "info",
+                                "mcp_tool_info": {
+                                    "agent_id": "system-agent-789",
+                                    "endpoint": "http://system-agent:8000",
+                                    "name": "get_system_info"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "heartbeat_decorators": {
+                "agent_id": "agent-hello-world-123",
+                "status": "success",
+                "message": "Heartbeat received",
+                "timestamp": "2025-06-14T01:01:49-04:00",
+                "dependencies_resolved": [
+                    {
+                        "function_name": "hello_mesh_simple",
+                        "capability": "greeting",
+                        "dependencies": [
+                            {
+                                "capability": "date_service",
+                                "mcp_tool_info": {
+                                    "agent_id": "date-agent-456",
+                                    "endpoint": "http://date-agent:8000",
+                                    "name": "get_current_date"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "hello_mesh_typed", 
+                        "capability": "advanced_greeting",
+                        "dependencies": [
+                            {
+                                "capability": "info",
+                                "mcp_tool_info": {
+                                    "agent_id": "system-agent-789",
+                                    "endpoint": "http://system-agent:8000",
+                                    "name": "get_system_info"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "test_dependencies",
+                        "capability": "dependency_test", 
+                        "dependencies": [
+                            {
+                                "capability": "date_service",
+                                "mcp_tool_info": {
+                                    "agent_id": "date-agent-456",
+                                    "endpoint": "http://date-agent:8000", 
+                                    "name": "get_current_date"
+                                },
+                                "status": "resolved"
+                            },
+                            {
+                                "capability": "info",
+                                "mcp_tool_info": {
+                                    "agent_id": "system-agent-789",
+                                    "endpoint": "http://system-agent:8000",
+                                    "name": "get_system_info"
+                                },
+                                "status": "resolved"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
 
     def _should_simulate_failure(self) -> bool:
         """Determine if a failure should be simulated."""
@@ -473,7 +611,21 @@ class MockRegistryClient:
         self._track_request("POST", endpoint, json)
 
         # Simulate different responses based on endpoint
-        if endpoint == "/agents/register":
+        if endpoint == "/agents/register_decorators":
+            # Handle new decorator-based registration
+            if self.go_compatibility_mode:
+                return self._handle_decorator_registration_go_compatible(json)
+            else:
+                return self._handle_decorator_registration_legacy(json)
+                
+        elif endpoint == "/heartbeat_decorators":
+            # Handle new decorator-based heartbeat
+            if self.go_compatibility_mode:
+                return self._handle_decorator_heartbeat_go_compatible(json)
+            else:
+                return self._handle_decorator_heartbeat_legacy(json)
+                
+        elif endpoint == "/agents/register":
             if self.config.return_errors and self._should_simulate_failure():
                 return MockHTTPResponse(
                     {"error": "Simulated registration failure"}, 500
@@ -698,6 +850,120 @@ class MockRegistryClient:
         """Manually set dependency resolution for an agent."""
         self.dependencies_resolved[agent_id] = dependencies
 
+    # Go-compatible decorator endpoint handlers
+    
+    def _handle_decorator_registration_go_compatible(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle decorator registration with Go-compatible response format."""
+        if self.config.return_errors and self._should_simulate_failure():
+            return MockHTTPResponse({"error": "Simulated registration failure"}, 500)
+            
+        # Validate request format matches Go expectations
+        self._validate_decorator_request(json_data, "register")
+        
+        # Extract agent info for storage
+        agent_id = json_data.get("agent_id", "unknown")
+        metadata = json_data.get("metadata", {})
+        
+        # Create agent with decorator info
+        decorators = metadata.get("decorators", [])
+        capabilities = [d.get("capability") for d in decorators if d.get("capability")]
+        
+        agent = MockAgent(
+            agent_id=agent_id,
+            name=metadata.get("name", agent_id),
+            capabilities=capabilities,
+            endpoint=metadata.get("endpoint", f"stdio://{agent_id}"),
+            version=metadata.get("version", "1.0.0"),
+        )
+        self.agents[agent_id] = agent
+        
+        # Return exact Go response format with updated agent ID and timestamp
+        response = copy.deepcopy(self._go_responses["register_decorators"])
+        response["agent_id"] = agent_id
+        response["timestamp"] = datetime.now(timezone.utc).isoformat()
+        
+        return MockHTTPResponse(response, 201)
+    
+    def _handle_decorator_heartbeat_go_compatible(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle decorator heartbeat with Go-compatible response format."""
+        if self.config.return_errors and self._should_simulate_failure():
+            return MockHTTPResponse({"error": "Simulated heartbeat failure"}, 500)
+            
+        # Validate request format matches Go expectations
+        self._validate_decorator_request(json_data, "heartbeat")
+        
+        agent_id = json_data.get("agent_id", "unknown")
+        
+        # Update agent last seen if it exists
+        if agent_id in self.agents:
+            self.agents[agent_id].last_seen = datetime.now(timezone.utc)
+        
+        # Return exact Go response format with updated agent ID and timestamp
+        response = copy.deepcopy(self._go_responses["heartbeat_decorators"])
+        response["agent_id"] = agent_id
+        response["timestamp"] = datetime.now(timezone.utc).isoformat()
+        
+        return MockHTTPResponse(response, 200)
+    
+    def _handle_decorator_registration_legacy(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle decorator registration with legacy mock behavior."""
+        # Fallback to standard registration behavior if not in Go compatibility mode
+        return self._handle_standard_registration(json_data)
+    
+    def _handle_decorator_heartbeat_legacy(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle decorator heartbeat with legacy mock behavior."""
+        # Fallback to standard heartbeat behavior if not in Go compatibility mode
+        return self._handle_standard_heartbeat(json_data)
+    
+    def _validate_decorator_request(self, json_data: dict[str, Any], request_type: str) -> None:
+        """Validate that Python request matches Go's expected format."""
+        required_fields = ["agent_id", "timestamp", "metadata"]
+        for field in required_fields:
+            if field not in json_data:
+                raise ValueError(f"Missing required field: {field}")
+        
+        metadata = json_data["metadata"]
+        required_metadata_fields = ["name", "agent_type", "namespace", "endpoint", "decorators"]
+        for field in required_metadata_fields:
+            if field not in metadata:
+                raise ValueError(f"Missing required metadata field: {field}")
+        
+        # Validate decorators structure
+        decorators = metadata["decorators"]
+        if not isinstance(decorators, list) or len(decorators) == 0:
+            raise ValueError("Decorators must be non-empty list")
+            
+        for decorator in decorators:
+            required_decorator_fields = ["function_name", "capability", "dependencies"]
+            for field in required_decorator_fields:
+                if field not in decorator:
+                    raise ValueError(f"Missing required decorator field: {field}")
+                    
+            # Validate dependencies are standardized format (objects, not strings)
+            for dep in decorator["dependencies"]:
+                if not isinstance(dep, dict) or "capability" not in dep:
+                    raise ValueError("Dependencies must be objects with 'capability' field")
+    
+    def _handle_standard_registration(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle standard registration for backward compatibility."""
+        # Implementation of legacy registration behavior
+        agent_id = json_data.get("agent_id", "unknown")
+        return MockHTTPResponse({
+            "status": "success",
+            "agent_id": agent_id,
+            "message": "Agent registered successfully",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, 201)
+    
+    def _handle_standard_heartbeat(self, json_data: dict[str, Any]) -> MockHTTPResponse:
+        """Handle standard heartbeat for backward compatibility."""
+        # Implementation of legacy heartbeat behavior  
+        return MockHTTPResponse({
+            "status": "success",
+            "message": "Heartbeat received",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, 200)
+
 
 # 🤖 AI TESTING PATTERNS:
 #
@@ -733,11 +999,16 @@ class MockRegistryClient:
 
 def create_mock_registry_client(
     config: MockRegistryConfig = None,
+    go_compatibility_mode: bool = False,
 ) -> MockRegistryClient:
     """
     Factory function to create a MockRegistryClient.
 
     🤖 AI CONVENIENCE FUNCTION:
     Use this in your tests for consistent mock creation.
+    
+    Args:
+        config: Mock configuration options
+        go_compatibility_mode: If True, returns exact Go registry response formats
     """
-    return MockRegistryClient(config or MockRegistryConfig())
+    return MockRegistryClient(config or MockRegistryConfig(), go_compatibility_mode=go_compatibility_mode)

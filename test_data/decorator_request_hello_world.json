@@ -1,0 +1,48 @@
+{
+  "agent_id": "agent-hello-world-123",
+  "timestamp": "2024-01-20T10:30:45Z",
+  "metadata": {
+    "name": "hello-world",
+    "agent_type": "mcp_agent",
+    "namespace": "default",
+    "endpoint": "stdio://agent-hello-world-123",
+    "version": "1.0.0",
+    "decorators": [
+      {
+        "function_name": "hello_mesh_simple",
+        "capability": "greeting",
+        "dependencies": [
+          {
+            "capability": "date_service"
+          }
+        ],
+        "description": "Simple greeting with date dependency"
+      },
+      {
+        "function_name": "hello_mesh_typed",
+        "capability": "advanced_greeting",
+        "dependencies": [
+          {
+            "capability": "info",
+            "tags": ["system", "general"]
+          }
+        ],
+        "description": "Advanced greeting with system info"
+      },
+      {
+        "function_name": "test_dependencies",
+        "capability": "dependency_test",
+        "dependencies": [
+          {
+            "capability": "date_service"
+          },
+          {
+            "capability": "info",
+            "tags": ["system", "disk"]
+          }
+        ],
+        "description": "Test multiple dependencies"
+      }
+    ]
+  }
+}

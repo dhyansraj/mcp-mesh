@@ -110,7 +110,7 @@ paths:
                   timestamp: "2024-01-20T10:30:45Z"
 
               agent_with_dependencies:
-                summary: Agent with dependencies
+                summary: Agent with rich dependencies and tag-based resolution
                 value:
                   agent_id: "system-monitor"
                   metadata:
@@ -119,7 +119,13 @@ paths:
                     namespace: "default"
                     endpoint: "http://localhost:8001"
                     capabilities: ["cpu_usage", "memory_usage"]
-                    dependencies: ["hello-world"]
+                    dependencies: 
+                      - "date_service"
+                      - capability: "info"
+                        tags: ["system", "general"]
+                      - capability: "storage"
+                        tags: ["system", "disk"]
+                        version: ">=1.0.0"
                     health_interval: 30
                     version: "1.0.0"
                   timestamp: "2024-01-20T10:30:45Z"
@@ -267,7 +273,7 @@ components:
 
     AgentMetadata:
       type: object
-      required: [name, agent_type, namespace, endpoint, capabilities]
+      required: [name, agent_type, namespace, endpoint]
       properties:
         name:
           type: string
@@ -293,15 +299,47 @@ components:
           type: array
           items:
             type: string
+          minItems: 0
           example: ["greeting", "farewell"]
-          description: List of capabilities provided by agent
+          description: List of capabilities provided by agent (0 or more)
         dependencies:
           type: array
           items:
-            type: string
+            oneOf:
+              - type: string
+                description: Simple dependency by capability name
+                example: "date_service"
+              - type: object
+                description: Rich dependency with tags and metadata
+                required: [capability]
+                properties:
+                  capability:
+                    type: string
+                    description: Required capability name
+                    example: "info"
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                    description: Optional tags for smart matching
+                    example: ["system", "general"]
+                  version:
+                    type: string
+                    description: Optional version constraint
+                    example: ">=1.0.0"
+                  namespace:
+                    type: string
+                    description: Optional namespace filter
+                    default: "default"
+                    example: "default"
+                additionalProperties: false
+          minItems: 0
           default: []
-          example: ["other-agent"]
-          description: List of agent dependencies
+          example: 
+            - "date_service"
+            - capability: "info"
+              tags: ["system", "general"]
+          description: List of agent dependencies (0 or more) - supports both simple strings and rich objects
         health_interval:
           type: integer
           minimum: 1
@@ -543,3 +581,210 @@ components:
           type: object
           additionalProperties: true
           description: Additional error details
+
+    # New decorator-based schema for unified request/response
+    DecoratorAgentRequest:
+      type: object
+      required: [agent_id, timestamp, metadata]
+      description: |
+        Unified request schema for both /agents/register and /heartbeat endpoints.
+        Supports decorator-based agent registration with per-function dependencies.
+      properties:
+        agent_id:
+          type: string
+          pattern: "^[a-zA-Z0-9_-]+$"
+          minLength: 1
+          maxLength: 64
+          example: "agent-hello-world-123"
+          description: Unique identifier for the agent
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Request timestamp
+        metadata:
+          $ref: "#/components/schemas/DecoratorAgentMetadata"
+
+    DecoratorAgentMetadata:
+      type: object
+      required: [name, agent_type, namespace, endpoint, decorators]
+      description: Agent metadata containing all decorator information
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: "hello-world"
+          description: Human-readable agent name
+        agent_type:
+          type: string
+          enum: [mcp_agent]
+          example: "mcp_agent"
+          description: Type of agent (standardized to mcp_agent)
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Agent namespace for organization
+        endpoint:
+          type: string
+          example: "stdio://agent-hello-world-123"
+          description: Agent endpoint URL (http://, https://, or stdio://)
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Agent version
+        decorators:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecoratorInfo"
+          minItems: 1
+          description: Array of all @mesh_agent decorators from the agent script
+
+    DecoratorInfo:
+      type: object
+      required: [function_name, capability, dependencies]
+      description: Information about a single @mesh_agent decorated function
+      properties:
+        function_name:
+          type: string
+          minLength: 1
+          example: "hello_mesh_simple"
+          description: Name of the decorated function
+        capability:
+          type: string
+          minLength: 1
+          example: "greeting"
+          description: Capability provided by this function
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/StandardizedDependency"
+          default: []
+          description: Dependencies required by this function
+        description:
+          type: string
+          example: "Simple greeting with date dependency"
+          description: Function description
+        version:
+          type: string
+          example: "1.0.0"
+          description: Function/capability version
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["greeting", "simple"]
+          description: Tags for this capability
+
+    StandardizedDependency:
+      type: object
+      required: [capability]
+      description: Standardized dependency format (always object, never string)
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          example: "date_service"
+          description: Required capability name
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["system", "general"]
+          description: Tags for smart matching
+        version:
+          type: string
+          example: ">=1.0.0"
+          description: Version constraint
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Namespace filter
+      additionalProperties: false
+
+    DecoratorAgentResponse:
+      type: object
+      required: [agent_id, status, message, timestamp]
+      description: |
+        Unified response schema for both /agents/register and /heartbeat endpoints.
+        Returns per-function dependency resolution.
+      properties:
+        agent_id:
+          type: string
+          example: "agent-hello-world-123"
+          description: Confirmed agent ID
+        status:
+          type: string
+          enum: [success, error]
+          example: "success"
+          description: Request status
+        message:
+          type: string
+          example: "Agent registered successfully"
+          description: Status message
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Response timestamp
+        dependencies_resolved:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolvedDecorator"
+          description: Per-function dependency resolution
+
+    ResolvedDecorator:
+      type: object
+      required: [function_name, capability, dependencies]
+      description: Dependency resolution for a single decorated function
+      properties:
+        function_name:
+          type: string
+          example: "hello_mesh_simple"
+          description: Name of the function
+        capability:
+          type: string
+          example: "greeting"
+          description: Capability provided by this function
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolvedDependency"
+          description: Resolved dependencies for this function
+
+    ResolvedDependency:
+      type: object
+      required: [capability]
+      description: A single resolved dependency with provider information
+      properties:
+        capability:
+          type: string
+          example: "date_service"
+          description: The capability that was resolved
+        mcp_tool_info:
+          type: object
+          description: Information needed to make MCP calls to the provider
+          properties:
+            name:
+              type: string
+              example: "get_current_date"
+              description: Actual function name on provider agent
+            endpoint:
+              type: string
+              example: "http://date-agent:8000"
+              description: HTTP endpoint to call for MCP requests
+            agent_id:
+              type: string
+              example: "date-agent-456"
+              description: Provider agent ID
+        status:
+          type: string
+          enum: [resolved, pending, failed]
+          default: "resolved"
+          example: "resolved"
+          description: Resolution status

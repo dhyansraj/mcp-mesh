@@ -6,6 +6,8 @@
 README.md
 docs/AgentInfo.md
 docs/AgentMetadata.md
+docs/AgentMetadataDependenciesInner.md
+docs/AgentMetadataDependenciesInnerOneOf.md
 docs/AgentRegistration.md
 docs/AgentsApi.md
 docs/AgentsListResponse.md
@@ -30,6 +32,8 @@ mcp_mesh_registry_client/exceptions.py
 mcp_mesh_registry_client/models/__init__.py
 mcp_mesh_registry_client/models/agent_info.py
 mcp_mesh_registry_client/models/agent_metadata.py
+mcp_mesh_registry_client/models/agent_metadata_dependencies_inner.py
+mcp_mesh_registry_client/models/agent_metadata_dependencies_inner_one_of.py
 mcp_mesh_registry_client/models/agent_registration.py
 mcp_mesh_registry_client/models/agents_list_response.py
 mcp_mesh_registry_client/models/dependency_info.py
@@ -50,6 +54,8 @@ test-requirements.txt
 test/__init__.py
 test/test_agent_info.py
 test/test_agent_metadata.py
+test/test_agent_metadata_dependencies_inner.py
+test/test_agent_metadata_dependencies_inner_one_of.py
 test/test_agent_registration.py
 test/test_agents_api.py
 test/test_agents_list_response.py

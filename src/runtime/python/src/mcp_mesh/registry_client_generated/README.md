@@ -109,6 +109,8 @@ Class | Method | HTTP request | Description
 
  - [AgentInfo](docs/AgentInfo.md)
  - [AgentMetadata](docs/AgentMetadata.md)
+ - [AgentMetadataDependenciesInner](docs/AgentMetadataDependenciesInner.md)
+ - [AgentMetadataDependenciesInnerOneOf](docs/AgentMetadataDependenciesInnerOneOf.md)
  - [AgentRegistration](docs/AgentRegistration.md)
  - [AgentsListResponse](docs/AgentsListResponse.md)
  - [DependencyInfo](docs/DependencyInfo.md)

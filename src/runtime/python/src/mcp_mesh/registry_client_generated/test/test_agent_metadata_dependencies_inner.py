@@ -14,10 +14,10 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.agent_metadata import AgentMetadata
+from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
 
-class TestAgentMetadata(unittest.TestCase):
-    """AgentMetadata unit test stubs"""
+class TestAgentMetadataDependenciesInner(unittest.TestCase):
+    """AgentMetadataDependenciesInner unit test stubs"""
 
     def setUp(self):
         pass
@@ -25,41 +25,29 @@ class TestAgentMetadata(unittest.TestCase):
     def tearDown(self):
         pass
 
-    def make_instance(self, include_optional) -> AgentMetadata:
-        """Test AgentMetadata
+    def make_instance(self, include_optional) -> AgentMetadataDependenciesInner:
+        """Test AgentMetadataDependenciesInner
             include_optional is a boolean, when False only required
             params are included, when True both required and
             optional params are included """
-        # uncomment below to create an instance of `AgentMetadata`
+        # uncomment below to create an instance of `AgentMetadataDependenciesInner`
         """
-        model = AgentMetadata()
+        model = AgentMetadataDependenciesInner()
         if include_optional:
-            return AgentMetadata(
-                name = 'hello-world',
-                agent_type = 'mesh_agent',
-                namespace = 'default',
-                endpoint = 'http://localhost:8001',
-                capabilities = ["greeting","farewell"],
-                dependencies = ["date_service",{"capability":"info","tags":["system","general"]}],
-                health_interval = 30,
-                timeout_threshold = 60,
-                eviction_threshold = 120,
-                version = '1.0.0',
-                description = 'Simple greeting agent',
-                tags = ["production","stable"],
-                security_context = 'default'
+            return AgentMetadataDependenciesInner(
+                capability = 'info',
+                tags = [system, general],
+                version = '>=1.0.0',
+                namespace = 'default'
             )
         else:
-            return AgentMetadata(
-                name = 'hello-world',
-                agent_type = 'mesh_agent',
-                namespace = 'default',
-                endpoint = 'http://localhost:8001',
+            return AgentMetadataDependenciesInner(
+                capability = 'info',
         )
         """
 
-    def testAgentMetadata(self):
-        """Test AgentMetadata"""
+    def testAgentMetadataDependenciesInner(self):
+        """Test AgentMetadataDependenciesInner"""
         # inst_req_only = self.make_instance(include_optional=False)
         # inst_req_and_optional = self.make_instance(include_optional=True)
 

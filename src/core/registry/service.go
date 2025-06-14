@@ -220,9 +220,15 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 
 	dependenciesJSON := "[]"
 	if deps, exists := metadata["dependencies"]; exists {
+		log.Printf("DEBUG: Found dependencies in metadata: %+v (type: %T)", deps, deps)
 		if depsBytes, err := json.Marshal(deps); err == nil {
 			dependenciesJSON = string(depsBytes)
+			log.Printf("DEBUG: Marshaled dependencies to: %s", dependenciesJSON)
+		} else {
+			log.Printf("DEBUG: Failed to marshal dependencies: %v", err)
 		}
+	} else {
+		log.Printf("DEBUG: No dependencies found in metadata. Available keys: %+v", getMapKeys(metadata))
 	}
 
 	// Create agent record (matching actual database.Agent model)
@@ -235,6 +241,7 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 		Status:            "healthy",
 		Labels:            labelsJSON,
 		Metadata:          configJSON, // Changed from Config to Metadata
+		Dependencies:      dependenciesJSON,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		LastHeartbeat:     &now,
@@ -272,7 +279,7 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 		agent.TimeoutThreshold, agent.EvictionThreshold,
 		"mesh-agent", // agent_type
 		agent.Metadata, // config
-		"[]") // dependencies
+		agent.Dependencies) // dependencies
 	if err != nil {
 		return nil, fmt.Errorf("failed to save agent: %w", err)
 	}
@@ -571,14 +578,14 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 		var securityContext sql.NullString
 
 		// Simplified scan to match actual database.Agent fields
-		var annotations, resourceVersion, agentType, config, dependencies string
+		var annotations, resourceVersion, agentType, config string
 		var healthInterval int
 		err := rows.Scan(
 			&agent.ID, &agent.Name, &agent.Namespace, &agent.BaseEndpoint, &agent.Status,
 			&agent.Labels, &annotations, &agent.CreatedAt, &agent.UpdatedAt,
 			&resourceVersion, &lastHeartbeat, &healthInterval,
 			&agent.TimeoutThreshold, &agent.EvictionThreshold, &agentType,
-			&config, &securityContext, &dependencies)
+			&config, &securityContext, &agent.Dependencies)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent: %w", err)
 		}
@@ -974,8 +981,17 @@ func (s *Service) agentToMap(agent database.Agent) map[string]interface{} {
 		result["config"] = map[string]interface{}{} // Default empty object
 	}
 
-	// Dependencies not in current Agent model - would be in tools
-	result["dependencies"] = []interface{}{} // Default empty array
+	// Parse dependencies from agent data
+	if agent.Dependencies != "" && agent.Dependencies != "[]" {
+		var dependencies interface{}
+		if err := json.Unmarshal([]byte(agent.Dependencies), &dependencies); err == nil {
+			result["dependencies"] = dependencies
+		} else {
+			result["dependencies"] = []interface{}{} // Empty array on parse error
+		}
+	} else {
+		result["dependencies"] = []interface{}{} // Default empty array
+	}
 
 	// Add capabilities with full details (using tools data, formatted as capabilities for compatibility)
 	capabilityMaps := make([]map[string]interface{}, len(tools))
@@ -1096,4 +1112,13 @@ func normalizeName(name string) string {
 	}
 
 	return name
+}
+
+// getMapKeys returns all keys from a map for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

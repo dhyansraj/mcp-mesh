@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -138,12 +139,35 @@ func (h *BusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 
 // ListAgents implements GET /agents
 func (h *BusinessLogicHandlers) ListAgents(c *gin.Context) {
-	// TODO: Implement actual agent listing logic
-	// This is where you add business logic for listing agents
+	// Parse query parameters
+	var params AgentQueryParams
+	if err := c.ShouldBindQuery(&params); err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Invalid query parameters: %v", err),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Call service method to get agents
+	serviceResp, err := h.service.ListAgents(&params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Convert service response to generated response format
+	agents := make([]generated.AgentInfo, len(serviceResp.Agents))
+	for i, agentMap := range serviceResp.Agents {
+		agents[i] = convertMapToAgentInfo(agentMap)
+	}
 
 	response := generated.AgentsListResponse{
-		Agents:    []generated.AgentInfo{},
-		Count:     0,
+		Agents:    agents,
+		Count:     serviceResp.Count,
 		Timestamp: time.Now(),
 	}
 
@@ -159,10 +183,39 @@ func convertAgentMetadataToMap(metadata generated.AgentMetadata) map[string]inte
 	result["agent_type"] = string(metadata.AgentType)
 	result["namespace"] = metadata.Namespace
 	result["endpoint"] = metadata.Endpoint
-	result["capabilities"] = metadata.Capabilities
+	if metadata.Capabilities != nil {
+		result["capabilities"] = *metadata.Capabilities // Dereference pointer
+	} else {
+		result["capabilities"] = []string{} // Default empty array
+	}
 
 	if metadata.Dependencies != nil {
-		result["dependencies"] = *metadata.Dependencies
+		// Convert union types to appropriate format for service layer
+		deps := make([]interface{}, len(*metadata.Dependencies))
+		for i, dep := range *metadata.Dependencies {
+			// Try to unmarshal as string first, then as object
+			if stringDep, err := dep.AsAgentMetadataDependencies0(); err == nil {
+				deps[i] = stringDep
+			} else if objDep, err := dep.AsAgentMetadataDependencies1(); err == nil {
+				deps[i] = map[string]interface{}{
+					"capability": objDep.Capability,
+					"tags":       objDep.Tags,
+					"version":    objDep.Version,
+					"namespace":  objDep.Namespace,
+				}
+			} else {
+				// Fallback: try to marshal and unmarshal to get raw interface{}
+				if jsonBytes, err := dep.MarshalJSON(); err == nil {
+					var rawDep interface{}
+					if err := json.Unmarshal(jsonBytes, &rawDep); err == nil {
+						deps[i] = rawDep
+					}
+				}
+			}
+		}
+		result["dependencies"] = deps
+	} else {
+		result["dependencies"] = []interface{}{} // Default empty array when nil
 	}
 
 	if metadata.HealthInterval != nil {
@@ -194,4 +247,81 @@ func convertAgentMetadataToMap(metadata generated.AgentMetadata) map[string]inte
 	}
 
 	return result
+}
+
+// convertMapToAgentInfo converts service layer map[string]interface{} to generated.AgentInfo
+func convertMapToAgentInfo(agentMap map[string]interface{}) generated.AgentInfo {
+	agentInfo := generated.AgentInfo{}
+
+	// Required fields
+	if id, ok := agentMap["id"].(string); ok {
+		agentInfo.Id = id
+	}
+	if name, ok := agentMap["name"].(string); ok {
+		agentInfo.Name = name
+	}
+	if endpoint, ok := agentMap["endpoint"].(string); ok {
+		agentInfo.Endpoint = endpoint
+	}
+	if status, ok := agentMap["status"].(string); ok {
+		agentInfo.Status = generated.AgentInfoStatus(status)
+	}
+
+	// Capabilities (required field)
+	if caps, ok := agentMap["capabilities"].([]interface{}); ok {
+		capabilities := make([]string, len(caps))
+		for i, cap := range caps {
+			if capStr, ok := cap.(string); ok {
+				capabilities[i] = capStr
+			} else if capMap, ok := cap.(map[string]interface{}); ok {
+				// Extract name from capability object
+				if name, ok := capMap["name"].(string); ok {
+					capabilities[i] = name
+				}
+			}
+		}
+		agentInfo.Capabilities = capabilities
+	} else if caps, ok := agentMap["capabilities"].([]string); ok {
+		agentInfo.Capabilities = caps
+	}
+
+	// Optional fields
+	if deps, ok := agentMap["dependencies"].([]interface{}); ok {
+		dependencies := make([]string, len(deps))
+		for i, dep := range deps {
+			if depStr, ok := dep.(string); ok {
+				dependencies[i] = depStr
+			} else if depObj, ok := dep.(map[string]interface{}); ok {
+				// For complex dependencies, create a descriptive string
+				if capability, ok := depObj["capability"].(string); ok {
+					dependencies[i] = capability
+					if tags, ok := depObj["tags"].([]interface{}); ok && len(tags) > 0 {
+						// Add first tag to make it more descriptive
+						if firstTag, ok := tags[0].(string); ok {
+							dependencies[i] = fmt.Sprintf("%s:%s", capability, firstTag)
+						}
+					}
+				} else {
+					dependencies[i] = "unknown"
+				}
+			} else {
+				dependencies[i] = "unknown"
+			}
+		}
+		agentInfo.Dependencies = &dependencies
+	} else if deps, ok := agentMap["dependencies"].([]string); ok {
+		agentInfo.Dependencies = &deps
+	}
+
+	if lastSeen, ok := agentMap["last_seen"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {
+			agentInfo.LastSeen = &t
+		}
+	}
+
+	if version, ok := agentMap["version"].(string); ok {
+		agentInfo.Version = &version
+	}
+
+	return agentInfo
 }

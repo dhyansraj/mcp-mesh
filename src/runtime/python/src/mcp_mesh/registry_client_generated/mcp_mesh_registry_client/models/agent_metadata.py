@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
+from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -31,8 +32,8 @@ class AgentMetadata(BaseModel):
     agent_type: StrictStr = Field(description="Type of agent")
     namespace: StrictStr = Field(description="Agent namespace for organization")
     endpoint: StrictStr = Field(description="Agent endpoint URL (http://, https://, or stdio://)")
-    capabilities: List[StrictStr] = Field(description="List of capabilities provided by agent")
-    dependencies: Optional[List[StrictStr]] = Field(default=None, description="List of agent dependencies")
+    capabilities: Optional[Annotated[List[StrictStr], Field(min_length=0)]] = Field(default=None, description="List of capabilities provided by agent (0 or more)")
+    dependencies: Optional[Annotated[List[AgentMetadataDependenciesInner], Field(min_length=0)]] = Field(default=None, description="List of agent dependencies (0 or more) - supports both simple strings and rich objects")
     health_interval: Optional[Annotated[int, Field(le=3600, strict=True, ge=1)]] = Field(default=30, description="Health check interval in seconds")
     timeout_threshold: Optional[Annotated[int, Field(strict=True, ge=1)]] = Field(default=60, description="Timeout threshold in seconds")
     eviction_threshold: Optional[Annotated[int, Field(strict=True, ge=1)]] = Field(default=120, description="Eviction threshold in seconds")
@@ -88,6 +89,13 @@ class AgentMetadata(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in dependencies (list)
+        _items = []
+        if self.dependencies:
+            for _item_dependencies in self.dependencies:
+                if _item_dependencies:
+                    _items.append(_item_dependencies.to_dict())
+            _dict['dependencies'] = _items
         return _dict
 
     @classmethod
@@ -105,7 +113,7 @@ class AgentMetadata(BaseModel):
             "namespace": obj.get("namespace") if obj.get("namespace") is not None else 'default',
             "endpoint": obj.get("endpoint"),
             "capabilities": obj.get("capabilities"),
-            "dependencies": obj.get("dependencies"),
+            "dependencies": [AgentMetadataDependenciesInner.from_dict(_item) for _item in obj["dependencies"]] if obj.get("dependencies") is not None else None,
             "health_interval": obj.get("health_interval") if obj.get("health_interval") is not None else 30,
             "timeout_threshold": obj.get("timeout_threshold") if obj.get("timeout_threshold") is not None else 60,
             "eviction_threshold": obj.get("eviction_threshold") if obj.get("eviction_threshold") is not None else 120,

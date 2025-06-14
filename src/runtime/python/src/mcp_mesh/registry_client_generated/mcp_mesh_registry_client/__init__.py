@@ -50,6 +50,8 @@ from mcp_mesh_registry_client.exceptions import ApiException
 # import models into sdk package
 from mcp_mesh_registry_client.models.agent_info import AgentInfo
 from mcp_mesh_registry_client.models.agent_metadata import AgentMetadata
+from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
+from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner_one_of import AgentMetadataDependenciesInnerOneOf
 from mcp_mesh_registry_client.models.agent_registration import AgentRegistration
 from mcp_mesh_registry_client.models.agents_list_response import AgentsListResponse
 from mcp_mesh_registry_client.models.dependency_info import DependencyInfo

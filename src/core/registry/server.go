@@ -39,6 +39,9 @@ func NewServer(db *database.Database, config *RegistryConfig) *Server {
 
 	// Setup routes using generated interface
 	server.SetupGeneratedRoutes()
+	
+	// Setup additional decorator-based routes (until OpenAPI generation supports them)
+	server.SetupDecoratorRoutes()
 
 	// Create and start health monitor (temporarily disabled due to field conflicts)
 	// healthMonitor := NewHealthMonitor(service, 10*time.Second)
@@ -82,4 +85,13 @@ func (s *Server) SetupGeneratedRoutes() {
 
 	// Register all routes from OpenAPI spec
 	generated.RegisterHandlers(s.engine, &wrapper)
+}
+
+// SetupDecoratorRoutes configures decorator-based endpoints
+// These will be integrated into OpenAPI spec once the generator supports complex schemas
+func (s *Server) SetupDecoratorRoutes() {
+	// Add decorator-based endpoints with different paths to avoid conflicts
+	// Both endpoints use the same DecoratorAgentRequest/Response format
+	s.engine.POST("/agents/register_decorators", s.service.DecoratorRegistrationHandler)
+	s.engine.POST("/heartbeat_decorators", s.service.DecoratorHeartbeatHandler)
 }
