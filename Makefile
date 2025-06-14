@@ -234,13 +234,12 @@ clean:
 .PHONY: clean-test
 clean-test:
 	@echo "🧹 Cleaning integration test environment..."
-	# Kill any running mcp-mesh processes (registry and dev)
-	@pkill -f "mcp-mesh-registry" 2>/dev/null || true
-	@pkill -f "mcp-mesh-dev" 2>/dev/null || true
+	# Kill any running mcp-mesh processes (registry and dev) - safer approach
+	@ps aux | grep -E '[m]cp-mesh-(registry|dev)' | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
 	# Kill any Python processes running our examples
-	@pkill -f "hello_world.py" 2>/dev/null || true
-	@pkill -f "system_agent.py" 2>/dev/null || true
-	@pkill -f "python.*examples/" 2>/dev/null || true
+	@ps aux | grep -E '[h]ello_world\.py' | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
+	@ps aux | grep -E '[s]ystem_agent\.py' | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
+	@ps aux | grep -E 'python.*examples/' | grep -v grep | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
 	# Wait a moment for graceful shutdown
 	@sleep 2
 	# Clean database files from current and subdirectories
@@ -275,6 +274,11 @@ clean-all:
 .PHONY: clean-all-force
 clean-all-force:
 	@echo "🧹 Deep cleaning..."
+	# Kill any running processes first - using more reliable approach
+	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
+	-pkill -f "mcp-mesh-registry" 2>/dev/null || true
+	-pkill -f "mcp-mesh-dev" 2>/dev/null || true
+	@sleep 2
 	# Go build artifacts
 	rm -rf $(BUILD_DIR)
 	# Binaries from project root (created by direct go build)

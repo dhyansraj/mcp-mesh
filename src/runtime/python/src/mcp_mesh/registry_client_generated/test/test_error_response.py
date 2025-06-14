@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.error_response import ErrorResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.error_response import ErrorResponse
 
 class TestErrorResponse(unittest.TestCase):
     """ErrorResponse unit test stubs"""

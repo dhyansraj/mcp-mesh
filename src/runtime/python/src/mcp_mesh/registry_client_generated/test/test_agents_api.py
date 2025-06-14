@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.api.agents_api import AgentsApi
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 
 
 class TestAgentsApi(unittest.TestCase):

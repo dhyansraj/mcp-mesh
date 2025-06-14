@@ -18,6 +18,25 @@ from .logging_config import configure_logging
 from .registry_client import RegistryClient
 from .shared.types import HealthStatus, HealthStatusType
 
+# Import generated client models for structured API calls
+try:
+    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.agents_api import (
+        AgentsApi,
+    )
+    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import (
+        ApiClient,
+    )
+    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.configuration import (
+        Configuration,
+    )
+
+    GENERATED_CLIENT_AVAILABLE = True
+except ImportError as e:
+    logging.getLogger(__name__).warning(
+        f"Generated client not available, falling back to manual HTTP calls: {e}"
+    )
+    GENERATED_CLIENT_AVAILABLE = False
+
 # Ensure logging is configured
 configure_logging()
 
@@ -32,6 +51,507 @@ class RegistrationError(DecoratorProcessorError):
     """Raised when agent registration fails."""
 
     pass
+
+
+class MeshToolProcessor:
+    """
+    Specialized processor for @mesh.tool decorated functions.
+
+    Handles the batching of tool metadata into a single agent registration
+    with multiple tools, following the new multi-tool architecture.
+    """
+
+    def __init__(self, registry_client: RegistryClient) -> None:
+        self.registry_client: RegistryClient = registry_client
+        self.logger: logging.Logger = logging.getLogger(__name__)
+        self._processed_tools: dict[str, bool] = {}
+
+    async def process_tools(
+        self, tools: dict[str, DecoratedFunction]
+    ) -> dict[str, bool]:
+        """
+        Process all @mesh.tool decorated functions into a single batched registration.
+
+        Args:
+            tools: Dictionary of function_name -> DecoratedFunction
+
+        Returns:
+            Dictionary of function_name -> success_status
+        """
+        if not tools:
+            self.logger.debug("No @mesh.tool decorated functions to process")
+            return {}
+
+        results = {}
+
+        try:
+            # Import here to avoid circular imports
+            from mesh.decorators import _get_or_create_agent_id
+
+            # Check if there's a @mesh.agent decorator to use for configuration
+            agent_config = self._get_agent_configuration()
+            agent_name = agent_config.get("name") if agent_config else None
+
+            # Generate shared agent ID for all tools, using agent name from @mesh.agent if available
+            agent_id = _get_or_create_agent_id(agent_name)
+
+            # Build list of tools using structured models when available
+            if GENERATED_CLIENT_AVAILABLE:
+                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
+                    MeshToolDependencyRegistration,
+                )
+                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
+                    MeshToolRegistration,
+                )
+
+                tool_list = []
+                for func_name, decorated_func in tools.items():
+                    metadata = decorated_func.metadata
+
+                    # Convert dependencies to MeshToolDependencyRegistration objects
+                    dependencies = metadata.get("dependencies", [])
+                    dep_registrations = []
+                    for dep in dependencies:
+                        if isinstance(dep, dict):
+                            dep_reg = MeshToolDependencyRegistration(
+                                capability=dep["capability"],
+                                tags=dep.get("tags"),
+                                version=dep.get("version"),
+                                namespace=dep.get("namespace", "default"),
+                            )
+                            dep_registrations.append(dep_reg)
+                        else:
+                            # Handle string dependencies
+                            dep_reg = MeshToolDependencyRegistration(
+                                capability=dep,
+                                tags=None,
+                                version=None,
+                                namespace="default",
+                            )
+                            dep_registrations.append(dep_reg)
+
+                    # Create structured MeshToolRegistration object
+                    tool_registration = MeshToolRegistration(
+                        function_name=func_name,
+                        capability=metadata.get("capability"),
+                        tags=metadata.get("tags"),
+                        version=metadata.get("version", "1.0.0"),
+                        dependencies=dep_registrations if dep_registrations else [],
+                        description=metadata.get("description"),
+                    )
+
+                    tool_list.append(tool_registration)
+
+                # Create structured registration object using flattened MeshAgentRegistration schema
+                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                    MeshAgentRegistration,
+                )
+
+                agent_registration = MeshAgentRegistration(
+                    agent_id=agent_id,
+                    agent_type="mcp_agent",
+                    name=agent_id,
+                    version=(
+                        agent_config.get("version", "1.0.0")
+                        if agent_config
+                        else "1.0.0"
+                    ),
+                    http_host="0.0.0.0",
+                    http_port=0,  # 0 for stdio
+                    timestamp=datetime.now(timezone.utc),
+                    namespace=(
+                        agent_config.get("namespace", "default")
+                        if agent_config
+                        else "default"
+                    ),
+                    tools=tool_list,
+                )
+
+                self.logger.debug(
+                    f"Using generated client models for {len(tools)} @mesh.tool functions"
+                )
+                response = await self._register_with_generated_client(
+                    agent_registration
+                )
+
+            else:
+                # Fallback to manual JSON construction
+                tool_list = []
+                for func_name, decorated_func in tools.items():
+                    metadata = decorated_func.metadata
+
+                    # Process dependencies to ensure proper schema compliance
+                    raw_dependencies = metadata.get("dependencies", [])
+                    processed_dependencies = []
+                    for dep in raw_dependencies:
+                        if isinstance(dep, str):
+                            # Handle string dependencies
+                            processed_dependencies.append(
+                                {
+                                    "capability": dep,
+                                    "tags": [],
+                                    "version": "1.0.0",  # Default version for string deps
+                                }
+                            )
+                        elif isinstance(dep, dict):
+                            # Handle dict dependencies, ensure no null values
+                            processed_dep = {
+                                "capability": dep.get("capability"),
+                                "tags": dep.get("tags", []),
+                            }
+                            # Only include version if it's not None
+                            if dep.get("version") is not None:
+                                processed_dep["version"] = str(dep.get("version"))
+                            processed_dependencies.append(processed_dep)
+
+                    tool_data = {
+                        "function_name": func_name,
+                        "capability": metadata.get(
+                            "capability"
+                        ),  # Can be None (nullable)
+                        "tags": metadata.get("tags", []),
+                        "version": metadata.get("version", "1.0.0"),
+                        "dependencies": processed_dependencies,
+                        "description": metadata.get("description")
+                        or "",  # Convert None to empty string
+                    }
+
+                    # Add any custom fields from metadata
+                    for key, value in metadata.items():
+                        if key not in [
+                            "capability",
+                            "tags",
+                            "version",
+                            "dependencies",
+                            "description",
+                        ]:
+                            tool_data[key] = value
+
+                    tool_list.append(tool_data)
+
+                # Build the batched registration payload using flattened MeshAgentRegistration schema
+                registration_data = {
+                    "agent_id": agent_id,
+                    "agent_type": "mcp_agent",
+                    "name": agent_id,
+                    "version": (
+                        agent_config.get("version", "1.0.0")
+                        if agent_config
+                        else "1.0.0"
+                    ),
+                    "http_host": "0.0.0.0",
+                    "http_port": 0,  # 0 for stdio
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "namespace": (
+                        agent_config.get("namespace", "default")
+                        if agent_config
+                        else "default"
+                    ),
+                    "tools": tool_list,
+                }
+
+                self.logger.debug(
+                    f"Using manual HTTP for {len(tools)} @mesh.tool functions (generated client unavailable)"
+                )
+                response = await self._register_with_mesh_registry(registration_data)
+
+            # Mark all tools as processed based on registration success
+            success = response and response.get("status") == "success"
+            for func_name in tools:
+                results[func_name] = success
+                if success:
+                    self._processed_tools[func_name] = True
+
+            if success:
+                self.logger.info(
+                    f"✅ Successfully registered {len(tools)} tools as single agent: {agent_id}"
+                )
+
+                # Process dependency injection for tools with dependencies
+                if response and "dependencies_resolved" in response:
+                    self.logger.debug(
+                        f"🔧 Processing dependency injection for {len(tools)} tools"
+                    )
+                    for func_name, decorated_func in tools.items():
+                        try:
+                            await self._setup_dependency_injection_for_tool(
+                                decorated_func, response
+                            )
+                        except Exception as e:
+                            self.logger.error(
+                                f"Failed to setup DI for tool {func_name}: {e}"
+                            )
+            else:
+                self.logger.error(f"❌ Failed to register tools as agent: {agent_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing tools: {e}")
+            # Mark all tools as failed
+            for func_name in tools:
+                results[func_name] = False
+
+        return results
+
+    def _get_agent_configuration(self) -> dict[str, Any] | None:
+        """
+        Check if there's a @mesh.agent decorator and return its configuration.
+
+        Returns:
+            Agent configuration dict if @mesh.agent decorator exists, None otherwise
+        """
+        mesh_agents = DecoratorRegistry.get_mesh_agents()
+        if not mesh_agents:
+            return None
+
+        # If there are multiple @mesh.agent decorators, take the first one
+        # In practice, there should only be one per class/module
+        for func_name, decorated_func in mesh_agents.items():
+            metadata = decorated_func.metadata
+            self.logger.debug(f"Found @mesh.agent configuration: {metadata}")
+            return metadata
+
+        return None
+
+    async def _setup_dependency_injection_for_tool(
+        self, decorated_func: DecoratedFunction, registry_response: dict[str, Any]
+    ) -> None:
+        """
+        Set up dependency injection for a @mesh.tool decorated function.
+
+        Args:
+            decorated_func: DecoratedFunction to enhance
+            registry_response: Registry response containing dependencies_resolved
+        """
+        metadata = decorated_func.metadata
+        dependencies = metadata.get("dependencies", [])
+
+        if not dependencies:
+            self.logger.debug(
+                f"No dependencies for tool {decorated_func.function.__name__}"
+            )
+            return
+
+        self.logger.info(
+            f"🔧 Setting up dependency injection for tool {decorated_func.function.__name__} "
+            f"with dependencies: {[dep.get('capability') if isinstance(dep, dict) else dep for dep in dependencies]}"
+        )
+
+        # Get the dependency injector
+        try:
+            from .dependency_injector import get_global_injector
+
+            injector = get_global_injector()
+
+            # CRITICAL: Create injection wrapper for the function FIRST
+            dependency_names = [
+                dep.get("capability") if isinstance(dep, dict) else dep
+                for dep in dependencies
+            ]
+            self.logger.debug(
+                f"🔧 Creating injection wrapper for {decorated_func.function.__name__} with dependencies: {dependency_names}"
+            )
+
+            # Create the injection wrapper that will inject dependencies as parameters
+            wrapped_function = injector.create_injection_wrapper(
+                decorated_func.function, dependency_names
+            )
+
+            # Update the function reference in DecoratorRegistry to use the wrapped version
+            decorated_func.function = wrapped_function
+            self.logger.debug(
+                f"✅ Function {decorated_func.function.__name__} wrapped for dependency injection"
+            )
+
+            # Process dependencies_resolved from registry response
+            if registry_response and "dependencies_resolved" in registry_response:
+                dependencies_resolved = registry_response.get(
+                    "dependencies_resolved", {}
+                )
+                func_name = decorated_func.function.__name__
+
+                # Get resolved dependencies for this specific function
+                if func_name in dependencies_resolved:
+                    function_deps = dependencies_resolved[func_name]
+
+                    # Process each resolved dependency (array of DependencyInfo)
+                    for dep_info in function_deps:
+                        if dep_info is None:
+                            continue
+
+                        capability = dep_info.get("capability", "")
+                        self.logger.debug(
+                            f"Processing dependency resolution for capability: {capability}"
+                        )
+
+                        # Create proxy using endpoint from registry
+                        try:
+                            endpoint = dep_info.get("endpoint", "")
+                            self.logger.debug(
+                                f"Creating proxy for tool dependency '{capability}' using endpoint: {endpoint}"
+                            )
+
+                            # Check if this is an HTTP endpoint
+                            if endpoint.startswith("http://") or endpoint.startswith(
+                                "https://"
+                            ):
+                                # Create HTTP-based proxy
+                                proxy = await self._create_http_proxy_for_tool(
+                                    capability, dep_info
+                                )
+                            else:
+                                # Create stdio-based proxy
+                                proxy = self._create_stdio_proxy_for_tool(
+                                    capability, dep_info
+                                )
+
+                            # Register with injector using capability name
+                            await injector.register_dependency(capability, proxy)
+                            self.logger.info(
+                                f"🔗 Successfully registered proxy for tool dependency '{capability}'"
+                            )
+
+                        except Exception as e:
+                            self.logger.error(
+                                f"Failed to create proxy for tool dependency '{capability}': {e}"
+                            )
+                            await injector.unregister_dependency(capability)
+                else:
+                    self.logger.debug(
+                        f"No resolved dependencies found for function {func_name}"
+                    )
+            else:
+                self.logger.debug("No dependencies_resolved in registry response")
+
+            # Add markers to the function
+            decorated_func.function._mesh_processor_enhanced = True
+            decorated_func.function._mesh_processor_dependencies = dependencies
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to setup dependency injection for tool {decorated_func.function.__name__}: {e}"
+            )
+
+    def _create_stdio_proxy_for_tool(self, dep_name: str, dep_info: dict[str, Any]):
+        """Create a stdio-based proxy for tool dependencies (simplified version)."""
+
+        def create_proxy(service_name, endpoint, agent_id, status, function_name):
+            class DynamicServiceProxy:
+                def __init__(self):
+                    self._service_name = service_name
+                    self._endpoint = endpoint
+                    self._agent_id = agent_id
+                    self._status = status
+                    self._function_name = function_name  # Bound to specific function
+
+                def __call__(self, arguments: dict[str, Any] = None) -> Any:
+                    """Call the bound remote function."""
+                    return self.invoke(arguments)
+
+                def invoke(self, arguments: dict[str, Any] = None) -> Any:
+                    """Invoke the bound remote function."""
+                    return f"Tool proxy call to {self._service_name}.{self._function_name}({arguments or {}})"
+
+            return DynamicServiceProxy()
+
+        return create_proxy(
+            dep_name,
+            dep_info.get("endpoint", ""),
+            dep_info.get("agent_id", ""),
+            "healthy",
+            dep_info.get("function_name", ""),
+        )
+
+    async def _create_http_proxy_for_tool(
+        self, dep_name: str, dep_info: dict[str, Any]
+    ):
+        """Create an HTTP-based proxy for tool dependencies."""
+
+        # This would implement HTTP proxy logic similar to MeshAgentProcessor
+        # For now, return a simple proxy
+        class HttpServiceProxy:
+            def __init__(self, endpoint: str, agent_id: str, function_name: str):
+                self.endpoint = endpoint
+                self.agent_id = agent_id
+                self.function_name = function_name  # Bound to specific function
+
+            def __call__(self, arguments: dict[str, Any] = None) -> Any:
+                """Call the bound remote function."""
+                return self.invoke(arguments)
+
+            def invoke(self, arguments: dict[str, Any] = None) -> Any:
+                """Invoke the bound remote function."""
+                return f"HTTP proxy call to {self.endpoint} for {self.function_name}({arguments or {}})"
+
+        return HttpServiceProxy(
+            dep_info.get("endpoint", ""),
+            dep_info.get("agent_id", ""),
+            dep_info.get("function_name", ""),
+        )
+
+    async def _register_with_generated_client(
+        self, agent_registration: Any
+    ) -> dict[str, Any] | None:
+        """
+        Send registration data using generated client models.
+
+        Args:
+            agent_registration: AgentRegistration object from generated client
+
+        Returns:
+            Registry response or None if failed
+        """
+        try:
+            self.logger.debug(
+                f"🚀 Registering agent with generated client: {agent_registration.agent_id}"
+            )
+
+            # Convert structured model to dict using model_dump with json mode
+            # This handles proper serialization including datetime -> string conversion
+            registration_dict = agent_registration.model_dump(
+                mode="json", exclude_none=True
+            )
+
+            return await self._register_with_mesh_registry(registration_dict)
+
+        except Exception as e:
+            self.logger.error(f"❌ Generated client registration error: {e}")
+            return None
+
+    async def _register_with_mesh_registry(
+        self, registration_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """
+        Send registration data to mesh registry.
+
+        Args:
+            registration_data: Registration payload
+
+        Returns:
+            Registry response or None if failed
+        """
+        try:
+            self.logger.debug(
+                f"🚀 Registering agent with registry: {registration_data['agent_id']}"
+            )
+
+            response = await self.registry_client.post(
+                "/agents/register", json=registration_data
+            )
+
+            if response.status == 201:
+                response_data = await response.json()
+                self.logger.debug(f"✅ Registration successful: {response_data}")
+                return response_data
+            else:
+                response_text = await response.text()
+                self.logger.error(
+                    f"❌ Registration failed with status {response.status}: {response_text}"
+                )
+                return None
+
+        except Exception as e:
+            self.logger.error(f"❌ Registration error: {e}")
+            return None
 
 
 class MeshAgentProcessor:
@@ -278,21 +798,41 @@ class MeshAgentProcessor:
             metadata = registration_data["metadata"]
 
             # Create proper registration payload for REST API (following OpenAPI schema)
+            # Extract capability names from rich capability objects (OpenAPI expects string array)
+            capability_names = []
+            if metadata.get("capabilities"):
+                for cap in metadata["capabilities"]:
+                    if isinstance(cap, dict) and "name" in cap:
+                        capability_names.append(cap["name"])
+                    elif isinstance(cap, str):
+                        capability_names.append(cap)
+
+            # Convert capabilities to tools format for new schema
+            tools = []
+            for capability in capability_names:
+                tools.append(
+                    {
+                        "function_name": capability,  # Required field
+                        "capability": capability,  # Required field
+                        "version": "1.0.0",
+                        "tags": [],
+                        "dependencies": [],
+                        "description": f"Tool {capability}",
+                    }
+                )
+
+            # Use flattened MeshAgentRegistration schema (no metadata wrapper)
             registration_payload = {
                 "agent_id": agent_id,
-                "metadata": {
-                    "name": metadata["name"],
-                    "agent_type": "mcp_agent",  # Required: Type of agent
-                    "namespace": "default",  # Required: Agent namespace
-                    "endpoint": metadata["endpoint"],
-                    "capabilities": metadata["capabilities"],
-                    "dependencies": metadata.get("dependencies", []),
-                    "health_interval": metadata.get("health_interval", 30),
-                    "security_context": metadata.get("security_context"),
-                    "tags": metadata.get("tags", []),
-                    "version": metadata.get("version", "1.0.0"),
-                    "description": metadata.get("description"),
-                },
+                "agent_type": "mcp_agent",
+                "name": metadata["name"],
+                "namespace": "default",
+                "endpoint": metadata["endpoint"],
+                "tools": tools,  # Required field in new schema
+                "health_interval": metadata.get("health_interval", 30),
+                "tags": metadata.get("tags", []),
+                "version": metadata.get("version", "1.0.0"),
+                "description": metadata.get("description"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -557,71 +1097,15 @@ class MeshAgentProcessor:
             f"💓 Health monitor started for {agent_name} (interval: {interval}s)"
         )
 
-        # Check if we need to retry registration
-        needs_registration = agent_name not in self._processed_agents
-
-        # Send initial heartbeat immediately (may fail if not registered)
+        # Send initial heartbeat immediately - registry will handle registration if needed
         self.logger.debug(f"💓 Sending initial heartbeat for {agent_name}")
-        heartbeat_success = await self._send_heartbeat(agent_name, metadata)
-
-        # If heartbeat failed and we need registration, try to register
-        if not heartbeat_success and needs_registration and registration_data:
-            self.logger.info(
-                f"🔄 Attempting to register {agent_name} via health monitor"
-            )
-            response = await self._register_with_mesh_registry(registration_data)
-            if response and response.get("status") == "success":
-                self.logger.info(f"✅ Successfully registered {agent_name} on retry!")
-                self._processed_agents[agent_name] = True
-                needs_registration = False
-
-                # Set up dependency injection for late registration
-                mesh_agents = DecoratorRegistry.get_mesh_agents()
-                # Find the function by checking agent_name in metadata
-                for func_name, decorated_func in mesh_agents.items():
-                    if (
-                        decorated_func.metadata.get("agent_name", func_name)
-                        == agent_name
-                    ):
-                        await self._setup_dependency_injection(decorated_func, response)
-                        break
+        await self._send_heartbeat(agent_name, metadata)
 
         while True:
             try:
                 await asyncio.sleep(interval)
                 self.logger.debug(f"💓 Sending heartbeat for {agent_name}")
-                heartbeat_success = await self._send_heartbeat(agent_name, metadata)
-
-                # If not registered yet and heartbeat failed, retry registration
-                if (
-                    agent_name not in self._processed_agents
-                    and not heartbeat_success
-                    and registration_data
-                ):
-                    self.logger.info(
-                        f"🔄 Registry appears to be back online, retrying registration for {agent_name}"
-                    )
-                    response = await self._register_with_mesh_registry(
-                        registration_data
-                    )
-                    if response and response.get("status") == "success":
-                        self.logger.info(
-                            f"✅ Successfully registered {agent_name} after registry came back online!"
-                        )
-                        self._processed_agents[agent_name] = True
-
-                        # Get the decorated function to set up dependency injection
-                        mesh_agents = DecoratorRegistry.get_mesh_agents()
-                        # Find the function by checking agent_name in metadata
-                        for func_name, decorated_func in mesh_agents.items():
-                            if (
-                                decorated_func.metadata.get("agent_name", func_name)
-                                == agent_name
-                            ):
-                                await self._setup_dependency_injection(
-                                    decorated_func, response
-                                )
-                                break
+                await self._send_heartbeat(agent_name, metadata)
 
             except asyncio.CancelledError:
                 self.logger.info(f"Health monitor cancelled for {agent_name}")
@@ -948,6 +1432,7 @@ class DecoratorProcessor:
 
         # Specialized processors
         self.mesh_agent_processor = MeshAgentProcessor(self.registry_client)
+        self.mesh_tool_processor = MeshToolProcessor(self.registry_client)
 
         # Track processing state
         self._processing_complete = False
@@ -1025,11 +1510,35 @@ class DecoratorProcessor:
         }
 
         try:
-            # Process @mesh_agent decorators
+            # Check what decorators we have
             mesh_agents = DecoratorRegistry.get_mesh_agents()
-            if mesh_agents:
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+
+            # If we have @mesh.tool decorators, they handle registration (possibly with @mesh.agent config)
+            # Skip @mesh.agent processing entirely when @mesh.tool decorators exist
+            if mesh_tools:
+                self.logger.debug(f"Processing {len(mesh_tools)} @mesh.tool decorators")
+                if mesh_agents:
+                    self.logger.debug(
+                        f"Found {len(mesh_agents)} @mesh.agent decorators - using for configuration only"
+                    )
+
+                tool_results = await self.mesh_tool_processor.process_tools(mesh_tools)
+                results["mesh_tools"] = tool_results
+
+                # Update counters
+                results["total_processed"] += len(tool_results)
+                results["total_successful"] += sum(
+                    1 for success in tool_results.values() if success
+                )
+                results["total_failed"] += sum(
+                    1 for success in tool_results.values() if not success
+                )
+
+            # Only process @mesh.agent decorators if there are NO @mesh.tool decorators
+            elif mesh_agents:
                 self.logger.debug(
-                    f"Processing {len(mesh_agents)} @mesh_agent decorators"
+                    f"Processing {len(mesh_agents)} @mesh_agent decorators (no @mesh.tool decorators found)"
                 )
                 agent_results = await self.mesh_agent_processor.process_agents(
                     mesh_agents
@@ -1046,7 +1555,6 @@ class DecoratorProcessor:
                 )
 
             # TODO: Add processing for other decorator types when implemented
-            # results["mesh_tools"] = await self.mesh_tool_processor.process_tools(...)
             # results["mesh_resources"] = await self.mesh_resource_processor.process_resources(...)
 
             self._processing_complete = True

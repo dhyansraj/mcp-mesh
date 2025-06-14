@@ -19,7 +19,7 @@ import ssl
 
 import urllib3
 
-from mcp_mesh_registry_client.exceptions import ApiException, ApiValueError
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.exceptions import ApiException, ApiValueError
 
 SUPPORTED_SOCKS_PROXIES = {"socks5", "socks5h", "socks4", "socks4a"}
 RESTResponseType = urllib3.HTTPResponse

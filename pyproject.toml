@@ -37,6 +37,8 @@ dependencies = [
     "fastmcp>=2.7.0",
     "uvicorn>=0.34.0",
     "psutil>=5.9.0",
+    "jsonschema>=4.0.0",
+    "PyYAML>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -144,15 +146,14 @@ ignore = [
 
 # Pytest configuration
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["src/runtime/python/tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=packages/mcp_mesh/src/mcp_mesh",
-    "--cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime",
+    "--cov=src/runtime/python/src/mcp_mesh",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -167,7 +168,7 @@ asyncio_mode = "auto"
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["packages/mcp_mesh/src/mcp_mesh", "packages/mcp_mesh_runtime/src/mcp_mesh_runtime"]
+source = ["src/runtime/python/src/mcp_mesh"]
 branch = true
 
 [tool.coverage.report]

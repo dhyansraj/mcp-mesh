@@ -1,0 +1,69 @@
+{
+  "agent_id": "agent-b065c499",
+  "agent_type": "mcp_agent",
+  "name": "agent-b065c499",
+  "version": "1.0.0",
+  "http_host": "0.0.0.0",
+  "http_port": 0,
+  "timestamp": "2025-06-14T22:09:13.536451Z",
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "smart_greet",
+      "capability": "personalized_greeting",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "date_service",
+          "tags": [],
+          "version": "1.0.0",
+          "namespace": "default"
+        }
+      ],
+      "description": "Greeting function that needs date service."
+    },
+    {
+      "function_name": "get_weather_report",
+      "capability": "weather_report",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "weather_service",
+          "tags": [],
+          "version": "1.0.0",
+          "namespace": "default"
+        },
+        {
+          "capability": "location_service",
+          "tags": [],
+          "version": "1.0.0",
+          "namespace": "default"
+        }
+      ],
+      "description": "Weather function that needs weather and location services."
+    },
+    {
+      "function_name": "send_notification",
+      "capability": "send_notification",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "email_service",
+          "tags": [],
+          "version": "1.0.0",
+          "namespace": "default"
+        },
+        {
+          "capability": "template_service",
+          "tags": [],
+          "version": "1.0.0",
+          "namespace": "default"
+        }
+      ],
+      "description": "Notification function that needs email and template services."
+    }
+  ]
+}

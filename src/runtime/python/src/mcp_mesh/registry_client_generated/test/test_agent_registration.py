@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.agent_registration import AgentRegistration
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_registration import AgentRegistration
 
 class TestAgentRegistration(unittest.TestCase):
     """AgentRegistration unit test stubs"""
@@ -36,39 +36,13 @@ class TestAgentRegistration(unittest.TestCase):
         if include_optional:
             return AgentRegistration(
                 agent_id = 'hello-world',
-                metadata = mcp_mesh_registry_client.models.agent_metadata.AgentMetadata(
-                    name = 'hello-world', 
-                    agent_type = 'mesh_agent', 
-                    namespace = 'default', 
-                    endpoint = 'http://localhost:8001', 
-                    capabilities = ["greeting","farewell"], 
-                    dependencies = ["date_service",{"capability":"info","tags":["system","general"]}], 
-                    health_interval = 30, 
-                    timeout_threshold = 60, 
-                    eviction_threshold = 120, 
-                    version = '1.0.0', 
-                    description = 'Simple greeting agent', 
-                    tags = ["production","stable"], 
-                    security_context = 'default', ),
+                metadata = None,
                 timestamp = '2024-01-20T10:30:45Z'
             )
         else:
             return AgentRegistration(
                 agent_id = 'hello-world',
-                metadata = mcp_mesh_registry_client.models.agent_metadata.AgentMetadata(
-                    name = 'hello-world', 
-                    agent_type = 'mesh_agent', 
-                    namespace = 'default', 
-                    endpoint = 'http://localhost:8001', 
-                    capabilities = ["greeting","farewell"], 
-                    dependencies = ["date_service",{"capability":"info","tags":["system","general"]}], 
-                    health_interval = 30, 
-                    timeout_threshold = 60, 
-                    eviction_threshold = 120, 
-                    version = '1.0.0', 
-                    description = 'Simple greeting agent', 
-                    tags = ["production","stable"], 
-                    security_context = 'default', ),
+                metadata = None,
                 timestamp = '2024-01-20T10:30:45Z',
         )
         """

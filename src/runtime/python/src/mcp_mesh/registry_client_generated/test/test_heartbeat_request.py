@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.heartbeat_request import HeartbeatRequest
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.heartbeat_request import HeartbeatRequest
 
 class TestHeartbeatRequest(unittest.TestCase):
     """HeartbeatRequest unit test stubs"""

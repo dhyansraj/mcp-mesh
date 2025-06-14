@@ -18,15 +18,13 @@ from typing_extensions import Annotated
 
 from pydantic import Field
 from typing_extensions import Annotated
-from mcp_mesh_registry_client.models.agent_registration import AgentRegistration
-from mcp_mesh_registry_client.models.agents_list_response import AgentsListResponse
-from mcp_mesh_registry_client.models.heartbeat_request import HeartbeatRequest
-from mcp_mesh_registry_client.models.heartbeat_response import HeartbeatResponse
-from mcp_mesh_registry_client.models.registration_response import RegistrationResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agents_list_response import AgentsListResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_agent_registration import MeshAgentRegistration
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
 
-from mcp_mesh_registry_client.api_client import ApiClient, RequestSerialized
-from mcp_mesh_registry_client.api_response import ApiResponse
-from mcp_mesh_registry_client.rest import RESTResponseType
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import ApiClient, RequestSerialized
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_response import ApiResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.rest import RESTResponseType
 
 
 class AgentsApi:
@@ -290,7 +288,7 @@ class AgentsApi:
     @validate_call
     def register_agent(
         self,
-        agent_registration: Annotated[AgentRegistration, Field(description="Agent registration data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent registration data")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -303,13 +301,13 @@ class AgentsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> RegistrationResponse:
+    ) -> MeshRegistrationResponse:
         """Register agent with registry
 
-        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Dependencies field enables dependency injection 
+        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Uses flattened structure with tools array for @mesh.tool based agents 
 
-        :param agent_registration: Agent registration data (required)
-        :type agent_registration: AgentRegistration
+        :param mesh_agent_registration: Agent registration data (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -333,7 +331,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._register_agent_serialize(
-            agent_registration=agent_registration,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -341,7 +339,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "RegistrationResponse",
+            '201': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -358,7 +356,7 @@ class AgentsApi:
     @validate_call
     def register_agent_with_http_info(
         self,
-        agent_registration: Annotated[AgentRegistration, Field(description="Agent registration data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent registration data")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -371,13 +369,13 @@ class AgentsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[RegistrationResponse]:
+    ) -> ApiResponse[MeshRegistrationResponse]:
         """Register agent with registry
 
-        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Dependencies field enables dependency injection 
+        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Uses flattened structure with tools array for @mesh.tool based agents 
 
-        :param agent_registration: Agent registration data (required)
-        :type agent_registration: AgentRegistration
+        :param mesh_agent_registration: Agent registration data (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -401,7 +399,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._register_agent_serialize(
-            agent_registration=agent_registration,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -409,7 +407,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "RegistrationResponse",
+            '201': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -426,7 +424,7 @@ class AgentsApi:
     @validate_call
     def register_agent_without_preload_content(
         self,
-        agent_registration: Annotated[AgentRegistration, Field(description="Agent registration data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent registration data")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -442,10 +440,10 @@ class AgentsApi:
     ) -> RESTResponseType:
         """Register agent with registry
 
-        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Dependencies field enables dependency injection 
+        Register a new agent or update existing agent registration.  🤖 AI CRITICAL CONTRACT: - Request format is FIXED - do not modify without user approval - Both Go and Python must accept this exact format - Response must include agent_id for heartbeat correlation - Uses flattened structure with tools array for @mesh.tool based agents 
 
-        :param agent_registration: Agent registration data (required)
-        :type agent_registration: AgentRegistration
+        :param mesh_agent_registration: Agent registration data (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -469,7 +467,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._register_agent_serialize(
-            agent_registration=agent_registration,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -477,7 +475,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "RegistrationResponse",
+            '201': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -489,7 +487,7 @@ class AgentsApi:
 
     def _register_agent_serialize(
         self,
-        agent_registration,
+        mesh_agent_registration,
         _request_auth,
         _content_type,
         _headers,
@@ -515,8 +513,8 @@ class AgentsApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if agent_registration is not None:
-            _body_params = agent_registration
+        if mesh_agent_registration is not None:
+            _body_params = mesh_agent_registration
 
 
         # set the HTTP header `Accept`
@@ -566,7 +564,7 @@ class AgentsApi:
     @validate_call
     def send_heartbeat(
         self,
-        heartbeat_request: Annotated[HeartbeatRequest, Field(description="Agent heartbeat data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent heartbeat data (same format as registration)")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -579,13 +577,13 @@ class AgentsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> HeartbeatResponse:
+    ) -> MeshRegistrationResponse:
         """Send agent heartbeat
 
-        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Used by health monitoring system - Response may include dependencies_resolved for dependency injection - Python runtime depends on this exact response format 
+        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Uses same format as /agents/register for passive registry design - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
 
-        :param heartbeat_request: Agent heartbeat data (required)
-        :type heartbeat_request: HeartbeatRequest
+        :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -609,7 +607,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._send_heartbeat_serialize(
-            heartbeat_request=heartbeat_request,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -617,7 +615,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "HeartbeatResponse",
+            '200': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -634,7 +632,7 @@ class AgentsApi:
     @validate_call
     def send_heartbeat_with_http_info(
         self,
-        heartbeat_request: Annotated[HeartbeatRequest, Field(description="Agent heartbeat data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent heartbeat data (same format as registration)")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -647,13 +645,13 @@ class AgentsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[HeartbeatResponse]:
+    ) -> ApiResponse[MeshRegistrationResponse]:
         """Send agent heartbeat
 
-        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Used by health monitoring system - Response may include dependencies_resolved for dependency injection - Python runtime depends on this exact response format 
+        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Uses same format as /agents/register for passive registry design - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
 
-        :param heartbeat_request: Agent heartbeat data (required)
-        :type heartbeat_request: HeartbeatRequest
+        :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -677,7 +675,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._send_heartbeat_serialize(
-            heartbeat_request=heartbeat_request,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -685,7 +683,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "HeartbeatResponse",
+            '200': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -702,7 +700,7 @@ class AgentsApi:
     @validate_call
     def send_heartbeat_without_preload_content(
         self,
-        heartbeat_request: Annotated[HeartbeatRequest, Field(description="Agent heartbeat data")],
+        mesh_agent_registration: Annotated[MeshAgentRegistration, Field(description="Agent heartbeat data (same format as registration)")],
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -718,10 +716,10 @@ class AgentsApi:
     ) -> RESTResponseType:
         """Send agent heartbeat
 
-        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Used by health monitoring system - Response may include dependencies_resolved for dependency injection - Python runtime depends on this exact response format 
+        Send periodic heartbeat to maintain agent registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Uses same format as /agents/register for passive registry design - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
 
-        :param heartbeat_request: Agent heartbeat data (required)
-        :type heartbeat_request: HeartbeatRequest
+        :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
+        :type mesh_agent_registration: MeshAgentRegistration
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -745,7 +743,7 @@ class AgentsApi:
         """ # noqa: E501
 
         _param = self._send_heartbeat_serialize(
-            heartbeat_request=heartbeat_request,
+            mesh_agent_registration=mesh_agent_registration,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -753,7 +751,7 @@ class AgentsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "HeartbeatResponse",
+            '200': "MeshRegistrationResponse",
             '400': "ErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -765,7 +763,7 @@ class AgentsApi:
 
     def _send_heartbeat_serialize(
         self,
-        heartbeat_request,
+        mesh_agent_registration,
         _request_auth,
         _content_type,
         _headers,
@@ -791,8 +789,8 @@ class AgentsApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if heartbeat_request is not None:
-            _body_params = heartbeat_request
+        if mesh_agent_registration is not None:
+            _body_params = mesh_agent_registration
 
 
         # set the HTTP header `Accept`

@@ -64,7 +64,7 @@ Before starting development, ensure you have:
 
    ```bash
    # Run tests to verify setup
-   pytest tests/unit/test_runner_simple.py -v
+   pytest src/runtime/python/tests/unit/test_mesh_decorators.py -v
 
    # Check code quality tools
    black --check src/ tests/

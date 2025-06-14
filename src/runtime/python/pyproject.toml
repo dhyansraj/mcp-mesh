@@ -63,7 +63,7 @@ Issues = "https://github.com/mcp-mesh/mcp-mesh/issues"
 Documentation = "https://github.com/mcp-mesh/mcp-mesh/docs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_mesh"]
+packages = ["src/mcp_mesh", "src/mesh"]
 
 [tool.hatch.build.targets.sdist]
 include = [

@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.registration_response import RegistrationResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.registration_response import RegistrationResponse
 
 class TestRegistrationResponse(unittest.TestCase):
     """RegistrationResponse unit test stubs"""
@@ -40,13 +40,14 @@ class TestRegistrationResponse(unittest.TestCase):
                 message = 'Agent registered successfully',
                 agent_id = 'hello-world',
                 dependencies_resolved = {
-                    'key' : mcp_mesh_registry_client.models.dependency_info.DependencyInfo(
-                        agent_id = 'provider-agent', 
-                        endpoint = 'http://localhost:8002', 
-                        status = 'available', 
-                        capabilities = ["greeting"], 
-                        version = '1.0.0', 
-                        metadata = { }, )
+                    'key' : [
+                        mcp_mesh_registry_client.models.mesh_registration_response_dependencies_resolved_value_inner.MeshRegistrationResponse_dependencies_resolved_value_inner(
+                            agent_id = '', 
+                            function_name = '', 
+                            endpoint = '', 
+                            capability = '', 
+                            status = 'available', )
+                        ]
                     }
             )
         else:

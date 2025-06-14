@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.health_response import HealthResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.health_response import HealthResponse
 
 class TestHealthResponse(unittest.TestCase):
     """HealthResponse unit test stubs"""

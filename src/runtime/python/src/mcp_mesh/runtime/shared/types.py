@@ -720,6 +720,7 @@ class MockHTTPResponse:
 
     def __init__(self, data: Any, status: int = 200):
         self.status = status
+        self.status_code = status  # Add status_code for compatibility
         self._data = data
 
     async def json(self) -> Any:

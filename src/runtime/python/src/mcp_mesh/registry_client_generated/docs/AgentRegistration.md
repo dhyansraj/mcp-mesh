@@ -6,7 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **agent_id** | **str** | Unique identifier for the agent | 
-**metadata** | [**AgentMetadata**](AgentMetadata.md) |  | 
+**metadata** | [**AgentRegistrationMetadata**](AgentRegistrationMetadata.md) |  | 
 **timestamp** | **datetime** | Registration timestamp | 
 
 ## Example

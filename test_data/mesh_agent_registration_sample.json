@@ -1,0 +1,56 @@
+{
+  "agent_id": "hello-world-agent",
+  "agent_type": "mcp_agent",
+  "name": "hello-world-agent",
+  "version": "1.0.0",
+  "http_host": "0.0.0.0",
+  "http_port": 0,
+  "timestamp": "2025-06-14T22:09:13.536451Z",
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "greet",
+      "capability": "greeting",
+      "version": "1.0.0",
+      "tags": ["demo", "simple"],
+      "dependencies": [],
+      "description": "Simple greeting function"
+    },
+    {
+      "function_name": "smart_greet",
+      "capability": "personalized_greeting", 
+      "version": "1.0.0",
+      "tags": ["demo", "v1"],
+      "dependencies": [
+        {
+          "capability": "date_service",
+          "tags": ["system"],
+          "version": ">=1.0.0",
+          "namespace": "default"
+        }
+      ],
+      "description": "Greeting function with date dependency"
+    },
+    {
+      "function_name": "get_weather",
+      "capability": "weather_report",
+      "version": "1.0.0", 
+      "tags": ["weather", "external"],
+      "dependencies": [
+        {
+          "capability": "weather_service",
+          "tags": ["external", "api"],
+          "version": ">=2.0.0",
+          "namespace": "default"
+        },
+        {
+          "capability": "location_service",
+          "tags": ["geo", "location"],
+          "version": ">=1.5.0", 
+          "namespace": "default"
+        }
+      ],
+      "description": "Weather report with location and weather service dependencies"
+    }
+  ]
+}

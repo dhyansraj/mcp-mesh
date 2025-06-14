@@ -16,12 +16,12 @@ from pydantic import validate_call, Field, StrictFloat, StrictStr, StrictInt
 from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
-from mcp_mesh_registry_client.models.health_response import HealthResponse
-from mcp_mesh_registry_client.models.root_response import RootResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.health_response import HealthResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.root_response import RootResponse
 
-from mcp_mesh_registry_client.api_client import ApiClient, RequestSerialized
-from mcp_mesh_registry_client.api_response import ApiResponse
-from mcp_mesh_registry_client.rest import RESTResponseType
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import ApiClient, RequestSerialized
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_response import ApiResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.rest import RESTResponseType
 
 
 class HealthApi:

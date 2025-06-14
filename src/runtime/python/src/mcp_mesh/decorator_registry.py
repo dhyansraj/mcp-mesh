@@ -234,6 +234,15 @@ class DecoratorRegistry:
         cls._mesh_workflows.clear()
         cls._custom_decorators.clear()
 
+        # Also clear the shared agent ID from mesh.decorators
+        try:
+            from mesh.decorators import _clear_shared_agent_id
+
+            _clear_shared_agent_id()
+        except ImportError:
+            # Graceful fallback if mesh.decorators not available
+            pass
+
     @classmethod
     def get_stats(cls) -> dict[str, int]:
         """Get statistics about registered decorators."""

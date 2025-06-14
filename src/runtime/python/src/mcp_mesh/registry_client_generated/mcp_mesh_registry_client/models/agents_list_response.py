@@ -21,7 +21,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
 from typing_extensions import Annotated
-from mcp_mesh_registry_client.models.agent_info import AgentInfo
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_info import AgentInfo
 from typing import Optional, Set
 from typing_extensions import Self
 

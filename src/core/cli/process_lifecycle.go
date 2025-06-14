@@ -24,11 +24,16 @@ func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error 
 		return fmt.Errorf("process %s has no associated OS process", name)
 	}
 
-	pm.logger.Printf("Stopping process: %s (PID: %d)", name, info.PID)
+	pm.logger.Printf("Stopping process group: %s (PID: %d)", name, info.PID)
 
-	// Send SIGTERM for graceful shutdown
-	if err := info.Process.Signal(os.Interrupt); err != nil {
-		return fmt.Errorf("failed to send SIGTERM to process %s: %w", name, err)
+	// Use platform-specific graceful process group termination
+	platformManager := NewPlatformProcessManager()
+	if err := platformManager.terminateProcessGroup(info.PID, timeout); err != nil {
+		pm.logger.Printf("Process group termination failed for %s, falling back to single process signal: %v", name, err)
+		// Fallback to signaling just the main process
+		if err := info.Process.Signal(os.Interrupt); err != nil {
+			return fmt.Errorf("failed to send SIGTERM to process %s: %w", name, err)
+		}
 	}
 
 	// Wait for graceful shutdown
@@ -114,7 +119,7 @@ func (pm *ProcessManager) RestartProcess(name string, newCommand string, newMeta
 	return info, nil
 }
 
-// TerminateProcess forcefully terminates a process
+// TerminateProcess forcefully terminates a process and its entire process group
 func (pm *ProcessManager) TerminateProcess(name string, timeout time.Duration) error {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
@@ -128,11 +133,16 @@ func (pm *ProcessManager) TerminateProcess(name string, timeout time.Duration) e
 		return fmt.Errorf("process %s has no associated OS process", name)
 	}
 
-	pm.logger.Printf("Terminating process: %s (PID: %d)", name, info.PID)
+	pm.logger.Printf("Terminating process group: %s (PID: %d)", name, info.PID)
 
-	// Send SIGKILL immediately
-	if err := info.Process.Kill(); err != nil {
-		return fmt.Errorf("failed to kill process %s: %w", name, err)
+	// Use platform-specific process group termination
+	platformManager := NewPlatformProcessManager()
+	if err := platformManager.terminateProcessGroup(info.PID, timeout); err != nil {
+		pm.logger.Printf("Process group termination failed for %s, falling back to single process kill: %v", name, err)
+		// Fallback to killing just the main process
+		if err := info.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to kill process %s: %w", name, err)
+		}
 	}
 
 	// Wait for process to die

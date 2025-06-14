@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.root_response import RootResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.root_response import RootResponse
 
 class TestRootResponse(unittest.TestCase):
     """RootResponse unit test stubs"""

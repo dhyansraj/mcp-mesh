@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.agent_metadata import AgentMetadata
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_metadata import AgentMetadata
 
 class TestAgentMetadata(unittest.TestCase):
     """AgentMetadata unit test stubs"""

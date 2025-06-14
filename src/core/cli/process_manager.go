@@ -474,6 +474,10 @@ func (pm *ProcessManager) restartProcessInternal(name string, info *ProcessInfo)
 	cmd := exec.Command("python", info.Command)
 	cmd.Dir = info.WorkingDir
 
+	// Set up process group for proper signal handling (Unix only)
+	platformManager := NewPlatformProcessManager()
+	platformManager.setProcessGroup(cmd)
+
 	// Set environment variables
 	env := os.Environ()
 	for key, value := range info.Environment {

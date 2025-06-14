@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.agents_list_response import AgentsListResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agents_list_response import AgentsListResponse
 
 class TestAgentsListResponse(unittest.TestCase):
     """AgentsListResponse unit test stubs"""

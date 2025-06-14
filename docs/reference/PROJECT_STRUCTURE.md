@@ -104,7 +104,6 @@ tests/
 │   ├── test_mesh_agent_enhanced.py      # Enhanced decorator tests
 │   ├── test_mock_integration.py         # Mock integration tests
 │   ├── test_performance.py              # Performance unit tests
-│   ├── test_runner_simple.py            # Simple test runner
 │   ├── test_security_validation.py      # Security validation tests
 │   ├── test_security_validation_enhanced.py # Enhanced security tests
 │   └── test_server.py                   # Server unit tests

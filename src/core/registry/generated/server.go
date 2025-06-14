@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -30,7 +29,6 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/gin-gonic/gin"
-	"github.com/oapi-codegen/runtime"
 )
 
 // Defines values for AgentInfoStatus.
@@ -41,20 +39,6 @@ const (
 	AgentInfoStatusUnhealthy AgentInfoStatus = "unhealthy"
 )
 
-// Defines values for AgentMetadataAgentType.
-const (
-	McpAgent    AgentMetadataAgentType = "mcp_agent"
-	MeshAgent   AgentMetadataAgentType = "mesh_agent"
-	SystemAgent AgentMetadataAgentType = "system_agent"
-)
-
-// Defines values for DependencyInfoStatus.
-const (
-	DependencyInfoStatusAvailable   DependencyInfoStatus = "available"
-	DependencyInfoStatusDegraded    DependencyInfoStatus = "degraded"
-	DependencyInfoStatusUnavailable DependencyInfoStatus = "unavailable"
-)
-
 // Defines values for HealthResponseStatus.
 const (
 	HealthResponseStatusDegraded  HealthResponseStatus = "degraded"
@@ -62,23 +46,22 @@ const (
 	HealthResponseStatusUnhealthy HealthResponseStatus = "unhealthy"
 )
 
-// Defines values for HeartbeatRequestStatus.
+// Defines values for MeshAgentRegistrationAgentType.
 const (
-	HeartbeatRequestStatusDegraded  HeartbeatRequestStatus = "degraded"
-	HeartbeatRequestStatusHealthy   HeartbeatRequestStatus = "healthy"
-	HeartbeatRequestStatusUnhealthy HeartbeatRequestStatus = "unhealthy"
+	McpAgent MeshAgentRegistrationAgentType = "mcp_agent"
 )
 
-// Defines values for HeartbeatResponseStatus.
+// Defines values for MeshRegistrationResponseDependenciesResolvedStatus.
 const (
-	HeartbeatResponseStatusError   HeartbeatResponseStatus = "error"
-	HeartbeatResponseStatusSuccess HeartbeatResponseStatus = "success"
+	Available   MeshRegistrationResponseDependenciesResolvedStatus = "available"
+	Degraded    MeshRegistrationResponseDependenciesResolvedStatus = "degraded"
+	Unavailable MeshRegistrationResponseDependenciesResolvedStatus = "unavailable"
 )
 
-// Defines values for RegistrationResponseStatus.
+// Defines values for MeshRegistrationResponseStatus.
 const (
-	RegistrationResponseStatusError   RegistrationResponseStatus = "error"
-	RegistrationResponseStatusSuccess RegistrationResponseStatus = "success"
+	Error   MeshRegistrationResponseStatus = "error"
+	Success MeshRegistrationResponseStatus = "success"
 )
 
 // AgentInfo defines model for AgentInfo.
@@ -96,84 +79,6 @@ type AgentInfo struct {
 // AgentInfoStatus defines model for AgentInfo.Status.
 type AgentInfoStatus string
 
-// AgentMetadata defines model for AgentMetadata.
-type AgentMetadata struct {
-	// AgentType Type of agent
-	AgentType AgentMetadataAgentType `json:"agent_type"`
-
-	// Capabilities List of capabilities provided by agent (0 or more)
-	Capabilities *[]string `json:"capabilities,omitempty"`
-
-	// Dependencies List of agent dependencies (0 or more) - supports both simple strings and rich objects
-	Dependencies *[]AgentMetadata_Dependencies_Item `json:"dependencies,omitempty"`
-
-	// Description Agent description
-	Description *string `json:"description,omitempty"`
-
-	// Endpoint Agent endpoint URL (http://, https://, or stdio://)
-	Endpoint string `json:"endpoint"`
-
-	// EvictionThreshold Eviction threshold in seconds
-	EvictionThreshold *int `json:"eviction_threshold,omitempty"`
-
-	// HealthInterval Health check interval in seconds
-	HealthInterval *int `json:"health_interval,omitempty"`
-
-	// Name Human-readable agent name
-	Name string `json:"name"`
-
-	// Namespace Agent namespace for organization
-	Namespace string `json:"namespace"`
-
-	// SecurityContext Security context for agent
-	SecurityContext *string `json:"security_context,omitempty"`
-
-	// Tags Agent tags for categorization
-	Tags *[]string `json:"tags,omitempty"`
-
-	// TimeoutThreshold Timeout threshold in seconds
-	TimeoutThreshold *int `json:"timeout_threshold,omitempty"`
-
-	// Version Agent version
-	Version *string `json:"version,omitempty"`
-}
-
-// AgentMetadataAgentType Type of agent
-type AgentMetadataAgentType string
-
-// AgentMetadataDependencies0 Simple dependency by capability name
-type AgentMetadataDependencies0 = string
-
-// AgentMetadataDependencies1 Rich dependency with tags and metadata
-type AgentMetadataDependencies1 struct {
-	// Capability Required capability name
-	Capability string `json:"capability"`
-
-	// Namespace Optional namespace filter
-	Namespace *string `json:"namespace,omitempty"`
-
-	// Tags Optional tags for smart matching
-	Tags *[]string `json:"tags,omitempty"`
-
-	// Version Optional version constraint
-	Version *string `json:"version,omitempty"`
-}
-
-// AgentMetadata_Dependencies_Item defines model for AgentMetadata.dependencies.Item.
-type AgentMetadata_Dependencies_Item struct {
-	union json.RawMessage
-}
-
-// AgentRegistration defines model for AgentRegistration.
-type AgentRegistration struct {
-	// AgentId Unique identifier for the agent
-	AgentId  string        `json:"agent_id"`
-	Metadata AgentMetadata `json:"metadata"`
-
-	// Timestamp Registration timestamp
-	Timestamp time.Time `json:"timestamp"`
-}
-
 // AgentsListResponse defines model for AgentsListResponse.
 type AgentsListResponse struct {
 	// Agents List of registered agents
@@ -183,30 +88,6 @@ type AgentsListResponse struct {
 	Count     int       `json:"count"`
 	Timestamp time.Time `json:"timestamp"`
 }
-
-// DependencyInfo defines model for DependencyInfo.
-type DependencyInfo struct {
-	// AgentId ID of the agent providing the dependency
-	AgentId string `json:"agent_id"`
-
-	// Capabilities Capabilities provided by this dependency
-	Capabilities *[]string `json:"capabilities,omitempty"`
-
-	// Endpoint Endpoint to connect to the provider
-	Endpoint string `json:"endpoint"`
-
-	// Metadata Additional metadata about the provider
-	Metadata *map[string]interface{} `json:"metadata,omitempty"`
-
-	// Status Current status of the dependency
-	Status DependencyInfoStatus `json:"status"`
-
-	// Version Version of the provider agent
-	Version *string `json:"version,omitempty"`
-}
-
-// DependencyInfoStatus Current status of the dependency
-type DependencyInfoStatus string
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
@@ -239,64 +120,110 @@ type HealthResponse struct {
 // HealthResponseStatus Overall registry health status
 type HealthResponseStatus string
 
-// HeartbeatRequest defines model for HeartbeatRequest.
-type HeartbeatRequest struct {
-	// AgentId Agent identifier from registration
+// MeshAgentRegistration Agent registration request with flattened structure.
+// Used by both /agents/register and /heartbeat endpoints.
+// Based on @mesh.tool decorator processing - always has at least one tool.
+type MeshAgentRegistration struct {
+	// AgentId Unique identifier for the agent
 	AgentId string `json:"agent_id"`
 
-	// Metadata Agent metadata and health information
-	Metadata HeartbeatRequest_Metadata `json:"metadata"`
+	// AgentType Type of agent (always mcp_agent for mesh tools)
+	AgentType *MeshAgentRegistrationAgentType `json:"agent_type,omitempty"`
 
-	// Status Current agent health status
-	Status HeartbeatRequestStatus `json:"status"`
+	// HttpHost HTTP host for agent endpoint
+	HttpHost *string `json:"http_host,omitempty"`
+
+	// HttpPort HTTP port for agent endpoint (0 for stdio)
+	HttpPort *int `json:"http_port,omitempty"`
+
+	// Name Human-readable agent name (defaults to agent_id)
+	Name *string `json:"name,omitempty"`
+
+	// Namespace Agent namespace for organization
+	Namespace *string `json:"namespace,omitempty"`
+
+	// Timestamp Registration/heartbeat timestamp
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+
+	// Tools Array of tools provided by this agent (@mesh.tool functions)
+	Tools []MeshToolRegistration `json:"tools"`
+
+	// Version Agent version
+	Version *string `json:"version,omitempty"`
 }
 
-// HeartbeatRequest_Metadata Agent metadata and health information
-type HeartbeatRequest_Metadata struct {
-	Capabilities []string `json:"capabilities"`
+// MeshAgentRegistrationAgentType Type of agent (always mcp_agent for mesh tools)
+type MeshAgentRegistrationAgentType string
 
-	// Checks Health check results
-	Checks *map[string]interface{} `json:"checks,omitempty"`
-
-	// Errors Any error messages
-	Errors               *[]string              `json:"errors,omitempty"`
-	Timestamp            time.Time              `json:"timestamp"`
-	UptimeSeconds        *int                   `json:"uptime_seconds,omitempty"`
-	Version              *string                `json:"version,omitempty"`
-	AdditionalProperties map[string]interface{} `json:"-"`
-}
-
-// HeartbeatRequestStatus Current agent health status
-type HeartbeatRequestStatus string
-
-// HeartbeatResponse defines model for HeartbeatResponse.
-type HeartbeatResponse struct {
-	// DependenciesResolved Updated dependency resolution for the agent.
-	// 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.
-	DependenciesResolved *map[string]DependencyInfo `json:"dependencies_resolved,omitempty"`
-	Message              string                     `json:"message"`
-	Status               HeartbeatResponseStatus    `json:"status"`
-	Timestamp            time.Time                  `json:"timestamp"`
-}
-
-// HeartbeatResponseStatus defines model for HeartbeatResponse.Status.
-type HeartbeatResponseStatus string
-
-// RegistrationResponse defines model for RegistrationResponse.
-type RegistrationResponse struct {
+// MeshRegistrationResponse Response for both registration and heartbeat requests
+type MeshRegistrationResponse struct {
 	// AgentId Confirmed agent ID
 	AgentId string `json:"agent_id"`
 
-	// DependenciesResolved Optional resolved dependencies for the agent.
+	// DependenciesResolved Function name to array of resolved dependencies mapping.
 	// 🤖 AI NOTE: This enables immediate dependency injection setup.
-	DependenciesResolved *map[string]DependencyInfo `json:"dependencies_resolved,omitempty"`
-	Message              string                     `json:"message"`
-	Status               RegistrationResponseStatus `json:"status"`
-	Timestamp            time.Time                  `json:"timestamp"`
+	DependenciesResolved *map[string][]struct {
+		// AgentId ID of the agent providing the dependency
+		AgentId string `json:"agent_id"`
+
+		// Capability Capability name for dependency matching
+		Capability string `json:"capability"`
+
+		// Endpoint Endpoint to connect to the provider
+		Endpoint string `json:"endpoint"`
+
+		// FunctionName Actual function name to call on provider
+		FunctionName string `json:"function_name"`
+
+		// Status Current status of the dependency
+		Status MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+	} `json:"dependencies_resolved,omitempty"`
+	Message   string                         `json:"message"`
+	Status    MeshRegistrationResponseStatus `json:"status"`
+	Timestamp time.Time                      `json:"timestamp"`
 }
 
-// RegistrationResponseStatus defines model for RegistrationResponse.Status.
-type RegistrationResponseStatus string
+// MeshRegistrationResponseDependenciesResolvedStatus Current status of the dependency
+type MeshRegistrationResponseDependenciesResolvedStatus string
+
+// MeshRegistrationResponseStatus defines model for MeshRegistrationResponse.Status.
+type MeshRegistrationResponseStatus string
+
+// MeshToolDependencyRegistration Dependency specification for a tool function
+type MeshToolDependencyRegistration struct {
+	// Capability Required capability name
+	Capability string `json:"capability"`
+
+	// Namespace Namespace filter
+	Namespace *string `json:"namespace,omitempty"`
+
+	// Tags Tags for smart matching
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Version constraint
+	Version *string `json:"version,omitempty"`
+}
+
+// MeshToolRegistration Metadata for a single @mesh.tool decorated function
+type MeshToolRegistration struct {
+	// Capability Capability provided by this function
+	Capability string `json:"capability"`
+
+	// Dependencies Dependencies required by this function
+	Dependencies *[]MeshToolDependencyRegistration `json:"dependencies,omitempty"`
+
+	// Description Function description
+	Description *string `json:"description,omitempty"`
+
+	// FunctionName Name of the decorated function
+	FunctionName string `json:"function_name"`
+
+	// Tags Tags for this capability
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Function/capability version
+	Version *string `json:"version,omitempty"`
+}
 
 // RootResponse defines model for RootResponse.
 type RootResponse struct {
@@ -308,211 +235,10 @@ type RootResponse struct {
 }
 
 // RegisterAgentJSONRequestBody defines body for RegisterAgent for application/json ContentType.
-type RegisterAgentJSONRequestBody = AgentRegistration
+type RegisterAgentJSONRequestBody = MeshAgentRegistration
 
 // SendHeartbeatJSONRequestBody defines body for SendHeartbeat for application/json ContentType.
-type SendHeartbeatJSONRequestBody = HeartbeatRequest
-
-// Getter for additional properties for HeartbeatRequest_Metadata. Returns the specified
-// element and whether it was found
-func (a HeartbeatRequest_Metadata) Get(fieldName string) (value interface{}, found bool) {
-	if a.AdditionalProperties != nil {
-		value, found = a.AdditionalProperties[fieldName]
-	}
-	return
-}
-
-// Setter for additional properties for HeartbeatRequest_Metadata
-func (a *HeartbeatRequest_Metadata) Set(fieldName string, value interface{}) {
-	if a.AdditionalProperties == nil {
-		a.AdditionalProperties = make(map[string]interface{})
-	}
-	a.AdditionalProperties[fieldName] = value
-}
-
-// Override default JSON handling for HeartbeatRequest_Metadata to handle AdditionalProperties
-func (a *HeartbeatRequest_Metadata) UnmarshalJSON(b []byte) error {
-	object := make(map[string]json.RawMessage)
-	err := json.Unmarshal(b, &object)
-	if err != nil {
-		return err
-	}
-
-	if raw, found := object["capabilities"]; found {
-		err = json.Unmarshal(raw, &a.Capabilities)
-		if err != nil {
-			return fmt.Errorf("error reading 'capabilities': %w", err)
-		}
-		delete(object, "capabilities")
-	}
-
-	if raw, found := object["checks"]; found {
-		err = json.Unmarshal(raw, &a.Checks)
-		if err != nil {
-			return fmt.Errorf("error reading 'checks': %w", err)
-		}
-		delete(object, "checks")
-	}
-
-	if raw, found := object["errors"]; found {
-		err = json.Unmarshal(raw, &a.Errors)
-		if err != nil {
-			return fmt.Errorf("error reading 'errors': %w", err)
-		}
-		delete(object, "errors")
-	}
-
-	if raw, found := object["timestamp"]; found {
-		err = json.Unmarshal(raw, &a.Timestamp)
-		if err != nil {
-			return fmt.Errorf("error reading 'timestamp': %w", err)
-		}
-		delete(object, "timestamp")
-	}
-
-	if raw, found := object["uptime_seconds"]; found {
-		err = json.Unmarshal(raw, &a.UptimeSeconds)
-		if err != nil {
-			return fmt.Errorf("error reading 'uptime_seconds': %w", err)
-		}
-		delete(object, "uptime_seconds")
-	}
-
-	if raw, found := object["version"]; found {
-		err = json.Unmarshal(raw, &a.Version)
-		if err != nil {
-			return fmt.Errorf("error reading 'version': %w", err)
-		}
-		delete(object, "version")
-	}
-
-	if len(object) != 0 {
-		a.AdditionalProperties = make(map[string]interface{})
-		for fieldName, fieldBuf := range object {
-			var fieldVal interface{}
-			err := json.Unmarshal(fieldBuf, &fieldVal)
-			if err != nil {
-				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
-			}
-			a.AdditionalProperties[fieldName] = fieldVal
-		}
-	}
-	return nil
-}
-
-// Override default JSON handling for HeartbeatRequest_Metadata to handle AdditionalProperties
-func (a HeartbeatRequest_Metadata) MarshalJSON() ([]byte, error) {
-	var err error
-	object := make(map[string]json.RawMessage)
-
-	object["capabilities"], err = json.Marshal(a.Capabilities)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'capabilities': %w", err)
-	}
-
-	if a.Checks != nil {
-		object["checks"], err = json.Marshal(a.Checks)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'checks': %w", err)
-		}
-	}
-
-	if a.Errors != nil {
-		object["errors"], err = json.Marshal(a.Errors)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'errors': %w", err)
-		}
-	}
-
-	object["timestamp"], err = json.Marshal(a.Timestamp)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'timestamp': %w", err)
-	}
-
-	if a.UptimeSeconds != nil {
-		object["uptime_seconds"], err = json.Marshal(a.UptimeSeconds)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'uptime_seconds': %w", err)
-		}
-	}
-
-	if a.Version != nil {
-		object["version"], err = json.Marshal(a.Version)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'version': %w", err)
-		}
-	}
-
-	for fieldName, field := range a.AdditionalProperties {
-		object[fieldName], err = json.Marshal(field)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
-		}
-	}
-	return json.Marshal(object)
-}
-
-// AsAgentMetadataDependencies0 returns the union data inside the AgentMetadata_Dependencies_Item as a AgentMetadataDependencies0
-func (t AgentMetadata_Dependencies_Item) AsAgentMetadataDependencies0() (AgentMetadataDependencies0, error) {
-	var body AgentMetadataDependencies0
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromAgentMetadataDependencies0 overwrites any union data inside the AgentMetadata_Dependencies_Item as the provided AgentMetadataDependencies0
-func (t *AgentMetadata_Dependencies_Item) FromAgentMetadataDependencies0(v AgentMetadataDependencies0) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeAgentMetadataDependencies0 performs a merge with any union data inside the AgentMetadata_Dependencies_Item, using the provided AgentMetadataDependencies0
-func (t *AgentMetadata_Dependencies_Item) MergeAgentMetadataDependencies0(v AgentMetadataDependencies0) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsAgentMetadataDependencies1 returns the union data inside the AgentMetadata_Dependencies_Item as a AgentMetadataDependencies1
-func (t AgentMetadata_Dependencies_Item) AsAgentMetadataDependencies1() (AgentMetadataDependencies1, error) {
-	var body AgentMetadataDependencies1
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromAgentMetadataDependencies1 overwrites any union data inside the AgentMetadata_Dependencies_Item as the provided AgentMetadataDependencies1
-func (t *AgentMetadata_Dependencies_Item) FromAgentMetadataDependencies1(v AgentMetadataDependencies1) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeAgentMetadataDependencies1 performs a merge with any union data inside the AgentMetadata_Dependencies_Item, using the provided AgentMetadataDependencies1
-func (t *AgentMetadata_Dependencies_Item) MergeAgentMetadataDependencies1(v AgentMetadataDependencies1) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t AgentMetadata_Dependencies_Item) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *AgentMetadata_Dependencies_Item) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
+type SendHeartbeatJSONRequestBody = MeshAgentRegistration
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -644,60 +370,60 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"vrj+dwAAAP///wtVpLAvAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

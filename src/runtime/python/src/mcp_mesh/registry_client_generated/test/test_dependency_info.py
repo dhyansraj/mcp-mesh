@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.dependency_info import DependencyInfo
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.dependency_info import DependencyInfo
 
 class TestDependencyInfo(unittest.TestCase):
     """DependencyInfo unit test stubs"""

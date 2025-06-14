@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.heartbeat_response import HeartbeatResponse
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.heartbeat_response import HeartbeatResponse
 
 class TestHeartbeatResponse(unittest.TestCase):
     """HeartbeatResponse unit test stubs"""
@@ -39,13 +39,14 @@ class TestHeartbeatResponse(unittest.TestCase):
                 timestamp = '2024-01-20T10:30:45Z',
                 message = 'Heartbeat received',
                 dependencies_resolved = {
-                    'key' : mcp_mesh_registry_client.models.dependency_info.DependencyInfo(
-                        agent_id = 'provider-agent', 
-                        endpoint = 'http://localhost:8002', 
-                        status = 'available', 
-                        capabilities = ["greeting"], 
-                        version = '1.0.0', 
-                        metadata = { }, )
+                    'key' : [
+                        mcp_mesh_registry_client.models.mesh_registration_response_dependencies_resolved_value_inner.MeshRegistrationResponse_dependencies_resolved_value_inner(
+                            agent_id = '', 
+                            function_name = '', 
+                            endpoint = '', 
+                            capability = '', 
+                            status = 'available', )
+                        ]
                     }
             )
         else:

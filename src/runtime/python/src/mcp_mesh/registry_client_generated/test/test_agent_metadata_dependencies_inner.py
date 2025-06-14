@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
 
 class TestAgentMetadataDependenciesInner(unittest.TestCase):
     """AgentMetadataDependenciesInner unit test stubs"""

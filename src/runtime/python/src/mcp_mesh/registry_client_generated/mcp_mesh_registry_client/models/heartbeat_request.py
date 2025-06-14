@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List
-from mcp_mesh_registry_client.models.heartbeat_request_metadata import HeartbeatRequestMetadata
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.heartbeat_request_metadata import HeartbeatRequestMetadata
 from typing import Optional, Set
 from typing_extensions import Self
 

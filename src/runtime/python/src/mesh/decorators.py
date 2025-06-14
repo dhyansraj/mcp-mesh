@@ -1,0 +1,343 @@
+"""
+Mesh decorators implementation - dual decorator architecture.
+
+Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns.
+"""
+
+import logging
+import os
+import uuid
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+# Import from mcp_mesh for registry and runtime integration
+from mcp_mesh.decorator_registry import DecoratorRegistry
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+# Global reference to the runtime processor, set by mcp_mesh runtime
+_runtime_processor: Any | None = None
+
+# Shared agent ID for all functions in the same process
+_SHARED_AGENT_ID: str | None = None
+
+
+def _get_or_create_agent_id(agent_name: str | None = None) -> str:
+    """
+    Get or create a shared agent ID for all functions in this process.
+
+    Format: {prefix}-{8chars} where:
+    - prefix precedence: MCP_MESH_AGENT_NAME env var > agent_name parameter > "agent"
+    - 8chars is first 8 characters of a UUID
+
+    Args:
+        agent_name: Optional name from @mesh.agent decorator
+
+    Returns:
+        Shared agent ID for this process
+    """
+    global _SHARED_AGENT_ID
+
+    if _SHARED_AGENT_ID is None:
+        # Precedence: env var > agent_name > default "agent"
+        if "MCP_MESH_AGENT_NAME" in os.environ:
+            prefix = os.environ["MCP_MESH_AGENT_NAME"]
+        elif agent_name is not None:
+            prefix = agent_name
+        else:
+            prefix = "agent"
+
+        uuid_suffix = str(uuid.uuid4())[:8]
+        _SHARED_AGENT_ID = f"{prefix}-{uuid_suffix}"
+
+    return _SHARED_AGENT_ID
+
+
+def _enhance_mesh_decorators(processor):
+    """Called by mcp_mesh runtime to enhance decorators with runtime capabilities."""
+    global _runtime_processor
+    _runtime_processor = processor
+
+
+def _clear_shared_agent_id():
+    """Clear the shared agent ID (useful for testing)."""
+    global _SHARED_AGENT_ID
+    _SHARED_AGENT_ID = None
+
+
+def tool(
+    capability: str | None = None,
+    *,
+    tags: list[str] | None = None,
+    version: str = "1.0.0",
+    dependencies: list[dict[str, Any]] | list[str] | None = None,
+    description: str | None = None,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """
+    Tool-level decorator for individual MCP functions/capabilities.
+
+    Handles individual tool registration, capabilities, and dependencies.
+
+    Args:
+        capability: Optional capability name this tool provides (default: None)
+        tags: Optional list of tags for discovery (default: [])
+        version: Tool version (default: "1.0.0")
+        dependencies: Optional list of dependencies (default: [])
+        description: Optional description (default: function docstring)
+        **kwargs: Additional metadata
+
+    Returns:
+        The original function with tool metadata attached
+    """
+
+    def decorator(target: T) -> T:
+        # Validate optional capability
+        if capability is not None and not isinstance(capability, str):
+            raise ValueError("capability must be a string")
+
+        # Validate optional parameters
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ValueError("tags must be a list")
+            for tag in tags:
+                if not isinstance(tag, str):
+                    raise ValueError("all tags must be strings")
+
+        if not isinstance(version, str):
+            raise ValueError("version must be a string")
+
+        if description is not None and not isinstance(description, str):
+            raise ValueError("description must be a string")
+
+        # Validate and process dependencies
+        if dependencies is not None:
+            if not isinstance(dependencies, list):
+                raise ValueError("dependencies must be a list")
+
+            validated_dependencies = []
+            for dep in dependencies:
+                if isinstance(dep, str):
+                    # Simple string dependency
+                    validated_dependencies.append(
+                        {
+                            "capability": dep,
+                            "tags": [],
+                            "version": None,
+                        }
+                    )
+                elif isinstance(dep, dict):
+                    # Complex dependency with metadata
+                    if "capability" not in dep:
+                        raise ValueError("dependency must have 'capability' field")
+                    if not isinstance(dep["capability"], str):
+                        raise ValueError("dependency capability must be a string")
+
+                    # Validate optional dependency fields
+                    dep_tags = dep.get("tags", [])
+                    if not isinstance(dep_tags, list):
+                        raise ValueError("dependency tags must be a list")
+                    for tag in dep_tags:
+                        if not isinstance(tag, str):
+                            raise ValueError("all dependency tags must be strings")
+
+                    dep_version = dep.get("version")
+                    if dep_version is not None and not isinstance(dep_version, str):
+                        raise ValueError("dependency version must be a string")
+
+                    validated_dependencies.append(
+                        {
+                            "capability": dep["capability"],
+                            "tags": dep_tags,
+                            "version": dep_version,
+                        }
+                    )
+                else:
+                    raise ValueError("dependencies must be strings or dictionaries")
+        else:
+            validated_dependencies = []
+
+        # Build tool metadata
+        metadata = {
+            "capability": capability,
+            "tags": tags or [],
+            "version": version,
+            "dependencies": validated_dependencies,
+            "description": description or getattr(target, "__doc__", None),
+            **kwargs,
+        }
+
+        # Store metadata on function
+        target._mesh_tool_metadata = metadata
+
+        # Register with DecoratorRegistry for processor discovery
+        DecoratorRegistry.register_mesh_tool(target, metadata)
+
+        # Create dependency injection wrapper if needed
+        if validated_dependencies:
+            try:
+                # Import here to avoid circular imports
+                from mcp_mesh.runtime.dependency_injector import get_global_injector
+
+                # Extract dependency names for injector
+                dependency_names = [dep["capability"] for dep in validated_dependencies]
+
+                injector = get_global_injector()
+                wrapped = injector.create_injection_wrapper(target, dependency_names)
+
+                # Preserve metadata on wrapper
+                wrapped._mesh_tool_metadata = metadata
+
+                # If runtime processor is available, register with it
+                if _runtime_processor is not None:
+                    try:
+                        _runtime_processor.register_function(wrapped, metadata)
+                    except Exception as e:
+                        logger.error(
+                            f"Runtime registration failed for {target.__name__}: {e}"
+                        )
+
+                return wrapped
+            except Exception as e:
+                # Log but don't fail - graceful degradation
+                logger.error(
+                    f"Dependency injection setup failed for {target.__name__}: {e}"
+                )
+
+        # No dependencies - just register with runtime if available
+        if _runtime_processor is not None:
+            try:
+                _runtime_processor.register_function(target, metadata)
+            except Exception as e:
+                logger.error(f"Runtime registration failed for {target.__name__}: {e}")
+
+        return target
+
+    return decorator
+
+
+def agent(
+    name: str | None = None,
+    *,
+    version: str = "1.0.0",
+    description: str | None = None,
+    http_host: str = "0.0.0.0",
+    http_port: int = 0,
+    health_interval: int = 30,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """
+    Agent-level decorator for agent-wide configuration and metadata.
+
+    This handles agent-level concerns like deployment, infrastructure,
+    and overall agent metadata. Applied to classes or main functions.
+
+    Args:
+        name: Required agent name (mandatory!)
+        version: Agent version (default: "1.0.0")
+        description: Optional agent description
+        http_host: HTTP server host (default: "0.0.0.0")
+            Environment variable: MCP_MESH_HTTP_HOST (takes precedence)
+        http_port: HTTP server port (default: 0)
+            Environment variable: MCP_MESH_HTTP_PORT (takes precedence)
+        health_interval: Health check interval in seconds (default: 30)
+            Environment variable: MCP_MESH_HEALTH_INTERVAL (takes precedence)
+        **kwargs: Additional agent metadata
+
+    Environment Variables:
+        MCP_MESH_HTTP_HOST: Override http_host parameter (string)
+        MCP_MESH_HTTP_PORT: Override http_port parameter (integer, 0-65535)
+        MCP_MESH_HEALTH_INTERVAL: Override health_interval parameter (integer, ≥1)
+
+    Returns:
+        The original class/function with agent metadata attached
+    """
+
+    def decorator(target: T) -> T:
+        # Validate required name
+        if name is None:
+            raise ValueError("name is required for @mesh.agent")
+        if not isinstance(name, str):
+            raise ValueError("name must be a string")
+
+        # Validate decorator parameters first
+        if not isinstance(version, str):
+            raise ValueError("version must be a string")
+
+        if description is not None and not isinstance(description, str):
+            raise ValueError("description must be a string")
+
+        if not isinstance(http_host, str):
+            raise ValueError("http_host must be a string")
+
+        if not isinstance(http_port, int):
+            raise ValueError("http_port must be an integer")
+        if not (0 <= http_port <= 65535):
+            raise ValueError("http_port must be between 0 and 65535")
+
+        if not isinstance(health_interval, int):
+            raise ValueError("health_interval must be an integer")
+        if health_interval < 1:
+            raise ValueError("health_interval must be at least 1 second")
+
+        # Get final values with environment variable precedence
+        final_http_host = os.environ.get("MCP_MESH_HTTP_HOST", http_host)
+
+        # Handle environment variable conversion and validation
+        env_http_port = os.environ.get("MCP_MESH_HTTP_PORT")
+        if env_http_port is not None:
+            try:
+                final_http_port = int(env_http_port)
+            except ValueError:
+                raise ValueError(
+                    "MCP_MESH_HTTP_PORT environment variable must be a valid integer"
+                )
+
+            if not (0 <= final_http_port <= 65535):
+                raise ValueError("http_port must be between 0 and 65535")
+        else:
+            final_http_port = http_port
+
+        env_health_interval = os.environ.get("MCP_MESH_HEALTH_INTERVAL")
+        if env_health_interval is not None:
+            try:
+                final_health_interval = int(env_health_interval)
+            except ValueError:
+                raise ValueError(
+                    "MCP_MESH_HEALTH_INTERVAL environment variable must be a valid integer"
+                )
+
+            if final_health_interval < 1:
+                raise ValueError("health_interval must be at least 1 second")
+        else:
+            final_health_interval = health_interval
+
+        # Build agent metadata
+        metadata = {
+            "name": name,
+            "version": version,
+            "description": description,
+            "http_host": final_http_host,
+            "http_port": final_http_port,
+            "health_interval": final_health_interval,
+            **kwargs,
+        }
+
+        # Store metadata on target (class or function)
+        target._mesh_agent_metadata = metadata
+
+        # Register with DecoratorRegistry for processor discovery
+        DecoratorRegistry.register_mesh_agent(target, metadata)
+
+        # If runtime processor is available, register with it
+        if _runtime_processor is not None:
+            try:
+                _runtime_processor.register_function(target, metadata)
+            except Exception as e:
+                logger.error(f"Runtime registration failed for agent {name}: {e}")
+
+        return target
+
+    return decorator

@@ -9,7 +9,7 @@ Name | Type | Description | Notes
 **timestamp** | **datetime** |  | 
 **message** | **str** |  | 
 **agent_id** | **str** | Confirmed agent ID | 
-**dependencies_resolved** | [**Dict[str, DependencyInfo]**](DependencyInfo.md) | Optional resolved dependencies for the agent. 🤖 AI NOTE: This enables immediate dependency injection setup.  | [optional] 
+**dependencies_resolved** | **Dict[str, List[MeshRegistrationResponseDependenciesResolvedValueInner]]** | Function name to array of resolved dependencies mapping. 🤖 AI NOTE: This enables immediate dependency injection setup.  | [optional] 
 
 ## Example
 

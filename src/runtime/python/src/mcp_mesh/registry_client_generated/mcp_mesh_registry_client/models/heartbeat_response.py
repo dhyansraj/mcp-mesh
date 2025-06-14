@@ -20,7 +20,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
-from mcp_mesh_registry_client.models.dependency_info import DependencyInfo
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_registration_response_dependencies_resolved_value_inner import MeshRegistrationResponseDependenciesResolvedValueInner
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -31,7 +31,7 @@ class HeartbeatResponse(BaseModel):
     status: StrictStr
     timestamp: datetime
     message: StrictStr
-    dependencies_resolved: Optional[Dict[str, DependencyInfo]] = Field(default=None, description="Updated dependency resolution for the agent. 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates. ")
+    dependencies_resolved: Optional[Dict[str, List[MeshRegistrationResponseDependenciesResolvedValueInner]]] = Field(default=None, description="Function name to array of resolved dependencies mapping. 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates. ")
     __properties: ClassVar[List[str]] = ["status", "timestamp", "message", "dependencies_resolved"]
 
     @field_validator('status')
@@ -80,13 +80,15 @@ class HeartbeatResponse(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of each value in dependencies_resolved (dict)
-        _field_dict = {}
+        # override the default output from pydantic by calling `to_dict()` of each value in dependencies_resolved (dict of array)
+        _field_dict_of_array = {}
         if self.dependencies_resolved:
             for _key_dependencies_resolved in self.dependencies_resolved:
-                if self.dependencies_resolved[_key_dependencies_resolved]:
-                    _field_dict[_key_dependencies_resolved] = self.dependencies_resolved[_key_dependencies_resolved].to_dict()
-            _dict['dependencies_resolved'] = _field_dict
+                if self.dependencies_resolved[_key_dependencies_resolved] is not None:
+                    _field_dict_of_array[_key_dependencies_resolved] = [
+                        _item.to_dict() for _item in self.dependencies_resolved[_key_dependencies_resolved]
+                    ]
+            _dict['dependencies_resolved'] = _field_dict_of_array
         return _dict
 
     @classmethod
@@ -103,11 +105,13 @@ class HeartbeatResponse(BaseModel):
             "timestamp": obj.get("timestamp"),
             "message": obj.get("message"),
             "dependencies_resolved": dict(
-                (_k, DependencyInfo.from_dict(_v))
-                for _k, _v in obj["dependencies_resolved"].items()
+                (_k,
+                        [MeshRegistrationResponseDependenciesResolvedValueInner.from_dict(_item) for _item in _v]
+                        if _v is not None
+                        else None
+                )
+                for _k, _v in obj.get("dependencies_resolved", {}).items()
             )
-            if obj.get("dependencies_resolved") is not None
-            else None
         })
         return _obj
 

@@ -109,7 +109,7 @@ The MCP Mesh SDK provides:
 
    ```bash
    # Run basic tests
-   pytest tests/unit/test_runner_simple.py -v
+   pytest src/runtime/python/tests/unit/test_mesh_decorators.py -v
 
    # Check code quality
    black --check src/ tests/

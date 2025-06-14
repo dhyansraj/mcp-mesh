@@ -20,7 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
-from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_metadata_dependencies_inner import AgentMetadataDependenciesInner
 from typing import Optional, Set
 from typing_extensions import Self
 

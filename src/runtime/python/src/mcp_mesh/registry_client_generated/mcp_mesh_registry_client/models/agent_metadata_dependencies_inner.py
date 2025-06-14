@@ -17,7 +17,7 @@ import json
 import pprint
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
 from typing import Any, List, Optional
-from mcp_mesh_registry_client.models.agent_metadata_dependencies_inner_one_of import AgentMetadataDependenciesInnerOneOf
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_metadata_dependencies_inner_one_of import AgentMetadataDependenciesInnerOneOf
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self

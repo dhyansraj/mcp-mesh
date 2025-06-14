@@ -84,7 +84,7 @@ paths:
         - Request format is FIXED - do not modify without user approval
         - Both Go and Python must accept this exact format
         - Response must include agent_id for heartbeat correlation
-        - Dependencies field enables dependency injection
+        - Uses flattened structure with tools array for @mesh.tool based agents
       operationId: registerAgent
       requestBody:
         required: true
@@ -92,50 +92,50 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AgentRegistration"
+              $ref: "#/components/schemas/MeshAgentRegistration"
             examples:
-              simple_agent:
-                summary: Simple agent with basic capabilities
+              minimal_agent:
+                summary: Minimal agent registration
                 value:
                   agent_id: "hello-world"
-                  metadata:
-                    name: "hello-world"
-                    agent_type: "mesh_agent"
-                    namespace: "default"
-                    endpoint: "stdio://hello-world"
-                    capabilities: ["greeting", "farewell"]
-                    dependencies: []
-                    health_interval: 30
-                    version: "1.0.0"
-                  timestamp: "2024-01-20T10:30:45Z"
+                  tools:
+                    - function_name: "greet"
+                      capability: "greeting"
 
-              agent_with_dependencies:
-                summary: Agent with rich dependencies and tag-based resolution
+              full_agent:
+                summary: Complete agent with multiple tools and dependencies
                 value:
-                  agent_id: "system-monitor"
-                  metadata:
-                    name: "system-monitor"
-                    agent_type: "mesh_agent"
-                    namespace: "default"
-                    endpoint: "http://localhost:8001"
-                    capabilities: ["cpu_usage", "memory_usage"]
-                    dependencies: 
-                      - "date_service"
-                      - capability: "info"
-                        tags: ["system", "general"]
-                      - capability: "storage"
-                        tags: ["system", "disk"]
-                        version: ">=1.0.0"
-                    health_interval: 30
-                    version: "1.0.0"
+                  agent_id: "multi-service-agent"
+                  agent_type: "mcp_agent"
+                  name: "multi-service-agent"
+                  version: "2.0.0"
+                  namespace: "production"
+                  http_host: "0.0.0.0"
+                  http_port: 8080
                   timestamp: "2024-01-20T10:30:45Z"
+                  tools:
+                    - function_name: "smart_greet"
+                      capability: "personalized_greeting"
+                      version: "1.0.0"
+                      tags: ["demo", "v1"]
+                      dependencies:
+                        - capability: "date_service"
+                          tags: ["system"]
+                          version: ">=1.0.0"
+                          namespace: "default"
+                      description: "Greeting function with date dependency"
+                    - function_name: "get_weather"
+                      capability: "weather_report"
+                      dependencies:
+                        - capability: "weather_service"
+                        - capability: "location_service"
       responses:
         "201":
           description: Agent registered successfully
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RegistrationResponse"
+                $ref: "#/components/schemas/MeshRegistrationResponse"
         "400":
           description: Invalid registration data
           content:
@@ -151,32 +151,30 @@ paths:
         Send periodic heartbeat to maintain agent registration and get dependency updates.
 
         🤖 AI CRITICAL CONTRACT:
-        - Used by health monitoring system
-        - Response may include dependencies_resolved for dependency injection
-        - Python runtime depends on this exact response format
+        - Uses same format as /agents/register for passive registry design
+        - Enables late registration when registry comes online after agent startup
+        - Response includes dependencies_resolved for dependency injection updates
+        - Agents work standalone when registry is down, register via heartbeat when available
       operationId: sendHeartbeat
       requestBody:
         required: true
-        description: Agent heartbeat data
+        description: Agent heartbeat data (same format as registration)
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/HeartbeatRequest"
+              $ref: "#/components/schemas/MeshAgentRegistration"
             example:
               agent_id: "hello-world"
-              status: "healthy"
-              metadata:
-                capabilities: ["greeting", "farewell"]
-                timestamp: "2024-01-20T10:30:45Z"
-                uptime_seconds: 300
-                version: "1.0.0"
+              tools:
+                - function_name: "greet"
+                  capability: "greeting"
       responses:
         "200":
           description: Heartbeat received successfully
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HeartbeatResponse"
+                $ref: "#/components/schemas/MeshRegistrationResponse"
         "400":
           description: Invalid heartbeat data
           content:
@@ -203,6 +201,180 @@ paths:
 
 components:
   schemas:
+    # New flattened mesh agent schemas
+    MeshAgentRegistration:
+      type: object
+      required: [agent_id, tools]
+      description: |
+        Agent registration request with flattened structure.
+        Used by both /agents/register and /heartbeat endpoints.
+        Based on @mesh.tool decorator processing - always has at least one tool.
+      properties:
+        agent_id:
+          type: string
+          pattern: "^[a-zA-Z0-9_-]+$"
+          minLength: 1
+          maxLength: 64
+          example: "hello-world"
+          description: Unique identifier for the agent
+        agent_type:
+          type: string
+          enum: [mcp_agent]
+          default: "mcp_agent"
+          example: "mcp_agent"
+          description: Type of agent (always mcp_agent for mesh tools)
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: "hello-world"
+          description: Human-readable agent name (defaults to agent_id)
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Agent version
+        http_host:
+          type: string
+          default: "0.0.0.0"
+          example: "0.0.0.0"
+          description: HTTP host for agent endpoint
+        http_port:
+          type: integer
+          default: 0
+          example: 8080
+          description: HTTP port for agent endpoint (0 for stdio)
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: Registration/heartbeat timestamp
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Agent namespace for organization
+        tools:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/MeshToolRegistration"
+          description: Array of tools provided by this agent (@mesh.tool functions)
+
+    MeshToolRegistration:
+      type: object
+      required: [function_name, capability]
+      description: Metadata for a single @mesh.tool decorated function
+      properties:
+        function_name:
+          type: string
+          minLength: 1
+          example: "greet"
+          description: Name of the decorated function
+        capability:
+          type: string
+          minLength: 1
+          example: "greeting"
+          description: Capability provided by this function
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Function/capability version
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["demo", "v1"]
+          description: Tags for this capability
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeshToolDependencyRegistration"
+          default: []
+          description: Dependencies required by this function
+        description:
+          type: string
+          example: "Simple greeting function"
+          description: Function description
+
+    MeshToolDependencyRegistration:
+      type: object
+      required: [capability]
+      description: Dependency specification for a tool function
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          example: "date_service"
+          description: Required capability name
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["system", "general"]
+          description: Tags for smart matching
+        version:
+          type: string
+          example: ">=1.0.0"
+          description: Version constraint
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Namespace filter
+      additionalProperties: false
+
+    MeshRegistrationResponse:
+      type: object
+      required: [status, timestamp, message, agent_id]
+      description: Response for both registration and heartbeat requests
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+          example: "success"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+        message:
+          type: string
+          example: "Agent registered successfully"
+        agent_id:
+          type: string
+          example: "hello-world"
+          description: Confirmed agent ID
+        dependencies_resolved:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              properties:
+                agent_id:
+                  type: string
+                  description: "ID of the agent providing the dependency"
+                function_name:
+                  type: string
+                  description: "Actual function name to call on provider"
+                endpoint:
+                  type: string
+                  description: "Endpoint to connect to the provider"
+                capability:
+                  type: string
+                  description: "Capability name for dependency matching"
+                status:
+                  type: string
+                  enum: [available, unavailable, degraded]
+                  description: "Current status of the dependency"
+              required: [agent_id, function_name, endpoint, capability, status]
+          description: |
+            Function name to array of resolved dependencies mapping.
+            🤖 AI NOTE: This enables immediate dependency injection setup.
+
     # Core response schemas
     HealthResponse:
       type: object
@@ -264,7 +436,10 @@ components:
           example: "hello-world"
           description: Unique identifier for the agent
         metadata:
-          $ref: "#/components/schemas/AgentMetadata"
+          oneOf:
+            - $ref: "#/components/schemas/AgentMetadata"
+            - $ref: "#/components/schemas/MeshAgentRegisterMetadata"
+          description: Agent metadata (legacy format or new mesh format)
         timestamp:
           type: string
           format: date-time
@@ -335,7 +510,7 @@ components:
                 additionalProperties: false
           minItems: 0
           default: []
-          example: 
+          example:
             - "date_service"
             - capability: "info"
               tags: ["system", "general"]
@@ -402,9 +577,29 @@ components:
         dependencies_resolved:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/DependencyInfo"
+            type: array
+            items:
+              type: object
+              properties:
+                agent_id:
+                  type: string
+                  description: "ID of the agent providing the dependency"
+                function_name:
+                  type: string
+                  description: "Actual function name to call on provider"
+                endpoint:
+                  type: string
+                  description: "Endpoint to connect to the provider"
+                capability:
+                  type: string
+                  description: "Capability name for dependency matching"
+                status:
+                  type: string
+                  enum: [available, unavailable, degraded]
+                  description: "Current status of the dependency"
+              required: [agent_id, function_name, endpoint, capability, status]
           description: |
-            Optional resolved dependencies for the agent.
+            Function name to array of resolved dependencies mapping.
             🤖 AI NOTE: This enables immediate dependency injection setup.
 
     # Heartbeat schemas
@@ -471,9 +666,29 @@ components:
         dependencies_resolved:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/DependencyInfo"
+            type: array
+            items:
+              type: object
+              properties:
+                agent_id:
+                  type: string
+                  description: "ID of the agent providing the dependency"
+                function_name:
+                  type: string
+                  description: "Actual function name to call on provider"
+                endpoint:
+                  type: string
+                  description: "Endpoint to connect to the provider"
+                capability:
+                  type: string
+                  description: "Capability name for dependency matching"
+                status:
+                  type: string
+                  enum: [available, unavailable, degraded]
+                  description: "Current status of the dependency"
+              required: [agent_id, function_name, endpoint, capability, status]
           description: |
-            Updated dependency resolution for the agent.
+            Function name to array of resolved dependencies mapping.
             🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.
 
     # Agent listing schemas
@@ -707,84 +922,106 @@ components:
           description: Namespace filter
       additionalProperties: false
 
-    DecoratorAgentResponse:
+    RichDependency:
       type: object
-      required: [agent_id, status, message, timestamp]
-      description: |
-        Unified response schema for both /agents/register and /heartbeat endpoints.
-        Returns per-function dependency resolution.
+      required: [capability, tags, version, namespace]
+      description: Rich dependency format with full metadata for internal processing
       properties:
-        agent_id:
+        capability:
           type: string
-          example: "agent-hello-world-123"
-          description: Confirmed agent ID
-        status:
-          type: string
-          enum: [success, error]
-          example: "success"
-          description: Request status
-        message:
-          type: string
-          example: "Agent registered successfully"
-          description: Status message
-        timestamp:
-          type: string
-          format: date-time
-          example: "2024-01-20T10:30:45Z"
-          description: Response timestamp
-        dependencies_resolved:
+          minLength: 1
+          example: "date_service"
+          description: Required capability name
+        tags:
           type: array
           items:
-            $ref: "#/components/schemas/ResolvedDecorator"
-          description: Per-function dependency resolution
+            type: string
+          default: []
+          example: ["system", "general"]
+          description: Tags for smart matching
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Version constraint
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Namespace filter
+      additionalProperties: false
 
-    ResolvedDecorator:
+    MeshAgentRegisterMetadata:
       type: object
-      required: [function_name, capability, dependencies]
-      description: Dependency resolution for a single decorated function
+      required: [agent_type, name, tools]
+      description: Agent registration metadata for @mesh.tool based agents
+      properties:
+        agent_type:
+          type: string
+          enum: [mcp_agent]
+          example: "mcp_agent"
+          description: Type of agent (always mcp_agent for mesh tools)
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: "greeting-agent"
+          description: Agent name
+        version:
+          type: string
+          default: "1.0.0"
+          example: "2.0.0"
+          description: Agent version
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Agent namespace
+        endpoint:
+          type: string
+          example: "stdio://agent-greeting-123"
+          description: Agent endpoint URL
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeshToolRegisterMetadata"
+          minItems: 1
+          description: Array of tools provided by this agent
+
+    MeshToolRegisterMetadata:
+      type: object
+      required: [function_name, capability]
+      description: Metadata for a single @mesh.tool decorated function
       properties:
         function_name:
           type: string
-          example: "hello_mesh_simple"
-          description: Name of the function
+          minLength: 1
+          example: "greet"
+          description: Name of the decorated function
         capability:
           type: string
+          minLength: 1
           example: "greeting"
           description: Capability provided by this function
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Function/capability version
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["demo", "v1"]
+          description: Tags for this capability
         dependencies:
           type: array
           items:
-            $ref: "#/components/schemas/ResolvedDependency"
-          description: Resolved dependencies for this function
-
-    ResolvedDependency:
-      type: object
-      required: [capability]
-      description: A single resolved dependency with provider information
-      properties:
-        capability:
+            $ref: "#/components/schemas/StandardizedDependency"
+          default: []
+          description: Dependencies required by this function
+        description:
           type: string
-          example: "date_service"
-          description: The capability that was resolved
-        mcp_tool_info:
-          type: object
-          description: Information needed to make MCP calls to the provider
-          properties:
-            name:
-              type: string
-              example: "get_current_date"
-              description: Actual function name on provider agent
-            endpoint:
-              type: string
-              example: "http://date-agent:8000"
-              description: HTTP endpoint to call for MCP requests
-            agent_id:
-              type: string
-              example: "date-agent-456"
-              description: Provider agent ID
-        status:
-          type: string
-          enum: [resolved, pending, failed]
-          default: "resolved"
-          example: "resolved"
-          description: Resolution status
+          example: "Simple greeting function"
+          description: Function description

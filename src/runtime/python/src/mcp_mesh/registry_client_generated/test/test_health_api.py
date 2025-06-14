@@ -14,7 +14,7 @@
 
 import unittest
 
-from mcp_mesh_registry_client.api.health_api import HealthApi
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.health_api import HealthApi
 
 
 class TestHealthApi(unittest.TestCase):

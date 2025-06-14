@@ -801,6 +801,10 @@ func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
 	// Set up environment
 	cmd.Env = append(os.Environ(), config.GetRegistryEnvironmentVariables()...)
 
+	// Set up process group for proper signal handling (Unix only)
+	platformManager := NewPlatformProcessManager()
+	platformManager.setProcessGroup(cmd)
+
 	// Set up stdio
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1104,6 +1108,12 @@ func createAgentCommand(agentPath string, env []string, workingDir, user, group 
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	cmd.Dir = finalWorkingDir
+
+	// NOTE: Process group setup temporarily disabled due to stdio logging issues
+	// TODO: Re-enable with proper stdio handling for background threads
+	// Set up process group for proper signal handling (Unix only)
+	// platformManager := NewPlatformProcessManager()
+	// platformManager.setProcessGroup(cmd)
 
 	// Set user and group (Unix only)
 	if user != "" || group != "" {

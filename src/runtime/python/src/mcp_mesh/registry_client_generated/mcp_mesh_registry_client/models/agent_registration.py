@@ -21,7 +21,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any, ClassVar, Dict, List
 from typing_extensions import Annotated
-from mcp_mesh_registry_client.models.agent_metadata import AgentMetadata
+from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.agent_registration_metadata import AgentRegistrationMetadata
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -30,7 +30,7 @@ class AgentRegistration(BaseModel):
     AgentRegistration
     """ # noqa: E501
     agent_id: Annotated[str, Field(min_length=1, strict=True, max_length=64)] = Field(description="Unique identifier for the agent")
-    metadata: AgentMetadata
+    metadata: AgentRegistrationMetadata
     timestamp: datetime = Field(description="Registration timestamp")
     __properties: ClassVar[List[str]] = ["agent_id", "metadata", "timestamp"]
 
@@ -96,7 +96,7 @@ class AgentRegistration(BaseModel):
 
         _obj = cls.model_validate({
             "agent_id": obj.get("agent_id"),
-            "metadata": AgentMetadata.from_dict(obj["metadata"]) if obj.get("metadata") is not None else None,
+            "metadata": AgentRegistrationMetadata.from_dict(obj["metadata"]) if obj.get("metadata") is not None else None,
             "timestamp": obj.get("timestamp")
         })
         return _obj

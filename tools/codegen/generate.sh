@@ -219,6 +219,11 @@ EOF
         mv "$temp_file" "$init_file"
     fi
 
+    # Fix import paths to use full project-relative paths
+    log_info "Fixing import paths in generated files..."
+    find "$output_dir" -name "*.py" -type f -exec sed -i 's/from mcp_mesh_registry_client\./from mcp_mesh.registry_client_generated.mcp_mesh_registry_client./g' {} \;
+    find "$output_dir" -name "*.py" -type f -exec sed -i 's/import mcp_mesh_registry_client\./import mcp_mesh.registry_client_generated.mcp_mesh_registry_client./g' {} \;
+
     log_success "Python registry client code generated: $output_dir"
 }
 

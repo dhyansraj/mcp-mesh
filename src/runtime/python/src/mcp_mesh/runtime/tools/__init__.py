@@ -11,7 +11,6 @@ from .dependency_injection import (
     resolve_dependency_async,
     validate_dependency_types,
 )
-from .file_operations import FileOperations
 from .lifecycle_tools import LifecycleTools, create_lifecycle_tools
 from .proxy_factory import (  # Enhanced proxy factory classes; Factory functions; Legacy compatibility; Legacy ProxyFactory (for backward compatibility)
     DynamicProxyGenerator,
@@ -32,7 +31,6 @@ from .versioning_tools import VersioningTools, create_versioning_tools
 
 __all__ = [
     # Core tools
-    "FileOperations",
     "VersioningTools",
     "create_versioning_tools",
     "LifecycleTools",

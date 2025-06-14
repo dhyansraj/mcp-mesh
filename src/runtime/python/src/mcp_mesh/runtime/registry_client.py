@@ -72,60 +72,86 @@ class RegistryClient:
         return result is not None
 
     async def send_heartbeat(self, health_status: HealthStatus) -> bool:
-        """Send periodic heartbeat to registry."""
-        # Convert to Go registry format - expects agent_id, status, and metadata
+        """Send periodic heartbeat to registry using same format as registration."""
+        # Build MeshAgentRegistration payload for unified /heartbeat endpoint
+        from datetime import datetime, timezone
+
+        # Get cached agent data from DecoratorRegistry
+        agent_id = health_status.agent_name
+
+        # Convert capabilities to tools format (same as registration)
+        tools = []
+        for capability in health_status.capabilities:
+            tools.append(
+                {
+                    "function_name": capability,  # Required field
+                    "capability": capability,  # Required field
+                    "version": "1.0.0",
+                    "tags": [],
+                    "dependencies": [],
+                    "description": f"Tool {capability}",
+                }
+            )
+
+        # Build same MeshAgentRegistration format as registration
         payload = {
-            "agent_id": health_status.agent_name,  # Go registry expects agent_id
-            "status": (
-                health_status.status.value
-                if hasattr(health_status.status, "value")
-                else health_status.status
-            ),
-            "metadata": {
-                "capabilities": health_status.capabilities,
-                "timestamp": (
-                    health_status.timestamp.isoformat()
-                    if health_status.timestamp
-                    else None
-                ),
-                "checks": health_status.checks,
-                "errors": health_status.errors,
-                "uptime_seconds": health_status.uptime_seconds,
-                "version": health_status.version,
-                **health_status.metadata,  # Include any additional metadata
-            },
+            "agent_id": agent_id,
+            "agent_type": "mcp_agent",
+            "name": agent_id,
+            "namespace": "default",
+            "endpoint": health_status.metadata.get("endpoint", f"stdio://{agent_id}"),
+            "tools": tools,  # Required field in new schema
+            "health_interval": health_status.metadata.get("health_interval", 30),
+            "tags": [],
+            "version": health_status.version or "1.0.0",
+            "description": health_status.metadata.get("description"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        # Use /heartbeat endpoint (not /agents/heartbeat)
+
+        # Send to /heartbeat endpoint with MeshAgentRegistration format
         result = await self._make_request("POST", "/heartbeat", payload)
         return result is not None
 
     async def send_heartbeat_with_response(
         self, health_status: HealthStatus
     ) -> dict | None:
-        """Send periodic heartbeat to registry and return full response."""
-        # Convert to Go registry format - expects agent_id, status, and metadata
+        """Send periodic heartbeat to registry using same format as registration and return full response."""
+        # Build MeshAgentRegistration payload for unified /heartbeat endpoint
+        from datetime import datetime, timezone
+
+        # Get cached agent data from DecoratorRegistry
+        agent_id = health_status.agent_name
+
+        # Convert capabilities to tools format (same as registration)
+        tools = []
+        for capability in health_status.capabilities:
+            tools.append(
+                {
+                    "function_name": capability,  # Required field
+                    "capability": capability,  # Required field
+                    "version": "1.0.0",
+                    "tags": [],
+                    "dependencies": [],
+                    "description": f"Tool {capability}",
+                }
+            )
+
+        # Build same MeshAgentRegistration format as registration
         payload = {
-            "agent_id": health_status.agent_name,  # Go registry expects agent_id
-            "status": (
-                health_status.status.value
-                if hasattr(health_status.status, "value")
-                else health_status.status
-            ),
-            "metadata": {
-                "capabilities": health_status.capabilities,
-                "timestamp": (
-                    health_status.timestamp.isoformat()
-                    if health_status.timestamp
-                    else None
-                ),
-                "checks": health_status.checks,
-                "errors": health_status.errors,
-                "uptime_seconds": health_status.uptime_seconds,
-                "version": health_status.version,
-                **health_status.metadata,  # Include any additional metadata
-            },
+            "agent_id": agent_id,
+            "agent_type": "mcp_agent",
+            "name": agent_id,
+            "namespace": "default",
+            "endpoint": health_status.metadata.get("endpoint", f"stdio://{agent_id}"),
+            "tools": tools,  # Required field in new schema
+            "health_interval": health_status.metadata.get("health_interval", 30),
+            "tags": [],
+            "version": health_status.version or "1.0.0",
+            "description": health_status.metadata.get("description"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        # Use /heartbeat endpoint (not /agents/heartbeat)
+
+        # Send to /heartbeat endpoint with MeshAgentRegistration format
         return await self._make_request("POST", "/heartbeat", payload)
 
     async def get_dependency(self, dependency_name: str) -> Any:

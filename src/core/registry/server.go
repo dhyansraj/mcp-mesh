@@ -39,7 +39,7 @@ func NewServer(db *database.Database, config *RegistryConfig) *Server {
 
 	// Setup routes using generated interface
 	server.SetupGeneratedRoutes()
-	
+
 	// Setup additional decorator-based routes (until OpenAPI generation supports them)
 	server.SetupDecoratorRoutes()
 

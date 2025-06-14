@@ -77,7 +77,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **register_agent**
-> RegistrationResponse register_agent(agent_registration)
+> MeshRegistrationResponse register_agent(mesh_agent_registration)
 
 Register agent with registry
 
@@ -87,7 +87,7 @@ Register a new agent or update existing agent registration.
 - Request format is FIXED - do not modify without user approval
 - Both Go and Python must accept this exact format
 - Response must include agent_id for heartbeat correlation
-- Dependencies field enables dependency injection
+- Uses flattened structure with tools array for @mesh.tool based agents
 
 
 ### Example
@@ -95,8 +95,8 @@ Register a new agent or update existing agent registration.
 
 ```python
 import mcp_mesh_registry_client
-from mcp_mesh_registry_client.models.agent_registration import AgentRegistration
-from mcp_mesh_registry_client.models.registration_response import RegistrationResponse
+from mcp_mesh_registry_client.models.mesh_agent_registration import MeshAgentRegistration
+from mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
 from mcp_mesh_registry_client.rest import ApiException
 from pprint import pprint
 
@@ -111,11 +111,11 @@ configuration = mcp_mesh_registry_client.Configuration(
 with mcp_mesh_registry_client.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = mcp_mesh_registry_client.AgentsApi(api_client)
-    agent_registration = {"agent_id":"hello-world","metadata":{"name":"hello-world","agent_type":"mesh_agent","namespace":"default","endpoint":"stdio://hello-world","capabilities":["greeting","farewell"],"dependencies":[],"health_interval":30,"version":"1.0.0"},"timestamp":"2024-01-20T10:30:45Z"} # AgentRegistration | Agent registration data
+    mesh_agent_registration = {"agent_id":"hello-world","tools":[{"function_name":"greet","capability":"greeting"}]} # MeshAgentRegistration | Agent registration data
 
     try:
         # Register agent with registry
-        api_response = api_instance.register_agent(agent_registration)
+        api_response = api_instance.register_agent(mesh_agent_registration)
         print("The response of AgentsApi->register_agent:\n")
         pprint(api_response)
     except Exception as e:
@@ -129,11 +129,11 @@ with mcp_mesh_registry_client.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **agent_registration** | [**AgentRegistration**](AgentRegistration.md)| Agent registration data | 
+ **mesh_agent_registration** | [**MeshAgentRegistration**](MeshAgentRegistration.md)| Agent registration data | 
 
 ### Return type
 
-[**RegistrationResponse**](RegistrationResponse.md)
+[**MeshRegistrationResponse**](MeshRegistrationResponse.md)
 
 ### Authorization
 
@@ -154,16 +154,17 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **send_heartbeat**
-> HeartbeatResponse send_heartbeat(heartbeat_request)
+> MeshRegistrationResponse send_heartbeat(mesh_agent_registration)
 
 Send agent heartbeat
 
 Send periodic heartbeat to maintain agent registration and get dependency updates.
 
 🤖 AI CRITICAL CONTRACT:
-- Used by health monitoring system
-- Response may include dependencies_resolved for dependency injection
-- Python runtime depends on this exact response format
+- Uses same format as /agents/register for passive registry design
+- Enables late registration when registry comes online after agent startup
+- Response includes dependencies_resolved for dependency injection updates
+- Agents work standalone when registry is down, register via heartbeat when available
 
 
 ### Example
@@ -171,8 +172,8 @@ Send periodic heartbeat to maintain agent registration and get dependency update
 
 ```python
 import mcp_mesh_registry_client
-from mcp_mesh_registry_client.models.heartbeat_request import HeartbeatRequest
-from mcp_mesh_registry_client.models.heartbeat_response import HeartbeatResponse
+from mcp_mesh_registry_client.models.mesh_agent_registration import MeshAgentRegistration
+from mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
 from mcp_mesh_registry_client.rest import ApiException
 from pprint import pprint
 
@@ -187,11 +188,11 @@ configuration = mcp_mesh_registry_client.Configuration(
 with mcp_mesh_registry_client.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = mcp_mesh_registry_client.AgentsApi(api_client)
-    heartbeat_request = {"agent_id":"hello-world","status":"healthy","metadata":{"capabilities":["greeting","farewell"],"timestamp":"2024-01-20T10:30:45Z","uptime_seconds":300,"version":"1.0.0"}} # HeartbeatRequest | Agent heartbeat data
+    mesh_agent_registration = {"agent_id":"hello-world","tools":[{"function_name":"greet","capability":"greeting"}]} # MeshAgentRegistration | Agent heartbeat data (same format as registration)
 
     try:
         # Send agent heartbeat
-        api_response = api_instance.send_heartbeat(heartbeat_request)
+        api_response = api_instance.send_heartbeat(mesh_agent_registration)
         print("The response of AgentsApi->send_heartbeat:\n")
         pprint(api_response)
     except Exception as e:
@@ -205,11 +206,11 @@ with mcp_mesh_registry_client.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **heartbeat_request** | [**HeartbeatRequest**](HeartbeatRequest.md)| Agent heartbeat data | 
+ **mesh_agent_registration** | [**MeshAgentRegistration**](MeshAgentRegistration.md)| Agent heartbeat data (same format as registration) | 
 
 ### Return type
 
-[**HeartbeatResponse**](HeartbeatResponse.md)
+[**MeshRegistrationResponse**](MeshRegistrationResponse.md)
 
 ### Authorization
 

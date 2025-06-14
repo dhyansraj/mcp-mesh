@@ -172,11 +172,11 @@ func (s *Service) processDecoratorRegistration(request *DecoratorAgentRequest) (
 func (s *Service) processDecoratorHeartbeat(request *DecoratorAgentRequest) (*DecoratorAgentResponse, error) {
 	// Update last heartbeat
 	_, err := s.db.Exec(`
-		UPDATE agents 
+		UPDATE agents
 		SET last_heartbeat = ?, updated_at = ?
 		WHERE id = ?
 	`, time.Now(), time.Now(), request.AgentID)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to update heartbeat: %w", err)
 	}
@@ -206,14 +206,14 @@ func (s *Service) upsertDecoratorAgent(tx *sql.Tx, request *DecoratorAgentReques
 	}
 	dependenciesJSON, _ := json.Marshal(allDependencies)
 
-	// Prepare decorators JSON  
+	// Prepare decorators JSON
 	decoratorsJSON, _ := json.Marshal(request.Metadata.Decorators)
 
 	// Use INSERT OR REPLACE for SQLite / UPSERT pattern
 	_, err := tx.Exec(`
 		INSERT OR REPLACE INTO agents (
-			id, name, namespace, endpoint, status, 
-			created_at, updated_at, resource_version, 
+			id, name, namespace, endpoint, status,
+			created_at, updated_at, resource_version,
 			dependencies, config, agent_type, last_heartbeat
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
@@ -253,7 +253,7 @@ func (s *Service) upsertDecoratorTools(tx *sql.Tx, request *DecoratorAgentReques
 
 		_, err := tx.Exec(`
 			INSERT INTO tools (
-				agent_id, name, capability, version, 
+				agent_id, name, capability, version,
 				dependencies, config, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`,

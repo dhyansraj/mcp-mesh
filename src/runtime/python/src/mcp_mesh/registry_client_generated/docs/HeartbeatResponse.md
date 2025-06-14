@@ -8,7 +8,7 @@ Name | Type | Description | Notes
 **status** | **str** |  | 
 **timestamp** | **datetime** |  | 
 **message** | **str** |  | 
-**dependencies_resolved** | [**Dict[str, DependencyInfo]**](DependencyInfo.md) | Updated dependency resolution for the agent. 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.  | [optional] 
+**dependencies_resolved** | **Dict[str, List[MeshRegistrationResponseDependenciesResolvedValueInner]]** | Function name to array of resolved dependencies mapping. 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.  | [optional] 
 
 ## Example
 

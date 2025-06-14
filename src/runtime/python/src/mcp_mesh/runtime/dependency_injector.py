@@ -6,10 +6,13 @@ Handles both initial injection and runtime updates when topology changes.
 
 import asyncio
 import functools
+import inspect
 import logging
 import weakref
 from collections.abc import Callable
 from typing import Any
+
+from .signature_analyzer import get_mesh_agent_positions
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +75,18 @@ class DependencyInjector:
         self, func: Callable, dependencies: list[str]
     ) -> Callable:
         """
-        Create a wrapper that handles dynamic dependency injection.
+        Create a wrapper that handles dynamic dependency injection using McpMeshAgent types.
 
         This wrapper:
-        1. Injects current dependencies at call time
-        2. Can be updated when topology changes
-        3. Handles missing dependencies gracefully
+        1. Analyzes function signature for McpMeshAgent parameters
+        2. Injects dependencies positionally based on declaration order
+        3. Can be updated when topology changes
+        4. Handles missing dependencies gracefully
         """
         func_id = f"{func.__module__}.{func.__qualname__}"
+
+        # Get positions of McpMeshAgent parameters
+        mesh_positions = get_mesh_agent_positions(func)
 
         # Track which dependencies this function needs
         for dep in dependencies:
@@ -91,30 +98,102 @@ class DependencyInjector:
         injected_deps = {}
 
         @functools.wraps(func)
-        def sync_wrapper(**kwargs):
-            # Inject current dependencies
-            for dep_name in dependencies:
-                if dep_name not in kwargs or kwargs[dep_name] is None:
-                    # Use stored value or get current value
-                    if dep_name in injected_deps:
-                        kwargs[dep_name] = injected_deps[dep_name]
-                    else:
-                        kwargs[dep_name] = self.get_dependency(dep_name)
+        def sync_wrapper(*args, **kwargs):
+            # Build the final args list by inserting dependencies at their positions
+            # and adjusting user-provided args accordingly
 
-            return func(**kwargs)
+            # Get function signature to determine total expected parameters
+
+            sig = inspect.signature(func)
+            params = list(sig.parameters.values())
+            param_count = len(params)
+
+            # Initialize final args list
+            final_args = []
+
+            # Place user-provided args, skipping McpMeshAgent positions
+            user_arg_index = 0
+            for param_index in range(param_count):
+                param = params[param_index]
+
+                if param_index in mesh_positions:
+                    # This position is for a dependency, inject it
+                    dep_index = mesh_positions.index(param_index)
+                    if dep_index < len(dependencies):
+                        dep_name = dependencies[dep_index]
+
+                        # Get the dependency to inject
+                        if dep_name in injected_deps:
+                            dependency = injected_deps[dep_name]
+                        else:
+                            dependency = self.get_dependency(dep_name)
+
+                        final_args.append(dependency)
+                    else:
+                        final_args.append(None)
+                else:
+                    # This position is for a user-provided arg
+                    if user_arg_index < len(args):
+                        final_args.append(args[user_arg_index])
+                        user_arg_index += 1
+                    elif param.default != inspect.Parameter.empty:
+                        # Parameter has a default value, stop adding positional args
+                        # Let the function use its default values
+                        break
+                    else:
+                        # Required parameter but no value provided
+                        final_args.append(None)
+
+            return func(*final_args, **kwargs)
 
         @functools.wraps(func)
-        async def async_wrapper(**kwargs):
-            # Inject current dependencies
-            for dep_name in dependencies:
-                if dep_name not in kwargs or kwargs[dep_name] is None:
-                    # Use stored value or get current value
-                    if dep_name in injected_deps:
-                        kwargs[dep_name] = injected_deps[dep_name]
-                    else:
-                        kwargs[dep_name] = self.get_dependency(dep_name)
+        async def async_wrapper(*args, **kwargs):
+            # Build the final args list by inserting dependencies at their positions
+            # and adjusting user-provided args accordingly
 
-            return await func(**kwargs)
+            # Get function signature to determine total expected parameters
+
+            sig = inspect.signature(func)
+            params = list(sig.parameters.values())
+            param_count = len(params)
+
+            # Initialize final args list
+            final_args = []
+
+            # Place user-provided args, skipping McpMeshAgent positions
+            user_arg_index = 0
+            for param_index in range(param_count):
+                param = params[param_index]
+
+                if param_index in mesh_positions:
+                    # This position is for a dependency, inject it
+                    dep_index = mesh_positions.index(param_index)
+                    if dep_index < len(dependencies):
+                        dep_name = dependencies[dep_index]
+
+                        # Get the dependency to inject
+                        if dep_name in injected_deps:
+                            dependency = injected_deps[dep_name]
+                        else:
+                            dependency = self.get_dependency(dep_name)
+
+                        final_args.append(dependency)
+                    else:
+                        final_args.append(None)
+                else:
+                    # This position is for a user-provided arg
+                    if user_arg_index < len(args):
+                        final_args.append(args[user_arg_index])
+                        user_arg_index += 1
+                    elif param.default != inspect.Parameter.empty:
+                        # Parameter has a default value, stop adding positional args
+                        # Let the function use its default values
+                        break
+                    else:
+                        # Required parameter but no value provided
+                        final_args.append(None)
+
+            return await func(*final_args, **kwargs)
 
         # Choose appropriate wrapper
         wrapper = async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper

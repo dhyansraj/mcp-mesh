@@ -46,9 +46,10 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-from .decorators import mesh_agent, mesh_tool
+
+# Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
+# Import mesh.tool and mesh.agent instead
 from .exceptions import (
-    FileOperationError,
     PermissionDeniedError,
     SecurityValidationError,
 )
@@ -64,7 +65,6 @@ from .fallback import (
     LocalInstanceResolver,
     RemoteProxyResolver,
 )
-from .file_operations import FileOperations
 from .lifecycle import (
     AgentInfo,
     DeregistrationResult,
@@ -162,6 +162,16 @@ def initialize_runtime():
         if hasattr(decorators, "_enhance_mesh_agent"):
             decorators._enhance_mesh_agent(_runtime_processor)
 
+        # Also enhance the new mesh decorators
+        try:
+            import mesh.decorators
+
+            if hasattr(mesh.decorators, "_enhance_mesh_decorators"):
+                mesh.decorators._enhance_mesh_decorators(_runtime_processor)
+        except ImportError:
+            # mesh module not available - skip enhancement
+            pass
+
         sys.stderr.write("MCP Mesh runtime initialized\n")
     except Exception as e:
         # Log but don't fail - allows graceful degradation
@@ -174,8 +184,7 @@ if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
 
 
 __all__ = [
-    "mesh_agent",
-    "mesh_tool",
+    # mesh_agent has been removed - use mesh.tool and mesh.agent instead
     "McpMeshAgent",
     "initialize_runtime",
     "DecoratedFunction",
@@ -183,8 +192,6 @@ __all__ = [
     "clear_decorator_registry",
     "get_all_mesh_agents",
     "get_decorator_stats",
-    "FileOperations",
-    "FileOperationError",
     "SecurityValidationError",
     "PermissionDeniedError",
     # Fallback chain (CRITICAL FEATURE)
