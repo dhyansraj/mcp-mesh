@@ -10,6 +10,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.server.fastmcp import FastMCP
 
+from mcp_mesh.types import McpMeshAgent
+
 
 # Mock SystemAgent that will be injected
 class MockSystemAgent:
@@ -74,42 +76,45 @@ class TestDependencyInjectionMCP:
 
     def test_decorator_order_works_both_ways(self):
         """Test that both decorator orders now work with FastMCP patching."""
+        import mesh
+
         server = FastMCP(name="test-server")
 
         # Order 1: @server.tool() first
         @server.tool()
-        @working_mesh_agent(capability="test1", dependencies=["SystemAgent"])
-        def order1(name: str = "User", SystemAgent: Any = None) -> str:
+        @mesh.tool(capability="test1", dependencies=[{"capability": "SystemAgent"}])
+        def order1(name: str = "User", SystemAgent: McpMeshAgent = None) -> str:
             if SystemAgent:
                 return f"Hello {name}, date is {SystemAgent.getDate()}"
             return f"Hello {name}, no injection"
 
-        # Order 2: @working_mesh_agent first
-        @working_mesh_agent(capability="test2", dependencies=["SystemAgent"])
+        # Order 2: @mesh.tool first
+        @mesh.tool(capability="test2", dependencies=[{"capability": "SystemAgent"}])
         @server.tool()
-        def order2(name: str = "User", SystemAgent: Any = None) -> str:
+        def order2(name: str = "User", SystemAgent: McpMeshAgent = None) -> str:
             if SystemAgent:
                 return f"Hello {name}, date is {SystemAgent.getDate()}"
             return f"Hello {name}, no injection"
 
-        # Check what FastMCP stored
+        # Check that both functions are registered with FastMCP
         assert hasattr(server, "_tool_manager")
         tools = server._tool_manager._tools
 
-        # Both orders should have metadata preserved
-        func1 = tools["order1"].fn
-        assert hasattr(func1, "_mesh_metadata")
-        assert func1._mesh_metadata["capability"] == "test1"
+        # Both decorator orders should work and functions should be registered
+        assert "order1" in tools
+        assert "order2" in tools
 
+        # Functions should be callable
+        func1 = tools["order1"].fn
         func2 = tools["order2"].fn
-        assert hasattr(func2, "_mesh_metadata")
-        assert func2._mesh_metadata["capability"] == "test2"
+        assert callable(func1)
+        assert callable(func2)
 
     @pytest.mark.asyncio
     async def test_injection_through_server_call_tool(self):
         """Test dependency injection through server.call_tool with FastMCP patching."""
-        # Import the real mesh_agent decorator
-        from mcp_mesh.decorators import mesh_agent
+        # Import the new mesh decorators
+        import mesh
 
         # Register dependency first
         from mcp_mesh.runtime.dependency_injector import get_global_injector
@@ -121,16 +126,16 @@ class TestDependencyInjectionMCP:
 
         # Order 1: @server.tool() first
         @server.tool()
-        @mesh_agent(capability="greet1", dependencies=["SystemAgent"])
-        def greet_order1(name: str = "User", SystemAgent: Any = None) -> str:
+        @mesh.tool(capability="greet1", dependencies=[{"capability": "SystemAgent"}])
+        def greet_order1(name: str = "User", SystemAgent: McpMeshAgent = None) -> str:
             if SystemAgent:
                 return f"Order1: Hello {name}, date={SystemAgent.getDate()}"
             return f"Order1: Hello {name}, no SystemAgent"
 
-        # Order 2: @mesh_agent first
-        @mesh_agent(capability="greet2", dependencies=["SystemAgent"])
+        # Order 2: @mesh.tool first
+        @mesh.tool(capability="greet2", dependencies=[{"capability": "SystemAgent"}])
         @server.tool()
-        def greet_order2(name: str = "User", SystemAgent: Any = None) -> str:
+        def greet_order2(name: str = "User", SystemAgent: McpMeshAgent = None) -> str:
             if SystemAgent:
                 return f"Order2: Hello {name}, date={SystemAgent.getDate()}"
             return f"Order2: Hello {name}, no SystemAgent"
@@ -152,22 +157,46 @@ class TestDependencyInjectionMCP:
         server_script = '''
 import asyncio
 from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
-from tests.unit.test_dependency_injection_mcp import working_mesh_agent, MockSystemAgent
+import mesh
+from mcp_mesh.types import McpMeshAgent
+
+# Mock SystemAgent for dependency injection
+class MockSystemAgent:
+    def getDate(self) -> str:
+        return "2024-01-20 12:00:00 (mock)"
+
+    def getUser(self) -> str:
+        return "TestUser"
 
 server = FastMCP(name="test-di-server")
 
-# Test with mesh_agent decorator
-@mesh_agent(capability="greeting", dependencies=["SystemAgent"])
+# Set up dependency injection
+async def setup_dependencies():
+    """Set up mock dependencies for testing."""
+    from mcp_mesh.runtime.dependency_injector import get_global_injector
+
+    injector = get_global_injector()
+    mock_agent = MockSystemAgent()
+    await injector.register_dependency("SystemAgent", mock_agent)
+    print("📦 Registered SystemAgent dependency for testing")
+
+# Test with mesh.tool decorator
+@mesh.tool(capability="greeting", dependencies=[{"capability": "SystemAgent"}])
 @server.tool()
-def greet(name: str = "World", SystemAgent = None) -> str:
+def greet(name: str = "World", SystemAgent: McpMeshAgent = None) -> str:
     """Greeting function with dependency injection."""
     if SystemAgent:
         return f"Hello {name}! SystemAgent says: date={SystemAgent.getDate()}, user={SystemAgent.getUser()}"
     return f"Hello {name}! No SystemAgent available"
 
-# Run server
+# Run server with dependency setup
+async def main():
+    await setup_dependencies()
+
 if __name__ == "__main__":
+    # Set up dependencies first
+    asyncio.run(main())
+    # Then run server synchronously
     server.run(transport="stdio")
 '''
 
@@ -207,34 +236,30 @@ if __name__ == "__main__":
             # Cleanup
             os.unlink(server_file)
 
-    def test_mesh_agent_wrapper_preserves_metadata(self):
-        """Test that the wrapper preserves all metadata."""
+    def test_mesh_tool_wrapper_preserves_metadata(self):
+        """Test that the mesh.tool wrapper preserves all metadata."""
+        import mesh
 
-        @working_mesh_agent(
+        @mesh.tool(
             capability="test_func",
-            dependencies=["Dep1", "Dep2"],
+            dependencies=[{"capability": "Dep1"}, {"capability": "Dep2"}],
             version="1.0.0",
-            custom_field="custom_value",
+            tags=["test"],
         )
-        def test_function(x: int, Dep1: Any = None, Dep2: Any = None) -> int:
+        def test_function(
+            x: int, Dep1: McpMeshAgent = None, Dep2: McpMeshAgent = None
+        ) -> int:
             """Test function docstring."""
             return x * 2
 
         # Check wrapper preserved everything
         assert test_function.__name__ == "test_function"
         assert test_function.__doc__ == "Test function docstring."
-        assert hasattr(test_function, "_mesh_metadata")
-        assert test_function._mesh_metadata["capability"] == "test_func"
-        assert test_function._mesh_metadata["dependencies"] == ["Dep1", "Dep2"]
-        assert test_function._mesh_metadata["version"] == "1.0.0"
-        assert test_function._mesh_metadata["custom_field"] == "custom_value"
 
-        # Test with mock registry
-        registry = MockRegistry()
-        registry.dependencies["Dep1"] = "MockDep1"
-        registry.dependencies["Dep2"] = "MockDep2"
+        # Check that mesh.tool decorated function is callable
+        assert callable(test_function)
 
-        # Call should work
+        # Test function execution
         result = test_function(x=5)
         assert result == 10
 

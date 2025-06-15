@@ -186,12 +186,11 @@ class TestMcpMeshAgentE2E:
         # Verify the registration payload
         registration_data = call_args[1]["json"]
         assert registration_data["agent_id"]
-        assert len(registration_data["metadata"]["tools"]) == 2
+        assert len(registration_data["tools"]) == 2
 
         # Find the tools in the registration
         tools_by_name = {
-            tool["function_name"]: tool
-            for tool in registration_data["metadata"]["tools"]
+            tool["function_name"]: tool for tool in registration_data["tools"]
         }
 
         time_greet_tool = tools_by_name["time_greet"]
@@ -309,12 +308,12 @@ class TestMcpMeshAgentE2E:
         result1 = decorated_func.function("Charlie")
         assert result1 == "Hello Charlie, you are 30 years old and today is 2023-12-25"
 
-        # Test with custom age
-        result2 = decorated_func.function("Diana", 25)
+        # Test with custom age (using keyword arguments to avoid positional conflicts with McpMeshAgent)
+        result2 = decorated_func.function("Diana", age=25)
         assert result2 == "Hello Diana, you are 25 years old and today is 2023-12-25"
 
-        # Test with custom greeting
-        result3 = decorated_func.function("Eve", 28, greeting="Hi")
+        # Test with custom greeting (using keyword arguments)
+        result3 = decorated_func.function("Eve", age=28, greeting="Hi")
         assert result3 == "Hi Eve, you are 28 years old and today is 2023-12-25"
 
     def test_mcp_mesh_agent_type_validation(self):

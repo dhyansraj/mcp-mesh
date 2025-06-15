@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -62,7 +61,7 @@ func (h *BusinessLogicHandlers) GetRoot(c *gin.Context) {
 
 // RegisterAgent implements POST /agents/register
 func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
-	var req generated.AgentRegistration
+	var req generated.MeshAgentRegistration
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
@@ -71,11 +70,14 @@ func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
 		return
 	}
 
-	// Convert generated.AgentRegistration to service.AgentRegistrationRequest
+	// Convert generated.MeshAgentRegistration to service.AgentRegistrationRequest
 	serviceReq := &AgentRegistrationRequest{
 		AgentID:   req.AgentId,
-		Timestamp: req.Timestamp.Format(time.RFC3339),
-		Metadata:  convertAgentMetadataToMap(req.Metadata),
+		Timestamp: time.Now().Format(time.RFC3339),
+		Metadata:  ConvertMeshAgentRegistrationToMap(req),
+	}
+	if req.Timestamp != nil {
+		serviceReq.Timestamp = req.Timestamp.Format(time.RFC3339)
 	}
 
 	// Call the actual service registration logic
@@ -89,8 +91,8 @@ func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
 	}
 
 	// Convert service response to generated response format
-	response := generated.RegistrationResponse{
-		Status:    generated.RegistrationResponseStatus(serviceResp.Status),
+	response := generated.MeshRegistrationResponse{
+		Status:    generated.MeshRegistrationResponseStatus(serviceResp.Status),
 		Timestamp: time.Now(),
 		Message:   serviceResp.Message,
 		AgentId:   serviceResp.AgentID,
@@ -98,17 +100,43 @@ func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
 
 	// Include dependency resolution if available
 	if serviceResp.DependenciesResolved != nil {
-		deps := make(map[string]generated.DependencyInfo)
-		for key, dep := range serviceResp.DependenciesResolved {
-			if dep != nil {
-				deps[key] = generated.DependencyInfo{
-					AgentId:  dep.AgentID,
-					Endpoint: dep.Endpoint,
-					Status:   generated.DependencyInfoStatus(dep.Status),
+		depsMap := make(map[string][]struct {
+			AgentId      string                                                       `json:"agent_id"`
+			Capability   string                                                       `json:"capability"`
+			Endpoint     string                                                       `json:"endpoint"`
+			FunctionName string                                                       `json:"function_name"`
+			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+		})
+
+		for functionName, deps := range serviceResp.DependenciesResolved {
+			if len(deps) > 0 {
+				depsList := make([]struct {
+					AgentId      string                                                       `json:"agent_id"`
+					Capability   string                                                       `json:"capability"`
+					Endpoint     string                                                       `json:"endpoint"`
+					FunctionName string                                                       `json:"function_name"`
+					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+				}, len(deps))
+
+				for i, dep := range deps {
+					depsList[i] = struct {
+						AgentId      string                                                       `json:"agent_id"`
+						Capability   string                                                       `json:"capability"`
+						Endpoint     string                                                       `json:"endpoint"`
+						FunctionName string                                                       `json:"function_name"`
+						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+					}{
+						AgentId:      dep.AgentID,
+						Capability:   dep.Capability,
+						Endpoint:     dep.Endpoint,
+						FunctionName: dep.FunctionName,
+						Status:       generated.MeshRegistrationResponseDependenciesResolvedStatus(dep.Status),
+					}
 				}
+				depsMap[functionName] = depsList
 			}
 		}
-		response.DependenciesResolved = &deps
+		response.DependenciesResolved = &depsMap
 	}
 
 	c.JSON(http.StatusCreated, response)
@@ -116,22 +144,45 @@ func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
 
 // SendHeartbeat implements POST /heartbeat
 func (h *BusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
-	var req generated.HeartbeatRequest
+	var req generated.MeshAgentRegistration
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     "Invalid JSON payload",
+			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
 			Timestamp: time.Now(),
 		})
 		return
 	}
 
-	// TODO: Implement actual heartbeat logic
-	// This is where you add business logic for heartbeat processing
+	// Convert to heartbeat request format (lighter than full registration)
+	heartbeatReq := &HeartbeatRequest{
+		AgentID:  req.AgentId,
+		Status:   "healthy", // Default status
+		Metadata: ConvertMeshAgentRegistrationToMap(req),
+	}
 
-	response := generated.HeartbeatResponse{
-		Status:    "success",
+	// Call lightweight heartbeat service method
+	serviceResp, err := h.service.UpdateHeartbeat(heartbeatReq)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Convert service response to API response
+	var status generated.MeshRegistrationResponseStatus
+	if serviceResp.Status == "success" {
+		status = generated.Success
+	} else {
+		status = generated.Error
+	}
+
+	response := generated.MeshRegistrationResponse{
+		Status:    status,
 		Timestamp: time.Now(),
-		Message:   "Heartbeat received",
+		Message:   serviceResp.Message,
+		AgentId:   req.AgentId,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -174,77 +225,113 @@ func (h *BusinessLogicHandlers) ListAgents(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// convertAgentMetadataToMap converts generated.AgentMetadata to map[string]interface{}
+// ConvertMeshAgentRegistrationToMap converts generated.MeshAgentRegistration to map[string]interface{}
 // for compatibility with the service layer
-func convertAgentMetadataToMap(metadata generated.AgentMetadata) map[string]interface{} {
+func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[string]interface{} {
 	result := make(map[string]interface{})
 
-	result["name"] = metadata.Name
-	result["agent_type"] = string(metadata.AgentType)
-	result["namespace"] = metadata.Namespace
-	result["endpoint"] = metadata.Endpoint
-	if metadata.Capabilities != nil {
-		result["capabilities"] = *metadata.Capabilities // Dereference pointer
+	// Basic agent information
+	if reg.Name != nil {
+		result["name"] = *reg.Name
 	} else {
-		result["capabilities"] = []string{} // Default empty array
+		result["name"] = reg.AgentId // Default to agent_id if name not provided
 	}
 
-	if metadata.Dependencies != nil {
-		// Convert union types to appropriate format for service layer
-		deps := make([]interface{}, len(*metadata.Dependencies))
-		for i, dep := range *metadata.Dependencies {
-			// Try to unmarshal as string first, then as object
-			if stringDep, err := dep.AsAgentMetadataDependencies0(); err == nil {
-				deps[i] = stringDep
-			} else if objDep, err := dep.AsAgentMetadataDependencies1(); err == nil {
-				deps[i] = map[string]interface{}{
-					"capability": objDep.Capability,
-					"tags":       objDep.Tags,
-					"version":    objDep.Version,
-					"namespace":  objDep.Namespace,
+	if reg.AgentType != nil {
+		result["agent_type"] = string(*reg.AgentType)
+	} else {
+		result["agent_type"] = "mcp_agent" // Default type
+	}
+
+	if reg.Namespace != nil {
+		result["namespace"] = *reg.Namespace
+	}
+
+	if reg.Version != nil {
+		result["version"] = *reg.Version
+	}
+
+	// Construct endpoint from http_host and http_port
+	endpoint := ""
+	if reg.HttpHost != nil && reg.HttpPort != nil {
+		if *reg.HttpPort == 0 {
+			endpoint = "stdio" // Port 0 indicates stdio transport
+		} else {
+			endpoint = fmt.Sprintf("http://%s:%d", *reg.HttpHost, *reg.HttpPort)
+		}
+	} else {
+		endpoint = "stdio" // Default to stdio if not specified
+	}
+	result["endpoint"] = endpoint
+
+	// Extract capabilities from tools
+	capabilities := make([]string, len(reg.Tools))
+	for i, tool := range reg.Tools {
+		capabilities[i] = tool.Capability
+	}
+	result["capabilities"] = capabilities
+
+	// Extract dependencies from tools
+	allDependencies := make([]interface{}, 0)
+	for _, tool := range reg.Tools {
+		if tool.Dependencies != nil {
+			for _, dep := range *tool.Dependencies {
+				depMap := map[string]interface{}{
+					"capability": dep.Capability,
 				}
-			} else {
-				// Fallback: try to marshal and unmarshal to get raw interface{}
-				if jsonBytes, err := dep.MarshalJSON(); err == nil {
-					var rawDep interface{}
-					if err := json.Unmarshal(jsonBytes, &rawDep); err == nil {
-						deps[i] = rawDep
-					}
+				if dep.Namespace != nil {
+					depMap["namespace"] = *dep.Namespace
 				}
+				if dep.Tags != nil {
+					depMap["tags"] = *dep.Tags
+				}
+				if dep.Version != nil {
+					depMap["version"] = *dep.Version
+				}
+				allDependencies = append(allDependencies, depMap)
 			}
 		}
-		result["dependencies"] = deps
-	} else {
-		result["dependencies"] = []interface{}{} // Default empty array when nil
 	}
+	result["dependencies"] = allDependencies
 
-	if metadata.HealthInterval != nil {
-		result["health_interval"] = *metadata.HealthInterval
+	// Store tools information for potential future use
+	toolsData := make([]interface{}, len(reg.Tools))
+	for i, tool := range reg.Tools {
+		toolData := map[string]interface{}{
+			"function_name": tool.FunctionName,
+			"capability":    tool.Capability,
+		}
+		if tool.Description != nil {
+			toolData["description"] = *tool.Description
+		}
+		if tool.Version != nil {
+			toolData["version"] = *tool.Version
+		}
+		if tool.Tags != nil {
+			toolData["tags"] = *tool.Tags
+		}
+		if tool.Dependencies != nil {
+			deps := make([]map[string]interface{}, len(*tool.Dependencies))
+			for j, dep := range *tool.Dependencies {
+				depData := map[string]interface{}{
+					"capability": dep.Capability,
+				}
+				if dep.Namespace != nil {
+					depData["namespace"] = *dep.Namespace
+				}
+				if dep.Tags != nil {
+					depData["tags"] = *dep.Tags
+				}
+				if dep.Version != nil {
+					depData["version"] = *dep.Version
+				}
+				deps[j] = depData
+			}
+			toolData["dependencies"] = deps
+		}
+		toolsData[i] = toolData
 	}
-
-	if metadata.TimeoutThreshold != nil {
-		result["timeout_threshold"] = *metadata.TimeoutThreshold
-	}
-
-	if metadata.EvictionThreshold != nil {
-		result["eviction_threshold"] = *metadata.EvictionThreshold
-	}
-
-	if metadata.Version != nil {
-		result["version"] = *metadata.Version
-	}
-
-	if metadata.Description != nil {
-		result["description"] = *metadata.Description
-	}
-
-	if metadata.Tags != nil {
-		result["tags"] = *metadata.Tags
-	}
-
-	if metadata.SecurityContext != nil {
-		result["security_context"] = *metadata.SecurityContext
-	}
+	result["tools"] = toolsData
 
 	return result
 }
@@ -286,32 +373,7 @@ func convertMapToAgentInfo(agentMap map[string]interface{}) generated.AgentInfo 
 	}
 
 	// Optional fields
-	if deps, ok := agentMap["dependencies"].([]interface{}); ok {
-		dependencies := make([]string, len(deps))
-		for i, dep := range deps {
-			if depStr, ok := dep.(string); ok {
-				dependencies[i] = depStr
-			} else if depObj, ok := dep.(map[string]interface{}); ok {
-				// For complex dependencies, create a descriptive string
-				if capability, ok := depObj["capability"].(string); ok {
-					dependencies[i] = capability
-					if tags, ok := depObj["tags"].([]interface{}); ok && len(tags) > 0 {
-						// Add first tag to make it more descriptive
-						if firstTag, ok := tags[0].(string); ok {
-							dependencies[i] = fmt.Sprintf("%s:%s", capability, firstTag)
-						}
-					}
-				} else {
-					dependencies[i] = "unknown"
-				}
-			} else {
-				dependencies[i] = "unknown"
-			}
-		}
-		agentInfo.Dependencies = &dependencies
-	} else if deps, ok := agentMap["dependencies"].([]string); ok {
-		agentInfo.Dependencies = &deps
-	}
+	// Note: Dependencies field removed from API spec - using real-time resolution instead
 
 	if lastSeen, ok := agentMap["last_seen"].(string); ok {
 		if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {

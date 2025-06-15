@@ -67,6 +67,79 @@ def _clear_shared_agent_id():
     _SHARED_AGENT_ID = None
 
 
+def _detect_fastmcp_already_processed(func) -> bool:
+    """
+    Detect if FastMCP has already processed this function.
+
+    This indicates wrong decorator order: @server.tool() came before @mesh.tool().
+    """
+    # Simple and reliable check: if FastMCP processed this function first,
+    # it will have this marker set by our fastmcp_integration patch
+    return hasattr(func, "_fastmcp_processed_first")
+
+
+def _attempt_fastmcp_replacement(target, wrapped) -> bool:
+    """
+    Attempt to replace the FastMCP cached function with our wrapper.
+
+    This is a compatibility workaround for wrong decorator order.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        func_name = target.__name__
+        replaced = False
+
+        # Try immediate replacement
+        if hasattr(target, "_mcp_server"):
+            server = target._mcp_server
+
+            if (
+                hasattr(server, "_tool_manager")
+                and hasattr(server._tool_manager, "_tools")
+                and func_name in server._tool_manager._tools
+            ):
+
+                server._tool_manager._tools[func_name].fn = wrapped
+                logger.debug(
+                    f"Replaced FastMCP cached function {func_name} with injection wrapper"
+                )
+                replaced = True
+
+        # Also check global function-to-server mapping
+        try:
+            from mcp_mesh.runtime.fastmcp_integration import _function_to_server
+
+            if target.__name__ in _function_to_server:
+                server = _function_to_server[target.__name__]
+
+                if (
+                    hasattr(server, "_tool_manager")
+                    and hasattr(server._tool_manager, "_tools")
+                    and func_name in server._tool_manager._tools
+                ):
+
+                    server._tool_manager._tools[func_name].fn = wrapped
+                    logger.debug(
+                        f"Replaced FastMCP cached function {func_name} via global mapping"
+                    )
+                    replaced = True
+        except ImportError:
+            pass
+
+        # If immediate replacement failed, set up delayed replacement
+        if not replaced:
+            target._mesh_delayed_replacement = lambda: _attempt_fastmcp_replacement(
+                target, wrapped
+            )
+            logger.debug(f"Set up delayed FastMCP replacement for {func_name}")
+
+        return replaced
+
+    except Exception as e:
+        logger.warning(f"FastMCP replacement failed for {target.__name__}: {e}")
+        return False
+
+
 def tool(
     capability: str | None = None,
     *,
@@ -81,6 +154,15 @@ def tool(
 
     Handles individual tool registration, capabilities, and dependencies.
 
+    IMPORTANT: For optimal compatibility with FastMCP, use this decorator order:
+
+    @mesh.tool(capability="example", dependencies=[...])
+    @server.tool()
+    def my_function():
+        pass
+
+    While both orders currently work, the above order is recommended for future compatibility.
+
     Args:
         capability: Optional capability name this tool provides (default: None)
         tags: Optional list of tags for discovery (default: [])
@@ -90,7 +172,8 @@ def tool(
         **kwargs: Additional metadata
 
     Returns:
-        The original function with tool metadata attached
+        Function with dependency injection wrapper if dependencies are specified,
+        otherwise the original function with metadata attached
     """
 
     def decorator(target: T) -> T:
@@ -190,6 +273,8 @@ def tool(
                 # Preserve metadata on wrapper
                 wrapped._mesh_tool_metadata = metadata
 
+                # Strategy: Always try the clean approach first, fallback to replacement if needed
+
                 # If runtime processor is available, register with it
                 if _runtime_processor is not None:
                     try:
@@ -199,7 +284,41 @@ def tool(
                             f"Runtime registration failed for {target.__name__}: {e}"
                         )
 
-                return wrapped
+                # Store the wrapper on the original function for reference
+                target._mesh_injection_wrapper = wrapped
+
+                # Check if FastMCP has already processed this function (wrong order)
+                fastmcp_already_processed = _detect_fastmcp_already_processed(target)
+
+                # For now, always apply the compatibility workaround since both orders
+                # end up with FastMCP processing the function before @mesh.tool runs
+                # The "correct" syntactic order will be handled cleanly in future versions
+
+                if fastmcp_already_processed:
+                    # FastMCP has already cached the function - use replacement workaround
+                    logger.debug(
+                        f"Applying FastMCP compatibility workaround for '{target.__name__}'"
+                    )
+
+                    # Try the FastMCP internal replacement as fallback
+                    success = _attempt_fastmcp_replacement(target, wrapped)
+                    if not success:
+                        # Set up delayed replacement
+                        target._mesh_delayed_replacement = (
+                            lambda: _attempt_fastmcp_replacement(target, wrapped)
+                        )
+                        logger.debug(
+                            f"Set up delayed replacement for '{target.__name__}'"
+                        )
+
+                    # Return original to maintain compatibility
+                    return target
+                else:
+                    # No FastMCP processing yet - return wrapper for clean chaining
+                    logger.debug(f"Clean decorator chaining for '{target.__name__}'")
+
+                    # Return the wrapped function - FastMCP will cache this wrapper when it runs
+                    return wrapped
             except Exception as e:
                 # Log but don't fail - graceful degradation
                 logger.error(
@@ -290,10 +409,10 @@ def agent(
         if env_http_port is not None:
             try:
                 final_http_port = int(env_http_port)
-            except ValueError:
+            except ValueError as e:
                 raise ValueError(
                     "MCP_MESH_HTTP_PORT environment variable must be a valid integer"
-                )
+                ) from e
 
             if not (0 <= final_http_port <= 65535):
                 raise ValueError("http_port must be between 0 and 65535")
@@ -304,10 +423,10 @@ def agent(
         if env_health_interval is not None:
             try:
                 final_health_interval = int(env_health_interval)
-            except ValueError:
+            except ValueError as e:
                 raise ValueError(
                     "MCP_MESH_HEALTH_INTERVAL environment variable must be a valid integer"
-                )
+                ) from e
 
             if final_health_interval < 1:
                 raise ValueError("health_interval must be at least 1 second")

@@ -221,8 +221,30 @@ EOF
 
     # Fix import paths to use full project-relative paths
     log_info "Fixing import paths in generated files..."
-    find "$output_dir" -name "*.py" -type f -exec sed -i 's/from mcp_mesh_registry_client\./from mcp_mesh.registry_client_generated.mcp_mesh_registry_client./g' {} \;
-    find "$output_dir" -name "*.py" -type f -exec sed -i 's/import mcp_mesh_registry_client\./import mcp_mesh.registry_client_generated.mcp_mesh_registry_client./g' {} \;
+
+    # Define replacement patterns that avoid double-replacement by being specific
+    # Only match paths that are NOT already corrected
+    declare -a patterns=(
+        # Only replace if it's NOT already prefixed with our target path
+        's|from mcp_mesh_registry_client\.|from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.|g'
+        's|import mcp_mesh_registry_client\.|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.|g'
+        # Handle getattr() and direct references separately - be very specific
+        's|getattr(mcp_mesh_registry_client\.models,|getattr(mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models,|g'
+        's|import mcp_mesh_registry_client\.models|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models|g'
+        's|import mcp_mesh_registry_client\.api|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api|g'
+        's|from mcp_mesh_registry_client import|from mcp_mesh.registry_client_generated.mcp_mesh_registry_client import|g'
+        # Most general pattern last - for standalone imports only at line boundaries
+        's|^import mcp_mesh_registry_client$|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client|g'
+    )
+
+    # Apply all patterns in a single sed command to avoid double-replacement
+    local sed_script=""
+    for pattern in "${patterns[@]}"; do
+        sed_script="${sed_script}${pattern};"
+    done
+
+    log_info "Applying ${#patterns[@]} import path fixes in single pass..."
+    find "$output_dir" -name "*.py" -type f -exec sed -i "$sed_script" {} \;
 
     log_success "Python registry client code generated: $output_dir"
 }

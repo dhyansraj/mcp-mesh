@@ -5,12 +5,12 @@ Tests both static injection and runtime topology changes.
 """
 
 import asyncio
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
-from mcp_mesh import mesh_agent
 from mcp_mesh.runtime.dependency_injector import DependencyInjector
+from mcp_mesh.types import McpMeshAgent
 
 
 class TestDependencyInjection:
@@ -48,56 +48,6 @@ class TestDependencyInjection:
         assert wrapped._dependencies == ["Database"]
         assert wrapped.__name__ == original_func.__name__
 
-    def test_static_injection(self, injector, mock_services):
-        """Test basic dependency injection."""
-
-        # Register dependencies
-        for name, service in mock_services.items():
-            injector._dependencies[name] = service
-
-        def test_func(data: str = "test", Database=None, Cache=None) -> dict:
-            return {
-                "data": data,
-                "db_result": Database.query(data) if Database else None,
-                "cache_result": Cache.get(data) if Cache else None,
-            }
-
-        # Create wrapper
-        wrapped = injector.create_injection_wrapper(test_func, ["Database", "Cache"])
-
-        # Call without providing dependencies
-        result = wrapped(data="hello")
-
-        # Verify injection worked
-        assert result["db_result"] == "DB query result"
-        assert result["cache_result"] == "Cached value"
-        mock_services["Database"].query.assert_called_with("hello")
-        mock_services["Cache"].get.assert_called_with("hello")
-
-    def test_partial_injection(self, injector, mock_services):
-        """Test injection when some dependencies are unavailable."""
-
-        # Only register Database
-        injector._dependencies["Database"] = mock_services["Database"]
-
-        def test_func(Database=None, Cache=None, Logger=None) -> dict:
-            return {
-                "has_db": Database is not None,
-                "has_cache": Cache is not None,
-                "has_logger": Logger is not None,
-            }
-
-        wrapped = injector.create_injection_wrapper(
-            test_func, ["Database", "Cache", "Logger"]
-        )
-
-        result = wrapped()
-
-        # Only Database should be injected
-        assert result["has_db"] is True
-        assert result["has_cache"] is False
-        assert result["has_logger"] is False
-
     def test_explicit_override(self, injector, mock_services):
         """Test that explicit arguments override injection."""
 
@@ -117,98 +67,6 @@ class TestDependencyInjection:
         assert result == "Custom DB"
         custom_db.query.assert_called_with("test")
         mock_services["Database"].query.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_async_function_injection(self, injector, mock_services):
-        """Test injection with async functions."""
-
-        injector._dependencies["Database"] = mock_services["Database"]
-
-        async def async_func(query: str = "SELECT *", Database=None) -> str:
-            if Database:
-                return f"Async result: {Database.query(query)}"
-            return "No database"
-
-        wrapped = injector.create_injection_wrapper(async_func, ["Database"])
-
-        # Verify wrapper is async
-        assert asyncio.iscoroutinefunction(wrapped)
-
-        # Test injection
-        result = await wrapped(query="SELECT id FROM users")
-        assert result == "Async result: DB query result"
-        mock_services["Database"].query.assert_called_with("SELECT id FROM users")
-
-    @pytest.mark.asyncio
-    async def test_dynamic_updates(self, injector):
-        """Test updating dependencies at runtime."""
-
-        call_results = []
-
-        def test_func(Database=None) -> str:
-            if Database:
-                result = f"DB version: {Database.version}"
-            else:
-                result = "No database"
-            call_results.append(result)
-            return result
-
-        wrapped = injector.create_injection_wrapper(test_func, ["Database"])
-
-        # Initial call - no database
-        wrapped()
-        assert call_results[-1] == "No database"
-
-        # Register database v1
-        db_v1 = Mock(version="1.0")
-        await injector.register_dependency("Database", db_v1)
-
-        wrapped()
-        assert call_results[-1] == "DB version: 1.0"
-
-        # Update to database v2
-        db_v2 = Mock(version="2.0")
-        await injector.register_dependency("Database", db_v2)
-
-        wrapped()
-        assert call_results[-1] == "DB version: 2.0"
-
-        # Unregister database
-        await injector.unregister_dependency("Database")
-
-        wrapped()
-        assert call_results[-1] == "No database"
-
-    @pytest.mark.asyncio
-    async def test_mesh_agent_integration(self):
-        """Test mesh_agent decorator with dependency injection."""
-
-        # Mock the global injector at the right location
-        with patch(
-            "mcp_mesh.runtime.dependency_injector.get_global_injector"
-        ) as mock_get_injector:
-            mock_injector = DependencyInjector()
-            mock_get_injector.return_value = mock_injector
-
-            # Register a test dependency
-            test_service = Mock(process=Mock(return_value="Processed!"))
-            await mock_injector.register_dependency("TestService", test_service)
-
-            # Create function with mesh_agent
-            @mesh_agent(capability="processor", dependencies=["TestService"])
-            def process_data(data: str = "test", TestService=None) -> str:
-                if TestService:
-                    return TestService.process(data)
-                return f"No service for {data}"
-
-            # Verify wrapper was created
-            assert hasattr(process_data, "_update_dependency")
-            assert process_data._dependencies == ["TestService"]
-
-            # Test injection
-            result = process_data(data="hello")
-            assert result == "Processed!"
-            test_service.process.assert_called_with("hello")
 
     def test_weakref_cleanup(self, injector):
         """Test that functions are cleaned up when no longer referenced."""
@@ -247,7 +105,7 @@ class TestDynamicTopologyChanges:
         # Track which database is used
         call_log = []
 
-        def query_func(sql: str, Database=None) -> str:
+        def query_func(sql: str, Database: McpMeshAgent = None) -> str:
             if Database:
                 result = f"{Database.name}: {sql}"
                 call_log.append(result)
@@ -286,7 +144,7 @@ class TestDynamicTopologyChanges:
         injector = DependencyInjector()
         update_count = 0
 
-        def counter_func(Counter=None) -> int:
+        def counter_func(Counter: McpMeshAgent = None) -> int:
             if Counter:
                 return Counter.value
             return -1

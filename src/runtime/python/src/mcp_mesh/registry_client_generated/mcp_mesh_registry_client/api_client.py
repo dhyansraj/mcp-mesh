@@ -22,6 +22,7 @@ from urllib.parse import quote
 from dateutil.parser import parse
 from pydantic import SecretStr
 
+import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models
 from mcp_mesh.registry_client_generated.mcp_mesh_registry_client import rest
 from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_response import (
     ApiResponse,
@@ -439,7 +440,10 @@ class ApiClient:
             if klass in self.NATIVE_TYPES_MAPPING:
                 klass = self.NATIVE_TYPES_MAPPING[klass]
             else:
-                klass = getattr(mcp_mesh_registry_client.models, klass)
+                klass = getattr(
+                    mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models,
+                    klass,
+                )
 
         if klass in self.PRIMITIVE_TYPES:
             return self.__deserialize_primitive(data, klass)

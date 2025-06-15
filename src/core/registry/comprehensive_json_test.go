@@ -1,0 +1,232 @@
+package registry
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"mcp-mesh/src/core/registry/generated"
+)
+
+// TestComprehensiveJSONParsing validates all JSON files in our test data directory
+func TestComprehensiveJSONParsing(t *testing.T) {
+	t.Run("ParseAllAgentRegistrationJSONs", func(t *testing.T) {
+		// Load and parse all JSON files in testdata/agent_registration/
+		testFiles, err := filepath.Glob("testdata/agent_registration/*.json")
+		require.NoError(t, err, "Failed to find test JSON files")
+		require.NotEmpty(t, testFiles, "No test JSON files found in testdata/agent_registration/")
+
+		for _, testFile := range testFiles {
+			t.Run(filepath.Base(testFile), func(t *testing.T) {
+				// Read JSON file
+				jsonData, err := os.ReadFile(testFile)
+				require.NoError(t, err, "Failed to read test file %s", testFile)
+
+				// Parse into MeshAgentRegistration
+				var registration generated.MeshAgentRegistration
+				err = json.Unmarshal(jsonData, &registration)
+				require.NoError(t, err, "Failed to parse JSON from %s", testFile)
+
+				// Validate required fields
+				assert.NotEmpty(t, registration.AgentId, "AgentId should not be empty")
+				assert.NotEmpty(t, registration.Tools, "Tools array should not be empty")
+
+				// Validate each tool has required fields
+				for i, tool := range registration.Tools {
+					assert.NotEmpty(t, tool.FunctionName, "Tool[%d].FunctionName should not be empty", i)
+					assert.NotEmpty(t, tool.Capability, "Tool[%d].Capability should not be empty", i)
+				}
+
+				// Test conversion to service layer
+				metadata := ConvertMeshAgentRegistrationToMap(registration)
+				validateServiceLayerFormat(t, metadata, registration)
+
+				t.Logf("✅ Successfully parsed and converted %s: AgentId=%s, Tools=%d",
+					filepath.Base(testFile), registration.AgentId, len(registration.Tools))
+			})
+		}
+	})
+}
+
+// validateServiceLayerFormat validates the converted service layer format
+func validateServiceLayerFormat(t *testing.T, metadata map[string]interface{}, original generated.MeshAgentRegistration) {
+	// Required fields should be present
+	assert.Contains(t, metadata, "name", "Service layer should have name")
+	assert.Contains(t, metadata, "agent_type", "Service layer should have agent_type")
+	assert.Contains(t, metadata, "endpoint", "Service layer should have endpoint")
+	assert.Contains(t, metadata, "capabilities", "Service layer should have capabilities")
+	assert.Contains(t, metadata, "dependencies", "Service layer should have dependencies")
+	assert.Contains(t, metadata, "tools", "Service layer should have tools")
+
+	// Validate capabilities extraction
+	capabilities, ok := metadata["capabilities"].([]string)
+	require.True(t, ok, "capabilities should be []string")
+	assert.Len(t, capabilities, len(original.Tools), "Should have one capability per tool")
+
+	// Validate dependencies extraction
+	dependencies, ok := metadata["dependencies"].([]interface{})
+	require.True(t, ok, "dependencies should be []interface{}")
+
+	// Count expected dependencies
+	expectedDepCount := 0
+	for _, tool := range original.Tools {
+		if tool.Dependencies != nil {
+			expectedDepCount += len(*tool.Dependencies)
+		}
+	}
+	assert.Len(t, dependencies, expectedDepCount, "Should have correct number of dependencies")
+
+	// Validate tools preservation
+	tools, ok := metadata["tools"].([]map[string]interface{})
+	require.True(t, ok, "tools should be []map[string]interface{}")
+	assert.Len(t, tools, len(original.Tools), "Should preserve all tools")
+
+	// Validate endpoint construction
+	endpoint, ok := metadata["endpoint"].(string)
+	require.True(t, ok, "endpoint should be string")
+
+	if original.HttpPort != nil && *original.HttpPort == 0 {
+		assert.Equal(t, "stdio", endpoint, "Port 0 should result in stdio endpoint")
+	} else if original.HttpHost != nil && original.HttpPort != nil {
+		// Note: This is a simplified check, the actual implementation may vary
+		assert.Contains(t, endpoint, "http", "HTTP endpoint should contain http")
+	}
+}
+
+// TestJSONSchemaValidation tests specific schema requirements
+func TestJSONSchemaValidation(t *testing.T) {
+	t.Run("RequiredFields", func(t *testing.T) {
+		// Test with minimal required fields only
+		minimalJSON := `{
+			"agent_id": "test-agent",
+			"tools": [
+				{
+					"function_name": "test_func",
+					"capability": "test_cap"
+				}
+			]
+		}`
+
+		var registration generated.MeshAgentRegistration
+		err := json.Unmarshal([]byte(minimalJSON), &registration)
+		require.NoError(t, err, "Should parse minimal JSON")
+
+		assert.Equal(t, "test-agent", registration.AgentId)
+		assert.Len(t, registration.Tools, 1)
+		assert.Equal(t, "test_func", registration.Tools[0].FunctionName)
+		assert.Equal(t, "test_cap", registration.Tools[0].Capability)
+	})
+
+	t.Run("OptionalFields", func(t *testing.T) {
+		// Test with all optional fields
+		fullJSON := `{
+			"agent_id": "test-agent",
+			"agent_type": "mcp_agent",
+			"name": "Test Agent",
+			"version": "1.0.0",
+			"http_host": "localhost",
+			"http_port": 8080,
+			"timestamp": "2024-01-01T00:00:00Z",
+			"namespace": "test",
+			"tools": [
+				{
+					"function_name": "test_func",
+					"capability": "test_cap",
+					"version": "1.0.0",
+					"description": "Test function",
+					"tags": ["test", "demo"],
+					"dependencies": [
+						{
+							"capability": "dep_cap",
+							"version": ">=1.0.0",
+							"namespace": "test",
+							"tags": ["production"]
+						}
+					]
+				}
+			]
+		}`
+
+		var registration generated.MeshAgentRegistration
+		err := json.Unmarshal([]byte(fullJSON), &registration)
+		require.NoError(t, err, "Should parse full JSON")
+
+		// Validate all optional fields are parsed
+		assert.NotNil(t, registration.AgentType)
+		assert.Equal(t, generated.McpAgent, *registration.AgentType)
+		assert.NotNil(t, registration.Name)
+		assert.Equal(t, "Test Agent", *registration.Name)
+		assert.NotNil(t, registration.Version)
+		assert.Equal(t, "1.0.0", *registration.Version)
+		assert.NotNil(t, registration.HttpHost)
+		assert.Equal(t, "localhost", *registration.HttpHost)
+		assert.NotNil(t, registration.HttpPort)
+		assert.Equal(t, 8080, *registration.HttpPort)
+		assert.NotNil(t, registration.Namespace)
+		assert.Equal(t, "test", *registration.Namespace)
+		assert.NotNil(t, registration.Timestamp)
+
+		// Validate tool optional fields
+		tool := registration.Tools[0]
+		assert.NotNil(t, tool.Version)
+		assert.Equal(t, "1.0.0", *tool.Version)
+		assert.NotNil(t, tool.Description)
+		assert.Equal(t, "Test function", *tool.Description)
+		assert.NotNil(t, tool.Tags)
+		assert.Contains(t, *tool.Tags, "test")
+		assert.Contains(t, *tool.Tags, "demo")
+		assert.NotNil(t, tool.Dependencies)
+		assert.Len(t, *tool.Dependencies, 1)
+
+		// Validate dependency fields
+		dep := (*tool.Dependencies)[0]
+		assert.Equal(t, "dep_cap", dep.Capability)
+		assert.NotNil(t, dep.Version)
+		assert.Equal(t, ">=1.0.0", *dep.Version)
+		assert.NotNil(t, dep.Namespace)
+		assert.Equal(t, "test", *dep.Namespace)
+		assert.NotNil(t, dep.Tags)
+		assert.Contains(t, *dep.Tags, "production")
+	})
+}
+
+// TestErrorCases tests various error scenarios
+func TestErrorCases(t *testing.T) {
+	t.Run("InvalidJSON", func(t *testing.T) {
+		invalidJSON := `{"agent_id": "test", "tools": [`
+
+		var registration generated.MeshAgentRegistration
+		err := json.Unmarshal([]byte(invalidJSON), &registration)
+		assert.Error(t, err, "Should fail to parse invalid JSON")
+	})
+
+	t.Run("MissingRequiredFields", func(t *testing.T) {
+		// Missing agent_id
+		missingAgentIdJSON := `{
+			"tools": [
+				{
+					"function_name": "test_func",
+					"capability": "test_cap"
+				}
+			]
+		}`
+
+		var registration generated.MeshAgentRegistration
+		err := json.Unmarshal([]byte(missingAgentIdJSON), &registration)
+		require.NoError(t, err, "JSON parsing should succeed even with missing fields")
+		assert.Empty(t, registration.AgentId, "AgentId should be empty when not provided")
+
+		// Missing tools
+		missingToolsJSON := `{
+			"agent_id": "test-agent"
+		}`
+
+		var registration2 generated.MeshAgentRegistration
+		err = json.Unmarshal([]byte(missingToolsJSON), &registration2)
+		require.NoError(t, err, "JSON parsing should succeed")
+		assert.Empty(t, registration2.Tools, "Tools should be empty when not provided")
+	})
+}

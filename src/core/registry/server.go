@@ -90,8 +90,6 @@ func (s *Server) SetupGeneratedRoutes() {
 // SetupDecoratorRoutes configures decorator-based endpoints
 // These will be integrated into OpenAPI spec once the generator supports complex schemas
 func (s *Server) SetupDecoratorRoutes() {
-	// Add decorator-based endpoints with different paths to avoid conflicts
-	// Both endpoints use the same DecoratorAgentRequest/Response format
-	s.engine.POST("/agents/register_decorators", s.service.DecoratorRegistrationHandler)
-	s.engine.POST("/heartbeat_decorators", s.service.DecoratorHeartbeatHandler)
+	// Decorator endpoints removed - using standard OpenAPI endpoints only
+	// All registration now goes through /agents/register and /heartbeat
 }

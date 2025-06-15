@@ -88,12 +88,10 @@ class TestMultiToolRegistrationFormat:
             },
         }
 
-        with patch.object(registry_client, "_get_session", return_value=mock_session):
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value=mock_response
-            )
-            mock_session.post.return_value.__aenter__.return_value.status = 201
-
+        # Mock the _make_request method directly since the session mocking is complex
+        with patch.object(
+            registry_client, "_make_request", return_value=mock_response
+        ) as mock_make_request:
             # Act - Register the agent with new multi-tool format
             response = await registry_client.register_multi_tool_agent(
                 agent_id, multi_tool_metadata
@@ -104,15 +102,16 @@ class TestMultiToolRegistrationFormat:
             assert response["status"] == "success"
             assert response["agent_id"] == agent_id
 
-            # Verify the request payload matches Go registry expectations
-            mock_session.post.assert_called_once()
-            call_args = mock_session.post.call_args
+            # Verify the request was made correctly
+            mock_make_request.assert_called_once()
+            call_args = mock_make_request.call_args
 
-            # Check URL
-            assert "/agents/register" in call_args[1]["url"]
+            # Check method and endpoint
+            assert call_args[0][0] == "POST"  # method
+            assert call_args[0][1] == "/agents/register"  # endpoint
 
             # Check payload structure
-            payload = call_args[1]["json"]
+            payload = call_args[0][2]  # payload is third argument
             assert payload["agent_id"] == agent_id
             assert "metadata" in payload
             assert "tools" in payload["metadata"]
@@ -221,12 +220,10 @@ class TestMultiToolRegistrationFormat:
             },
         }
 
-        with patch.object(registry_client, "_get_session", return_value=mock_session):
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value=mock_response
-            )
-            mock_session.post.return_value.__aenter__.return_value.status = 200
-
+        # Mock the _make_request method directly since the session mocking is complex
+        with patch.object(
+            registry_client, "_make_request", return_value=mock_response
+        ) as mock_make_request:
             # Act - Send heartbeat and get dependency resolution
             response = await registry_client.send_heartbeat_with_dependency_resolution(
                 health_status
@@ -241,6 +238,14 @@ class TestMultiToolRegistrationFormat:
             assert "greet" in deps
             assert "farewell" in deps
             assert deps["greet"]["date_service"]["agent_id"] == "date-provider-456"
+
+            # Verify the request was made correctly
+            mock_make_request.assert_called_once()
+            call_args = mock_make_request.call_args
+
+            # Check method and endpoint
+            assert call_args[0][0] == "POST"  # method
+            assert call_args[0][1] == "/heartbeat"  # endpoint
 
     @pytest.mark.asyncio
     async def test_version_constraint_matching(self, registry_client, mock_session):
@@ -379,26 +384,24 @@ class TestMultiToolRegistrationFormat:
             },
         }
 
-        with patch.object(registry_client, "_get_session", return_value=mock_session):
-            # Test healthy state - dependencies should be resolved
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value=healthy_response
-            )
-            mock_session.post.return_value.__aenter__.return_value.status = 200
-
+        # Test healthy state - dependencies should be resolved
+        with patch.object(
+            registry_client, "_make_request", return_value=healthy_response
+        ) as mock_make_request:
             response = await registry_client.send_heartbeat_with_dependency_resolution(
                 healthy_status
             )
+            assert response is not None
             assert len(response["dependencies_resolved"]["test_tool"]) > 0
 
-            # Test degraded state - dependencies should be empty
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value=degraded_response
-            )
-
+        # Test degraded state - dependencies should be empty
+        with patch.object(
+            registry_client, "_make_request", return_value=degraded_response
+        ) as mock_make_request:
             response = await registry_client.send_heartbeat_with_dependency_resolution(
                 healthy_status
             )
+            assert response is not None
             assert len(response["dependencies_resolved"]["test_tool"]) == 0
 
 
@@ -410,15 +413,14 @@ class TestBackwardCompatibility:
         return RegistryClient(url="http://localhost:8080")
 
     @pytest.mark.asyncio
-    async def test_legacy_registration_still_works(self, registry_client, mock_session):
+    async def test_legacy_registration_still_works(self, registry_client):
         """Test that legacy single-capability registration still works."""
         # This ensures we don't break existing agents during migration
-        with patch.object(registry_client, "_get_session", return_value=mock_session):
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value={"status": "success"}
-            )
-            mock_session.post.return_value.__aenter__.return_value.status = 201
+        mock_response = {"status": "success"}
 
+        with patch.object(
+            registry_client, "_make_request", return_value=mock_response
+        ) as mock_make_request:
             # Should still work with old format
             result = await registry_client.register_agent(
                 agent_name="legacy-agent",
@@ -426,6 +428,12 @@ class TestBackwardCompatibility:
                 dependencies=["old_dependency"],
             )
             assert result is True
+
+            # Verify the request was made correctly
+            mock_make_request.assert_called_once()
+            call_args = mock_make_request.call_args
+            assert call_args[0][0] == "POST"  # method
+            assert call_args[0][1] == "/agents/register"  # endpoint
 
     @pytest.mark.asyncio
     async def test_mixed_format_handling(self, registry_client):
@@ -457,17 +465,18 @@ class TestErrorHandling:
         return RegistryClient(url="http://localhost:8080")
 
     @pytest.mark.asyncio
-    async def test_registration_failure_handling(self, registry_client, mock_session):
+    async def test_registration_failure_handling(self, registry_client):
         """Test handling of registration failures."""
-        with patch.object(registry_client, "_get_session", return_value=mock_session):
-            # Mock registration failure
-            mock_session.post.return_value.__aenter__.return_value.json = AsyncMock(
-                return_value={"error": "Invalid tool configuration"}
-            )
-            mock_session.post.return_value.__aenter__.return_value.status = 400
+        from mcp_mesh.runtime.exceptions import RegistryConnectionError
 
+        # Mock _make_request to raise an exception (simulating registry error)
+        with patch.object(
+            registry_client,
+            "_make_request",
+            side_effect=RegistryConnectionError("Registry returned 400"),
+        ):
             with pytest.raises(
-                (ValueError, RuntimeError)
+                RegistryConnectionError
             ):  # Should raise appropriate exception
                 await registry_client.register_multi_tool_agent(
                     "bad-agent", {"invalid": "config"}

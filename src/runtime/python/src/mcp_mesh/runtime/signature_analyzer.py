@@ -37,17 +37,28 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
         for i, param_name in enumerate(param_names):
             if param_name in type_hints:
                 param_type = type_hints[param_name]
-                # Check if it's McpMeshAgent type
-                if param_type == McpMeshAgent or (
-                    hasattr(param_type, "__origin__")
-                    and param_type.__origin__ is type(McpMeshAgent)
+                # Check if it's McpMeshAgent type (handle different import paths)
+                if (
+                    param_type == McpMeshAgent
+                    or (
+                        hasattr(param_type, "__name__")
+                        and param_type.__name__ == "McpMeshAgent"
+                    )
+                    or (
+                        hasattr(param_type, "__origin__")
+                        and param_type.__origin__ is type(McpMeshAgent)
+                    )
                 ):
                     mesh_positions.append(i)
 
         return mesh_positions
 
-    except Exception:
+    except Exception as e:
         # If we can't analyze the signature, return empty list
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
 

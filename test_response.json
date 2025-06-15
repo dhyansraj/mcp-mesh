@@ -1,0 +1,31 @@
+{
+  "status": "success",
+  "timestamp": 76587678,
+  "message": "Agent registered successfully",
+  "agent_id": "agent-multi-deps",
+  "dependencies_resolved": {
+    "advanced_greet": [
+      {
+        "agent_id": "dateservice-123",
+        "function_name": "get_date",
+        "endpoint": "http://date:8080",
+        "capability": "date_service",
+        "status": "available"
+      },
+      {
+        "agent_id": "weatherservice-456",
+        "function_name": "get_weather",
+        "endpoint": "http://weather:8080",
+        "capability": "weather_service",
+        "status": "available"
+      },
+      {
+        "agent_id": "userservice-789",
+        "function_name": "get_user_profile",
+        "endpoint": "http://user:8080",
+        "capability": "user_service",
+        "status": "available"
+      }
+    ]
+  }
+}

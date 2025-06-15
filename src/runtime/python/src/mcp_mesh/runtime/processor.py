@@ -305,7 +305,7 @@ class MeshToolProcessor:
 
         # If there are multiple @mesh.agent decorators, take the first one
         # In practice, there should only be one per class/module
-        for func_name, decorated_func in mesh_agents.items():
+        for _func_name, decorated_func in mesh_agents.items():
             metadata = decorated_func.metadata
             self.logger.debug(f"Found @mesh.agent configuration: {metadata}")
             return metadata
@@ -927,7 +927,7 @@ class MeshAgentProcessor:
                             # Create HTTP-based proxy
                             proxy = await self._create_http_proxy(dep_name, dep_info)
                         else:
-                            # Create stdio-based proxy (existing code)
+                            # Create stdio-based proxy (fallback)
                             proxy = self._create_stdio_proxy(dep_name, dep_info)
 
                         # Register with injector

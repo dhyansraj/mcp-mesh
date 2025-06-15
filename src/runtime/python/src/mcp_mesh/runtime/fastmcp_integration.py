@@ -86,6 +86,18 @@ def patch_fastmcp():
 
         # Create wrapper that stores server reference
         def wrapper(func):
+            # Check if @mesh.tool was applied first (correct order)
+            if hasattr(func, "_mesh_tool_metadata"):
+                logger.debug(
+                    f"✅ Correct decorator order for '{func.__name__}': @mesh.tool() applied before @server.tool()"
+                )
+            else:
+                # Mark that FastMCP processed this function first (wrong order)
+                func._fastmcp_processed_first = True
+                logger.debug(
+                    f"🔄 FastMCP processing '{func.__name__}' before @mesh.tool() - this indicates wrong decorator order"
+                )
+
             # Apply original decorator
             decorated = decorator(func)
             # Store server reference
@@ -94,6 +106,26 @@ def patch_fastmcp():
             # Also store on function itself
             func._mcp_server = self
             logger.debug(f"Registered function {func.__name__} with server {self.name}")
+
+            # CRITICAL: Check if this function has a pending mesh.tool injection wrapper
+            # If so, replace the FastMCP cached function immediately
+            if hasattr(func, "_mesh_delayed_replacement"):
+                try:
+                    success = func._mesh_delayed_replacement()
+                    if success:
+                        delattr(func, "_mesh_delayed_replacement")
+                        logger.debug(
+                            f"✅ Executed delayed mesh.tool injection replacement for {func.__name__}"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ Failed to execute delayed replacement for {func.__name__}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error executing delayed replacement for {func.__name__}: {e}"
+                    )
+
             return decorated
 
         return wrapper

@@ -79,20 +79,22 @@ type AgentRegistrationRequest struct {
 
 // AgentRegistrationResponse matches Python response format exactly
 type AgentRegistrationResponse struct {
-	Status               string                           `json:"status"`
-	AgentID              string                           `json:"agent_id"`
-	ResourceVersion      string                           `json:"resource_version"`
-	Timestamp            string                           `json:"timestamp"`
-	Message              string                           `json:"message"`
-	DependenciesResolved map[string]*DependencyResolution `json:"dependencies_resolved,omitempty"`
-	Metadata             map[string]interface{}           `json:"metadata,omitempty"`
+	Status               string                             `json:"status"`
+	AgentID              string                             `json:"agent_id"`
+	ResourceVersion      string                             `json:"resource_version"`
+	Timestamp            string                             `json:"timestamp"`
+	Message              string                             `json:"message"`
+	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
+	Metadata             map[string]interface{}             `json:"metadata,omitempty"`
 }
 
-// DependencyResolution represents a resolved dependency
+// DependencyResolution represents a resolved dependency in the new format
 type DependencyResolution struct {
-	AgentID  string `json:"agent_id"`
-	Endpoint string `json:"endpoint"`
-	Status   string `json:"status"`
+	AgentID      string `json:"agent_id"`
+	FunctionName string `json:"function_name"`
+	Endpoint     string `json:"endpoint"`
+	Capability   string `json:"capability"`
+	Status       string `json:"status"`
 }
 
 // HeartbeatRequest matches Python HeartbeatRequest exactly
@@ -104,12 +106,12 @@ type HeartbeatRequest struct {
 
 // HeartbeatResponse matches Python response format exactly
 type HeartbeatResponse struct {
-	Status               string                           `json:"status"`
-	Timestamp            string                           `json:"timestamp"`
-	Message              string                           `json:"message"`
-	AgentID              string                           `json:"agent_id,omitempty"`
-	ResourceVersion      string                           `json:"resource_version,omitempty"`
-	DependenciesResolved map[string]*DependencyResolution `json:"dependencies_resolved,omitempty"`
+	Status               string                             `json:"status"`
+	Timestamp            string                             `json:"timestamp"`
+	Message              string                             `json:"message"`
+	AgentID              string                             `json:"agent_id,omitempty"`
+	ResourceVersion      string                             `json:"resource_version,omitempty"`
+	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
 }
 
 // AgentsResponse matches Python AgentsResponse exactly
@@ -129,195 +131,126 @@ type CapabilitiesResponse struct {
 // RegisterAgent handles agent registration with metadata
 // MUST match Python register_agent_with_metadata behavior exactly
 func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrationResponse, error) {
-	// Validate registration request (matches Python validation)
-	if err := s.validator.ValidateAgentRegistration(req); err != nil {
-		return nil, fmt.Errorf("validation failed: %w", err)
+	if req.AgentID == "" {
+		return nil, fmt.Errorf("agent_id is required")
 	}
 
-	// Extract metadata similar to Python implementation
-	metadata := req.Metadata
-
-	// Skip legacy capabilities processing - we'll focus on new tools format
-
-	// Normalize names (matches Python normalize_name function)
-	agentName := normalizeName(getStringFromMap(metadata, "name", req.AgentID))
-	agentType := normalizeName(getStringFromMap(metadata, "agent_type", "mesh-agent"))
-
-	// Set type-specific thresholds (matches Python logic)
-	timeoutThreshold := getIntFromMap(metadata, "timeout_threshold", s.config.DefaultTimeoutThreshold)
-	evictionThreshold := getIntFromMap(metadata, "eviction_threshold", s.config.DefaultEvictionThreshold)
-
-	// Apply type-specific defaults if not specified
-	switch agentType {
-	case "file-agent":
-		if timeoutThreshold == s.config.DefaultTimeoutThreshold {
-			timeoutThreshold = 90
-		}
-		if evictionThreshold == s.config.DefaultEvictionThreshold {
-			evictionThreshold = 180
-		}
-	case "worker":
-		if timeoutThreshold == s.config.DefaultTimeoutThreshold {
-			timeoutThreshold = 45
-		}
-		if evictionThreshold == s.config.DefaultEvictionThreshold {
-			evictionThreshold = 90
-		}
-	case "critical":
-		if timeoutThreshold == s.config.DefaultTimeoutThreshold {
-			timeoutThreshold = 30
-		}
-		if evictionThreshold == s.config.DefaultEvictionThreshold {
-			evictionThreshold = 60
-		}
-	}
-
-	// Create endpoint (matches Python logic for stdio agents)
-	endpoint := getStringFromMap(metadata, "endpoint", "")
-
-	// Handle HTTP endpoint if provided
-	httpEndpoint := ""
-	if ep, ok := metadata["endpoint"].(string); ok && (strings.HasPrefix(ep, "http://") || strings.HasPrefix(ep, "https://")) {
-		httpEndpoint = ep
-	}
-
-	// Store transport type information
-	transports := []string{"stdio"}
-	if httpEndpoint != "" {
-		transports = append(transports, "http")
-	}
-
-	// Store transport info in metadata
-	if _, exists := metadata["transport"]; !exists {
-		metadata["transport"] = transports
-	}
-	// Keep stdio:// endpoints as-is, they will be updated when HTTP wrapper starts
-	if endpoint == "" {
-		endpoint = fmt.Sprintf("stdio://%s", agentName)
-	} else if strings.HasPrefix(endpoint, "stdio://") {
-		// Keep stdio:// prefix as-is
-		endpoint = endpoint
-	} else if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		// For backward compatibility, convert other formats to stdio://
-		endpoint = fmt.Sprintf("stdio://%s", agentName)
-	}
-
-	// Convert labels to JSON strings (matches Python storage format)
-	labelsJSON := "{}"
-	if labels, exists := metadata["tags"]; exists {
-		if labelsBytes, err := json.Marshal(labels); err == nil {
-			labelsJSON = string(labelsBytes)
-		}
-	}
-
-	// Convert config and dependencies to JSON strings
-	configJSON := "{}"
-	if config, exists := metadata["metadata"]; exists {
-		if configBytes, err := json.Marshal(config); err == nil {
-			configJSON = string(configBytes)
-		}
-	}
-
-	dependenciesJSON := "[]"
-	if deps, exists := metadata["dependencies"]; exists {
-		log.Printf("DEBUG: Found dependencies in metadata: %+v (type: %T)", deps, deps)
-		if depsBytes, err := json.Marshal(deps); err == nil {
-			dependenciesJSON = string(depsBytes)
-			log.Printf("DEBUG: Marshaled dependencies to: %s", dependenciesJSON)
-		} else {
-			log.Printf("DEBUG: Failed to marshal dependencies: %v", err)
-		}
-	} else {
-		log.Printf("DEBUG: No dependencies found in metadata. Available keys: %+v", getMapKeys(metadata))
-	}
-
-	// Create agent record (matching actual database.Agent model)
-	now := time.Now().UTC()
-	agent := database.Agent{
-		ID:                req.AgentID,
-		Name:              agentName,
-		Namespace:         getStringFromMap(metadata, "namespace", "default"),
-		BaseEndpoint:      endpoint, // Changed from Endpoint to BaseEndpoint
-		Status:            "healthy",
-		Labels:            labelsJSON,
-		Metadata:          configJSON, // Changed from Config to Metadata
-		Dependencies:      dependenciesJSON,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		LastHeartbeat:     &now,
-		TimeoutThreshold:  timeoutThreshold,
-		EvictionThreshold: evictionThreshold,
-		Transport:         `["stdio"]`, // Default transport
-	}
-
-	// Save to database using transaction (matches Python behavior)
+	// Begin transaction
 	tx, err := s.db.DB.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
 
-	// Delete existing tools for this agent (tools replace the old capabilities table)
-	_, err = tx.Exec("DELETE FROM tools WHERE agent_id = ?", req.AgentID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete existing tools: %w", err)
+	// Check if agent exists
+	var existingID string
+	err = tx.QueryRow("SELECT agent_id FROM agents WHERE agent_id = ?", req.AgentID).Scan(&existingID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to check existing agent: %w", err)
 	}
 
-	// Insert or update agent using direct SQL that matches database schema
-	resourceVersion := fmt.Sprintf("%d", now.UnixMilli())
-	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO agents (
-			id, name, namespace, endpoint, status, labels, annotations,
-			created_at, updated_at, resource_version, last_heartbeat,
-			health_interval, timeout_threshold, eviction_threshold,
-			agent_type, config, dependencies
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		agent.ID, agent.Name, agent.Namespace, agent.BaseEndpoint, agent.Status,
-		agent.Labels, "{}", // annotations
-		agent.CreatedAt, agent.UpdatedAt, resourceVersion, agent.LastHeartbeat,
-		30, // health_interval
-		agent.TimeoutThreshold, agent.EvictionThreshold,
-		"mesh-agent", // agent_type
-		agent.Metadata, // config
-		agent.Dependencies) // dependencies
-	if err != nil {
-		return nil, fmt.Errorf("failed to save agent: %w", err)
-	}
-
-	// Convert simple capabilities array to tools format for backward compatibility
-	if capabilities, exists := metadata["capabilities"]; exists {
-		if capSlice, ok := capabilities.([]string); ok {
-			// Convert simple string capabilities to tools format
-			tools := make([]interface{}, len(capSlice))
-			for i, cap := range capSlice {
-				tools[i] = map[string]interface{}{
-					"function_name": cap,
-					"capability":    cap,
-					"version":       "1.0.0",
-					"dependencies":  []interface{}{},
-					"config":        map[string]interface{}{},
-				}
-			}
-			metadata["tools"] = tools
+	// Extract agent metadata from request
+	agentName := req.AgentID
+	if name, exists := req.Metadata["name"]; exists {
+		if nameStr, ok := name.(string); ok {
+			agentName = nameStr
 		}
 	}
 
-	// Process tools (multi-tool format, including converted capabilities)
-	if err := s.ProcessTools(req.AgentID, metadata, tx); err != nil {
-		return nil, fmt.Errorf("failed to process tools: %w", err)
+	agentType := "mcp_agent"
+	if aType, exists := req.Metadata["agent_type"]; exists {
+		if typeStr, ok := aType.(string); ok {
+			agentType = typeStr
+		}
 	}
 
-	// Skip recording registry events for now
+	namespace := "default"
+	if ns, exists := req.Metadata["namespace"]; exists {
+		if nsStr, ok := ns.(string); ok {
+			namespace = nsStr
+		}
+	}
 
-	// Skip registry events for now as the table may not exist
-	// _, err = tx.Exec(`
-	//	INSERT INTO registry_events (
-	//		event_type, agent_id, timestamp, resource_version, data, source, metadata
-	//	) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-	//	"MODIFIED", req.AgentID, now, fmt.Sprintf("%d", now.UnixMilli()), eventDataStr, "registry", "{}")
-	// if err != nil {
-	//	return nil, fmt.Errorf("failed to record registry event: %w", err)
-	// }
+	version := ""
+	if v, exists := req.Metadata["version"]; exists {
+		if vStr, ok := v.(string); ok {
+			version = vStr
+		}
+	}
+
+	httpHost := ""
+	if host, exists := req.Metadata["http_host"]; exists {
+		if hostStr, ok := host.(string); ok {
+			httpHost = hostStr
+		}
+	}
+
+	var httpPort *int
+	if port, exists := req.Metadata["http_port"]; exists {
+		if portFloat, ok := port.(float64); ok {
+			portInt := int(portFloat)
+			httpPort = &portInt
+		}
+	}
+
+	// Note: timestamp field removed - registry controls all timestamps via created_at/updated_at
+
+	// Count total dependencies from tools
+	totalDeps := 0
+	if toolsData, exists := req.Metadata["tools"]; exists {
+		if toolsList, ok := toolsData.([]interface{}); ok {
+			for _, toolData := range toolsList {
+				if toolMap, ok := toolData.(map[string]interface{}); ok {
+					if deps, exists := toolMap["dependencies"]; exists {
+						// Handle both []interface{} and []map[string]interface{} types
+						var depCount int
+						if depsList, ok := deps.([]interface{}); ok {
+							depCount = len(depsList)
+						} else if depsMapList, ok := deps.([]map[string]interface{}); ok {
+							depCount = len(depsMapList)
+						} else {
+							continue
+						}
+						totalDeps += depCount
+					}
+				}
+			}
+		}
+	}
+
+	// Prepare SQL for agent upsert
+	now := time.Now().UTC()
+	if existingID != "" {
+		// Update existing agent
+		_, err = tx.Exec(`
+			UPDATE agents
+			SET agent_type = ?, name = ?, version = ?, http_host = ?, http_port = ?,
+			    namespace = ?, total_dependencies = ?, updated_at = ?
+			WHERE agent_id = ?`,
+			agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, now, req.AgentID)
+	} else {
+		// Insert new agent
+		_, err = tx.Exec(`
+			INSERT INTO agents (agent_id, agent_type, name, version, http_host, http_port,
+			                   namespace, total_dependencies, dependencies_resolved,
+			                   created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+			req.AgentID, agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, now, now)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert agent: %w", err)
+	}
+
+	// Process capabilities using the new ProcessCapabilities method
+	err = s.ProcessCapabilities(req.AgentID, req.Metadata, tx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process capabilities: %w", err)
+	}
 
 	// Commit transaction
 	err = tx.Commit()
@@ -325,51 +258,182 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to register agent: %w", err)
-	}
-
-	// Invalidate cache
-	s.cache.invalidateAll()
-
-	// Parse dependencies from JSON (legacy format)
-	var dependencies []string
-	if dependenciesJSON != "[]" && dependenciesJSON != "" {
-		if err := json.Unmarshal([]byte(dependenciesJSON), &dependencies); err != nil {
-			log.Printf("Warning: Failed to parse dependencies: %v", err)
-		}
-	}
-
-	// Resolve dependencies (legacy format)
-	dependenciesResolved, err := s.resolveDependencies(req.AgentID, dependencies)
+	// Resolve dependencies from metadata during registration
+	dependenciesResolved, err := s.ResolveAllDependenciesFromMetadata(req.Metadata)
 	if err != nil {
 		log.Printf("Warning: Failed to resolve dependencies: %v", err)
 		// Continue without dependencies rather than failing registration
-		dependenciesResolved = make(map[string]*DependencyResolution)
+		dependenciesResolved = make(map[string][]*DependencyResolution)
 	}
 
-	// Resolve per-tool dependencies (new multi-tool format)
-	toolDependenciesResolved := s.resolveAllDependencies(req.AgentID)
+	// Count total resolved dependencies across all functions
+	resolvedCount := 0
+	for _, deps := range dependenciesResolved {
+		resolvedCount += len(deps)
+	}
 
-	// Return response with both legacy and new dependency resolution
-	response := &AgentRegistrationResponse{
+	// Update dependencies_resolved count in database
+	_, err = s.db.DB.Exec(`
+		UPDATE agents SET dependencies_resolved = ? WHERE agent_id = ?`,
+		resolvedCount, req.AgentID)
+	if err != nil {
+		log.Printf("Warning: Failed to update dependencies_resolved count: %v", err)
+		// Don't fail registration over this
+	}
+
+	log.Printf("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedCount)
+
+	return &AgentRegistrationResponse{
 		Status:               "success",
-		AgentID:              req.AgentID,
-		ResourceVersion:      fmt.Sprintf("%d", now.UnixMilli()),
-		Timestamp:            now.Format(time.RFC3339),
 		Message:              "Agent registered successfully",
+		AgentID:              req.AgentID,
+		Timestamp:            now.Format(time.RFC3339),
 		DependenciesResolved: dependenciesResolved,
-		Metadata: map[string]interface{}{
-			"dependencies_resolved": toolDependenciesResolved,
-		},
-	}
-
-	return response, nil
+	}, nil
 }
 
-// UpdateHeartbeat handles agent heartbeat updates
-// MUST match Python update_heartbeat behavior exactly
+// UpdateHeartbeat handles lightweight agent heartbeat updates
 func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, error) {
+	if req.AgentID == "" {
+		return nil, fmt.Errorf("agent_id is required")
+	}
+
+	now := time.Now().UTC()
+
+	// Check if agent exists
+	var existingID string
+	err := s.db.DB.QueryRow("SELECT agent_id FROM agents WHERE agent_id = ?", req.AgentID).Scan(&existingID)
+	agentExists := err == nil
+
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to check agent existence: %w", err)
+	}
+
+	// If agent doesn't exist and heartbeat has tools/metadata, register it
+	if !agentExists && req.Metadata != nil {
+		fullReq := &AgentRegistrationRequest{
+			AgentID:   req.AgentID,
+			Metadata:  req.Metadata,
+			Timestamp: now.Format(time.RFC3339),
+		}
+		regResp, err := s.RegisterAgent(fullReq)
+		if err != nil {
+			return &HeartbeatResponse{
+				Status:    "error",
+				Timestamp: now.Format(time.RFC3339),
+				Message:   err.Error(),
+			}, nil
+		}
+		return &HeartbeatResponse{
+			Status:    regResp.Status,
+			Timestamp: now.Format(time.RFC3339),
+			Message:   "Agent registered via heartbeat",
+			AgentID:   regResp.AgentID,
+		}, nil
+	}
+
+	// If agent doesn't exist and no metadata, return error
+	if !agentExists {
+		return &HeartbeatResponse{
+			Status:    "error",
+			Timestamp: now.Format(time.RFC3339),
+			Message:   fmt.Sprintf("Agent %s not found - must provide metadata for registration", req.AgentID),
+		}, nil
+	}
+
+	// Note: Status is implicit in heartbeat (assumes healthy unless agent sends error)
+
+	// If metadata is provided and contains tools, do full registration instead
+	if req.Metadata != nil {
+		if _, hasTools := req.Metadata["tools"]; hasTools {
+			// Fall back to full registration for tool updates
+			fullReq := &AgentRegistrationRequest{
+				AgentID:   req.AgentID,
+				Metadata:  req.Metadata,
+				Timestamp: now.Format(time.RFC3339),
+			}
+			regResp, err := s.RegisterAgent(fullReq)
+			if err != nil {
+				return &HeartbeatResponse{
+					Status:    "error",
+					Timestamp: now.Format(time.RFC3339),
+					Message:   err.Error(),
+				}, nil
+			}
+			return &HeartbeatResponse{
+				Status:    regResp.Status,
+				Timestamp: now.Format(time.RFC3339),
+				Message:   "Heartbeat with tools update received",
+				AgentID:   regResp.AgentID,
+			}, nil
+		}
+	}
+
+	// Lightweight heartbeat - just update timestamp and basic metadata
+	updateSQL := `UPDATE agents SET updated_at = ?`
+	args := []interface{}{now}
+
+	// Optionally update basic metadata fields
+	if req.Metadata != nil {
+		if version, exists := req.Metadata["version"]; exists {
+			if vStr, ok := version.(string); ok {
+				updateSQL += ", version = ?"
+				args = append(args, vStr)
+			}
+		}
+		if namespace, exists := req.Metadata["namespace"]; exists {
+			if nsStr, ok := namespace.(string); ok {
+				updateSQL += ", namespace = ?"
+				args = append(args, nsStr)
+			}
+		}
+		if httpHost, exists := req.Metadata["http_host"]; exists {
+			if hostStr, ok := httpHost.(string); ok {
+				updateSQL += ", http_host = ?"
+				args = append(args, hostStr)
+			}
+		}
+		if httpPort, exists := req.Metadata["http_port"]; exists {
+			if portFloat, ok := httpPort.(float64); ok {
+				updateSQL += ", http_port = ?"
+				args = append(args, int(portFloat))
+			}
+		}
+	}
+
+	updateSQL += " WHERE agent_id = ?"
+	args = append(args, req.AgentID)
+
+	// Execute update
+	result, err := s.db.DB.Exec(updateSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update heartbeat: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return &HeartbeatResponse{
+			Status:    "error",
+			Timestamp: now.Format(time.RFC3339),
+			Message:   fmt.Sprintf("Agent %s not found", req.AgentID),
+		}, nil
+	}
+
+	return &HeartbeatResponse{
+		Status:    "success",
+		Timestamp: now.Format(time.RFC3339),
+		Message:   "Heartbeat received",
+		AgentID:   req.AgentID,
+	}, nil
+}
+
+// UpdateHeartbeatLegacy handles agent heartbeat updates (legacy implementation)
+// MUST match Python update_heartbeat behavior exactly
+func (s *Service) UpdateHeartbeatLegacy(req *HeartbeatRequest) (*HeartbeatResponse, error) {
 	now := time.Now().UTC()
 	resourceVersion := fmt.Sprintf("%d", now.UnixMilli())
 
@@ -457,27 +521,11 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	// Invalidate cache when heartbeat updates occur (matches Python behavior)
 	s.cache.invalidateAll()
 
-	// Get agent's dependencies from database
-	var dependenciesJSON string
-	err = s.db.DB.QueryRow("SELECT dependencies FROM agents WHERE id = ?", req.AgentID).Scan(&dependenciesJSON)
-	if err != nil {
-		log.Printf("Warning: Failed to get agent dependencies: %v", err)
-		dependenciesJSON = "[]"
-	}
-
-	// Parse dependencies
-	var dependencies []string
-	if dependenciesJSON != "[]" && dependenciesJSON != "" {
-		if err := json.Unmarshal([]byte(dependenciesJSON), &dependencies); err != nil {
-			log.Printf("Warning: Failed to parse dependencies: %v", err)
-		}
-	}
-
-	// Resolve dependencies
-	dependenciesResolved, err := s.resolveDependencies(req.AgentID, dependencies)
+	// Resolve dependencies using new dependency resolution system
+	dependenciesResolved, err := s.ResolveAllDependencies(req.AgentID)
 	if err != nil {
 		log.Printf("Warning: Failed to resolve dependencies: %v", err)
-		dependenciesResolved = make(map[string]*DependencyResolution)
+		dependenciesResolved = make(map[string][]*DependencyResolution)
 	}
 
 	return &HeartbeatResponse{
@@ -516,7 +564,7 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 		args = append(args, params.Status)
 	}
 
-	// Capability filtering via subquery (matches Python logic exactly)
+	// Capability filtering via subquery (updated for new schema)
 	if len(params.Capabilities) > 0 {
 		// Build capability filter with fuzzy matching support
 		capabilityConditions := make([]string, 0, len(params.Capabilities))
@@ -525,16 +573,17 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 		for _, cap := range params.Capabilities {
 			if params.FuzzyMatch {
 				// Fuzzy matching using LIKE (matches Python Levenshtein logic approximation)
-				capabilityConditions = append(capabilityConditions, "LOWER(name) LIKE ?")
+				capabilityConditions = append(capabilityConditions, "LOWER(capability) LIKE ?")
 				capabilityArgs = append(capabilityArgs, "%"+strings.ToLower(cap)+"%")
 			} else {
 				// Exact matching
-				capabilityConditions = append(capabilityConditions, "name = ?")
+				capabilityConditions = append(capabilityConditions, "capability = ?")
 				capabilityArgs = append(capabilityArgs, cap)
 			}
 		}
 
-		capabilitySubquery := fmt.Sprintf("id IN (SELECT DISTINCT agent_id FROM tools WHERE %s)", strings.Join(capabilityConditions, " OR "))
+		// Updated to use capabilities table instead of tools table
+		capabilitySubquery := fmt.Sprintf("agent_id IN (SELECT DISTINCT agent_id FROM capabilities WHERE %s)", strings.Join(capabilityConditions, " OR "))
 		conditions = append(conditions, capabilitySubquery)
 		args = append(args, capabilityArgs...)
 	}
@@ -571,55 +620,138 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 	}
 	defer rows.Close()
 
-	var agents []database.Agent
+	// Use map to represent agents for new schema
+	var agents []map[string]interface{}
 	for rows.Next() {
-		var agent database.Agent
-		var lastHeartbeat sql.NullTime
-		var securityContext sql.NullString
+		var agentID, agentType, name string
+		var version, httpHost, namespace sql.NullString
+		var httpPort, totalDeps, resolvedDeps sql.NullInt64
+		var createdAt, updatedAt sql.NullString
 
-		// Simplified scan to match actual database.Agent fields
-		var annotations, resourceVersion, agentType, config string
-		var healthInterval int
+		// Scan using new schema columns (timestamp column removed)
 		err := rows.Scan(
-			&agent.ID, &agent.Name, &agent.Namespace, &agent.BaseEndpoint, &agent.Status,
-			&agent.Labels, &annotations, &agent.CreatedAt, &agent.UpdatedAt,
-			&resourceVersion, &lastHeartbeat, &healthInterval,
-			&agent.TimeoutThreshold, &agent.EvictionThreshold, &agentType,
-			&config, &securityContext, &agent.Dependencies)
+			&agentID, &agentType, &name, &version, &httpHost, &httpPort,
+			&namespace, &totalDeps, &resolvedDeps,
+			&createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent: %w", err)
 		}
 
-		if lastHeartbeat.Valid {
-			agent.LastHeartbeat = &lastHeartbeat.Time
+		// Calculate health status based on last_seen with smart thresholds
+		status := "expired" // Default for unparseable timestamps
+		if updatedAt.Valid {
+			// Try multiple timestamp formats
+			var lastSeen time.Time
+			var parseErr error
+
+			// Try RFC3339 format first (what we store)
+			lastSeen, parseErr = time.Parse(time.RFC3339, updatedAt.String)
+			if parseErr != nil {
+				// Try SQLite default format
+				lastSeen, parseErr = time.Parse("2006-01-02 15:04:05", updatedAt.String)
+			}
+			if parseErr != nil {
+				// Try another common format
+				lastSeen, parseErr = time.Parse("2006-01-02T15:04:05Z", updatedAt.String)
+			}
+
+			if parseErr == nil {
+				timeSinceLastSeen := time.Since(lastSeen)
+				timeoutThreshold := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
+
+				// Smart health calculation:
+				// < timeout = healthy
+				// timeout to timeout*2 = degraded
+				// > timeout*2 = expired
+				if timeSinceLastSeen < timeoutThreshold {
+					status = "healthy"
+				} else if timeSinceLastSeen < timeoutThreshold*2 {
+					status = "degraded"
+				} else {
+					status = "expired"
+				}
+			} else {
+				log.Printf("Warning: Could not parse updated_at timestamp '%s': %v", updatedAt.String, parseErr)
+			}
 		}
-		// Note: securityContext is scanned but not used in current Agent model
+
+		// Build agent map for API response
+		agent := map[string]interface{}{
+			"id":     agentID,
+			"name":   name,
+			"status": status,
+		}
+
+		// Add optional fields
+		if version.Valid {
+			agent["version"] = version.String
+		}
+		if namespace.Valid {
+			agent["namespace"] = namespace.String
+		} else {
+			agent["namespace"] = "default"
+		}
+
+		// Build endpoint
+		endpoint := "stdio://" + agentID // Default
+		if httpHost.Valid && httpPort.Valid && httpPort.Int64 > 0 {
+			endpoint = fmt.Sprintf("http://%s:%d", httpHost.String, httpPort.Int64)
+		}
+		agent["endpoint"] = endpoint
+
+		// Add dependency counts (for debugging/display)
+		if totalDeps.Valid {
+			agent["total_dependencies"] = totalDeps.Int64
+		}
+		if resolvedDeps.Valid {
+			agent["dependencies_resolved"] = resolvedDeps.Int64
+		}
+
+		// Parse last seen from updated_at (reuse the parsed value from health calculation)
+		if updatedAt.Valid {
+			// Try multiple timestamp formats (same as health calculation)
+			var lastSeenTime time.Time
+			var parseErr error
+
+			lastSeenTime, parseErr = time.Parse(time.RFC3339, updatedAt.String)
+			if parseErr != nil {
+				lastSeenTime, parseErr = time.Parse("2006-01-02 15:04:05", updatedAt.String)
+			}
+			if parseErr != nil {
+				lastSeenTime, parseErr = time.Parse("2006-01-02T15:04:05Z", updatedAt.String)
+			}
+
+			if parseErr == nil {
+				agent["last_seen"] = lastSeenTime.Format(time.RFC3339)
+			}
+		}
 
 		agents = append(agents, agent)
 	}
 
-	// Post-process filtering (matches Python post-query filtering)
-	filteredAgents := make([]database.Agent, 0, len(agents))
+	// Now we need to add capabilities to each agent
+	agentMaps := make([]map[string]interface{}, 0, len(agents))
 	for _, agent := range agents {
-		include := true
-
-		// TODO: Add label selector filtering when AgentQueryParams includes LabelSelector field
-		// Currently AgentQueryParams doesn't have LabelSelector field
-
-		// TODO: Add version constraint filtering when needed
-		// if params.VersionConstraint != "" {
-		//     include = include && s.matchesVersionConstraint(agent, params.VersionConstraint)
-		// }
-
-		if include {
-			filteredAgents = append(filteredAgents, agent)
+		// Get capabilities for this agent
+		agentID := agent["id"].(string)
+		capabilities, err := s.GetAgentCapabilities(agentID)
+		if err != nil {
+			log.Printf("Warning: Failed to get capabilities for agent %s: %v", agentID, err)
+			capabilities = []map[string]interface{}{} // Empty capabilities on error
 		}
-	}
 
-	// Convert to response format (matches Python agent.model_dump())
-	agentMaps := make([]map[string]interface{}, len(filteredAgents))
-	for i, agent := range filteredAgents {
-		agentMaps[i] = s.agentToMap(agent)
+		// Extract capability names for the required "capabilities" field
+		capabilityNames := make([]string, len(capabilities))
+		for i, cap := range capabilities {
+			if capName, ok := cap["capability"].(string); ok {
+				capabilityNames[i] = capName
+			}
+		}
+		agent["capabilities"] = capabilityNames
+
+		// Note: Dependencies field removed from API spec - we use real-time resolution instead
+
+		agentMaps = append(agentMaps, agent)
 	}
 
 	response := &AgentsResponse{
@@ -851,54 +983,6 @@ func (s *Service) Health() map[string]interface{} {
 	return health
 }
 
-// resolveDependencies resolves the dependencies for an agent by finding healthy agents with the required capabilities
-func (s *Service) resolveDependencies(agentID string, dependencies []string) (map[string]*DependencyResolution, error) {
-	resolved := make(map[string]*DependencyResolution)
-
-	// If no dependencies, return empty map
-	if len(dependencies) == 0 {
-		return resolved, nil
-	}
-
-	// For each dependency, find the first healthy agent with that capability
-	for _, dep := range dependencies {
-		// Query for healthy agents with the required capability
-		rows, err := s.db.DB.Query(`
-			SELECT DISTINCT a.id, a.base_endpoint, a.status
-			FROM agents a
-			JOIN tools t ON t.agent_id = a.id
-			WHERE t.capability = ? AND a.status = 'healthy'
-			ORDER BY a.updated_at DESC
-			LIMIT 1`, dep)
-
-		if err != nil {
-			log.Printf("Error querying for dependency %s: %v", dep, err)
-			resolved[dep] = nil
-			continue
-		}
-
-		var found bool
-		if rows.Next() {
-			var depAgentID, endpoint, status string
-			if err := rows.Scan(&depAgentID, &endpoint, &status); err == nil {
-				resolved[dep] = &DependencyResolution{
-					AgentID:  depAgentID,
-					Endpoint: endpoint,
-					Status:   status,
-				}
-				found = true
-			}
-		}
-		rows.Close()
-
-		if !found {
-			// No healthy provider found
-			resolved[dep] = nil
-		}
-	}
-
-	return resolved, nil
-}
 
 // Helper methods
 

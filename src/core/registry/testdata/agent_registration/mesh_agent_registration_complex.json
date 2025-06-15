@@ -1,0 +1,68 @@
+{
+  "agent_id": "multi-service-agent",
+  "agent_type": "mcp_agent",
+  "name": "Multi-Service Agent",
+  "version": "2.1.0",
+  "http_host": "0.0.0.0",
+  "http_port": 8080,
+  "timestamp": "2025-06-14T22:15:30.123456Z",
+  "namespace": "production",
+  "tools": [
+    {
+      "function_name": "process_data",
+      "capability": "data_processing",
+      "version": "2.0.0",
+      "tags": ["processing", "batch", "production"],
+      "dependencies": [
+        {
+          "capability": "database_service",
+          "tags": ["persistence", "sql"],
+          "version": ">=3.0.0",
+          "namespace": "production"
+        },
+        {
+          "capability": "cache_service",
+          "tags": ["redis", "memory"],
+          "version": ">=6.0.0",
+          "namespace": "production"
+        }
+      ],
+      "description": "High-performance data processing with database and cache dependencies"
+    },
+    {
+      "function_name": "validate_input",
+      "capability": "input_validation",
+      "version": "1.5.0",
+      "tags": ["validation", "security"],
+      "dependencies": [],
+      "description": "Input validation without external dependencies"
+    },
+    {
+      "function_name": "generate_report",
+      "capability": "reporting",
+      "version": "1.2.0",
+      "tags": ["reports", "analytics", "pdf"],
+      "dependencies": [
+        {
+          "capability": "template_service",
+          "tags": ["jinja2", "rendering"],
+          "version": ">=2.5.0",
+          "namespace": "production"
+        },
+        {
+          "capability": "pdf_service",
+          "tags": ["conversion", "documents"],
+          "version": ">=1.8.0",
+          "namespace": "production"
+        },
+        {
+          "capability": "data_processing",
+          "tags": ["processing", "batch"],
+          "version": ">=2.0.0",
+          "namespace": "production"
+        }
+      ],
+      "description": "Report generation with template, PDF, and data processing dependencies"
+    }
+  ]
+}

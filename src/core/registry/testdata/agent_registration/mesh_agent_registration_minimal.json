@@ -1,0 +1,9 @@
+{
+  "agent_id": "minimal-agent",
+  "tools": [
+    {
+      "function_name": "hello",
+      "capability": "greeting"
+    }
+  ]
+}

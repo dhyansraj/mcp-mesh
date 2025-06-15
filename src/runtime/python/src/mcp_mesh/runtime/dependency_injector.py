@@ -17,6 +17,83 @@ from .signature_analyzer import get_mesh_agent_positions
 logger = logging.getLogger(__name__)
 
 
+def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:
+    """
+    Analyze function signature and determine injection strategy.
+
+    Rules:
+    1. Single parameter: inject regardless of typing (with warning if not McpMeshAgent)
+    2. Multiple parameters: only inject into McpMeshAgent typed parameters
+    3. Log warnings for mismatches and edge cases
+
+    Args:
+        func: Function to analyze
+        dependencies: List of dependency names to inject
+
+    Returns:
+        List of parameter positions to inject into
+    """
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+    param_count = len(params)
+    mesh_positions = get_mesh_agent_positions(func)
+    func_name = f"{func.__module__}.{func.__qualname__}"
+
+    # No parameters at all
+    if param_count == 0:
+        if dependencies:
+            logger.warning(
+                f"Function '{func_name}' has no parameters but {len(dependencies)} "
+                f"dependencies declared. Skipping injection."
+            )
+        return []
+
+    # Single parameter rule: inject regardless of typing
+    if param_count == 1:
+        if not mesh_positions:
+            param_name = params[0].name
+            logger.warning(
+                f"Single parameter '{param_name}' in function '{func_name}' found, "
+                f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
+                f"(consider typing as McpMeshAgent for clarity)"
+            )
+        return [0]  # Inject into the single parameter
+
+    # Multiple parameters rule: only inject into McpMeshAgent typed parameters
+    if param_count > 1:
+        if not mesh_positions:
+            logger.warning(
+                f"Function '{func_name}' has {param_count} parameters but none are "
+                f"typed as McpMeshAgent. Skipping injection of {len(dependencies)} dependencies. "
+                f"Consider typing dependency parameters as McpMeshAgent."
+            )
+            return []
+
+        # Check for dependency/parameter count mismatches
+        if len(dependencies) != len(mesh_positions):
+            if len(dependencies) > len(mesh_positions):
+                excess_deps = dependencies[len(mesh_positions) :]
+                logger.warning(
+                    f"Function '{func_name}' has {len(dependencies)} dependencies "
+                    f"but only {len(mesh_positions)} McpMeshAgent parameters. "
+                    f"Dependencies {excess_deps} will not be injected."
+                )
+            else:
+                excess_params = [
+                    params[pos].name for pos in mesh_positions[len(dependencies) :]
+                ]
+                logger.warning(
+                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent parameters "
+                    f"but only {len(dependencies)} dependencies declared. "
+                    f"Parameters {excess_params} will remain None."
+                )
+
+        # Return positions we can actually inject into
+        return mesh_positions[: len(dependencies)]
+
+    return mesh_positions
+
+
 class DependencyInjector:
     """
     Manages dynamic dependency injection for mesh agents.
@@ -75,18 +152,19 @@ class DependencyInjector:
         self, func: Callable, dependencies: list[str]
     ) -> Callable:
         """
-        Create a wrapper that handles dynamic dependency injection using McpMeshAgent types.
+        Create a wrapper that handles dynamic dependency injection.
 
         This wrapper:
-        1. Analyzes function signature for McpMeshAgent parameters
-        2. Injects dependencies positionally based on declaration order
+        1. Analyzes function signature using smart injection strategy
+        2. Injects dependencies positionally based on analysis
         3. Can be updated when topology changes
         4. Handles missing dependencies gracefully
+        5. Logs warnings for configuration issues
         """
         func_id = f"{func.__module__}.{func.__qualname__}"
 
-        # Get positions of McpMeshAgent parameters
-        mesh_positions = get_mesh_agent_positions(func)
+        # Use new smart injection strategy
+        mesh_positions = analyze_injection_strategy(func, dependencies)
 
         # Track which dependencies this function needs
         for dep in dependencies:
@@ -99,101 +177,112 @@ class DependencyInjector:
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            # Build the final args list by inserting dependencies at their positions
-            # and adjusting user-provided args accordingly
+            logger.debug(
+                f"sync_wrapper called for {func.__name__} with args={args}, kwargs={kwargs}"
+            )
 
-            # Get function signature to determine total expected parameters
+            # If no mesh positions to inject into, call function normally
+            if not mesh_positions:
+                logger.debug(f"No mesh positions for {func.__name__}, calling normally")
+                return func(*args, **kwargs)
 
+            # Get function signature
             sig = inspect.signature(func)
-            params = list(sig.parameters.values())
-            param_count = len(params)
+            params = list(sig.parameters.keys())
+            logger.debug(f"Function {func.__name__} parameters: {params}")
+            logger.debug(f"Mesh positions to inject: {mesh_positions}")
+            logger.debug(f"Dependencies to inject: {dependencies}")
 
-            # Initialize final args list
-            final_args = []
+            # Create a copy of kwargs to modify
+            final_kwargs = kwargs.copy()
 
-            # Place user-provided args, skipping McpMeshAgent positions
-            user_arg_index = 0
-            for param_index in range(param_count):
-                param = params[param_index]
+            # Inject dependencies into their designated parameter positions
+            for dep_index, param_position in enumerate(mesh_positions):
+                if dep_index < len(dependencies):
+                    dep_name = dependencies[dep_index]
+                    param_name = params[param_position]
+                    logger.debug(
+                        f"Processing dependency {dep_index}: {dep_name} -> {param_name} (position {param_position})"
+                    )
 
-                if param_index in mesh_positions:
-                    # This position is for a dependency, inject it
-                    dep_index = mesh_positions.index(param_index)
-                    if dep_index < len(dependencies):
-                        dep_name = dependencies[dep_index]
+                    # Only inject if the parameter wasn't explicitly provided OR if it's None
+                    should_inject = (
+                        param_name not in final_kwargs
+                        or final_kwargs.get(param_name) is None
+                    )
 
+                    if should_inject:
                         # Get the dependency to inject
                         if dep_name in injected_deps:
                             dependency = injected_deps[dep_name]
+                            logger.debug(
+                                f"Using cached dependency {dep_name}: {dependency}"
+                            )
                         else:
                             dependency = self.get_dependency(dep_name)
+                            logger.debug(
+                                f"Retrieved dependency {dep_name}: {dependency}"
+                            )
 
-                        final_args.append(dependency)
+                        # Check if this parameter position has a positional argument
+                        if param_position < len(args):
+                            # User provided positional arg, don't inject
+                            logger.debug(
+                                f"Skipping injection for {param_name} - positional arg provided"
+                            )
+                            continue
+                        else:
+                            # Inject as keyword argument (replace None or missing)
+                            final_kwargs[param_name] = dependency
+                            logger.debug(
+                                f"Injected {dep_name} as {param_name}: {dependency}"
+                            )
                     else:
-                        final_args.append(None)
-                else:
-                    # This position is for a user-provided arg
-                    if user_arg_index < len(args):
-                        final_args.append(args[user_arg_index])
-                        user_arg_index += 1
-                    elif param.default != inspect.Parameter.empty:
-                        # Parameter has a default value, stop adding positional args
-                        # Let the function use its default values
-                        break
-                    else:
-                        # Required parameter but no value provided
-                        final_args.append(None)
+                        logger.debug(
+                            f"Skipping injection for {param_name} - already provided in kwargs with non-None value"
+                        )
 
-            return func(*final_args, **kwargs)
+            logger.debug(
+                f"Final call to {func.__name__} with args={args}, kwargs={final_kwargs}"
+            )
+            return func(*args, **final_kwargs)
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            # Build the final args list by inserting dependencies at their positions
-            # and adjusting user-provided args accordingly
+            # If no mesh positions to inject into, call function normally
+            if not mesh_positions:
+                return await func(*args, **kwargs)
 
-            # Get function signature to determine total expected parameters
-
+            # Get function signature
             sig = inspect.signature(func)
-            params = list(sig.parameters.values())
-            param_count = len(params)
+            params = list(sig.parameters.keys())
 
-            # Initialize final args list
-            final_args = []
+            # Create a copy of kwargs to modify
+            final_kwargs = kwargs.copy()
 
-            # Place user-provided args, skipping McpMeshAgent positions
-            user_arg_index = 0
-            for param_index in range(param_count):
-                param = params[param_index]
+            # Inject dependencies into their designated parameter positions
+            for dep_index, param_position in enumerate(mesh_positions):
+                if dep_index < len(dependencies):
+                    dep_name = dependencies[dep_index]
+                    param_name = params[param_position]
 
-                if param_index in mesh_positions:
-                    # This position is for a dependency, inject it
-                    dep_index = mesh_positions.index(param_index)
-                    if dep_index < len(dependencies):
-                        dep_name = dependencies[dep_index]
-
+                    # Only inject if the parameter wasn't explicitly provided
+                    if param_name not in final_kwargs:
                         # Get the dependency to inject
                         if dep_name in injected_deps:
                             dependency = injected_deps[dep_name]
                         else:
                             dependency = self.get_dependency(dep_name)
 
-                        final_args.append(dependency)
-                    else:
-                        final_args.append(None)
-                else:
-                    # This position is for a user-provided arg
-                    if user_arg_index < len(args):
-                        final_args.append(args[user_arg_index])
-                        user_arg_index += 1
-                    elif param.default != inspect.Parameter.empty:
-                        # Parameter has a default value, stop adding positional args
-                        # Let the function use its default values
-                        break
-                    else:
-                        # Required parameter but no value provided
-                        final_args.append(None)
+                        # Check if this parameter position has a positional argument
+                        if param_position < len(args):
+                            # User provided positional arg, don't inject
+                            continue
+                        else:
+                            # Inject as keyword argument
+                            final_kwargs[param_name] = dependency
 
-            return await func(*final_args, **kwargs)
+            return await func(*args, **final_kwargs)
 
         # Choose appropriate wrapper
         wrapper = async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper

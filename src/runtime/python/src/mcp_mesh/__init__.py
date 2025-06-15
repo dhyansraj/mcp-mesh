@@ -106,8 +106,7 @@ from .service_proxy import (
     ServiceContractError,
     ServiceProxyProtocol,
 )
-
-McpMeshAgent = Any
+from .types import McpMeshAgent
 from .unified_dependencies import (
     DependencyAnalyzer,
     DependencyContext,

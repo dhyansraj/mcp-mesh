@@ -1,18 +1,16 @@
 # AgentInfo
 
-
 ## Properties
 
-Name | Type | Description | Notes
------------- | ------------- | ------------- | -------------
-**id** | **str** |  | 
-**name** | **str** |  | 
-**status** | **str** |  | 
-**endpoint** | **str** |  | 
-**capabilities** | **List[str]** |  | 
-**dependencies** | **List[str]** |  | [optional] 
-**last_seen** | **datetime** |  | [optional] 
-**version** | **str** |  | [optional] 
+| Name             | Type          | Description | Notes      |
+| ---------------- | ------------- | ----------- | ---------- |
+| **id**           | **str**       |             |
+| **name**         | **str**       |             |
+| **status**       | **str**       |             |
+| **endpoint**     | **str**       |             |
+| **capabilities** | **List[str]** |             |
+| **last_seen**    | **datetime**  |             | [optional] |
+| **version**      | **str**       |             | [optional] |
 
 ## Example
 
@@ -31,6 +29,5 @@ agent_info_dict = agent_info_instance.to_dict()
 # create an instance of AgentInfo from a dict
 agent_info_from_dict = AgentInfo.from_dict(agent_info_dict)
 ```
+
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
-
-

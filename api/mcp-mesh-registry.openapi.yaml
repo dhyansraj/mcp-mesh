@@ -733,11 +733,6 @@ components:
           items:
             type: string
           example: ["greeting", "farewell"]
-        dependencies:
-          type: array
-          items:
-            type: string
-          example: ["other-agent"]
         last_seen:
           type: string
           format: date-time

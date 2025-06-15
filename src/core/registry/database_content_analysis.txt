@@ -1,0 +1,77 @@
+DATABASE CONTENT ANALYSIS
+========================
+
+Test Setup:
+- Provider Agent: weather-provider (capability: weather_data)
+- Consumer Agent: weather-consumer (capability: weather_report, depends on: weather_data)
+
+ACTUAL AGENTS TABLE:
+====================
+AGENT_ID             NAME                 TYPE         VERSION    HOST            PORT   NAMESPACE    T_DEPS   R_DEPS   CREATED_AT                     UPDATED_AT
+------------------------------------------------------------------------------------------------------------------------------------------
+weather-consumer     weather-consumer     mcp_agent                               NULL   default      1        1        2025-06-15T14:40:27.706991564Z 2025-06-15T14:40:27.706991564Z
+weather-provider     weather-provider     mcp_agent                               NULL   default      0        0        2025-06-15T14:40:27.706923189Z 2025-06-15T14:40:27.706923189Z
+
+
+ACTUAL CAPABILITIES TABLE:
+==========================
+AGENT_ID             FUNCTION_NAME             CAPABILITY           VERSION    DESCRIPTION          TAGS            CREATED_AT                     UPDATED_AT
+------------------------------------------------------------------------------------------------------------------------------------
+weather-consumer     weather_report_func       weather_report       1.0.0                           []              2025-06-15T14:40:27.707004981Z 2025-06-15T14:40:27.707004981Z
+weather-provider     weather_data_func         weather_data         1.0.0                           []              2025-06-15T14:40:27.706944939Z 2025-06-15T14:40:27.706944939Z
+
+
+API RESPONSE (from /agents endpoint at 14:40:27.706 UTC):
+================================================================
+ID                   NAME                 ENDPOINT                       STATUS       CAPABILITIES              LAST_SEEN
+----------------------------------------------------------------------------------------------------------------------
+weather-consumer     weather-consumer     stdio://weather-consumer       healthy      weather_report            14:40:27.000 UTC
+weather-provider     weather-provider     stdio://weather-provider       healthy      weather_data              14:40:27.000 UTC
+
+
+INFERRED CAPABILITIES TABLE:
+============================================
+AGENT_ID             FUNCTION_NAME             CAPABILITY           VERSION         DESCRIPTION
+----------------------------------------------------------------------------------------------------------------------
+weather-consumer     weather_report_func       weather_report       1.0.0
+weather-provider     weather_data_func         weather_data         1.0.0
+
+
+DEPENDENCY RESOLUTION ANALYSIS:
+===============================
+Provider Response - DependenciesResolved: true
+Provider Dependencies Count: 0
+Consumer Response - DependenciesResolved: true
+Consumer Dependencies Count: 1
+  Function 'weather_report_func' has 1 resolved dependencies:
+    [0] weather_data -> weather-provider (available) @ stdio://weather-provider
+
+
+JSON PAYLOADS SENT:
+===================
+Provider JSON:
+{
+  "agent_id": "weather-provider",
+  "tools": [
+    {
+      "capability": "weather_data",
+      "function_name": "weather_data_func"
+    }
+  ]
+}
+
+Consumer JSON:
+{
+  "agent_id": "weather-consumer",
+  "tools": [
+    {
+      "capability": "weather_report",
+      "dependencies": [
+        {
+          "capability": "weather_data"
+        }
+      ],
+      "function_name": "weather_report_func"
+    }
+  ]
+}
