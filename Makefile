@@ -274,13 +274,29 @@ clean-all:
 .PHONY: clean-all-force
 clean-all-force:
 	@echo "🧹 Deep cleaning..."
-	# Kill any running processes first - using more reliable approach
-	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill 2>/dev/null || true
+	# Kill any running processes first - more aggressive approach
+	@echo "🔪 Terminating any running mcp-mesh processes..."
+	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill -TERM 2>/dev/null || true
 	-pkill -f "mcp-mesh-registry" 2>/dev/null || true
 	-pkill -f "mcp-mesh-dev" 2>/dev/null || true
-	@sleep 2
-	# Go build artifacts
-	rm -rf $(BUILD_DIR)
+	@echo "⏳ Waiting for processes to terminate..."
+	@sleep 3
+	# Force kill if still running
+	@echo "🔨 Force killing any remaining processes..."
+	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill -KILL 2>/dev/null || true
+	-pkill -9 -f "mcp-mesh-registry" 2>/dev/null || true
+	-pkill -9 -f "mcp-mesh-dev" 2>/dev/null || true
+	@sleep 1
+	# Go build artifacts - with better error handling
+	@echo "🗑️  Removing build artifacts..."
+	@if [ -d "$(BUILD_DIR)" ]; then \
+		echo "📁 Contents of $(BUILD_DIR):"; \
+		ls -la $(BUILD_DIR) 2>/dev/null || true; \
+		echo "🔍 Checking for processes using files in $(BUILD_DIR)..."; \
+		lsof +D $(BUILD_DIR) 2>/dev/null || true; \
+		chmod -R +w $(BUILD_DIR) 2>/dev/null || true; \
+		rm -rf $(BUILD_DIR) 2>/dev/null || (echo "⚠️  Some files in $(BUILD_DIR) are still in use, trying force removal..." && sudo rm -rf $(BUILD_DIR) 2>/dev/null) || (echo "❌ Could not remove $(BUILD_DIR), some files may still be in use"); \
+	fi
 	# Binaries from project root (created by direct go build)
 	rm -f $(REGISTRY_NAME) $(DEV_NAME)
 	# Clean any stray binaries in cmd directories

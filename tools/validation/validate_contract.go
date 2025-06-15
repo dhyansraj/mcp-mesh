@@ -68,17 +68,17 @@ func NewContractValidator(specPath string) (*ContractValidator, error) {
 
 // ValidateResponse validates an HTTP response against the OpenAPI schema
 func (cv *ContractValidator) ValidateResponse(method, path string, statusCode int, body []byte) error {
-	// Find the route and operation
-	route, pathParams, err := cv.router.FindRoute(method, &url.URL{Path: path})
-	if err != nil {
-		return fmt.Errorf("route not found: %w", err)
-	}
-
 	// Create request for validation context
 	req := &http.Request{
 		Method: method,
 		URL:    &url.URL{Path: path},
 		Header: make(http.Header),
+	}
+
+	// Find the route and operation
+	route, pathParams, err := cv.router.FindRoute(req)
+	if err != nil {
+		return fmt.Errorf("route not found: %w", err)
 	}
 
 	// Create response for validation
@@ -281,7 +281,7 @@ func main() {
 	}
 
 	// Create contract validator
-	validator, err := NewContractValidator(specPath)
+	_, err := NewContractValidator(specPath)
 	if err != nil {
 		log.Fatalf("Failed to create validator: %v", err)
 	}

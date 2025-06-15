@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 
-	"github.com/Masterminds/semver/v3"
 	"mcp-mesh/src/core/database"
 )
 
@@ -62,7 +60,6 @@ func (s *Service) ResolveAllDependenciesFromMetadata(metadata map[string]interfa
 
 		// Get dependencies for this function
 		var resolvedDeps []*DependencyResolution
-		var allDependenciesResolved = true
 
 		if deps, exists := toolMap["dependencies"]; exists {
 
@@ -117,21 +114,24 @@ func (s *Service) ResolveAllDependenciesFromMetadata(metadata map[string]interfa
 					if provider != nil {
 						resolvedDeps = append(resolvedDeps, provider)
 					} else {
-						// Dependency cannot be resolved - mark as failed
-						allDependenciesResolved = false
+						// Dependency cannot be resolved - log but continue with other dependencies
 						log.Printf("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
-						break // No point continuing if any dependency fails
+						// Continue processing other dependencies instead of breaking
 					}
 				}
 			}
 		}
 
-		// Only include function if ALL dependencies resolved (or no dependencies)
-		if allDependenciesResolved {
-			resolved[functionName] = resolvedDeps
-		} else {
-			// Function excluded from resolved map due to unresolvable dependencies
-			log.Printf("Function %s excluded due to unresolvable dependencies", functionName)
+		// Always include function in resolved map, even if some dependencies are unresolved
+		// This allows partial dependency resolution tracking
+		resolved[functionName] = resolvedDeps
+		if len(resolvedDeps) == 0 && len(toolMap) > 0 {
+			// Only log if function had dependencies but none were resolved
+			if deps, exists := toolMap["dependencies"]; exists {
+				if depsList, ok := deps.([]interface{}); ok && len(depsList) > 0 {
+					log.Printf("Function %s excluded due to unresolvable dependencies", functionName)
+				}
+			}
 		}
 	}
 
@@ -204,10 +204,10 @@ func (s *Service) findHealthyProviderWithTTL(dep database.Dependency) *Dependenc
 			UpdatedAt    string
 		}, 0)
 
-		constraint, err := parseVersionConstraintNew(dep.Version)
+		constraint, err := parseVersionConstraint(dep.Version)
 		if err == nil {
 			for _, c := range candidates {
-				if matchesVersionNew(c.Version, constraint) {
+				if matchesVersion(c.Version, constraint) {
 					filtered = append(filtered, c)
 				}
 			}
@@ -237,7 +237,7 @@ func (s *Service) findHealthyProviderWithTTL(dep database.Dependency) *Dependenc
 				for i, tag := range tags {
 					tagStrs[i] = fmt.Sprintf("%v", tag)
 				}
-				if hasAllTagsNew(tagStrs, dep.Tags) {
+				if hasAllTags(tagStrs, dep.Tags) {
 					filtered = append(filtered, c)
 				}
 			}
@@ -267,48 +267,4 @@ func (s *Service) findHealthyProviderWithTTL(dep database.Dependency) *Dependenc
 
 	log.Printf("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
 	return nil
-}
-
-// parseVersionConstraintNew parses version constraint string
-func parseVersionConstraintNew(constraint string) (*semver.Constraints, error) {
-	// Handle special cases
-	constraint = strings.TrimSpace(constraint)
-
-	// Convert Python-style constraints to semver
-	if strings.HasPrefix(constraint, "~") {
-		// ~1.2 -> >=1.2.0, <1.3.0
-		base := strings.TrimPrefix(constraint, "~")
-		parts := strings.Split(base, ".")
-		if len(parts) == 2 {
-			minor, _ := fmt.Sscanf(parts[1], "%d", new(int))
-			constraint = fmt.Sprintf(">=%s.0, <%s.%d.0", base, parts[0], minor+1)
-		}
-	}
-
-	return semver.NewConstraint(constraint)
-}
-
-// matchesVersionNew checks if version matches constraint
-func matchesVersionNew(version string, constraint *semver.Constraints) bool {
-	v, err := semver.NewVersion(version)
-	if err != nil {
-		return false
-	}
-	return constraint.Check(v)
-}
-
-// hasAllTagsNew checks if all required tags are present
-func hasAllTagsNew(available, required []string) bool {
-	tagMap := make(map[string]bool)
-	for _, tag := range available {
-		tagMap[tag] = true
-	}
-
-	for _, tag := range required {
-		if !tagMap[tag] {
-			return false
-		}
-	}
-
-	return true
 }

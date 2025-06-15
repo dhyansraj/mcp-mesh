@@ -80,9 +80,17 @@ func validateServiceLayerFormat(t *testing.T, metadata map[string]interface{}, o
 	assert.Len(t, dependencies, expectedDepCount, "Should have correct number of dependencies")
 
 	// Validate tools preservation
-	tools, ok := metadata["tools"].([]map[string]interface{})
-	require.True(t, ok, "tools should be []map[string]interface{}")
-	assert.Len(t, tools, len(original.Tools), "Should preserve all tools")
+	toolsInterface, ok := metadata["tools"].([]interface{})
+	require.True(t, ok, "tools should be []interface{}")
+	assert.Len(t, toolsInterface, len(original.Tools), "Should preserve all tools")
+
+	// Convert to []map[string]interface{} for further validation
+	tools := make([]map[string]interface{}, len(toolsInterface))
+	for i, tool := range toolsInterface {
+		toolMap, ok := tool.(map[string]interface{})
+		require.True(t, ok, "each tool should be map[string]interface{}")
+		tools[i] = toolMap
+	}
 
 	// Validate endpoint construction
 	endpoint, ok := metadata["endpoint"].(string)

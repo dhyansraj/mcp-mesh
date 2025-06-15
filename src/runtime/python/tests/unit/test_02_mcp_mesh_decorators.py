@@ -465,6 +465,8 @@ class TestMeshAgentDecorator:
         assert metadata["description"] is None  # default
         assert metadata["http_host"] == "0.0.0.0"  # default
         assert metadata["http_port"] == 0  # default
+        assert metadata["enable_http"] == True  # default
+        assert metadata["namespace"] == "default"  # default
         assert metadata["health_interval"] == 30  # default
 
     def test_mesh_agent_name_is_mandatory(self):
@@ -495,6 +497,8 @@ class TestMeshAgentDecorator:
             description="Full featured agent",
             http_host="127.0.0.1",
             http_port=8080,
+            enable_http=True,
+            namespace="production",
             health_interval=60,
             custom_field="custom_value",
         )
@@ -507,6 +511,8 @@ class TestMeshAgentDecorator:
         assert metadata["description"] == "Full featured agent"
         assert metadata["http_host"] == "127.0.0.1"
         assert metadata["http_port"] == 8080
+        assert metadata["enable_http"] == True
+        assert metadata["namespace"] == "production"
         assert metadata["health_interval"] == 60
         assert metadata["custom_field"] == "custom_value"
 
@@ -533,6 +539,20 @@ class TestMeshAgentDecorator:
 
             @mesh.agent(name="test", health_interval="30")
             class InvalidHealthAgent:
+                pass
+
+        # Invalid enable_http type
+        with pytest.raises(ValueError, match="enable_http must be a boolean"):
+
+            @mesh.agent(name="test", enable_http="true")
+            class InvalidEnableHttpAgent:
+                pass
+
+        # Invalid namespace type
+        with pytest.raises(ValueError, match="namespace must be a string"):
+
+            @mesh.agent(name="test", namespace=123)
+            class InvalidNamespaceAgent:
                 pass
 
     def test_mesh_agent_works_with_functions(self):
@@ -805,6 +825,8 @@ class TestMeshAgentEnvironmentVariables:
             {
                 "MCP_MESH_HTTP_HOST": "example.com",
                 "MCP_MESH_HTTP_PORT": "8888",
+                "MCP_MESH_ENABLE_HTTP": "false",
+                "MCP_MESH_NAMESPACE": "prod-env",
                 "MCP_MESH_HEALTH_INTERVAL": "90",
             },
         ):
@@ -813,6 +835,8 @@ class TestMeshAgentEnvironmentVariables:
                 name="test-agent",
                 http_host="localhost",
                 http_port=5000,
+                enable_http=True,
+                namespace="dev",
                 health_interval=15,
             )
             class TestAgent:
@@ -821,6 +845,8 @@ class TestMeshAgentEnvironmentVariables:
             metadata = TestAgent._mesh_agent_metadata
             assert metadata["http_host"] == "example.com"  # env var precedence
             assert metadata["http_port"] == 8888  # env var precedence
+            assert metadata["enable_http"] == False  # env var precedence
+            assert metadata["namespace"] == "prod-env"  # env var precedence
             assert metadata["health_interval"] == 90  # env var precedence
 
     def test_http_port_environment_variable_validation_range(self):
@@ -923,6 +949,129 @@ class TestMeshAgentEnvironmentVariables:
                 pass
 
             assert TestAgentMin._mesh_agent_metadata["health_interval"] == 1
+
+    def test_enable_http_environment_variable_precedence(self):
+        """Test that MCP_MESH_ENABLE_HTTP environment variable takes precedence."""
+        from unittest.mock import patch
+
+        import mesh
+
+        # Test true values
+        for true_value in ["true", "1", "yes", "on", "TRUE", "True"]:
+            with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": true_value}):
+
+                @mesh.agent(name=f"test-agent-{true_value}", enable_http=False)
+                class TestAgentTrue:
+                    pass
+
+                metadata = TestAgentTrue._mesh_agent_metadata
+                assert metadata["enable_http"] == True  # env var takes precedence
+
+        # Test false values
+        for false_value in ["false", "0", "no", "off", "FALSE", "False"]:
+            with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": false_value}):
+
+                @mesh.agent(name=f"test-agent-{false_value}", enable_http=True)
+                class TestAgentFalse:
+                    pass
+
+                metadata = TestAgentFalse._mesh_agent_metadata
+                assert metadata["enable_http"] == False  # env var takes precedence
+
+    def test_enable_http_decorator_value_when_no_env_var(self):
+        """Test that decorator value is used when no environment variable is set."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {}, clear=True):
+
+            @mesh.agent(name="test-agent-true", enable_http=True)
+            class TestAgentTrue:
+                pass
+
+            @mesh.agent(name="test-agent-false", enable_http=False)
+            class TestAgentFalse:
+                pass
+
+            assert TestAgentTrue._mesh_agent_metadata["enable_http"] == True
+            assert TestAgentFalse._mesh_agent_metadata["enable_http"] == False
+
+    def test_enable_http_default_value(self):
+        """Test that default value is True when neither env var nor decorator value provided."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {}, clear=True):
+
+            @mesh.agent(name="test-agent")
+            class TestAgent:
+                pass
+
+            metadata = TestAgent._mesh_agent_metadata
+            assert metadata["enable_http"] == True  # default value
+
+    def test_enable_http_environment_variable_validation(self):
+        """Test that enable_http environment variable is validated."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": "invalid_value"}):
+            with pytest.raises(
+                ValueError,
+                match="MCP_MESH_ENABLE_HTTP environment variable must be a boolean value",
+            ):
+
+                @mesh.agent(name="test-agent")
+                class TestAgent:
+                    pass
+
+    def test_namespace_environment_variable_precedence(self):
+        """Test that MCP_MESH_NAMESPACE environment variable takes precedence."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {"MCP_MESH_NAMESPACE": "production-env"}):
+
+            @mesh.agent(name="test-agent", namespace="development")
+            class TestAgent:
+                pass
+
+            metadata = TestAgent._mesh_agent_metadata
+            assert metadata["namespace"] == "production-env"  # env var takes precedence
+
+    def test_namespace_decorator_value_when_no_env_var(self):
+        """Test that decorator value is used when no environment variable is set."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {}, clear=True):
+
+            @mesh.agent(name="test-agent", namespace="custom-namespace")
+            class TestAgent:
+                pass
+
+            metadata = TestAgent._mesh_agent_metadata
+            assert metadata["namespace"] == "custom-namespace"  # decorator value used
+
+    def test_namespace_default_value(self):
+        """Test that default value is 'default' when neither env var nor decorator value provided."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict("os.environ", {}, clear=True):
+
+            @mesh.agent(name="test-agent")
+            class TestAgent:
+                pass
+
+            metadata = TestAgent._mesh_agent_metadata
+            assert metadata["namespace"] == "default"  # default value
 
 
 class TestDualDecoratorIntegration:

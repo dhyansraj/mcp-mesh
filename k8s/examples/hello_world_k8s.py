@@ -9,8 +9,8 @@ The mesh decorators with enable_http=True will automatically create HTTP endpoin
 import os
 from typing import Any
 
+import mesh
 from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
 
 
 def create_hello_world_server() -> FastMCP:
@@ -52,8 +52,7 @@ def create_hello_world_server() -> FastMCP:
     # This function uses DUAL-DECORATOR pattern: @server.tool() + @mesh_agent()
     # Includes mesh integration with automatic dependency injection
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="greeting_with_date",  # Unique capability name
         dependencies=["SystemAgent_getDate"],  # Depend on flat function
         health_interval=30,
@@ -95,8 +94,7 @@ def create_hello_world_server() -> FastMCP:
     # ===== NEW SINGLE CAPABILITY PATTERN (KUBERNETES-OPTIMIZED) =====
     # Each function provides exactly ONE capability for better organization
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="greeting_with_info",  # Unique capability name
         dependencies=[
             "SystemAgent_getDate",
@@ -178,8 +176,7 @@ def create_hello_world_server() -> FastMCP:
             ],
         }
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="dependency_validation",  # Single capability
         dependencies=["SystemAgent_getDate"],
         fallback_mode=True,

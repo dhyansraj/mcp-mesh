@@ -1,56 +1,57 @@
-FROM python:3.11-slim
+# Build stage - using debian for better compatibility
+FROM golang:1.23-bookworm AS builder
 
 WORKDIR /app
 
-# Install system dependencies
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY cmd/ cmd/
+COPY src/ src/
+
+# Build the binary
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -o mcp-mesh-registry ./cmd/mcp-mesh-registry
+
+# Runtime stage - minimal debian
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    ca-certificates \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy registry source code (placeholder for now)
-RUN mkdir -p /app/mcp_mesh_registry
+# Create non-root user
+RUN useradd -m -u 1000 mcp
 
-# Create a simple registry server for testing
-RUN echo 'from http.server import HTTPServer, BaseHTTPRequestHandler\n\
-import json\n\
-import os\n\
-\n\
-class RegistryHandler(BaseHTTPRequestHandler):\n\
-    def do_GET(self):\n\
-        if self.path == "/health":\n\
-            self.send_response(200)\n\
-            self.send_header("Content-type", "application/json")\n\
-            self.end_headers()\n\
-            self.wfile.write(json.dumps({"status": "healthy"}).encode())\n\
-        elif self.path == "/ready":\n\
-            self.send_response(200)\n\
-            self.send_header("Content-type", "application/json")\n\
-            self.end_headers()\n\
-            self.wfile.write(json.dumps({"ready": True}).encode())\n\
-        elif self.path == "/api/v1/agents":\n\
-            self.send_response(200)\n\
-            self.send_header("Content-type", "application/json")\n\
-            self.end_headers()\n\
-            self.wfile.write(json.dumps({"agents": []}).encode())\n\
-        else:\n\
-            self.send_response(404)\n\
-            self.end_headers()\n\
-\n\
-if __name__ == "__main__":\n\
-    server = HTTPServer(("0.0.0.0", 8080), RegistryHandler)\n\
-    print("Registry server starting on port 8080...")\n\
-    server.serve_forever()\n\
-' > /app/server.py
+# Create necessary directories
+RUN mkdir -p /data /etc/mcp-mesh && \
+    chown -R mcp:mcp /data /etc/mcp-mesh
 
-# Create directories
-RUN mkdir -p /data /etc/mcp-mesh
+WORKDIR /app
 
-# Non-root user
-RUN useradd -m -u 1000 mcp && \
-    chown -R mcp:mcp /app /data /etc/mcp-mesh
+# Copy binary from builder
+COPY --from=builder /app/mcp-mesh-registry /app/mcp-mesh-registry
 
+# Switch to non-root user
 USER mcp
 
+# Expose ports
 EXPOSE 8080 9090
 
-CMD ["python", "/app/server.py"]
+# Set default environment variables
+ENV HOST=0.0.0.0 \
+    PORT=8080 \
+    DATABASE_URL=/data/registry.db \
+    LOG_LEVEL=info \
+    HEALTH_CHECK_INTERVAL=30 \
+    CACHE_TTL=30
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/app/mcp-mesh-registry", "-version"]
+
+# Run the registry
+ENTRYPOINT ["/app/mcp-mesh-registry"]

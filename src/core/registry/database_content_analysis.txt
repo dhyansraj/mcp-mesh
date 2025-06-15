@@ -9,24 +9,24 @@ ACTUAL AGENTS TABLE:
 ====================
 AGENT_ID             NAME                 TYPE         VERSION    HOST            PORT   NAMESPACE    T_DEPS   R_DEPS   CREATED_AT                     UPDATED_AT
 ------------------------------------------------------------------------------------------------------------------------------------------
-weather-consumer     weather-consumer     mcp_agent                               NULL   default      1        1        2025-06-15T14:40:27.706991564Z 2025-06-15T14:40:27.706991564Z
-weather-provider     weather-provider     mcp_agent                               NULL   default      0        0        2025-06-15T14:40:27.706923189Z 2025-06-15T14:40:27.706923189Z
+weather-consumer     weather-consumer     mcp_agent                               NULL   default      1        1        2025-06-15T23:39:29.679070652Z 2025-06-15T23:39:29.679070652Z
+weather-provider     weather-provider     mcp_agent                               NULL   default      0        0        2025-06-15T23:39:29.678865027Z 2025-06-15T23:39:29.678865027Z
 
 
 ACTUAL CAPABILITIES TABLE:
 ==========================
 AGENT_ID             FUNCTION_NAME             CAPABILITY           VERSION    DESCRIPTION          TAGS            CREATED_AT                     UPDATED_AT
 ------------------------------------------------------------------------------------------------------------------------------------
-weather-consumer     weather_report_func       weather_report       1.0.0                           []              2025-06-15T14:40:27.707004981Z 2025-06-15T14:40:27.707004981Z
-weather-provider     weather_data_func         weather_data         1.0.0                           []              2025-06-15T14:40:27.706944939Z 2025-06-15T14:40:27.706944939Z
+weather-consumer     weather_report_func       weather_report       1.0.0                           []              2025-06-15T23:39:29.679106736Z 2025-06-15T23:39:29.679106736Z
+weather-provider     weather_data_func         weather_data         1.0.0                           []              2025-06-15T23:39:29.678932944Z 2025-06-15T23:39:29.678932944Z
 
 
-API RESPONSE (from /agents endpoint at 14:40:27.706 UTC):
+API RESPONSE (from /agents endpoint at 23:39:29.676 UTC):
 ================================================================
 ID                   NAME                 ENDPOINT                       STATUS       CAPABILITIES              LAST_SEEN
 ----------------------------------------------------------------------------------------------------------------------
-weather-consumer     weather-consumer     stdio://weather-consumer       healthy      weather_report            14:40:27.000 UTC
-weather-provider     weather-provider     stdio://weather-provider       healthy      weather_data              14:40:27.000 UTC
+weather-consumer     weather-consumer     stdio://weather-consumer       healthy      weather_report            23:39:29.000 UTC
+weather-provider     weather-provider     stdio://weather-provider       healthy      weather_data              23:39:29.000 UTC
 
 
 INFERRED CAPABILITIES TABLE:

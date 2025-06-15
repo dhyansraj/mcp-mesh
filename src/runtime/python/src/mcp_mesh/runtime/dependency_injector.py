@@ -177,75 +177,79 @@ class DependencyInjector:
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            logger.debug(
-                f"sync_wrapper called for {func.__name__} with args={args}, kwargs={kwargs}"
-            )
-
             # If no mesh positions to inject into, call function normally
             if not mesh_positions:
-                logger.debug(f"No mesh positions for {func.__name__}, calling normally")
                 return func(*args, **kwargs)
 
             # Get function signature
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
-            logger.debug(f"Function {func.__name__} parameters: {params}")
-            logger.debug(f"Mesh positions to inject: {mesh_positions}")
-            logger.debug(f"Dependencies to inject: {dependencies}")
 
-            # Create a copy of kwargs to modify
+            # Strategy: If there are positional args, reconstruct args list
+            # If all kwargs, inject into kwargs
             final_kwargs = kwargs.copy()
 
-            # Inject dependencies into their designated parameter positions
-            for dep_index, param_position in enumerate(mesh_positions):
-                if dep_index < len(dependencies):
-                    dep_name = dependencies[dep_index]
-                    param_name = params[param_position]
-                    logger.debug(
-                        f"Processing dependency {dep_index}: {dep_name} -> {param_name} (position {param_position})"
-                    )
+            if args:
+                # We have positional args, need to reconstruct the args list properly
+                final_args = []
+                original_args_used = 0
 
-                    # Only inject if the parameter wasn't explicitly provided OR if it's None
-                    should_inject = (
-                        param_name not in final_kwargs
-                        or final_kwargs.get(param_name) is None
-                    )
+                for param_index in range(len(params)):
+                    param_name = params[param_index]
 
-                    if should_inject:
-                        # Get the dependency to inject
-                        if dep_name in injected_deps:
-                            dependency = injected_deps[dep_name]
-                            logger.debug(
-                                f"Using cached dependency {dep_name}: {dependency}"
-                            )
+                    # Check if this parameter was provided in kwargs
+                    if param_name in kwargs:
+                        # User provided this as kwarg, skip it in args processing
+                        continue
+
+                    # Check if this is a dependency position
+                    if param_index in mesh_positions:
+                        # This is a dependency parameter - inject it
+                        dep_index = mesh_positions.index(param_index)
+                        if dep_index < len(dependencies):
+                            dep_name = dependencies[dep_index]
+
+                            # Get the dependency to inject
+                            if dep_name in injected_deps:
+                                dependency = injected_deps[dep_name]
+                            else:
+                                dependency = self.get_dependency(dep_name)
+
+                            final_args.append(dependency)
                         else:
-                            dependency = self.get_dependency(dep_name)
-                            logger.debug(
-                                f"Retrieved dependency {dep_name}: {dependency}"
-                            )
-
-                        # Check if this parameter position has a positional argument
-                        if param_position < len(args):
-                            # User provided positional arg, don't inject
-                            logger.debug(
-                                f"Skipping injection for {param_name} - positional arg provided"
-                            )
-                            continue
-                        else:
-                            # Inject as keyword argument (replace None or missing)
-                            final_kwargs[param_name] = dependency
-                            logger.debug(
-                                f"Injected {dep_name} as {param_name}: {dependency}"
-                            )
+                            # No more dependencies to inject, use None or default
+                            final_args.append(None)
                     else:
-                        logger.debug(
-                            f"Skipping injection for {param_name} - already provided in kwargs with non-None value"
-                        )
+                        # This is a regular parameter - use provided arg if available
+                        if original_args_used < len(args):
+                            final_args.append(args[original_args_used])
+                            original_args_used += 1
+                        else:
+                            # No more args available, function will use default or kwargs
+                            break
 
-            logger.debug(
-                f"Final call to {func.__name__} with args={args}, kwargs={final_kwargs}"
-            )
-            return func(*args, **final_kwargs)
+                return func(*final_args, **final_kwargs)
+            else:
+                # No positional args, inject dependencies as kwargs
+                for dep_index, param_position in enumerate(mesh_positions):
+                    if dep_index < len(dependencies):
+                        dep_name = dependencies[dep_index]
+                        param_name = params[param_position]
+
+                        # Only inject if the parameter wasn't explicitly provided
+                        if (
+                            param_name not in final_kwargs
+                            or final_kwargs.get(param_name) is None
+                        ):
+                            # Get the dependency to inject
+                            if dep_name in injected_deps:
+                                dependency = injected_deps[dep_name]
+                            else:
+                                dependency = self.get_dependency(dep_name)
+
+                            final_kwargs[param_name] = dependency
+
+                return func(**final_kwargs)
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):

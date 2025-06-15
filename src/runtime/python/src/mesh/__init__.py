@@ -25,6 +25,59 @@ from . import decorators
 __version__ = "1.0.0"
 
 
+# Helper function to create FastMCP server with proper naming
+def create_server(name: str | None = None) -> "FastMCP":
+    """
+    Create a FastMCP server with proper naming for MCP Mesh integration.
+
+    If a @mesh.agent decorator has been applied to a class in the current module,
+    this function will use the agent name for the server. Otherwise, it uses the
+    provided name or a default.
+
+    Args:
+        name: Optional server name. If not provided, will try to use @mesh.agent name
+
+    Returns:
+        FastMCP server instance with proper name
+
+    Example:
+        @mesh.agent(name="my-service")
+        class MyAgent:
+            pass
+
+        server = mesh.create_server()  # Uses "my-service" as server name
+
+        @mesh.tool(capability="greeting")
+        @server.tool()
+        def hello():
+            return "Hello!"
+    """
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:
+        raise ImportError("FastMCP not available. Install with: pip install mcp")
+
+    # Try to get agent name from existing @mesh.agent decorators
+    if name is None:
+        from mcp_mesh.decorator_registry import DecoratorRegistry
+
+        agents = DecoratorRegistry.get_mesh_agents()
+
+        if agents:
+            # Use the first agent's name found
+            agent_data = next(iter(agents.values()))
+            agent_metadata = agent_data.metadata
+            agent_name = agent_metadata.get("name")
+            if agent_name:
+                name = agent_name
+
+    # Fallback to default name
+    if name is None:
+        name = "mcp-mesh-server"
+
+    return FastMCP(name=name)
+
+
 # Make decorators available as mesh.tool and mesh.agent
 def __getattr__(name):
     if name == "tool":
@@ -33,6 +86,10 @@ def __getattr__(name):
         return decorators.agent
     elif name == "McpMeshAgent":
         return McpMeshAgent
+    elif name == "create_server":
+        return create_server
+    elif name == "start_auto_run_service":
+        return decorators.start_auto_run_service
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

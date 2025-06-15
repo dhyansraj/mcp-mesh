@@ -4,6 +4,7 @@ Mesh decorators implementation - dual decorator architecture.
 Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns.
 """
 
+import atexit
 import logging
 import os
 import uuid
@@ -22,6 +23,9 @@ _runtime_processor: Any | None = None
 
 # Shared agent ID for all functions in the same process
 _SHARED_AGENT_ID: str | None = None
+
+# Auto-run configuration storage
+_auto_run_config: dict[str, Any] | None = None
 
 
 def _get_or_create_agent_id(agent_name: str | None = None) -> str:
@@ -344,7 +348,11 @@ def agent(
     description: str | None = None,
     http_host: str = "0.0.0.0",
     http_port: int = 0,
+    enable_http: bool = True,
+    namespace: str = "default",
     health_interval: int = 30,
+    auto_run: bool = True,  # Changed to True by default!
+    auto_run_interval: int = 10,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -359,16 +367,43 @@ def agent(
         description: Optional agent description
         http_host: HTTP server host (default: "0.0.0.0")
             Environment variable: MCP_MESH_HTTP_HOST (takes precedence)
-        http_port: HTTP server port (default: 0)
+        http_port: HTTP server port (default: 0, means auto-assign)
             Environment variable: MCP_MESH_HTTP_PORT (takes precedence)
+        enable_http: Enable HTTP endpoints (default: True)
+            Environment variable: MCP_MESH_ENABLE_HTTP (takes precedence)
+        namespace: Agent namespace (default: "default")
+            Environment variable: MCP_MESH_NAMESPACE (takes precedence)
         health_interval: Health check interval in seconds (default: 30)
             Environment variable: MCP_MESH_HEALTH_INTERVAL (takes precedence)
+        auto_run: Automatically start service and keep process alive (default: True)
+            Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
+        auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
+            Environment variable: MCP_MESH_AUTO_RUN_INTERVAL (takes precedence)
         **kwargs: Additional agent metadata
 
     Environment Variables:
         MCP_MESH_HTTP_HOST: Override http_host parameter (string)
         MCP_MESH_HTTP_PORT: Override http_port parameter (integer, 0-65535)
+        MCP_MESH_ENABLE_HTTP: Override enable_http parameter (boolean: true/false)
+        MCP_MESH_NAMESPACE: Override namespace parameter (string)
         MCP_MESH_HEALTH_INTERVAL: Override health_interval parameter (integer, ≥1)
+        MCP_MESH_AUTO_RUN: Override auto_run parameter (boolean: true/false)
+        MCP_MESH_AUTO_RUN_INTERVAL: Override auto_run_interval parameter (integer, ≥1)
+
+    Auto-Run Feature:
+        When auto_run=True, the decorator automatically starts the service and keeps
+        the process alive. This eliminates the need for manual while True loops.
+
+        Example:
+            @mesh.agent(name="my-service", auto_run=True)
+            class MyAgent:
+                pass
+
+            @mesh.tool(capability="greeting")
+            def hello():
+                return "Hello!"
+
+            # Script automatically stays alive - no while loop needed!
 
     Returns:
         The original class/function with agent metadata attached
@@ -396,10 +431,24 @@ def agent(
         if not (0 <= http_port <= 65535):
             raise ValueError("http_port must be between 0 and 65535")
 
+        if not isinstance(enable_http, bool):
+            raise ValueError("enable_http must be a boolean")
+
+        if not isinstance(namespace, str):
+            raise ValueError("namespace must be a string")
+
         if not isinstance(health_interval, int):
             raise ValueError("health_interval must be an integer")
         if health_interval < 1:
             raise ValueError("health_interval must be at least 1 second")
+
+        if not isinstance(auto_run, bool):
+            raise ValueError("auto_run must be a boolean")
+
+        if not isinstance(auto_run_interval, int):
+            raise ValueError("auto_run_interval must be an integer")
+        if auto_run_interval < 1:
+            raise ValueError("auto_run_interval must be at least 1 second")
 
         # Get final values with environment variable precedence
         final_http_host = os.environ.get("MCP_MESH_HTTP_HOST", http_host)
@@ -419,6 +468,21 @@ def agent(
         else:
             final_http_port = http_port
 
+        env_enable_http = os.environ.get("MCP_MESH_ENABLE_HTTP")
+        if env_enable_http is not None:
+            if env_enable_http.lower() in ("true", "1", "yes", "on"):
+                final_enable_http = True
+            elif env_enable_http.lower() in ("false", "0", "no", "off"):
+                final_enable_http = False
+            else:
+                raise ValueError(
+                    "MCP_MESH_ENABLE_HTTP environment variable must be a boolean value (true/false, 1/0, yes/no, on/off)"
+                )
+        else:
+            final_enable_http = enable_http
+
+        final_namespace = os.environ.get("MCP_MESH_NAMESPACE", namespace)
+
         env_health_interval = os.environ.get("MCP_MESH_HEALTH_INTERVAL")
         if env_health_interval is not None:
             try:
@@ -433,6 +497,33 @@ def agent(
         else:
             final_health_interval = health_interval
 
+        env_auto_run = os.environ.get("MCP_MESH_AUTO_RUN")
+        if env_auto_run is not None:
+            if env_auto_run.lower() in ("true", "1", "yes", "on"):
+                final_auto_run = True
+            elif env_auto_run.lower() in ("false", "0", "no", "off"):
+                final_auto_run = False
+            else:
+                raise ValueError(
+                    "MCP_MESH_AUTO_RUN environment variable must be a boolean value (true/false, 1/0, yes/no, on/off)"
+                )
+        else:
+            final_auto_run = auto_run
+
+        env_auto_run_interval = os.environ.get("MCP_MESH_AUTO_RUN_INTERVAL")
+        if env_auto_run_interval is not None:
+            try:
+                final_auto_run_interval = int(env_auto_run_interval)
+            except ValueError as e:
+                raise ValueError(
+                    "MCP_MESH_AUTO_RUN_INTERVAL environment variable must be a valid integer"
+                ) from e
+
+            if final_auto_run_interval < 1:
+                raise ValueError("auto_run_interval must be at least 1 second")
+        else:
+            final_auto_run_interval = auto_run_interval
+
         # Build agent metadata
         metadata = {
             "name": name,
@@ -440,7 +531,11 @@ def agent(
             "description": description,
             "http_host": final_http_host,
             "http_port": final_http_port,
+            "enable_http": final_enable_http,
+            "namespace": final_namespace,
             "health_interval": final_health_interval,
+            "auto_run": final_auto_run,
+            "auto_run_interval": final_auto_run_interval,
             **kwargs,
         }
 
@@ -457,6 +552,128 @@ def agent(
             except Exception as e:
                 logger.error(f"Runtime registration failed for agent {name}: {e}")
 
+        # Handle auto-run functionality
+        if final_auto_run:
+            logger.info(
+                f"🚀 Auto-run enabled for agent '{name}' - will start service automatically"
+            )
+
+            # Store auto-run configuration globally for later execution
+            global _auto_run_config
+            _auto_run_config = {
+                "name": name,
+                "interval": final_auto_run_interval,
+                "enabled": True,
+            }
+
         return target
 
     return decorator
+
+
+def start_auto_run_service() -> None:
+    """
+    Start the auto-run service if enabled by @mesh.agent(auto_run=True).
+
+    This function should be called at the end of your script to start the
+    keep-alive loop. It only runs if auto_run=True was set on a @mesh.agent.
+
+    Example:
+        import mesh
+
+        @mesh.agent(name="my-service", auto_run=True)
+        class MyAgent:
+            pass
+
+        @mesh.tool(capability="greeting")
+        def hello():
+            return "Hello!"
+
+        # This will start the service and keep it alive
+        mesh.start_auto_run_service()
+    """
+    global _auto_run_config
+
+    if _auto_run_config is None or not _auto_run_config.get("enabled", False):
+        logger.debug("Auto-run not enabled - service will not start automatically")
+        return
+
+    import signal
+    import sys
+    import threading
+    import time
+
+    name = _auto_run_config["name"]
+    interval = _auto_run_config["interval"]
+
+    logger.info(f"🎯 Starting auto-run service '{name}'")
+    logger.info(f"💓 Keep-alive heartbeat every {interval} seconds")
+    logger.info("🛑 Press Ctrl+C to stop the service")
+
+    # Set up signal handlers for graceful shutdown
+    shutdown_event = threading.Event()
+
+    def signal_handler(signum, frame):
+        logger.info(
+            f"🔴 Received shutdown signal {signum} for auto-run service '{name}'"
+        )
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Give time for all decorators and runtime to initialize
+    logger.info("⏳ Initializing service components...")
+    time.sleep(3)
+
+    # Keep-alive loop
+    heartbeat_count = 0
+    try:
+        logger.info(f"✅ Service '{name}' is now running")
+        while not shutdown_event.is_set():
+            time.sleep(interval)
+            heartbeat_count += 1
+
+            if heartbeat_count % 6 == 0:  # Every minute with 10s interval
+                logger.info(
+                    f"💓 Service '{name}' heartbeat #{heartbeat_count} - running for {heartbeat_count * interval} seconds"
+                )
+            else:
+                logger.debug(
+                    f"💓 Auto-run heartbeat #{heartbeat_count} for service '{name}'"
+                )
+
+    except Exception as e:
+        logger.error(f"Auto-run service error: {e}")
+    finally:
+        logger.info(f"🛑 Auto-run service '{name}' shutting down gracefully")
+        sys.exit(0)
+
+
+def _auto_run_exit_handler():
+    """
+    atexit handler that automatically starts auto-run service if enabled.
+
+    This provides the ultimate magic experience - scripts with @mesh.agent(auto_run=True)
+    will automatically stay alive without requiring any manual calls.
+    """
+    global _auto_run_config
+
+    # Only auto-start if config exists and auto_run is enabled
+    if _auto_run_config is None or not _auto_run_config.get("enabled", False):
+        return
+
+    # Give background processor time to complete registration
+    import time
+
+    time.sleep(4)
+
+    # Start the auto-run service automatically
+    logger.info(
+        "🪄 Script ending - auto-starting keep-alive service for ultimate magic experience"
+    )
+    start_auto_run_service()
+
+
+# Register the atexit handler for automatic auto-run
+atexit.register(_auto_run_exit_handler)

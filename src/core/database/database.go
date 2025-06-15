@@ -93,8 +93,8 @@ func Initialize(config *Config) (*Database, error) {
 		database.Exec(fmt.Sprintf("PRAGMA cache_size = -%d", config.CacheSize))
 	}
 
-	// Initialize schema using manual SQL
-	if err := database.initializeSchemaManual(); err != nil {
+	// Initialize schema using current schema
+	if err := database.initializeSchema(); err != nil {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
@@ -103,7 +103,7 @@ func Initialize(config *Config) (*Database, error) {
 
 // initializeSchema creates all tables and indexes (OLD - for reference)
 // MUST match Python DatabaseSchema.SCHEMA_SQL and INDEXES exactly
-func (db *Database) initializeSchemaManual() error {
+func (db *Database) initializeSchema() error {
 	// Create tables manually to avoid GORM association issues
 	schemas := []string{
 		`CREATE TABLE IF NOT EXISTS schema_version (
@@ -112,129 +112,50 @@ func (db *Database) initializeSchemaManual() error {
 		)`,
 
 		`CREATE TABLE IF NOT EXISTS agents (
-			id TEXT PRIMARY KEY,
+			agent_id TEXT PRIMARY KEY,
+			agent_type TEXT NOT NULL DEFAULT 'mcp_agent',
 			name TEXT NOT NULL,
-			namespace TEXT NOT NULL DEFAULT 'default',
-			endpoint TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			labels TEXT DEFAULT '{}',
-			annotations TEXT DEFAULT '{}',
-			created_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL,
-			resource_version TEXT NOT NULL,
-			last_heartbeat TIMESTAMP,
-			health_interval INTEGER DEFAULT 30,
-			timeout_threshold INTEGER DEFAULT 60,
-			eviction_threshold INTEGER DEFAULT 120,
-			agent_type TEXT DEFAULT 'mesh-agent',
-			config TEXT DEFAULT '{}',
-			security_context TEXT,
-			dependencies TEXT DEFAULT '[]'
+			version TEXT,
+			http_host TEXT,
+			http_port INTEGER,
+			namespace TEXT DEFAULT 'default',
+
+			-- Dependency tracking (computed fields)
+			total_dependencies INTEGER DEFAULT 0,
+			dependencies_resolved INTEGER DEFAULT 0,
+
+			-- Registry-controlled timestamps (source of truth)
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS tools (
+		// 2. CAPABILITIES table - What each agent provides
+		`CREATE TABLE IF NOT EXISTS capabilities (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,
-			name TEXT NOT NULL,
-			capability TEXT NOT NULL,
+			function_name TEXT NOT NULL,               -- "smart_greet", "get_weather_report"
+			capability TEXT NOT NULL,                  -- "personalized_greeting", "weather_report"
 			version TEXT DEFAULT '1.0.0',
-			dependencies TEXT DEFAULT '[]',
-			config TEXT DEFAULT '{}',
+			description TEXT,
+			tags TEXT DEFAULT '[]',                    -- JSON array: ["prod", "ml", "gpu"]
+
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-			UNIQUE(agent_id, name)
+
+			FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+			UNIQUE(agent_id, function_name)
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS agent_health (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			agent_id TEXT NOT NULL,
-			status TEXT NOT NULL,
-			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			checks TEXT DEFAULT '{}',
-			errors TEXT DEFAULT '[]',
-			uptime_seconds INTEGER DEFAULT 0,
-			metadata TEXT DEFAULT '{}',
-			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
-		)`,
-
+		// 3. REGISTRY_EVENTS table - Audit trail
 		`CREATE TABLE IF NOT EXISTS registry_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_type TEXT NOT NULL,
+			event_type TEXT NOT NULL,                  -- 'register', 'heartbeat', 'expire'
 			agent_id TEXT NOT NULL,
+			function_name TEXT,                        -- NULL for agent-level events
 			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			resource_version TEXT NOT NULL,
-			data TEXT,
-			source TEXT DEFAULT 'registry',
-			metadata TEXT DEFAULT '{}'
+			data TEXT DEFAULT '{}'                     -- JSON event data
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS service_contracts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			agent_id TEXT NOT NULL,
-			service_name TEXT NOT NULL,
-			service_version TEXT NOT NULL DEFAULT '1.0.0',
-			description TEXT,
-			contract_version TEXT NOT NULL DEFAULT '1.0.0',
-			compatibility_level TEXT NOT NULL DEFAULT 'strict',
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS method_metadata (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			contract_id INTEGER NOT NULL,
-			method_name TEXT NOT NULL,
-			signature_data TEXT NOT NULL,
-			return_type TEXT,
-			is_async BOOLEAN DEFAULT FALSE,
-			method_type TEXT DEFAULT 'function',
-			docstring TEXT,
-			service_version TEXT DEFAULT '1.0.0',
-			stability_level TEXT DEFAULT 'stable',
-			deprecation_warning TEXT,
-			expected_complexity TEXT DEFAULT 'O(1)',
-			timeout_hint INTEGER DEFAULT 30,
-			resource_requirements TEXT DEFAULT '{}',
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (contract_id) REFERENCES service_contracts(id) ON DELETE CASCADE
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS method_parameters (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			method_id INTEGER NOT NULL,
-			parameter_name TEXT NOT NULL,
-			parameter_type TEXT NOT NULL,
-			parameter_kind TEXT NOT NULL,
-			default_value TEXT,
-			annotation TEXT,
-			has_default BOOLEAN DEFAULT FALSE,
-			is_optional BOOLEAN DEFAULT FALSE,
-			position INTEGER NOT NULL,
-			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS method_capabilities (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			method_id INTEGER NOT NULL,
-			capability_name TEXT NOT NULL,
-			capability_id INTEGER,
-			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE
-			-- Note: Removed FK to capabilities table since we use tools table instead
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS capability_method_mapping (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			capability_id INTEGER NOT NULL,
-			method_id INTEGER NOT NULL,
-			mapping_type TEXT DEFAULT 'direct',
-			priority INTEGER DEFAULT 0,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			-- Note: Removed FK to capabilities table since we use tools table instead
-			FOREIGN KEY (method_id) REFERENCES method_metadata(id) ON DELETE CASCADE
-		)`,
 	}
 
 	for _, schema := range schemas {
@@ -243,55 +164,22 @@ func (db *Database) initializeSchemaManual() error {
 		}
 	}
 
-	// Create additional indexes that match Python DatabaseSchema.INDEXES exactly
+	// Create performance indexes for current schema
 	indexes := []string{
-		// Agent discovery optimization
+		// Agent indexes
 		"CREATE INDEX IF NOT EXISTS idx_agents_namespace ON agents(namespace)",
-		"CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)",
-		"CREATE INDEX IF NOT EXISTS idx_agents_updated ON agents(updated_at)",
-		"CREATE INDEX IF NOT EXISTS idx_agents_heartbeat ON agents(last_heartbeat)",
+		"CREATE INDEX IF NOT EXISTS idx_agents_type ON agents(agent_type)",
+		"CREATE INDEX IF NOT EXISTS idx_agents_updated_at ON agents(updated_at)",
 
-		// Capability discovery optimization
-		"CREATE INDEX IF NOT EXISTS idx_tools_capability ON tools(capability)",
-		"CREATE INDEX IF NOT EXISTS idx_tools_agent ON tools(agent_id)",
-		"CREATE INDEX IF NOT EXISTS idx_tools_composite ON tools(capability, agent_id)",
+		// Capability indexes
+		"CREATE INDEX IF NOT EXISTS idx_capabilities_capability ON capabilities(capability)",
+		"CREATE INDEX IF NOT EXISTS idx_capabilities_agent ON capabilities(agent_id)",
+		"CREATE INDEX IF NOT EXISTS idx_capabilities_function ON capabilities(function_name)",
 
-		// Health monitoring optimization
-		"CREATE INDEX IF NOT EXISTS idx_health_agent ON agent_health(agent_id)",
-		"CREATE INDEX IF NOT EXISTS idx_health_timestamp ON agent_health(timestamp)",
-		"CREATE INDEX IF NOT EXISTS idx_health_status ON agent_health(agent_id, timestamp)",
-
-		// Event history optimization
+		// Event indexes
 		"CREATE INDEX IF NOT EXISTS idx_events_agent ON registry_events(agent_id)",
 		"CREATE INDEX IF NOT EXISTS idx_events_timestamp ON registry_events(timestamp)",
-		"CREATE INDEX IF NOT EXISTS idx_events_type ON registry_events(event_type, timestamp)",
-
-		// Service contract optimization
-		"CREATE INDEX IF NOT EXISTS idx_contracts_agent ON service_contracts(agent_id)",
-		"CREATE INDEX IF NOT EXISTS idx_contracts_service ON service_contracts(service_name, service_version)",
-		"CREATE INDEX IF NOT EXISTS idx_contracts_composite ON service_contracts(agent_id, service_name)",
-
-		// Method metadata optimization
-		"CREATE INDEX IF NOT EXISTS idx_methods_contract ON method_metadata(contract_id)",
-		"CREATE INDEX IF NOT EXISTS idx_methods_name ON method_metadata(method_name)",
-		"CREATE INDEX IF NOT EXISTS idx_methods_composite ON method_metadata(contract_id, method_name)",
-		"CREATE INDEX IF NOT EXISTS idx_methods_stability ON method_metadata(stability_level)",
-
-		// Parameter optimization
-		"CREATE INDEX IF NOT EXISTS idx_parameters_method ON method_parameters(method_id)",
-		"CREATE INDEX IF NOT EXISTS idx_parameters_type ON method_parameters(parameter_type)",
-		"CREATE INDEX IF NOT EXISTS idx_parameters_position ON method_parameters(method_id, position)",
-
-		// Method capabilities optimization
-		"CREATE INDEX IF NOT EXISTS idx_method_caps_method ON method_capabilities(method_id)",
-		"CREATE INDEX IF NOT EXISTS idx_method_caps_capability ON method_capabilities(capability_name)",
-		"CREATE INDEX IF NOT EXISTS idx_method_caps_composite ON method_capabilities(capability_name, method_id)",
-
-		// Capability-method mapping optimization
-		"CREATE INDEX IF NOT EXISTS idx_cap_mapping_capability ON capability_method_mapping(capability_id)",
-		"CREATE INDEX IF NOT EXISTS idx_cap_mapping_method ON capability_method_mapping(method_id)",
-		"CREATE INDEX IF NOT EXISTS idx_cap_mapping_type ON capability_method_mapping(mapping_type)",
-		"CREATE INDEX IF NOT EXISTS idx_cap_mapping_priority ON capability_method_mapping(capability_id, priority)",
+		"CREATE INDEX IF NOT EXISTS idx_events_type ON registry_events(event_type)",
 	}
 
 	for _, indexSQL := range indexes {
@@ -345,40 +233,48 @@ func (db *Database) Close() error {
 func (db *Database) GetStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
 
-	// Agent counts by status
-	rows, err := db.Query("SELECT status, COUNT(*) as count FROM agents GROUP BY status")
+	// Total agent count
+	var totalAgents int64
+	err := db.QueryRow("SELECT COUNT(*) FROM agents").Scan(&totalAgents)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get agent status counts: %w", err)
+		return nil, fmt.Errorf("failed to get total agent count: %w", err)
+	}
+	stats["total_agents"] = totalAgents
+
+	// Agent counts by namespace
+	rows, err := db.Query("SELECT namespace, COUNT(*) as count FROM agents GROUP BY namespace")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent namespace counts: %w", err)
 	}
 	defer rows.Close()
 
-	agentsByStatus := make(map[string]int64)
+	agentsByNamespace := make(map[string]int64)
 	for rows.Next() {
-		var status string
+		var namespace string
 		var count int64
-		if err := rows.Scan(&status, &count); err != nil {
-			return nil, fmt.Errorf("failed to scan agent status counts: %w", err)
+		if err := rows.Scan(&namespace, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan agent namespace counts: %w", err)
 		}
-		agentsByStatus[status] = count
+		agentsByNamespace[namespace] = count
 	}
-	stats["agents_by_status"] = agentsByStatus
+	stats["agents_by_namespace"] = agentsByNamespace
 
-	// Unique capabilities count (using tools table instead of capabilities)
+	// Unique capabilities count (using capabilities table)
 	var uniqueCapabilities int64
-	err = db.QueryRow("SELECT COUNT(DISTINCT capability) FROM tools").Scan(&uniqueCapabilities)
+	err = db.QueryRow("SELECT COUNT(DISTINCT capability) FROM capabilities").Scan(&uniqueCapabilities)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get unique capabilities count: %w", err)
 	}
 	stats["unique_capabilities"] = uniqueCapabilities
 
-	// Health events in last hour
+	// Recent registry events count (last hour)
 	oneHourAgo := time.Now().UTC().Add(-time.Hour)
-	var healthEventsLastHour int64
-	err = db.QueryRow("SELECT COUNT(*) FROM agent_health WHERE timestamp > ?", oneHourAgo).Scan(&healthEventsLastHour)
+	var recentEvents int64
+	err = db.QueryRow("SELECT COUNT(*) FROM registry_events WHERE timestamp > ?", oneHourAgo).Scan(&recentEvents)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get health events count: %w", err)
+		return nil, fmt.Errorf("failed to get recent events count: %w", err)
 	}
-	stats["health_events_last_hour"] = healthEventsLastHour
+	stats["recent_events_last_hour"] = recentEvents
 
 	return stats, nil
 }

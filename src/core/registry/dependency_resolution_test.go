@@ -263,9 +263,10 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		response, err := service.RegisterAgent(consumerReq)
 		require.NoError(t, err, "Registration should succeed even with unresolvable dependencies")
 
-		// With strict resolution, functions with unresolvable dependencies should be excluded
+		// With partial resolution, functions with unresolvable dependencies are included but with empty deps
 		depsResolved := response.DependenciesResolved
-		assert.NotContains(t, depsResolved, "orphaned_function", "Function with unresolvable dependencies should be excluded")
+		assert.Contains(t, depsResolved, "orphaned_function", "Function should be included even with unresolvable dependencies")
+		assert.Empty(t, depsResolved["orphaned_function"], "Function with unresolvable dependencies should have empty dependency list")
 
 		t.Logf("✅ Unresolvable dependencies handled gracefully")
 	})

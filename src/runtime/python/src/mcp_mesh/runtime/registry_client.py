@@ -39,8 +39,10 @@ class RegistryClient:
             raise RegistryConnectionError("aiohttp is required for registry client")
 
         if not self._session:
+            # Create session with connector that doesn't register atexit handlers
+            connector = aiohttp.TCPConnector()
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
+                timeout=aiohttp.ClientTimeout(total=self.timeout), connector=connector
             )
         return self._session
 
@@ -108,8 +110,19 @@ class RegistryClient:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+        self.logger.debug(f"💓 HEARTBEAT REQUEST for agent: {agent_id}")
+        self.logger.debug(f"   Tools count: {len(tools)}")
+        self.logger.debug(f"   Payload: {payload}")
+
         # Send to /heartbeat endpoint with MeshAgentRegistration format
         result = await self._make_request("POST", "/heartbeat", payload)
+
+        if result:
+            self.logger.debug(f"💓 HEARTBEAT SUCCESS for agent: {agent_id}")
+            self.logger.debug(f"   Response: {result}")
+        else:
+            self.logger.debug(f"💓 HEARTBEAT FAILED for agent: {agent_id}")
+
         return result is not None
 
     async def send_heartbeat_with_response(
@@ -275,17 +288,53 @@ class RegistryClient:
 
                     elif method == "POST":
                         self.logger.debug("Sending POST request...")
-                        async with session.post(url, json=payload) as response:
-                            if response.status in [200, 201]:
-                                return (
-                                    await response.json()
-                                    if response.content_length
-                                    else {"status": "ok"}
+                        try:
+                            self.logger.debug("🔄 AIOHTTP POST REQUEST")
+                            self.logger.debug(f"   URL: {url}")
+                            self.logger.debug(f"   Payload: {payload}")
+
+                            async with session.post(url, json=payload) as response:
+                                self.logger.debug("🎯 AIOHTTP RESPONSE RECEIVED")
+                                self.logger.debug(f"   Status: {response.status}")
+
+                                if response.status in [200, 201]:
+                                    response_data = (
+                                        await response.json()
+                                        if response.content_length
+                                        else {"status": "ok"}
+                                    )
+                                    self.logger.debug(f"   Response: {response_data}")
+                                    return response_data
+                                else:
+                                    error_text = await response.text()
+                                    self.logger.error(
+                                        f"❌ POST FAILED - Status: {response.status}, Error: {error_text}"
+                                    )
+                                    raise RegistryConnectionError(
+                                        f"Registry returned {response.status}: {error_text}"
+                                    )
+                        except asyncio.TimeoutError as e:
+                            self.logger.error(
+                                f"POST request timed out on attempt {attempt + 1}: {e}"
+                            )
+                            raise
+                        except RuntimeError as e:
+                            if "can't register atexit after shutdown" in str(e):
+                                self.logger.warning(
+                                    f"Python shutting down, falling back to simple HTTP for attempt {attempt + 1}"
                                 )
+                                # Fall back to requests or urllib if available
+                                return await self._fallback_post_request(url, payload)
                             else:
-                                raise RegistryConnectionError(
-                                    f"Registry returned {response.status}"
+                                self.logger.error(
+                                    f"POST request failed on attempt {attempt + 1}: {type(e).__name__}: {e}"
                                 )
+                                raise
+                        except Exception as e:
+                            self.logger.error(
+                                f"POST request failed on attempt {attempt + 1}: {type(e).__name__}: {e}"
+                            )
+                            raise
 
                     elif method == "PUT":
                         self.logger.debug("Sending PUT request...")
@@ -346,6 +395,37 @@ class RegistryClient:
     def _get_registry_url_from_env(self) -> str:
         """Get registry URL from environment variables."""
         return os.getenv("MCP_MESH_REGISTRY_URL", "http://localhost:8000")
+
+    async def _fallback_post_request(self, url: str, payload: dict) -> dict:
+        """Fallback HTTP POST using urllib when aiohttp fails during shutdown."""
+        import json
+        import urllib.parse
+        import urllib.request
+
+        try:
+            self.logger.debug("🔄 FALLBACK POST REQUEST")
+            self.logger.debug(f"   URL: {url}")
+            self.logger.debug(f"   Payload: {payload}")
+
+            # Prepare the request
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data)
+            req.add_header("Content-Type", "application/json")
+
+            # Make the request
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                response_data = response.read().decode("utf-8")
+                result = (
+                    json.loads(response_data) if response_data else {"status": "ok"}
+                )
+                self.logger.debug("🎯 FALLBACK RESPONSE SUCCESS")
+                self.logger.debug(f"   Status: {response.status}")
+                self.logger.debug(f"   Response: {result}")
+                return result
+
+        except Exception as e:
+            self.logger.error(f"❌ FALLBACK REQUEST FAILED: {e}")
+            raise RegistryConnectionError(f"Fallback request failed: {e}")
 
     async def close(self) -> None:
         """Close the HTTP session."""
@@ -501,4 +581,31 @@ class RegistryClient:
 
         # Use /heartbeat endpoint - Go registry returns full dependency state
         result = await self._make_request("POST", "/heartbeat", payload)
+        return result
+
+    async def update_agent_endpoint(
+        self, endpoint_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """
+        Update agent registration with HTTP endpoint information.
+
+        Args:
+            endpoint_data: Dictionary containing:
+                - agent_id: ID of the agent
+                - http_host: HTTP host
+                - http_port: HTTP port
+                - endpoint: Full HTTP endpoint URL
+                - timestamp: Update timestamp
+
+        Returns:
+            Update response from registry
+        """
+        self.logger.debug(
+            f"Updating endpoint for {endpoint_data.get('agent_id')} to {endpoint_data.get('endpoint')}"
+        )
+
+        # Use PUT method to update existing agent registration
+        result = await self._make_request(
+            "PUT", f"/agents/{endpoint_data['agent_id']}/endpoint", endpoint_data
+        )
         return result

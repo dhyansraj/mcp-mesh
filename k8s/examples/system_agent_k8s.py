@@ -17,8 +17,8 @@ import time
 from datetime import datetime
 from typing import Any
 
+import mesh
 from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
 
 
 def create_system_agent_server() -> FastMCP:
@@ -37,8 +37,7 @@ def create_system_agent_server() -> FastMCP:
     # In standard MCP, we provide flat functions, not class methods
     # Each function is a separate tool that can be called independently
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="SystemAgent_getDate",  # Flat function naming convention
         enable_http=True,
         http_host=os.environ.get("MCP_MESH_HTTP_HOST", "0.0.0.0"),
@@ -61,8 +60,7 @@ def create_system_agent_server() -> FastMCP:
         now = datetime.now()
         return now.strftime("%B %d, %Y at %I:%M %p")
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="SystemAgent_getUptime",  # Flat function naming convention
         enable_http=True,
         http_host=os.environ.get("MCP_MESH_HTTP_HOST", "0.0.0.0"),
@@ -82,8 +80,7 @@ def create_system_agent_server() -> FastMCP:
         uptime = datetime.now() - start_time
         return f"Agent running for {uptime.total_seconds():.1f} seconds"
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="SystemAgent_getInfo",  # Additional useful function
         enable_http=True,
         http_host=os.environ.get("MCP_MESH_HTTP_HOST", "0.0.0.0"),

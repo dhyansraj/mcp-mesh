@@ -14,8 +14,8 @@ Key Demonstration:
 
 from typing import Any
 
+import mesh
 from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
 
 
 def create_hello_world_server() -> FastMCP:
@@ -57,8 +57,7 @@ def create_hello_world_server() -> FastMCP:
     # This function uses DUAL-DECORATOR pattern: @server.tool() + @mesh_agent()
     # Includes mesh integration with automatic dependency injection
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="greeting",  # Single capability
         dependencies=["SystemAgent_getDate"],  # Depend on flat function
         health_interval=30,
@@ -99,8 +98,7 @@ def create_hello_world_server() -> FastMCP:
     # ===== NEW SINGLE CAPABILITY PATTERN (KUBERNETES-OPTIMIZED) =====
     # Each function provides exactly ONE capability for better organization
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="greeting",  # Single capability (new pattern)
         dependencies=[
             "SystemAgent_getDate",
@@ -185,8 +183,7 @@ def create_hello_world_server() -> FastMCP:
             ],
         }
 
-    @server.tool()
-    @mesh_agent(
+    @mesh.tool(
         capability="dependency_validation",  # Single capability
         dependencies=["SystemAgent_getDate"],
         fallback_mode=True,

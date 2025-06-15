@@ -185,6 +185,47 @@ func (h *BusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		AgentId:   req.AgentId,
 	}
 
+	// Include dependency resolution if available (heartbeat with tools should return dependencies)
+	if serviceResp.DependenciesResolved != nil {
+		depsMap := make(map[string][]struct {
+			AgentId      string                                                       `json:"agent_id"`
+			Capability   string                                                       `json:"capability"`
+			Endpoint     string                                                       `json:"endpoint"`
+			FunctionName string                                                       `json:"function_name"`
+			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+		})
+
+		for functionName, deps := range serviceResp.DependenciesResolved {
+			if len(deps) > 0 {
+				depsList := make([]struct {
+					AgentId      string                                                       `json:"agent_id"`
+					Capability   string                                                       `json:"capability"`
+					Endpoint     string                                                       `json:"endpoint"`
+					FunctionName string                                                       `json:"function_name"`
+					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+				}, len(deps))
+
+				for i, dep := range deps {
+					depsList[i] = struct {
+						AgentId      string                                                       `json:"agent_id"`
+						Capability   string                                                       `json:"capability"`
+						Endpoint     string                                                       `json:"endpoint"`
+						FunctionName string                                                       `json:"function_name"`
+						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+					}{
+						AgentId:      dep.AgentID,
+						Capability:   dep.Capability,
+						Endpoint:     dep.Endpoint,
+						FunctionName: dep.FunctionName,
+						Status:       generated.MeshRegistrationResponseDependenciesResolvedStatus(dep.Status),
+					}
+				}
+				depsMap[functionName] = depsList
+			}
+		}
+		response.DependenciesResolved = &depsMap
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -249,6 +290,15 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 
 	if reg.Version != nil {
 		result["version"] = *reg.Version
+	}
+
+	// Include HTTP host and port as separate fields for the service layer
+	if reg.HttpHost != nil {
+		result["http_host"] = *reg.HttpHost
+	}
+
+	if reg.HttpPort != nil {
+		result["http_port"] = *reg.HttpPort
 	}
 
 	// Construct endpoint from http_host and http_port

@@ -65,6 +65,8 @@ class MeshToolProcessor:
         self.registry_client: RegistryClient = registry_client
         self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_tools: dict[str, bool] = {}
+        self._health_tasks: dict[str, asyncio.Task[None]] = {}
+        self._last_dependencies_resolved: dict[str, dict[str, Any]] = {}
 
     async def process_tools(
         self, tools: dict[str, DecoratedFunction]
@@ -142,6 +144,39 @@ class MeshToolProcessor:
 
                     tool_list.append(tool_registration)
 
+                # Check if HTTP wrapper should be enabled
+                enable_http = True  # Default to True for @mesh.tool
+                if agent_config:
+                    enable_http = agent_config.get("enable_http", True)
+
+                # Set up HTTP wrapper FIRST to get the real endpoint
+                http_endpoint = None
+                http_host = (
+                    agent_config.get("http_host", "0.0.0.0")
+                    if agent_config
+                    else "0.0.0.0"
+                )
+                http_port = agent_config.get("http_port", 0) if agent_config else 0
+
+                if enable_http:
+                    self.logger.debug(
+                        f"🌐 Setting up HTTP wrapper for @mesh.tool agent {agent_id}"
+                    )
+                    http_endpoint = await self._setup_http_wrapper_for_tools(
+                        agent_id, tools, agent_config
+                    )
+
+                    if http_endpoint:
+                        # Parse the endpoint to get real values
+                        from urllib.parse import urlparse
+
+                        parsed = urlparse(http_endpoint)
+                        http_host = parsed.hostname or "127.0.0.1"
+                        http_port = parsed.port or 80
+                        self.logger.info(
+                            f"🔧 Updated registration with real HTTP endpoint: {http_endpoint}"
+                        )
+
                 # Create structured registration object using flattened MeshAgentRegistration schema
                 from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
                     MeshAgentRegistration,
@@ -156,8 +191,8 @@ class MeshToolProcessor:
                         if agent_config
                         else "1.0.0"
                     ),
-                    http_host="0.0.0.0",
-                    http_port=0,  # 0 for stdio
+                    http_host=http_host,
+                    http_port=http_port,
                     timestamp=datetime.now(timezone.utc),
                     namespace=(
                         agent_config.get("namespace", "default")
@@ -167,8 +202,11 @@ class MeshToolProcessor:
                     tools=tool_list,
                 )
 
+                # Note: endpoint field not available in generated model
+                # The registry will construct the endpoint from http_host:http_port
+
                 self.logger.debug(
-                    f"Using generated client models for {len(tools)} @mesh.tool functions"
+                    f"📝 Registering {len(tools)} @mesh.tool functions with real endpoint info"
                 )
                 response = await self._register_with_generated_client(
                     agent_registration
@@ -239,8 +277,14 @@ class MeshToolProcessor:
                         if agent_config
                         else "1.0.0"
                     ),
-                    "http_host": "0.0.0.0",
-                    "http_port": 0,  # 0 for stdio
+                    "http_host": (
+                        agent_config.get("http_host", "0.0.0.0")
+                        if agent_config
+                        else "0.0.0.0"
+                    ),
+                    "http_port": (
+                        agent_config.get("http_port", 0) if agent_config else 0
+                    ),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "namespace": (
                         agent_config.get("namespace", "default")
@@ -250,8 +294,44 @@ class MeshToolProcessor:
                     "tools": tool_list,
                 }
 
+                # Check if HTTP wrapper should be enabled
+                enable_http = True  # Default to True for @mesh.tool
+                if agent_config:
+                    enable_http = agent_config.get("enable_http", True)
+
                 self.logger.debug(
-                    f"Using manual HTTP for {len(tools)} @mesh.tool functions (generated client unavailable)"
+                    f"🔍 Checking HTTP for @mesh.tool agent {agent_id}: enable_http={enable_http}"
+                )
+
+                # Set up HTTP wrapper FIRST to get the real endpoint
+                http_endpoint = None
+                if enable_http:
+                    self.logger.debug(
+                        f"🌐 Setting up HTTP wrapper for @mesh.tool agent {agent_id}"
+                    )
+                    http_endpoint = await self._setup_http_wrapper_for_tools(
+                        agent_id, tools, agent_config
+                    )
+
+                    if http_endpoint:
+                        # Parse the endpoint to update registration data with real values
+                        from urllib.parse import urlparse
+
+                        parsed = urlparse(http_endpoint)
+                        registration_data["http_host"] = parsed.hostname or "127.0.0.1"
+                        registration_data["http_port"] = parsed.port or 80
+                        registration_data["endpoint"] = http_endpoint
+                        self.logger.info(
+                            f"🔧 Updated registration with real HTTP endpoint: {http_endpoint}"
+                        )
+                else:
+                    self.logger.debug(
+                        f"📡 HTTP wrapper not enabled for @mesh.tool agent {agent_id}"
+                    )
+
+                # Now register with the REAL endpoint information
+                self.logger.debug(
+                    f"📝 Registering {len(tools)} @mesh.tool functions with real endpoint info"
                 )
                 response = await self._register_with_mesh_registry(registration_data)
 
@@ -281,6 +361,75 @@ class MeshToolProcessor:
                             self.logger.error(
                                 f"Failed to setup DI for tool {func_name}: {e}"
                             )
+
+                # Start health monitoring for the registered agent
+                # Use configuration from @mesh.agent if available, otherwise defaults
+                health_interval = 30  # Default interval
+                if agent_config:
+                    health_interval = agent_config.get("health_interval", 30)
+
+                self.logger.debug(
+                    f"💓💓💓 Starting heartbeat monitoring for agent {agent_id} with interval {health_interval}s"
+                )
+
+                # Create agent metadata for health monitoring with REAL HTTP endpoint info
+                # Use the same http_host/http_port that was used in registration
+                final_http_host = "0.0.0.0"
+                final_http_port = 0
+
+                # If HTTP was enabled and endpoint was created, extract the real values
+                if enable_http and http_endpoint:
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(http_endpoint)
+                    final_http_host = parsed.hostname or "127.0.0.1"
+                    final_http_port = parsed.port or 80
+                    self.logger.debug(
+                        f"💓 Using real HTTP endpoint for heartbeat: {final_http_host}:{final_http_port}"
+                    )
+                else:
+                    # Fallback to agent config values
+                    final_http_host = (
+                        agent_config.get("http_host", "0.0.0.0")
+                        if agent_config
+                        else "0.0.0.0"
+                    )
+                    final_http_port = (
+                        agent_config.get("http_port", 0) if agent_config else 0
+                    )
+
+                agent_metadata = {
+                    "agent_id": agent_id,
+                    "agent_type": "mcp_agent",
+                    "name": agent_id,
+                    "version": (
+                        agent_config.get("version", "1.0.0")
+                        if agent_config
+                        else "1.0.0"
+                    ),
+                    "namespace": (
+                        agent_config.get("namespace", "default")
+                        if agent_config
+                        else "default"
+                    ),
+                    "http_host": final_http_host,
+                    "http_port": final_http_port,
+                    "enable_http": enable_http,
+                    "tools": [func_name for func_name in tools],
+                    "capabilities": list(
+                        set(
+                            decorated_func.metadata.get("capability")
+                            for decorated_func in tools.values()
+                            if decorated_func.metadata.get("capability")
+                        )
+                    ),
+                }
+
+                # Create and start the health monitoring task
+                task = asyncio.create_task(
+                    self._health_monitor(agent_id, agent_metadata, health_interval)
+                )
+                self._health_tasks[agent_id] = task
             else:
                 self.logger.error(f"❌ Failed to register tools as agent: {agent_id}")
 
@@ -552,6 +701,320 @@ class MeshToolProcessor:
         except Exception as e:
             self.logger.error(f"❌ Registration error: {e}")
             return None
+
+    async def _health_monitor(
+        self,
+        agent_id: str,
+        metadata: dict[str, Any],
+        interval: int,
+    ) -> None:
+        """
+        Background task for periodic health monitoring for @mesh.tool agents.
+
+        Args:
+            agent_id: ID of the agent
+            metadata: Agent metadata
+            interval: Health check interval in seconds
+        """
+        self.logger.debug(
+            f"💓 Health monitor started for tool agent {agent_id} (interval: {interval}s)"
+        )
+
+        # Send initial heartbeat immediately
+        self.logger.debug(f"💓 Sending initial heartbeat for tool agent {agent_id}")
+        await self._send_heartbeat(agent_id, metadata)
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                self.logger.debug(f"💓 Sending heartbeat for tool agent {agent_id}")
+                await self._send_heartbeat(agent_id, metadata)
+
+            except asyncio.CancelledError:
+                self.logger.info(f"Health monitor cancelled for tool agent {agent_id}")
+                break
+            except Exception as e:
+                self.logger.error(
+                    f"Error in health monitor for tool agent {agent_id}: {e}"
+                )
+                # Continue monitoring even on errors
+
+    async def _send_heartbeat(self, agent_id: str, metadata: dict[str, Any]) -> bool:
+        """Send a heartbeat to the registry for @mesh.tool agents.
+
+        Uses the same MeshAgentRegistration format as registration for consistency.
+
+        Returns:
+            True if heartbeat was sent successfully, False otherwise
+        """
+        try:
+            self.logger.debug(
+                f"💗 Sending heartbeat for tool agent {agent_id} to registry"
+            )
+
+            # Build the same MeshAgentRegistration format as registration
+            # Get the tools from DecoratorRegistry to ensure we have the latest metadata
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+
+            # Build tools array with full metadata (same as registration)
+            tool_list = []
+            for func_name, decorated_func in mesh_tools.items():
+                tool_metadata = decorated_func.metadata
+
+                # Process dependencies to ensure proper schema compliance
+                raw_dependencies = tool_metadata.get("dependencies", [])
+                processed_dependencies = []
+                for dep in raw_dependencies:
+                    if isinstance(dep, str):
+                        processed_dependencies.append(
+                            {"capability": dep, "tags": [], "namespace": "default"}
+                        )
+                    elif isinstance(dep, dict):
+                        processed_dep = {
+                            "capability": dep.get("capability"),
+                            "tags": dep.get("tags", []),
+                            "namespace": dep.get("namespace", "default"),
+                        }
+                        processed_dependencies.append(processed_dep)
+
+                tool_data = {
+                    "function_name": func_name,
+                    "capability": tool_metadata.get("capability"),
+                    "tags": tool_metadata.get("tags", []),
+                    "version": tool_metadata.get("version", "1.0.0"),
+                    "dependencies": processed_dependencies,
+                    "description": tool_metadata.get("description") or "",
+                }
+                tool_list.append(tool_data)
+
+            # Build the exact same payload format as registration
+            heartbeat_data = {
+                "agent_id": agent_id,
+                "agent_type": "mcp_agent",
+                "name": agent_id,
+                "version": metadata.get("version", "1.0.0"),
+                "http_host": metadata.get("http_host", "0.0.0.0"),
+                "http_port": metadata.get("http_port", 0),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "namespace": metadata.get("namespace", "default"),
+                "tools": tool_list,
+            }
+
+            # Send to /heartbeat endpoint using the same format as registration
+            response = await self._send_heartbeat_request(heartbeat_data)
+
+            if response and response.get("status") == "success":
+                self.logger.debug(
+                    f"💚 Heartbeat sent successfully for tool agent {agent_id}"
+                )
+
+                # Check if dependencies have changed
+                if "dependencies_resolved" in response:
+                    current_deps = response.get("dependencies_resolved", {})
+                    last_deps = self._last_dependencies_resolved.get(agent_id, {})
+
+                    if current_deps != last_deps:
+                        self.logger.debug(
+                            f"🔄 Dependencies changed for tool agent {agent_id}, updating proxies..."
+                        )
+                        self._last_dependencies_resolved[agent_id] = current_deps
+                        # TODO: Update dependency injection for tools if needed
+
+                return True
+            else:
+                self.logger.warning(f"❤️‍🩹 Heartbeat failed for tool agent {agent_id}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"💔 Heartbeat error for tool agent {agent_id}: {e}")
+            return False
+
+    async def _send_heartbeat_request(
+        self, heartbeat_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """
+        Send heartbeat data to mesh registry using the same format as registration.
+
+        Args:
+            heartbeat_data: Heartbeat payload in MeshAgentRegistration format
+
+        Returns:
+            Registry response or None if failed
+        """
+        try:
+            self.logger.debug(
+                f"💓 Sending heartbeat to registry with {len(heartbeat_data.get('tools', []))} tools"
+            )
+
+            response = await self.registry_client.post(
+                "/heartbeat", json=heartbeat_data
+            )
+
+            if response.status in [200, 201]:
+                response_data = await response.json()
+                self.logger.debug(f"💓 Heartbeat successful: {response_data}")
+                return response_data
+            else:
+                response_text = await response.text()
+                self.logger.error(
+                    f"💔 Heartbeat failed with status {response.status}: {response_text}"
+                )
+                return None
+
+        except Exception as e:
+            self.logger.error(f"💔 Heartbeat request error: {e}")
+            return None
+
+    async def _setup_http_wrapper_for_tools(
+        self, agent_id: str, tools: dict[str, Any], agent_config: dict[str, Any] | None
+    ) -> str | None:
+        """
+        Set up HTTP wrapper for @mesh.tool decorated functions.
+
+        Args:
+            agent_id: ID of the agent
+            tools: Dictionary of tool functions
+            agent_config: Configuration from @mesh.agent decorator
+
+        Returns:
+            HTTP endpoint URL if successful, None otherwise
+        """
+        try:
+            from mcp.server.fastmcp import FastMCP
+
+            from .http_wrapper import HttpConfig, HttpMcpWrapper
+
+            # Check if tools are already registered with an existing server
+            existing_server = None
+            for func_name, decorated_func in tools.items():
+                if hasattr(decorated_func.function, "_mcp_server"):
+                    existing_server = decorated_func.function._mcp_server
+                    break
+
+            if existing_server:
+                # Use existing server but log if name differs from agent_id
+                server = existing_server
+                if hasattr(server, "name") and server.name != agent_id:
+                    self.logger.warning(
+                        f"🔄 FastMCP server name '{server.name}' differs from agent ID '{agent_id}'. "
+                        f"Consider using mesh.create_server() to automatically use @mesh.agent name."
+                    )
+            else:
+                # Create a new FastMCP server for the tools
+                server = FastMCP(name=agent_id)
+                self.logger.info(
+                    f"🔧 Auto-created FastMCP server '{agent_id}' for {len(tools)} @mesh.tool functions"
+                )
+
+                # Auto-register all tools with the FastMCP server
+                for func_name, decorated_func in tools.items():
+                    try:
+                        # Register the function as an MCP tool
+                        server.tool()(decorated_func.function)
+                        self.logger.debug(
+                            f"📝 Auto-registered '{func_name}' as MCP tool"
+                        )
+
+                        # Store server reference on function for future use
+                        decorated_func.function._mcp_server = server
+                    except Exception as e:
+                        self.logger.warning(
+                            f"⚠️ Failed to auto-register '{func_name}' as MCP tool: {e}"
+                        )
+
+                self.logger.info(
+                    f"✅ Auto-registered {len(tools)} tools with FastMCP server"
+                )
+
+            # Create HTTP wrapper config using agent config values
+            http_host = (
+                agent_config.get("http_host", "0.0.0.0") if agent_config else "0.0.0.0"
+            )
+            http_port = (
+                agent_config.get("http_port", 0) if agent_config else 0
+            )  # 0 = auto-assign
+
+            config = HttpConfig(
+                host=http_host,
+                port=http_port,
+            )
+
+            self.logger.debug(
+                f"🌐 Creating HTTP wrapper for {agent_id}: {http_host}:{http_port}"
+            )
+
+            # Create and start HTTP wrapper
+            wrapper = HttpMcpWrapper(server, config)
+            await wrapper.setup()
+            await wrapper.start()
+
+            # Store wrapper for lifecycle management
+            if not hasattr(self, "_http_wrappers"):
+                self._http_wrappers = {}
+            self._http_wrappers[agent_id] = wrapper
+
+            # Get the actual endpoint
+            http_endpoint = wrapper.get_endpoint()
+            self.logger.info(f"🚀 HTTP wrapper started for {agent_id}: {http_endpoint}")
+
+            return http_endpoint
+
+        except Exception as e:
+            self.logger.error(f"Failed to setup HTTP wrapper for {agent_id}: {e}")
+            return None
+
+    async def _update_agent_registration_with_http_endpoint(
+        self, agent_id: str, http_endpoint: str
+    ) -> None:
+        """
+        Update the agent registration with the HTTP endpoint.
+
+        Args:
+            agent_id: ID of the agent
+            http_endpoint: HTTP endpoint URL
+        """
+        try:
+            # Parse the endpoint to get host and port
+            from urllib.parse import urlparse
+
+            parsed = urlparse(http_endpoint)
+            http_host = parsed.hostname or "127.0.0.1"
+            http_port = parsed.port or 80
+
+            # Prepare the update payload
+            update_data = {
+                "agent_id": agent_id,
+                "http_host": http_host,
+                "http_port": http_port,
+                "endpoint": http_endpoint,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            self.logger.debug(
+                f"🔄 Updating {agent_id} registration with HTTP endpoint: {http_endpoint}"
+            )
+
+            # Call the registry to update the agent's endpoint
+            try:
+                response = await self.registry_client.update_agent_endpoint(update_data)
+                if response and response.get("status") == "success":
+                    self.logger.info(
+                        f"✅ Updated {agent_id} registration with HTTP endpoint: {http_endpoint}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️ Failed to update {agent_id} HTTP endpoint: {response}"
+                    )
+            except Exception as registry_error:
+                self.logger.warning(
+                    f"⚠️ Registry endpoint update failed for {agent_id}: {registry_error}"
+                )
+                # Don't fail the whole process if endpoint update fails
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to update registration for {agent_id} with HTTP endpoint: {e}"
+            )
 
 
 class MeshAgentProcessor:

@@ -90,9 +90,12 @@ func TestDependencyCountingInDatabase(t *testing.T) {
 			"test-consumer").Scan(&totalDeps, &resolvedDeps)
 		require.NoError(t, err)
 
-		// Verify counts: 3 total deps (2 + 1), but only 1 resolved (since strict resolution excludes unresolvable functions)
+		// Verify counts: 3 total deps (2 + 1), 2 resolved with partial resolution logic
+		// Function 1: 1 resolved (test_capability), 1 unresolved (missing_capability)
+		// Function 2: 1 resolved (test_capability)
+		// Total: 2 resolved dependencies with partial resolution counting
 		assert.Equal(t, 3, totalDeps, "Should count all dependencies across all tools")
-		assert.Equal(t, 1, resolvedDeps, "Should count only resolved dependencies (function with unresolvable deps is excluded)")
+		assert.Equal(t, 2, resolvedDeps, "Should count individual resolved dependencies (partial resolution enabled)")
 
 		t.Logf("✅ Database dependency counts verified:")
 		t.Logf("   Total dependencies: %d", totalDeps)

@@ -191,8 +191,14 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 
 	var httpPort *int
 	if port, exists := req.Metadata["http_port"]; exists {
-		if portFloat, ok := port.(float64); ok {
-			portInt := int(portFloat)
+		switch p := port.(type) {
+		case float64:
+			portInt := int(p)
+			httpPort = &portInt
+		case int:
+			httpPort = &p
+		case int64:
+			portInt := int(p)
 			httpPort = &portInt
 		}
 	}
@@ -325,10 +331,11 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 			}, nil
 		}
 		return &HeartbeatResponse{
-			Status:    regResp.Status,
-			Timestamp: now.Format(time.RFC3339),
-			Message:   "Agent registered via heartbeat",
-			AgentID:   regResp.AgentID,
+			Status:               regResp.Status,
+			Timestamp:            now.Format(time.RFC3339),
+			Message:              "Agent registered via heartbeat",
+			AgentID:              regResp.AgentID,
+			DependenciesResolved: regResp.DependenciesResolved,
 		}, nil
 	}
 
@@ -361,10 +368,11 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 				}, nil
 			}
 			return &HeartbeatResponse{
-				Status:    regResp.Status,
-				Timestamp: now.Format(time.RFC3339),
-				Message:   "Heartbeat with tools update received",
-				AgentID:   regResp.AgentID,
+				Status:               regResp.Status,
+				Timestamp:            now.Format(time.RFC3339),
+				Message:              "Heartbeat with tools update received",
+				AgentID:              regResp.AgentID,
+				DependenciesResolved: regResp.DependenciesResolved,
 			}, nil
 		}
 	}
@@ -394,9 +402,16 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 			}
 		}
 		if httpPort, exists := req.Metadata["http_port"]; exists {
-			if portFloat, ok := httpPort.(float64); ok {
+			switch p := httpPort.(type) {
+			case float64:
 				updateSQL += ", http_port = ?"
-				args = append(args, int(portFloat))
+				args = append(args, int(p))
+			case int:
+				updateSQL += ", http_port = ?"
+				args = append(args, p)
+			case int64:
+				updateSQL += ", http_port = ?"
+				args = append(args, int(p))
 			}
 		}
 	}
