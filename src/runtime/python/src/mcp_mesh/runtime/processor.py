@@ -505,7 +505,7 @@ class MeshToolProcessor:
                 decorated_func.function, dependency_names
             )
 
-            # Update the function reference in DecoratorRegistry to use the wrapped version
+            # Update the function reference to use the dependency wrapper
             decorated_func.function = wrapped_function
             self.logger.debug(
                 f"✅ Function {decorated_func.function.__name__} wrapped for dependency injection"
@@ -613,23 +613,58 @@ class MeshToolProcessor:
     async def _create_http_proxy_for_tool(
         self, dep_name: str, dep_info: dict[str, Any]
     ):
-        """Create an HTTP-based proxy for tool dependencies."""
+        """Create an HTTP-based proxy for tool dependencies that makes real HTTP calls."""
 
-        # This would implement HTTP proxy logic similar to MeshAgentProcessor
-        # For now, return a simple proxy
+        endpoint = dep_info.get("endpoint")
+        agent_id = dep_info.get("agent_id")
+        function_name = dep_info.get("function_name")
+
+        # For stdio-based agents, fall back to stdio proxy
+        if not endpoint or not endpoint.startswith("http"):
+            return self._create_stdio_proxy_for_tool(dep_name, dep_info)
+
+        # Import here to avoid circular imports
+        from .sync_http_client import SyncHttpClient
+
+        # Capture logger for use in proxy
+        logger = self.logger
+
         class HttpServiceProxy:
             def __init__(self, endpoint: str, agent_id: str, function_name: str):
                 self.endpoint = endpoint
                 self.agent_id = agent_id
                 self.function_name = function_name  # Bound to specific function
+                self._client = SyncHttpClient(endpoint)
+                self._logger = logger
 
             def __call__(self, arguments: dict[str, Any] = None) -> Any:
-                """Call the bound remote function."""
+                """Call the bound remote function via HTTP."""
                 return self.invoke(arguments)
 
             def invoke(self, arguments: dict[str, Any] = None) -> Any:
-                """Invoke the bound remote function."""
-                return f"HTTP proxy call to {self.endpoint} for {self.function_name}({arguments or {}})"
+                """Invoke the bound remote function via HTTP."""
+                try:
+                    # Make the synchronous HTTP call to the bound function
+                    result = self._client.call_tool(self.function_name, arguments or {})
+                    self._logger.debug(
+                        f"🌐 HTTP call successful for {self.function_name}: {result}"
+                    )
+                    return result
+                except Exception as e:
+                    self._logger.error(
+                        f"🌐 HTTP call failed for {self.function_name}: {e}",
+                        extra={
+                            "endpoint": self.endpoint,
+                            "agent_id": self.agent_id,
+                            "function_name": self.function_name,
+                            "error": str(e),
+                        },
+                    )
+                    # Re-raise to let the caller handle it
+                    raise
+
+            def __repr__(self):
+                return f"<HttpServiceProxy {self.function_name} -> {self.endpoint}>"
 
         return HttpServiceProxy(
             dep_info.get("endpoint", ""),
@@ -818,7 +853,16 @@ class MeshToolProcessor:
                             f"🔄 Dependencies changed for tool agent {agent_id}, updating proxies..."
                         )
                         self._last_dependencies_resolved[agent_id] = current_deps
-                        # TODO: Update dependency injection for tools if needed
+
+                        # Update dependency injection for all tools with dependencies
+                        mesh_tools = DecoratorRegistry.get_mesh_tools()
+                        for func_name, decorated_func in mesh_tools.items():
+                            # Check if this tool has dependencies
+                            metadata = decorated_func.metadata
+                            if metadata.get("dependencies"):
+                                await self._setup_dependency_injection_for_tool(
+                                    decorated_func, response
+                                )
 
                 return True
             else:
@@ -880,7 +924,16 @@ class MeshToolProcessor:
             HTTP endpoint URL if successful, None otherwise
         """
         try:
-            from mcp.server.fastmcp import FastMCP
+            try:
+                from fastmcp import FastMCP
+
+                self.logger.info("🆕 Processor: Using NEW FastMCP library (fastmcp)")
+            except ImportError:
+                from mcp.server.fastmcp import FastMCP
+
+                self.logger.info(
+                    "🔄 Processor: Using OLD FastMCP library (mcp.server.fastmcp)"
+                )
 
             from .http_wrapper import HttpConfig, HttpMcpWrapper
 

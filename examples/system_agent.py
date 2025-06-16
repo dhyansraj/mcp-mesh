@@ -19,7 +19,7 @@ import mesh
 from mcp_mesh import McpMeshAgent
 
 
-@mesh.agent(name="system-agent")
+@mesh.agent(name="system-agent", http_port=9091)
 class SystemAgent:
     """System information agent providing date and info capabilities."""
 
@@ -182,7 +182,7 @@ def perform_health_diagnostic(
     # Use injected date service if available
     if date_service is not None:
         try:
-            current_time = date_service.call()
+            current_time = date_service.invoke()
             status["timestamp"] = current_time
             status["time_service"] = "available"
         except Exception as e:
@@ -193,6 +193,77 @@ def perform_health_diagnostic(
         status["time_service"] = "not_injected"
 
     return status
+
+
+# ===== COMPREHENSIVE SYSTEM REPORT WITH WEATHER =====
+
+
+@mesh.tool(
+    capability="system_report",
+    dependencies=[
+        "weather_service",  # From weather-agent
+    ],
+    description="Comprehensive system report including weather data",
+    version="1.0.0",
+)
+def generate_comprehensive_report(
+    weather_service: McpMeshAgent | None = None,
+) -> dict[str, Any]:
+    """
+    Generate a comprehensive system report with weather information.
+
+    This demonstrates multi-agent chaining:
+    hello_world -> system_agent -> weather_agent
+
+    The system agent acts as a middleman, collecting both system info
+    and weather data to provide a complete environmental report.
+    """
+    uptime = datetime.now() - start_time
+
+    report = {
+        "report_type": "comprehensive_system_environment",
+        "generated_at": datetime.now().isoformat(),
+        "system": {
+            "server_name": "system-agent",
+            "uptime_seconds": uptime.total_seconds(),
+            "uptime_formatted": f"{uptime.total_seconds():.1f} seconds",
+            "version": "1.0.0",
+            "agent_type": "system_service",
+            "capabilities_provided": [
+                "date_service",
+                "info",
+                "uptime_info",
+                "health_check",
+                "system_report",
+            ],
+        },
+        "timestamp": None,
+        "weather": None,
+    }
+
+    # Get current time locally (no dependency injection needed)
+    current_time = get_current_time()
+    report["timestamp"] = current_time
+    report["system"]["current_time"] = current_time
+
+    # Get weather information from weather agent
+    if weather_service is not None:
+        try:
+            weather_data = weather_service.invoke()
+            report["weather"] = weather_data
+            # Add formatted summary
+            location = weather_data.get("location", "Unknown")
+            temp = weather_data.get("temperature_f", "N/A")
+            conditions = weather_data.get("weather_description", "Unknown")
+            report["weather_summary"] = f"{temp}°F in {location} - {conditions}"
+        except Exception as e:
+            report["weather"] = {"error": f"Weather service error: {e}"}
+            report["weather_summary"] = "Weather data unavailable"
+    else:
+        report["weather"] = {"error": "Weather service not available"}
+        report["weather_summary"] = "Weather service not injected"
+
+    return report
 
 
 # 🎉 That's it! Pure simplicity with auto_run=True by default!

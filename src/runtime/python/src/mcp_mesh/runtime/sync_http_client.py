@@ -1,9 +1,10 @@
 """Synchronous HTTP client for cross-service MCP calls."""
 
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
-
-import requests
 
 
 class SyncHttpClient:
@@ -18,7 +19,6 @@ class SyncHttpClient:
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.session = requests.Session()
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> Any:
         """Call a remote MCP tool synchronously.
@@ -31,49 +31,77 @@ class SyncHttpClient:
             The result from the tool call
 
         Raises:
-            requests.HTTPError: If the HTTP request fails
+            urllib.error.HTTPError: If the HTTP request fails
             RuntimeError: If the tool call returns an error
         """
         payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
             "method": "tools/call",
             "params": {"name": tool_name, "arguments": arguments or {}},
         }
 
         try:
-            response = self.session.post(
-                f"{self.base_url}/mcp", json=payload, timeout=self.timeout
+            # Prepare the request
+            url = f"{self.base_url}/mcp"
+            data = json.dumps(payload).encode("utf-8")
+
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
             )
-            response.raise_for_status()
 
-            data = response.json()
+            # Make the request
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                response_data = response.read().decode("utf-8")
+                data = json.loads(response_data)
 
-            # Check if the tool call resulted in an error
-            if data.get("isError", False):
-                error_content = data.get("content", [{}])[0]
-                error_msg = error_content.get("text", "Unknown error")
+            # Check for JSON-RPC error
+            if "error" in data:
+                error = data["error"]
+                error_msg = error.get("message", "Unknown error")
                 raise RuntimeError(f"Tool call error: {error_msg}")
 
-            # Extract the result from the content
-            content = data.get("content", [])
-            if content and isinstance(content[0], dict):
-                text = content[0].get("text", "{}")
-                try:
-                    # Try to parse as JSON
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    # Return as plain text if not JSON
-                    return text
+            # Extract the result
+            if "result" in data:
+                result = data["result"]
+                # Handle MCP response format
+                if isinstance(result, dict) and "content" in result:
+                    content = result["content"]
+                    if content and isinstance(content[0], dict):
+                        content_item = content[0]
 
+                        # Handle different content types
+                        if "object" in content_item:
+                            # Return the object directly
+                            return content_item["object"]
+                        elif "text" in content_item:
+                            text = content_item["text"]
+                            try:
+                                # Try to parse as JSON
+                                return json.loads(text)
+                            except json.JSONDecodeError:
+                                # Return as plain text if not JSON
+                                return text
+                        else:
+                            # Fallback to empty dict
+                            return {}
+                else:
+                    return result
             return None
 
-        except requests.exceptions.Timeout:
-            raise RuntimeError(f"Timeout calling {tool_name} at {self.base_url}")
-        except requests.exceptions.ConnectionError:
-            raise RuntimeError(f"Connection error to {self.base_url}")
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
                 raise RuntimeError(f"Tool {tool_name} not found at {self.base_url}")
-            raise
+            raise RuntimeError(f"HTTP error {e.code}: {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Connection error to {self.base_url}: {e.reason}")
+        except Exception as e:
+            raise RuntimeError(f"Error calling {tool_name}: {e}")
 
     def list_tools(self) -> list[dict[str, Any]]:
         """List available tools from the remote service.
@@ -81,18 +109,32 @@ class SyncHttpClient:
         Returns:
             List of tool descriptions
         """
-        payload = {"method": "tools/list"}
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
-            response = self.session.post(
-                f"{self.base_url}/mcp", json=payload, timeout=self.timeout
+            # Prepare the request
+            url = f"{self.base_url}/mcp"
+            data = json.dumps(payload).encode("utf-8")
+
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
             )
-            response.raise_for_status()
 
-            data = response.json()
-            return data.get("tools", [])
+            # Make the request
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                response_data = response.read().decode("utf-8")
+                data = json.loads(response_data)
 
-        except requests.exceptions.RequestException as e:
+            if "result" in data:
+                return data["result"].get("tools", [])
+            return []
+
+        except Exception as e:
             raise RuntimeError(f"Failed to list tools: {e}")
 
     def health_check(self) -> bool:

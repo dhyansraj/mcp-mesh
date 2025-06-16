@@ -452,7 +452,7 @@ class TestMeshAgentDecorator:
         """Test basic mesh.agent decorator usage with mandatory name."""
         import mesh
 
-        @mesh.agent(name="test-agent")
+        @mesh.agent(name="test-agent", auto_run=False)
         class TestAgent:
             pass
 
@@ -500,6 +500,7 @@ class TestMeshAgentDecorator:
             enable_http=True,
             namespace="production",
             health_interval=60,
+            auto_run=False,
             custom_field="custom_value",
         )
         class FullAgent:
@@ -559,7 +560,7 @@ class TestMeshAgentDecorator:
         """Test that mesh.agent can also be applied to functions."""
         import mesh
 
-        @mesh.agent(name="function-agent")
+        @mesh.agent(name="function-agent", auto_run=False)
         def agent_function():
             return "agent function"
 
@@ -687,7 +688,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {"MCP_MESH_HTTP_HOST": "192.168.1.1"}):
 
-            @mesh.agent(name="test-agent", http_host="127.0.0.1")
+            @mesh.agent(name="test-agent", http_host="127.0.0.1", auto_run=False)
             class TestAgent:
                 pass
 
@@ -702,7 +703,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent", http_host="10.0.0.1")
+            @mesh.agent(name="test-agent", http_host="10.0.0.1", auto_run=False)
             class TestAgent:
                 pass
 
@@ -717,7 +718,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent")
+            @mesh.agent(name="test-agent", auto_run=False)
             class TestAgent:
                 pass
 
@@ -732,7 +733,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {"MCP_MESH_HTTP_PORT": "9090"}):
 
-            @mesh.agent(name="test-agent", http_port=8080)
+            @mesh.agent(name="test-agent", http_port=8080, auto_run=False)
             class TestAgent:
                 pass
 
@@ -747,7 +748,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent", http_port=3000)
+            @mesh.agent(name="test-agent", http_port=3000, auto_run=False)
             class TestAgent:
                 pass
 
@@ -762,7 +763,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent")
+            @mesh.agent(name="test-agent", auto_run=False)
             class TestAgent:
                 pass
 
@@ -777,7 +778,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {"MCP_MESH_HEALTH_INTERVAL": "60"}):
 
-            @mesh.agent(name="test-agent", health_interval=45)
+            @mesh.agent(name="test-agent", health_interval=45, auto_run=False)
             class TestAgent:
                 pass
 
@@ -792,7 +793,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent", health_interval=120)
+            @mesh.agent(name="test-agent", health_interval=120, auto_run=False)
             class TestAgent:
                 pass
 
@@ -807,7 +808,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent")
+            @mesh.agent(name="test-agent", auto_run=False)
             class TestAgent:
                 pass
 
@@ -838,6 +839,7 @@ class TestMeshAgentEnvironmentVariables:
                 enable_http=True,
                 namespace="dev",
                 health_interval=15,
+                auto_run=False,
             )
             class TestAgent:
                 pass
@@ -860,7 +862,7 @@ class TestMeshAgentEnvironmentVariables:
                 ValueError, match="http_port must be between 0 and 65535"
             ):
 
-                @mesh.agent(name="test-agent")
+                @mesh.agent(name="test-agent", auto_run=False)
                 class TestAgent:
                     pass
 
@@ -876,7 +878,7 @@ class TestMeshAgentEnvironmentVariables:
                 match="MCP_MESH_HTTP_PORT environment variable must be a valid integer",
             ):
 
-                @mesh.agent(name="test-agent")
+                @mesh.agent(name="test-agent", auto_run=False)
                 class TestAgent:
                     pass
 
@@ -891,7 +893,7 @@ class TestMeshAgentEnvironmentVariables:
                 ValueError, match="health_interval must be at least 1 second"
             ):
 
-                @mesh.agent(name="test-agent")
+                @mesh.agent(name="test-agent", auto_run=False)
                 class TestAgent:
                     pass
 
@@ -907,7 +909,7 @@ class TestMeshAgentEnvironmentVariables:
                 match="MCP_MESH_HEALTH_INTERVAL environment variable must be a valid integer",
             ):
 
-                @mesh.agent(name="test-agent")
+                @mesh.agent(name="test-agent", auto_run=False)
                 class TestAgent:
                     pass
 
@@ -920,7 +922,7 @@ class TestMeshAgentEnvironmentVariables:
         # Test port 0 (valid)
         with patch.dict("os.environ", {"MCP_MESH_HTTP_PORT": "0"}):
 
-            @mesh.agent(name="test-agent-0")
+            @mesh.agent(name="test-agent-0", auto_run=False)
             class TestAgent0:
                 pass
 
@@ -929,7 +931,7 @@ class TestMeshAgentEnvironmentVariables:
         # Test port 65535 (valid)
         with patch.dict("os.environ", {"MCP_MESH_HTTP_PORT": "65535"}):
 
-            @mesh.agent(name="test-agent-max")
+            @mesh.agent(name="test-agent-max", auto_run=False)
             class TestAgentMax:
                 pass
 
@@ -944,7 +946,7 @@ class TestMeshAgentEnvironmentVariables:
         # Test minimum valid value (1)
         with patch.dict("os.environ", {"MCP_MESH_HEALTH_INTERVAL": "1"}):
 
-            @mesh.agent(name="test-agent-min")
+            @mesh.agent(name="test-agent-min", auto_run=False)
             class TestAgentMin:
                 pass
 
@@ -960,7 +962,9 @@ class TestMeshAgentEnvironmentVariables:
         for true_value in ["true", "1", "yes", "on", "TRUE", "True"]:
             with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": true_value}):
 
-                @mesh.agent(name=f"test-agent-{true_value}", enable_http=False)
+                @mesh.agent(
+                    name=f"test-agent-{true_value}", enable_http=False, auto_run=False
+                )
                 class TestAgentTrue:
                     pass
 
@@ -971,7 +975,9 @@ class TestMeshAgentEnvironmentVariables:
         for false_value in ["false", "0", "no", "off", "FALSE", "False"]:
             with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": false_value}):
 
-                @mesh.agent(name=f"test-agent-{false_value}", enable_http=True)
+                @mesh.agent(
+                    name=f"test-agent-{false_value}", enable_http=True, auto_run=False
+                )
                 class TestAgentFalse:
                     pass
 
@@ -986,11 +992,11 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent-true", enable_http=True)
+            @mesh.agent(name="test-agent-true", enable_http=True, auto_run=False)
             class TestAgentTrue:
                 pass
 
-            @mesh.agent(name="test-agent-false", enable_http=False)
+            @mesh.agent(name="test-agent-false", enable_http=False, auto_run=False)
             class TestAgentFalse:
                 pass
 
@@ -1005,7 +1011,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent")
+            @mesh.agent(name="test-agent", auto_run=False)
             class TestAgent:
                 pass
 
@@ -1024,7 +1030,7 @@ class TestMeshAgentEnvironmentVariables:
                 match="MCP_MESH_ENABLE_HTTP environment variable must be a boolean value",
             ):
 
-                @mesh.agent(name="test-agent")
+                @mesh.agent(name="test-agent", auto_run=False)
                 class TestAgent:
                     pass
 
@@ -1036,7 +1042,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {"MCP_MESH_NAMESPACE": "production-env"}):
 
-            @mesh.agent(name="test-agent", namespace="development")
+            @mesh.agent(name="test-agent", namespace="development", auto_run=False)
             class TestAgent:
                 pass
 
@@ -1051,7 +1057,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent", namespace="custom-namespace")
+            @mesh.agent(name="test-agent", namespace="custom-namespace", auto_run=False)
             class TestAgent:
                 pass
 
@@ -1066,7 +1072,7 @@ class TestMeshAgentEnvironmentVariables:
 
         with patch.dict("os.environ", {}, clear=True):
 
-            @mesh.agent(name="test-agent")
+            @mesh.agent(name="test-agent", auto_run=False)
             class TestAgent:
                 pass
 
@@ -1081,7 +1087,7 @@ class TestDualDecoratorIntegration:
         """Test using both decorators on the same class."""
         import mesh
 
-        @mesh.agent(name="combined-agent", version="1.5.0")
+        @mesh.agent(name="combined-agent", version="1.5.0", auto_run=False)
         class CombinedAgent:
             @mesh.tool(capability="test_capability")
             def test_method(self):
@@ -1108,7 +1114,7 @@ class TestDualDecoratorIntegration:
         """Test agent with multiple mesh.tool decorated methods."""
         import mesh
 
-        @mesh.agent(name="multi-tool-agent")
+        @mesh.agent(name="multi-tool-agent", auto_run=False)
         class MultiToolAgent:
             @mesh.tool(capability="capability1", tags=["tag1"])
             def tool1(self):
@@ -1157,7 +1163,7 @@ class TestDualDecoratorIntegration:
         """Test that processor can discover tools within an agent."""
         import mesh
 
-        @mesh.agent(name="discoverable-agent")
+        @mesh.agent(name="discoverable-agent", auto_run=False)
         class DiscoverableAgent:
             @mesh.tool(capability="discover_me", tags=["discoverable"])
             def discoverable_tool(self):
@@ -1210,7 +1216,7 @@ class TestLegacyDeprecation:
         def test_tool():
             return "test"
 
-        @mesh.agent(name="registry-agent")
+        @mesh.agent(name="registry-agent", auto_run=False)
         class TestAgent:
             pass
 

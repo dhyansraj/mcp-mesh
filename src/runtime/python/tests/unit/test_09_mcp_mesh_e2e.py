@@ -2,15 +2,25 @@
 End-to-end test for McpMeshAgent positional dependency injection with @mesh.tool and @mesh.agent.
 """
 
-from unittest.mock import AsyncMock, Mock
+import os
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import MeshToolProcessor
+from mcp_mesh.runtime.processor import MeshDecoratorProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
 from mcp_mesh.types import McpMeshAgent
+
+
+@pytest.fixture(autouse=True)
+def disable_background_services():
+    """Disable background services for all tests in this module."""
+    with patch.dict(
+        os.environ, {"MCP_MESH_AUTO_RUN": "false", "MCP_MESH_ENABLE_HTTP": "false"}
+    ):
+        yield
 
 
 class TestMcpMeshAgentE2E:
@@ -120,7 +130,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor and process tools
-        processor = MeshToolProcessor(mock_registry_client)
+        processor = MeshDecoratorProcessor(mock_registry_client)
 
         # Mock HTTP proxy creation to return single-function bound proxies
         async def mock_create_http_proxy(dep_name, dep_info):
@@ -272,7 +282,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor
-        processor = MeshToolProcessor(mock_registry_client)
+        processor = MeshDecoratorProcessor(mock_registry_client)
 
         # Mock proxy creation to return single-function bound proxies
         def mock_create_stdio_proxy(dep_name, dep_info):

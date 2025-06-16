@@ -2,12 +2,22 @@
 Test the mesh.create_server() helper function.
 """
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
+
+
+@pytest.fixture(autouse=True)
+def disable_background_services():
+    """Disable background services for all tests in this module."""
+    with patch.dict(
+        os.environ, {"MCP_MESH_AUTO_RUN": "false", "MCP_MESH_ENABLE_HTTP": "false"}
+    ):
+        yield
 
 
 class TestMeshCreateServer:

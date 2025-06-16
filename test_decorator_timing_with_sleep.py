@@ -1,49 +1,123 @@
 #!/usr/bin/env python3
 """
-Test decorator processing timing - with manual sleep to keep process alive
+Test script to verify that decorators can be discovered across different scopes and timing.
 """
 
+import asyncio
 import logging
-import os
-import sys
 import time
 
-# Add source to path
-sys.path.insert(0, "src/runtime/python/src")
+# Set up logging to see the flow
+logging.basicConfig(level=logging.WARNING)  # Reduce noise
 
-logging.basicConfig(level=logging.DEBUG)
-os.environ["MCP_MESH_REGISTRY_URL"] = "http://localhost:8000"
+print("=== Testing Decorator Discovery Across Scopes ===")
 
-print("🧪 Testing decorator processing WITH manual sleep...")
-
+# Import mesh
 import mesh
+from mcp_mesh import DecoratorRegistry
+
+# Define decorators at different "times" and scopes
+print("1. Define @mesh.agent at module level")
 
 
-@mesh.agent(name="timing-test-with-sleep", auto_run=True, auto_run_interval=10)
-class TimingTestAgent:
+@mesh.agent(name="scope-test-agent", auto_run=False)
+class ModuleLevelAgent:
     pass
 
 
-@mesh.tool(capability="test1")
-def test_function_1():
-    return "Test 1"
+print("2. Define @mesh.tool at module level")
 
 
-@mesh.tool(capability="test2")
-def test_function_2():
-    return "Test 2"
+@mesh.tool(capability="module-greeting")
+def module_level_tool():
+    return "Hello from module level!"
 
 
-@mesh.tool(capability="test3")
-def test_function_3():
-    return "Test 3"
+def define_decorators_in_function():
+    """Define decorators inside a function scope"""
+    print("3. Define @mesh.tool inside function scope")
+
+    @mesh.tool(capability="function-greeting")
+    def function_scoped_tool():
+        return "Hello from function scope!"
+
+    return function_scoped_tool
 
 
-print("✅ All decorators defined")
-print("🎯 NOT calling mesh.start_auto_run_service()")
-print("🔄 Adding manual sleep to keep process alive...")
+# Call the function to define function-scoped decorator
+function_tool = define_decorators_in_function()
 
-# Manual sleep to give background processor time
-time.sleep(15)
+# Wait a bit to simulate time passing
+print("4. Sleeping for 1 second to simulate time passing...")
+time.sleep(1)
 
-print("🔚 Script ending after sleep...")
+print("5. Define another @mesh.tool after delay")
+
+
+@mesh.tool(capability="delayed-greeting")
+def delayed_tool():
+    return "Hello from delayed definition!"
+
+
+# Check what's in the registry
+print("\n=== Registry State ===")
+print(f"Mesh agents: {list(DecoratorRegistry.get_mesh_agents().keys())}")
+print(f"Mesh tools: {list(DecoratorRegistry.get_mesh_tools().keys())}")
+
+# Test processor discovery
+print("\n=== Processor Discovery Test ===")
+from mcp_mesh.runtime.processor import MeshToolProcessor
+
+
+class MockRegistryClient:
+    def __init__(self):
+        pass
+
+    async def post(self, endpoint, json=None):
+        print(f"Registry call: {endpoint}")
+
+        class MockResponse:
+            status = 201
+
+            async def json(self):
+                return {"status": "success", "dependencies_resolved": {}}
+
+        return MockResponse()
+
+
+processor = MeshToolProcessor(MockRegistryClient())
+
+# Test if processor can find all decorators regardless of scope/timing
+print("\n6. Testing processor discovery...")
+agent_config = processor._get_agent_configuration()
+print(f"Agent config found: {agent_config['name'] if agent_config else 'None'}")
+
+tools = DecoratorRegistry.get_mesh_tools()
+print(f"Tools found: {list(tools.keys())}")
+
+
+# Test the actual processing
+async def test_scoped_processing():
+    print("\n7. Testing processor.process_tools() with all discovered tools...")
+    results = await processor.process_tools(tools)
+    print(f"Processing results: {results}")
+    return all(results.values())
+
+
+success = asyncio.run(test_scoped_processing())
+print(f"\n=== Result: All tools processed successfully: {success} ===")
+
+# Test if we can discover decorators defined even later
+print("\n8. Define one more @mesh.tool after processor creation...")
+
+
+@mesh.tool(capability="post-processor-greeting")
+def post_processor_tool():
+    return "Hello from post-processor definition!"
+
+
+final_tools = DecoratorRegistry.get_mesh_tools()
+print(f"Final tools count: {len(final_tools)}")
+print(f"All tool names: {list(final_tools.keys())}")
+
+print("\n=== Scope and Discovery Test Complete ===")

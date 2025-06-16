@@ -84,6 +84,12 @@ class DecoratorRegistry:
         cls._mesh_tools[func.__name__] = decorated_func
 
     @classmethod
+    def update_mesh_tool_function(cls, func_name: str, new_func: Callable) -> None:
+        """Update the function reference for a registered mesh tool."""
+        if func_name in cls._mesh_tools:
+            cls._mesh_tools[func_name].function = new_func
+
+    @classmethod
     def register_mesh_resource(cls, func: Callable, metadata: dict[str, Any]) -> None:
         """Register a @mesh_resource decorated function (future use)."""
         decorated_func = DecoratedFunction(

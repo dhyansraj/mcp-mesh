@@ -231,11 +231,38 @@ This document provides a comprehensive analysis of all test functions in each te
 - `test_multiple_tools_single_fastapi_server` (async) - Test that multiple functions can be served by a single FastAPI server.
 - `test_health_endpoints_availability` (async) - Test that all expected health endpoints are available (/health, /ready, /livez, /mesh/info, /mesh/tools, /metrics).
 
+### 11. test_11_mcp_mesh_create_server.py
+
+**Test Classes:** 1
+**Test Functions:** 6
+
+#### TestMeshCreateServer
+
+- `test_create_server_with_explicit_name` - Test creating server with explicit name.
+- `test_create_server_uses_mesh_agent_name` - Test that create_server uses @mesh.agent name when available.
+- `test_create_server_fallback_name` - Test that create_server uses fallback name when no agent is defined.
+- `test_create_server_import_error` - Test that create_server raises helpful error when FastMCP not available.
+- `test_create_server_prefers_explicit_name_over_agent` - Test that explicit name takes precedence over @mesh.agent name.
+- `test_create_server_with_multiple_agents` - Test that create_server uses first agent when multiple are defined.
+
+### 12. test_12_mcp_mesh_processor_agent_config.py
+
+**Test Classes:** 1
+**Test Functions:** 5
+
+#### TestMeshToolProcessorAgentConfig
+
+- `test_processor_uses_agent_config_values` (async) - Test that processor uses agent config values in registration.
+- `test_processor_uses_defaults_when_no_agent_config` (async) - Test that processor uses defaults when no @mesh.agent is present.
+- `test_processor_uses_agent_config_with_environment_variables` (async) - Test that processor uses agent config values that respect environment variables.
+- `test_processor_enable_http_affects_wrapper_setup` (async) - Test that enable_http setting affects HTTP wrapper setup.
+- `test_processor_enable_http_false_skips_wrapper_setup` (async) - Test that enable_http=False skips HTTP wrapper setup.
+
 ## Summary Statistics
 
-**Total Test Files:** 10 (after removing 10 obsolete files)
-**Total Test Classes:** 26
-**Total Test Functions:** 114 (comprehensive core functionality)
+**Total Test Files:** 12 (after removing 10 obsolete files and adding 2 new test files)
+**Total Test Classes:** 28
+**Total Test Functions:** 125 (comprehensive core functionality)
 
 ## Redundancy Analysis Summary
 
@@ -281,6 +308,8 @@ This document provides a comprehensive analysis of all test functions in each te
 8. **test_08_mcp_mesh_registry_multi_tool.py** - 11 functions (Multi-tool registry features)
 9. **test_09_mcp_mesh_e2e.py** - 3 functions (End-to-end integration)
 10. **test_10_mcp_mesh_fastapi.py** - 3 functions (FastAPI HTTP endpoint validation)
+11. **test_11_mcp_mesh_create_server.py** - 6 functions (mesh.create_server() helper functionality)
+12. **test_12_mcp_mesh_processor_agent_config.py** - 5 functions (Agent configuration in MeshToolProcessor)
 
 ### 🔧 Dependency Injection Test Progression Logic:
 
@@ -325,7 +354,8 @@ This document provides a comprehensive analysis of all test functions in each te
 ### Benefits of Test Suite Cleanup:
 
 - **Reduced Redundancy:** Eliminated 10 obsolete test files
-- **Focused Coverage:** 114 focused test functions covering core functionality
+- **Focused Coverage:** 125 focused test functions covering core functionality
 - **Better Organization:** Numbered test files for clear execution order
 - **Maintainability:** Removed deprecated API tests and consolidated functionality
 - **Performance:** Faster test execution with no redundant tests
+- **Complete Coverage:** Added comprehensive testing for mesh.create_server() and agent configuration

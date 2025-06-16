@@ -1,46 +1,107 @@
 #!/usr/bin/env python3
 """
-Test decorator processing timing - what happens without mesh.start_auto_run_service()?
+Test script to understand the timing of decorator registration and MeshToolProcessor processing.
 """
 
+import asyncio
 import logging
-import os
-import sys
 
-# Add source to path
-sys.path.insert(0, "src/runtime/python/src")
+# Set up logging to see the flow
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+)
 
-logging.basicConfig(level=logging.DEBUG)
-os.environ["MCP_MESH_REGISTRY_URL"] = "http://localhost:8000"
-
-print("🧪 Testing decorator processing without auto-run...")
-
+print("=== STEP 1: Import mesh ===")
 import mesh
 
+print("=== STEP 2: Check DecoratorRegistry state ===")
+from mcp_mesh import DecoratorRegistry
 
-@mesh.agent(name="timing-test-service", auto_run=True, auto_run_interval=10)
-class TimingTestAgent:
+print(f"Mesh agents: {list(DecoratorRegistry.get_mesh_agents().keys())}")
+print(f"Mesh tools: {list(DecoratorRegistry.get_mesh_tools().keys())}")
+
+print("=== STEP 3: Define @mesh.agent decorator ===")
+
+
+@mesh.agent(name="test-agent", auto_run=False)
+class TestAgent:
     pass
 
 
-@mesh.tool(capability="test1")
-def test_function_1():
-    return "Test 1"
+print("=== STEP 4: Check DecoratorRegistry after @mesh.agent ===")
+print(f"Mesh agents: {list(DecoratorRegistry.get_mesh_agents().keys())}")
+print(f"Mesh tools: {list(DecoratorRegistry.get_mesh_tools().keys())}")
+
+print("=== STEP 5: Define @mesh.tool decorator ===")
 
 
-@mesh.tool(capability="test2")
-def test_function_2():
-    return "Test 2"
+@mesh.tool(capability="greeting")
+def say_hello():
+    return "Hello!"
 
 
-@mesh.tool(capability="test3")
-def test_function_3():
-    return "Test 3"
+print("=== STEP 6: Check DecoratorRegistry after @mesh.tool ===")
+print(f"Mesh agents: {list(DecoratorRegistry.get_mesh_agents().keys())}")
+print(f"Mesh tools: {list(DecoratorRegistry.get_mesh_tools().keys())}")
+
+print("=== STEP 7: Check if MeshToolProcessor would find decorators ===")
+# Simulate what MeshToolProcessor._get_agent_configuration() does
+mesh_agents = DecoratorRegistry.get_mesh_agents()
+if mesh_agents:
+    for func_name, decorated_func in mesh_agents.items():
+        metadata = decorated_func.metadata
+        print(f"Found @mesh.agent config: {metadata}")
+else:
+    print("No @mesh.agent decorators found by processor")
+
+mesh_tools = DecoratorRegistry.get_mesh_tools()
+if mesh_tools:
+    for func_name, decorated_func in mesh_tools.items():
+        metadata = decorated_func.metadata
+        print(f"Found @mesh.tool: {func_name} with metadata: {metadata}")
+else:
+    print("No @mesh.tool decorators found by processor")
+
+print("=== STEP 8: Import and check runtime processor ===")
+from mcp_mesh.runtime.processor import MeshToolProcessor
 
 
-print("✅ All decorators defined")
-print("🎯 NOT calling mesh.start_auto_run_service()")
-print("📊 Let's see what decorator processing completed...")
+# Create a mock registry client
+class MockRegistryClient:
+    def __init__(self):
+        pass
 
-# Script will exit here - let's see what logs we get
-print("🔚 Script ending normally...")
+    async def post(self, endpoint, json=None):
+        print(f"MockRegistryClient.post({endpoint}, {json})")
+
+        class MockResponse:
+            status = 201
+
+            async def json(self):
+                return {"status": "success", "dependencies_resolved": {}}
+
+        return MockResponse()
+
+
+mock_client = MockRegistryClient()
+processor = MeshToolProcessor(mock_client)
+
+print("=== STEP 9: Test processor._get_agent_configuration() ===")
+agent_config = processor._get_agent_configuration()
+print(f"Agent config found by processor: {agent_config}")
+
+print("=== STEP 10: Test processor.process_tools() ===")
+
+
+async def test_processing():
+    tools = DecoratorRegistry.get_mesh_tools()
+    print(f"Tools to process: {list(tools.keys())}")
+
+    results = await processor.process_tools(tools)
+    print(f"Processing results: {results}")
+
+
+# Run the async test
+asyncio.run(test_processing())
+
+print("=== TIMING ANALYSIS COMPLETE ===")

@@ -63,7 +63,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     if param_count > 1:
         if not mesh_positions:
             logger.warning(
-                f"Function '{func_name}' has {param_count} parameters but none are "
+                f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
                 f"typed as McpMeshAgent. Skipping injection of {len(dependencies)} dependencies. "
                 f"Consider typing dependency parameters as McpMeshAgent."
             )
@@ -125,9 +125,9 @@ class DependencyInjector:
             if name in self._dependency_mapping:
                 for func_id in self._dependency_mapping[name]:
                     if func_id in self._function_registry:
-                        func_wrapper = self._function_registry[func_id]
-                        if hasattr(func_wrapper, "_update_dependency"):
-                            func_wrapper._update_dependency(name, instance)
+                        func = self._function_registry[func_id]
+                        if hasattr(func, "_mesh_update_dependency"):
+                            func._mesh_update_dependency(name, instance)
 
     async def unregister_dependency(self, name: str) -> None:
         """Remove a dependency (e.g., service went down)."""
@@ -140,9 +140,9 @@ class DependencyInjector:
                 if name in self._dependency_mapping:
                     for func_id in self._dependency_mapping[name]:
                         if func_id in self._function_registry:
-                            func_wrapper = self._function_registry[func_id]
-                            if hasattr(func_wrapper, "_update_dependency"):
-                                func_wrapper._update_dependency(name, None)
+                            func = self._function_registry[func_id]
+                            if hasattr(func, "_mesh_update_dependency"):
+                                func._mesh_update_dependency(name, None)
 
     def get_dependency(self, name: str) -> Any | None:
         """Get current instance of a dependency."""
@@ -152,11 +152,11 @@ class DependencyInjector:
         self, func: Callable, dependencies: list[str]
     ) -> Callable:
         """
-        Create a wrapper that handles dynamic dependency injection.
+        Create in-place dependency injection by modifying the original function.
 
-        This wrapper:
-        1. Analyzes function signature using smart injection strategy
-        2. Injects dependencies positionally based on analysis
+        This approach:
+        1. Preserves the original function pointer for FastMCP
+        2. Adds dynamic dependency injection capability
         3. Can be updated when topology changes
         4. Handles missing dependencies gracefully
         5. Logs warnings for configuration issues
@@ -172,144 +172,113 @@ class DependencyInjector:
                 self._dependency_mapping[dep] = set()
             self._dependency_mapping[dep].add(func_id)
 
-        # Store current dependency values (can be updated)
-        injected_deps = {}
+        # Store current dependency values on the function itself
+        if not hasattr(func, "_mesh_injected_deps"):
+            func._mesh_injected_deps = {}
 
+        # Store original implementation if not already stored
+        if not hasattr(func, "_mesh_original_func"):
+            func._mesh_original_func = func
+
+        # Create a wrapper function that handles dependency injection
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
-            # If no mesh positions to inject into, call function normally
+        def dependency_wrapper(*args, **kwargs):
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: Function {func.__name__} called")
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: args={args}, kwargs={kwargs}")
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: mesh_positions={mesh_positions}")
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}")
+
+            # If no mesh positions to inject into, call original function
             if not mesh_positions:
-                return func(*args, **kwargs)
+                logger.debug(
+                    "🔧 DEPENDENCY_WRAPPER: No mesh positions, calling original"
+                )
+                return func._mesh_original_func(*args, **kwargs)
 
             # Get function signature
             sig = inspect.signature(func)
             params = list(sig.parameters.keys())
-
-            # Strategy: If there are positional args, reconstruct args list
-            # If all kwargs, inject into kwargs
             final_kwargs = kwargs.copy()
 
-            if args:
-                # We have positional args, need to reconstruct the args list properly
-                final_args = []
-                original_args_used = 0
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: params={params}")
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: original kwargs={kwargs}")
 
-                for param_index in range(len(params)):
-                    param_name = params[param_index]
-
-                    # Check if this parameter was provided in kwargs
-                    if param_name in kwargs:
-                        # User provided this as kwarg, skip it in args processing
-                        continue
-
-                    # Check if this is a dependency position
-                    if param_index in mesh_positions:
-                        # This is a dependency parameter - inject it
-                        dep_index = mesh_positions.index(param_index)
-                        if dep_index < len(dependencies):
-                            dep_name = dependencies[dep_index]
-
-                            # Get the dependency to inject
-                            if dep_name in injected_deps:
-                                dependency = injected_deps[dep_name]
-                            else:
-                                dependency = self.get_dependency(dep_name)
-
-                            final_args.append(dependency)
-                        else:
-                            # No more dependencies to inject, use None or default
-                            final_args.append(None)
-                    else:
-                        # This is a regular parameter - use provided arg if available
-                        if original_args_used < len(args):
-                            final_args.append(args[original_args_used])
-                            original_args_used += 1
-                        else:
-                            # No more args available, function will use default or kwargs
-                            break
-
-                return func(*final_args, **final_kwargs)
-            else:
-                # No positional args, inject dependencies as kwargs
-                for dep_index, param_position in enumerate(mesh_positions):
-                    if dep_index < len(dependencies):
-                        dep_name = dependencies[dep_index]
-                        param_name = params[param_position]
-
-                        # Only inject if the parameter wasn't explicitly provided
-                        if (
-                            param_name not in final_kwargs
-                            or final_kwargs.get(param_name) is None
-                        ):
-                            # Get the dependency to inject
-                            if dep_name in injected_deps:
-                                dependency = injected_deps[dep_name]
-                            else:
-                                dependency = self.get_dependency(dep_name)
-
-                            final_kwargs[param_name] = dependency
-
-                return func(**final_kwargs)
-
-        @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            # If no mesh positions to inject into, call function normally
-            if not mesh_positions:
-                return await func(*args, **kwargs)
-
-            # Get function signature
-            sig = inspect.signature(func)
-            params = list(sig.parameters.keys())
-
-            # Create a copy of kwargs to modify
-            final_kwargs = kwargs.copy()
-
-            # Inject dependencies into their designated parameter positions
+            # Inject dependencies as kwargs
+            injected_count = 0
             for dep_index, param_position in enumerate(mesh_positions):
                 if dep_index < len(dependencies):
                     dep_name = dependencies[dep_index]
                     param_name = params[param_position]
 
+                    logger.debug(
+                        f"🔧 DEPENDENCY_WRAPPER: Processing dep {dep_index}: {dep_name} -> {param_name}"
+                    )
+
                     # Only inject if the parameter wasn't explicitly provided
-                    if param_name not in final_kwargs:
-                        # Get the dependency to inject
-                        if dep_name in injected_deps:
-                            dependency = injected_deps[dep_name]
-                        else:
+                    if (
+                        param_name not in final_kwargs
+                        or final_kwargs.get(param_name) is None
+                    ):
+                        # Get the dependency from wrapper's storage
+                        dependency = dependency_wrapper._mesh_injected_deps.get(
+                            dep_name
+                        )
+                        logger.debug(
+                            f"🔧 DEPENDENCY_WRAPPER: From wrapper storage: {dependency}"
+                        )
+
+                        if dependency is None:
                             dependency = self.get_dependency(dep_name)
+                            logger.debug(
+                                f"🔧 DEPENDENCY_WRAPPER: From global storage: {dependency}"
+                            )
 
-                        # Check if this parameter position has a positional argument
-                        if param_position < len(args):
-                            # User provided positional arg, don't inject
-                            continue
-                        else:
-                            # Inject as keyword argument
-                            final_kwargs[param_name] = dependency
+                        final_kwargs[param_name] = dependency
+                        injected_count += 1
+                        logger.debug(
+                            f"🔧 DEPENDENCY_WRAPPER: Injected {dep_name} as {param_name}"
+                        )
+                    else:
+                        logger.debug(
+                            f"🔧 DEPENDENCY_WRAPPER: Skipping {param_name} - already provided"
+                        )
 
-            return await func(*args, **final_kwargs)
+            logger.debug(
+                f"🔧 DEPENDENCY_WRAPPER: Injected {injected_count} dependencies"
+            )
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}")
 
-        # Choose appropriate wrapper
-        wrapper = async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+            result = func._mesh_original_func(*args, **final_kwargs)
+            logger.debug(f"🔧 DEPENDENCY_WRAPPER: Original returned: {type(result)}")
+            return result
+
+        # Store dependency state on wrapper
+        dependency_wrapper._mesh_injected_deps = {}
 
         # Add update method to wrapper
         def update_dependency(name: str, instance: Any | None) -> None:
             """Called when a dependency changes."""
             if instance is None:
-                injected_deps.pop(name, None)
+                dependency_wrapper._mesh_injected_deps.pop(name, None)
                 logger.debug(f"Removed {name} from {func_id}")
             else:
-                injected_deps[name] = instance
+                dependency_wrapper._mesh_injected_deps[name] = instance
                 logger.debug(f"Updated {name} for {func_id}")
+                logger.debug(
+                    f"🔗 Wrapper pointer receiving dependency: {dependency_wrapper} at {hex(id(dependency_wrapper))}"
+                )
 
-        wrapper._update_dependency = update_dependency
-        wrapper._injected_deps = injected_deps
-        wrapper._original_func = func
-        wrapper._dependencies = dependencies
+        # Store update method on wrapper
+        dependency_wrapper._mesh_update_dependency = update_dependency
+        dependency_wrapper._mesh_dependencies = dependencies
+        dependency_wrapper._mesh_positions = mesh_positions
+        dependency_wrapper._mesh_original_func = func
 
-        # Register this wrapper
-        self._function_registry[func_id] = wrapper
+        # Register this wrapper for dependency updates
+        self._function_registry[func_id] = dependency_wrapper
 
-        return wrapper
+        # Return the wrapper (which FastMCP will register)
+        return dependency_wrapper
 
 
 # Global injector instance

@@ -27,11 +27,15 @@ class RegistryClient:
     def __init__(
         self, url: str | None = None, timeout: int = 30, retry_attempts: int = 3
     ):
-        self.url = url or self._get_registry_url_from_env()
+        env_url = self._get_registry_url_from_env()
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"🔥 DEBUG: RegistryClient.__init__ called with url={url}")
+        self.logger.info(f"🔥 DEBUG: Environment URL: {env_url}")
+        self.url = url or env_url
+        self.logger.info(f"🔥 DEBUG: Final URL set to: {self.url}")
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self._session: Any | None = None
-        self.logger = logging.getLogger(__name__)
 
     async def _get_session(self) -> Any:
         """Get or create HTTP session."""
@@ -259,43 +263,58 @@ class RegistryClient:
         self, method: str, endpoint: str, payload: dict | None = None
     ) -> dict | None:
         """Make HTTP request to registry with retry logic."""
-        self.logger.debug(f"Making {method} request to {endpoint}")
-        self.logger.debug(f"Payload: {payload}")
+        self.logger.info(f"🔥 DEBUG: Making {method} request to {endpoint}")
+        self.logger.info(f"🔥 DEBUG: Registry URL: {self.url}")
+        self.logger.info(f"🔥 DEBUG: Full URL will be: {self.url}{endpoint}")
+        self.logger.info(f"🔥 DEBUG: Payload: {payload}")
 
         if aiohttp is None:
             # Fallback mode: simulate successful requests
-            self.logger.warning("aiohttp is None, using fallback mode")
+            self.logger.warning("🔥 DEBUG: aiohttp is None, using fallback mode")
             return {"status": "ok", "message": "fallback mode"}
 
         try:
             session = await self._get_session()
             url = f"{self.url}{endpoint}"
-            self.logger.debug(f"Full URL: {url}")
+            self.logger.info(f"🔥 DEBUG: Full URL: {url}")
 
             for attempt in range(self.retry_attempts):
                 try:
-                    self.logger.debug(f"Attempt {attempt + 1}/{self.retry_attempts}")
+                    self.logger.info(
+                        f"🔥 DEBUG: Attempt {attempt + 1}/{self.retry_attempts}"
+                    )
 
                     if method == "GET":
+                        self.logger.info(f"🔥 DEBUG: Making GET request to {url}")
                         async with session.get(url) as response:
-                            self.logger.debug(f"GET response status: {response.status}")
+                            self.logger.info(
+                                f"🔥 DEBUG: GET response status: {response.status}"
+                            )
                             if response.status == 200:
-                                return await response.json()
+                                result = await response.json()
+                                self.logger.info(
+                                    f"🔥 DEBUG: GET success, result: {result}"
+                                )
+                                return result
                             else:
                                 raise RegistryConnectionError(
                                     f"Registry returned {response.status}"
                                 )
 
                     elif method == "POST":
-                        self.logger.debug("Sending POST request...")
+                        self.logger.info("🔥 DEBUG: Sending POST request...")
                         try:
-                            self.logger.debug("🔄 AIOHTTP POST REQUEST")
-                            self.logger.debug(f"   URL: {url}")
-                            self.logger.debug(f"   Payload: {payload}")
+                            self.logger.info("🔥 DEBUG: 🔄 AIOHTTP POST REQUEST")
+                            self.logger.info(f"🔥 DEBUG:    URL: {url}")
+                            self.logger.info(f"🔥 DEBUG:    Payload: {payload}")
 
                             async with session.post(url, json=payload) as response:
-                                self.logger.debug("🎯 AIOHTTP RESPONSE RECEIVED")
-                                self.logger.debug(f"   Status: {response.status}")
+                                self.logger.info(
+                                    "🔥 DEBUG: 🎯 AIOHTTP RESPONSE RECEIVED"
+                                )
+                                self.logger.info(
+                                    f"🔥 DEBUG:    Status: {response.status}"
+                                )
 
                                 if response.status in [200, 201]:
                                     response_data = (

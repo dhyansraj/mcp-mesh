@@ -40,10 +40,20 @@ def patch_fastmcp():
 
     # Import FastMCP class
     try:
-        from mcp.server.fastmcp import FastMCP
+        from fastmcp import FastMCP
+
+        logger.info("🆕 FastMCP Integration: Using NEW FastMCP library (fastmcp)")
     except ImportError:
-        logger.warning("FastMCP not available, skipping patches")
-        return
+        try:
+            # Fallback to old version
+            from mcp.server.fastmcp import FastMCP
+
+            logger.info(
+                "🔄 FastMCP Integration: Using OLD FastMCP library (mcp.server.fastmcp)"
+            )
+        except ImportError:
+            logger.warning("FastMCP not available, skipping patches")
+            return
 
     # Store original methods
     _original_call_tool = ToolManager.call_tool
@@ -63,6 +73,9 @@ def patch_fastmcp():
 
         # Check if the function has dependency metadata
         fn = tool.fn
+        logger.debug(
+            f"🎯 FastMCP calling function: {fn.__name__} at {hex(id(fn))} | Full function: {fn}"
+        )
         if hasattr(fn, "_mesh_agent_dependencies"):
             dependencies = fn._mesh_agent_dependencies
             injector = get_global_injector()
@@ -101,11 +114,26 @@ def patch_fastmcp():
 
         # Create wrapper that stores server reference
         def wrapper(func):
+            logger.debug(
+                f"🔍 FastMCP patched_tool received function: {func} at {hex(id(func))}"
+            )
+
             # Check if @mesh.tool was applied first (correct order)
             if hasattr(func, "_mesh_tool_metadata"):
                 logger.debug(
                     f"✅ Correct decorator order for '{func.__name__}': @mesh.tool() applied before @server.tool()"
                 )
+
+                # Check if this is a wrapper from mesh.tool
+                if hasattr(func, "_original_func"):
+                    original = func._original_func
+                    logger.debug("🔍 Function is a mesh.tool wrapper:")
+                    logger.debug(f"  🔹 Wrapper: {func} at {hex(id(func))}")
+                    logger.debug(f"  🔸 Original: {original} at {hex(id(original))}")
+                else:
+                    logger.debug(
+                        "🔍 Function has mesh metadata but no _original_func - might be original"
+                    )
             else:
                 # Mark that FastMCP processed this function first (wrong order)
                 func._fastmcp_processed_first = True
@@ -121,6 +149,7 @@ def patch_fastmcp():
             # Also store on function itself
             func._mcp_server = self
             logger.debug(f"Registered function {func.__name__} with server {self.name}")
+            logger.debug(f"🏷️  FastMCP will cache: {func} at {hex(id(func))}")
 
             # CRITICAL: Check if this function has a pending mesh.tool injection wrapper
             # If so, replace the FastMCP cached function immediately
@@ -141,6 +170,7 @@ def patch_fastmcp():
                         f"Error executing delayed replacement for {func.__name__}: {e}"
                     )
 
+            logger.debug(f"🔍 FastMCP decorated function result: {decorated}")
             return decorated
 
         return wrapper
@@ -167,11 +197,15 @@ def unpatch_fastmcp():
 
     if _original_add_tool:
         try:
-            from mcp.server.fastmcp import FastMCP
-
-            FastMCP.tool = _original_add_tool
+            from fastmcp import FastMCP
         except ImportError:
-            pass
+            try:
+                from mcp.server.fastmcp import FastMCP
+            except ImportError:
+                pass
+
+        if "FastMCP" in locals():
+            FastMCP.tool = _original_add_tool
 
     _patched = False
     logger.info("FastMCP patches removed")

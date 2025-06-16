@@ -16,7 +16,7 @@ import mesh
 from mcp_mesh import McpMeshAgent
 
 
-@mesh.agent(name="hello-world")
+@mesh.agent(name="hello-world", http_port=9090)
 class HelloWorldAgent:
     """Hello World agent demonstrating MCP Mesh features."""
 
@@ -76,12 +76,116 @@ def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
 
     try:
         # This will call the general system info (not disk info) due to smart tag matching!
-        system_info = info.call()
+        system_info = info.invoke()
         uptime = system_info.get("uptime_formatted", "unknown")
         server_name = system_info.get("server_name", "unknown")
         return f"👋 Hello from smart MCP Mesh! Server: {server_name}, Uptime: {uptime}"
     except Exception as e:
         return f"👋 Hello from smart MCP Mesh! (Error getting info: {e})"
+
+
+# ===== COMPREHENSIVE DASHBOARD =====
+# Chains multiple agents together for a complete system report
+
+
+@mesh.tool(
+    capability="system_dashboard",
+    dependencies=[
+        "system_report",  # From system-agent (which chains to weather-agent)
+    ],
+    description="Complete system dashboard - demonstrates clean agent chaining",
+)
+def generate_system_dashboard(
+    system_report: McpMeshAgent | None = None,
+) -> str:
+    """
+    Generate a comprehensive system dashboard using clean agent chaining.
+
+    This demonstrates elegant MCP Mesh distributed dependency injection:
+    hello_world -> system_agent -> weather_agent
+
+    The system agent does the heavy lifting of coordinating multiple services,
+    making this function clean and focused.
+    """
+    dashboard_lines = []
+    dashboard_lines.append("=" * 65)
+    dashboard_lines.append("🎯 MCP MESH DISTRIBUTED SYSTEM DASHBOARD")
+    dashboard_lines.append("=" * 65)
+    dashboard_lines.append("")
+
+    if system_report is not None:
+        try:
+            report = system_report.invoke()
+
+            # Header with greeting
+            user_name = "John"  # Could be parameterized
+            dashboard_lines.append(f"👋 Hello {user_name}!")
+            dashboard_lines.append("")
+
+            # System status overview
+            system = report.get("system", {})
+            dashboard_lines.append("🖥️  SYSTEM STATUS:")
+            dashboard_lines.append("   All systems in your data center look good!")
+            dashboard_lines.append(f"   Server: {system.get('server_name', 'Unknown')}")
+            dashboard_lines.append(
+                f"   Uptime: {system.get('uptime_formatted', 'Unknown')}"
+            )
+            dashboard_lines.append(
+                f"   Current Time: {report.get('timestamp', 'Unknown')}"
+            )
+            dashboard_lines.append(f"   Version: {system.get('version', 'Unknown')}")
+            capabilities = system.get("capabilities_provided", [])
+            dashboard_lines.append(
+                f"   Active Services: {len(capabilities)} ({', '.join(capabilities[:3])}...)"
+            )
+            dashboard_lines.append("")
+
+            # Weather report
+            weather = report.get("weather", {})
+            if "error" not in weather:
+                location = weather.get("location", "Unknown")
+                dashboard_lines.append(f"🌤️  WEATHER REPORT FOR {location.upper()}:")
+                dashboard_lines.append(
+                    f"   {report.get('weather_summary', 'No weather data')}"
+                )
+
+                # Additional weather details
+                feels_like = weather.get("feels_like_f")
+                humidity = weather.get("humidity_percent")
+                wind = weather.get("wind_speed_mph")
+                conditions = weather.get("weather_description", "Unknown")
+
+                if feels_like is not None:
+                    dashboard_lines.append(f"   Feels like: {feels_like}°F")
+                if humidity is not None:
+                    dashboard_lines.append(f"   Humidity: {humidity}%")
+                if wind is not None:
+                    dashboard_lines.append(f"   Wind: {wind} mph")
+                dashboard_lines.append(f"   Conditions: {conditions}")
+
+                location_method = weather.get("location_method", "unknown")
+                dashboard_lines.append(f"   Location detection: {location_method}")
+            else:
+                dashboard_lines.append("🌤️  WEATHER REPORT:")
+                dashboard_lines.append(
+                    f"   {weather.get('error', 'Weather service unavailable')}"
+                )
+
+        except Exception as e:
+            dashboard_lines.append(f"❌ Error generating report: {e}")
+    else:
+        dashboard_lines.append("❌ System report service unavailable")
+        dashboard_lines.append("   Cannot generate comprehensive dashboard")
+
+    dashboard_lines.append("")
+    dashboard_lines.append("=" * 65)
+    dashboard_lines.append("✨ Powered by MCP Mesh Distributed Agent Framework")
+    dashboard_lines.append(
+        "🔗 Clean Agent Chain: hello-world → system-agent → weather-agent"
+    )
+    dashboard_lines.append("=" * 65)
+
+    return "\n".join(dashboard_lines)
 
 
 # ===== DEPENDENCY TEST FUNCTION =====
@@ -128,7 +232,7 @@ def test_dependencies(
     if info is not None:
         try:
             disk_info = (
-                info.call()
+                info.invoke()
             )  # This should return disk/OS info, not general system info
             info_type = disk_info.get("info_type", "unknown")
             result["disk_info_service"] = (

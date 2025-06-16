@@ -3,7 +3,9 @@ Unit test for dependency injection through MCP protocol with mocked registry.
 """
 
 import functools
+import os
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -73,6 +75,19 @@ def working_mesh_agent(capability: str, dependencies: list[str] = None, **kwargs
 
 class TestDependencyInjectionMCP:
     """Test dependency injection through MCP protocol."""
+
+    @pytest.fixture(autouse=True)
+    def disable_background_services(self):
+        """Disable background services for all tests in this class."""
+        with patch.dict(
+            os.environ,
+            {
+                "MCP_MESH_AUTO_RUN": "false",
+                "MCP_MESH_ENABLE_HTTP": "false",
+                "MCP_MESH_HEALTH_INTERVAL": "0",
+            },
+        ):
+            yield
 
     def test_decorator_order_works_both_ways(self):
         """Test that both decorator orders now work with FastMCP patching."""

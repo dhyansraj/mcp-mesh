@@ -4,8 +4,9 @@ Unit tests for the redesigned registration and dependency injection system.
 These tests define the expected behavior BEFORE implementation (TDD).
 """
 
+import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jsonschema
 import pytest
@@ -15,6 +16,15 @@ from mcp.server.fastmcp import FastMCP
 import mesh
 from mcp_mesh.runtime.registry_client import RegistryClient
 from mcp_mesh.types import McpMeshAgent
+
+
+@pytest.fixture(autouse=True)
+def disable_background_services():
+    """Disable background services for all tests in this module."""
+    with patch.dict(
+        os.environ, {"MCP_MESH_AUTO_RUN": "false", "MCP_MESH_ENABLE_HTTP": "false"}
+    ):
+        yield
 
 
 def load_openapi_schema():

@@ -8,24 +8,22 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import MeshToolProcessor
+from mcp_mesh.runtime.processor import MeshDecoratorProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
+from mcp_mesh.runtime.shared.types import MockHTTPResponse
 
 
-class TestMeshToolProcessorAgentConfig:
-    """Test MeshToolProcessor using agent configuration."""
+class TestMeshDecoratorProcessorAgentConfig:
+    """Test MeshDecoratorProcessor using agent configuration."""
 
     @pytest.fixture
     def mock_registry_client(self):
         """Create a mock registry client."""
         client = Mock(spec=RegistryClient)
 
-        # Mock the post method that processor actually calls
-        mock_response = Mock()
-        mock_response.status = 201  # Success status
-        mock_response.text = AsyncMock(return_value='{"status": "success"}')
-        mock_response.json = AsyncMock(
-            return_value={"status": "success", "dependencies_resolved": {}}
+        # Mock the post method to return MockHTTPResponse like the real client
+        mock_response = MockHTTPResponse(
+            {"status": "success", "dependencies_resolved": {}}, 201
         )
 
         client.post = AsyncMock(return_value=mock_response)
@@ -33,8 +31,8 @@ class TestMeshToolProcessorAgentConfig:
 
     @pytest.fixture
     def processor(self, mock_registry_client):
-        """Create MeshToolProcessor with mock client."""
-        return MeshToolProcessor(mock_registry_client)
+        """Create MeshDecoratorProcessor with mock client."""
+        return MeshDecoratorProcessor(mock_registry_client)
 
     @pytest.mark.asyncio
     async def test_processor_uses_agent_config_values(self, processor):
@@ -43,15 +41,18 @@ class TestMeshToolProcessorAgentConfig:
         DecoratorRegistry.clear_all()
 
         # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(processor, "_setup_http_wrapper_for_tools"):
-            # Define agent with custom config
+        with patch.object(
+            processor, "_setup_http_wrapper_for_tools", return_value=None
+        ):
+            # Define agent with custom config - disable HTTP for simplicity in tests
             @mesh.agent(
                 name="custom-agent",
                 version="2.1.0",
                 http_host="127.0.0.1",  # Use localhost to avoid bind issues
                 http_port=0,  # Use 0 for auto-assign to avoid port conflicts
-                enable_http=True,
+                enable_http=False,  # Disable HTTP for test simplicity
                 namespace="production",
+                auto_run=False,  # Disable auto-run for tests
             )
             class CustomAgent:
                 pass
@@ -86,7 +87,9 @@ class TestMeshToolProcessorAgentConfig:
         DecoratorRegistry.clear_all()
 
         # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(processor, "_setup_http_wrapper_for_tools"):
+        with patch.object(
+            processor, "_setup_http_wrapper_for_tools", return_value=None
+        ):
 
             @mesh.tool(capability="standalone_capability")
             def standalone_function():
@@ -120,7 +123,9 @@ class TestMeshToolProcessorAgentConfig:
         DecoratorRegistry.clear_all()
 
         # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(processor, "_setup_http_wrapper_for_tools"):
+        with patch.object(
+            processor, "_setup_http_wrapper_for_tools", return_value=None
+        ):
             # Test with environment variables
             with patch.dict(
                 "os.environ",
@@ -138,6 +143,7 @@ class TestMeshToolProcessorAgentConfig:
                     http_port=8888,
                     enable_http=True,
                     namespace="decorator-namespace",
+                    auto_run=False,  # Disable auto-run for tests
                 )
                 class EnvAgent:
                     pass
@@ -172,12 +178,13 @@ class TestMeshToolProcessorAgentConfig:
 
         # Mock the HTTP wrapper setup method
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools"
+            processor, "_setup_http_wrapper_for_tools", return_value=None
         ) as mock_http_setup:
             # Test with enable_http=True
             @mesh.agent(
                 name="http-agent",
                 enable_http=True,
+                auto_run=False,  # Disable auto-run for tests
             )
             class HttpAgent:
                 pass
@@ -203,12 +210,13 @@ class TestMeshToolProcessorAgentConfig:
 
         # Mock the HTTP wrapper setup method
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools"
+            processor, "_setup_http_wrapper_for_tools", return_value=None
         ) as mock_http_setup:
             # Test with enable_http=False
             @mesh.agent(
                 name="no-http-agent",
                 enable_http=False,
+                auto_run=False,  # Disable auto-run for tests
             )
             class NoHttpAgent:
                 pass

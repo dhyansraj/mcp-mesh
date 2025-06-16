@@ -53,9 +53,19 @@ def create_server(name: str | None = None) -> "FastMCP":
             return "Hello!"
     """
     try:
-        from mcp.server.fastmcp import FastMCP
+        from fastmcp import FastMCP
+
+        print("🆕 Using NEW FastMCP library (fastmcp)")
     except ImportError:
-        raise ImportError("FastMCP not available. Install with: pip install mcp")
+        try:
+            # Fallback to old version
+            from mcp.server.fastmcp import FastMCP
+
+            print("🔄 Using OLD FastMCP library (mcp.server.fastmcp)")
+        except ImportError:
+            raise ImportError(
+                "FastMCP not available. Install with: pip install fastmcp"
+            )
 
     # Try to get agent name from existing @mesh.agent decorators
     if name is None:

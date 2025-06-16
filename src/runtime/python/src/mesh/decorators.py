@@ -93,9 +93,14 @@ def _attempt_fastmcp_replacement(target, wrapped) -> bool:
         func_name = target.__name__
         replaced = False
 
+        logger.debug(f"🔧 Attempting FastMCP replacement for '{func_name}'")
+        logger.debug(f"🔸 Target original: {target} at {hex(id(target))}")
+        logger.debug(f"🔹 Replacement wrapper: {wrapped} at {hex(id(wrapped))}")
+
         # Try immediate replacement
         if hasattr(target, "_mcp_server"):
             server = target._mcp_server
+            logger.debug(f"🎯 Found _mcp_server on target: {server}")
 
             if (
                 hasattr(server, "_tool_manager")
@@ -103,7 +108,20 @@ def _attempt_fastmcp_replacement(target, wrapped) -> bool:
                 and func_name in server._tool_manager._tools
             ):
 
+                # Log what FastMCP currently has cached
+                current_cached = server._tool_manager._tools[func_name].fn
+                logger.debug(
+                    f"📦 FastMCP currently has cached: {current_cached} at {hex(id(current_cached))}"
+                )
+
                 server._tool_manager._tools[func_name].fn = wrapped
+
+                # Verify the replacement
+                new_cached = server._tool_manager._tools[func_name].fn
+                logger.debug(
+                    f"✅ FastMCP now has cached: {new_cached} at {hex(id(new_cached))}"
+                )
+
                 logger.debug(
                     f"Replaced FastMCP cached function {func_name} with injection wrapper"
                 )
@@ -115,6 +133,7 @@ def _attempt_fastmcp_replacement(target, wrapped) -> bool:
 
             if target.__name__ in _function_to_server:
                 server = _function_to_server[target.__name__]
+                logger.debug(f"🌍 Found server via global mapping: {server}")
 
                 if (
                     hasattr(server, "_tool_manager")
@@ -122,25 +141,42 @@ def _attempt_fastmcp_replacement(target, wrapped) -> bool:
                     and func_name in server._tool_manager._tools
                 ):
 
+                    # Log what FastMCP currently has cached
+                    current_cached = server._tool_manager._tools[func_name].fn
+                    logger.debug(
+                        f"📦 FastMCP (global) currently has cached: {current_cached} at {hex(id(current_cached))}"
+                    )
+
                     server._tool_manager._tools[func_name].fn = wrapped
+
+                    # Verify the replacement
+                    new_cached = server._tool_manager._tools[func_name].fn
+                    logger.debug(
+                        f"✅ FastMCP (global) now has cached: {new_cached} at {hex(id(new_cached))}"
+                    )
+
                     logger.debug(
                         f"Replaced FastMCP cached function {func_name} via global mapping"
                     )
                     replaced = True
         except ImportError:
-            pass
+            logger.debug(
+                "❌ Could not import _function_to_server from fastmcp_integration"
+            )
 
         # If immediate replacement failed, set up delayed replacement
         if not replaced:
             target._mesh_delayed_replacement = lambda: _attempt_fastmcp_replacement(
                 target, wrapped
             )
-            logger.debug(f"Set up delayed FastMCP replacement for {func_name}")
+            logger.debug(f"⏰ Set up delayed FastMCP replacement for {func_name}")
+        else:
+            logger.debug(f"✅ FastMCP replacement successful for {func_name}")
 
         return replaced
 
     except Exception as e:
-        logger.warning(f"FastMCP replacement failed for {target.__name__}: {e}")
+        logger.warning(f"❌ FastMCP replacement failed for {target.__name__}: {e}")
         return False
 
 
@@ -259,7 +295,7 @@ def tool(
         # Store metadata on function
         target._mesh_tool_metadata = metadata
 
-        # Register with DecoratorRegistry for processor discovery
+        # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
 
         # Create dependency injection wrapper if needed
@@ -271,13 +307,30 @@ def tool(
                 # Extract dependency names for injector
                 dependency_names = [dep["capability"] for dep in validated_dependencies]
 
+                # Log the original function pointer
+                logger.debug(
+                    f"🔸 ORIGINAL function pointer: {target} at {hex(id(target))}"
+                )
+
                 injector = get_global_injector()
                 wrapped = injector.create_injection_wrapper(target, dependency_names)
+
+                # Log the wrapper function pointer
+                logger.debug(
+                    f"🔹 WRAPPER function pointer: {wrapped} at {hex(id(wrapped))}"
+                )
 
                 # Preserve metadata on wrapper
                 wrapped._mesh_tool_metadata = metadata
 
-                # Strategy: Always try the clean approach first, fallback to replacement if needed
+                # Store the wrapper on the original function for reference
+                target._mesh_injection_wrapper = wrapped
+
+                # CRITICAL: Update DecoratorRegistry to use the wrapper instead of the original
+                DecoratorRegistry.update_mesh_tool_function(target.__name__, wrapped)
+                logger.debug(
+                    f"🔄 Updated DecoratorRegistry to use wrapper for '{target.__name__}'"
+                )
 
                 # If runtime processor is available, register with it
                 if _runtime_processor is not None:
@@ -287,9 +340,6 @@ def tool(
                         logger.error(
                             f"Runtime registration failed for {target.__name__}: {e}"
                         )
-
-                # Store the wrapper on the original function for reference
-                target._mesh_injection_wrapper = wrapped
 
                 # Check if FastMCP has already processed this function (wrong order)
                 fastmcp_already_processed = _detect_fastmcp_already_processed(target)
@@ -301,25 +351,41 @@ def tool(
                 if fastmcp_already_processed:
                     # FastMCP has already cached the function - use replacement workaround
                     logger.debug(
-                        f"Applying FastMCP compatibility workaround for '{target.__name__}'"
+                        f"❌ FastMCP processed first for '{target.__name__}' - applying workaround"
+                    )
+                    logger.debug(
+                        f"🔸 FastMCP cached ORIGINAL: {target} at {hex(id(target))}"
+                    )
+                    logger.debug(
+                        f"🔹 Trying to replace with WRAPPER: {wrapped} at {hex(id(wrapped))}"
                     )
 
                     # Try the FastMCP internal replacement as fallback
                     success = _attempt_fastmcp_replacement(target, wrapped)
-                    if not success:
+                    if success:
+                        logger.debug(
+                            f"✅ Successfully replaced FastMCP cache with wrapper for '{target.__name__}'"
+                        )
+                    else:
                         # Set up delayed replacement
                         target._mesh_delayed_replacement = (
                             lambda: _attempt_fastmcp_replacement(target, wrapped)
                         )
                         logger.debug(
-                            f"Set up delayed replacement for '{target.__name__}'"
+                            f"⏰ Set up delayed replacement for '{target.__name__}'"
                         )
 
                     # Return original to maintain compatibility
+                    logger.debug(
+                        f"🔸 Returning ORIGINAL function: {target} at {hex(id(target))}"
+                    )
                     return target
                 else:
                     # No FastMCP processing yet - return wrapper for clean chaining
-                    logger.debug(f"Clean decorator chaining for '{target.__name__}'")
+                    logger.debug(f"✅ Clean decorator chaining for '{target.__name__}'")
+                    logger.debug(
+                        f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}"
+                    )
 
                     # Return the wrapped function - FastMCP will cache this wrapper when it runs
                     return wrapped

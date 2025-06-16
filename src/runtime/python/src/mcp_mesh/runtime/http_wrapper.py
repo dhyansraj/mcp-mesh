@@ -6,7 +6,6 @@ and distributed environments.
 """
 
 import asyncio
-import json
 import logging
 import os
 import socket
@@ -95,9 +94,39 @@ class HttpMcpWrapper:
     def __init__(self, mcp_server: FastMCP, config: HttpConfig):
         self.mcp_server = mcp_server
         self.config = config
+
+        # Store mcp_server for later use
+        self._mcp_app = None
+        self._lifespan = None
+
+        # Get FastMCP's lifespan if available (for new FastMCP integration)
+        if hasattr(mcp_server, "http_app") and callable(mcp_server.http_app):
+            try:
+                # Create FastMCP HTTP app with stateless transport
+                logger.debug("🔍 Creating FastMCP HTTP app with stateless transport")
+                self._mcp_app = mcp_server.http_app(
+                    path="/mcp", stateless_http=True, transport="streamable-http"
+                )
+                logger.debug(f"✅ Created FastMCP app: {type(self._mcp_app)}")
+                if hasattr(self._mcp_app, "lifespan"):
+                    self._lifespan = self._mcp_app.lifespan
+                    logger.debug("✅ Got FastMCP lifespan for FastAPI app")
+            except Exception as e:
+                logger.warning(f"Could not create FastMCP stateless app: {e}")
+                # Try without stateless_http parameter
+                try:
+                    logger.debug("🔄 Trying FastMCP HTTP app without stateless_http")
+                    self._mcp_app = mcp_server.http_app(path="/mcp")
+                    if hasattr(self._mcp_app, "lifespan"):
+                        self._lifespan = self._mcp_app.lifespan
+                        logger.debug("✅ Got FastMCP lifespan (fallback)")
+                except Exception as e2:
+                    logger.warning(f"FastMCP HTTP app creation failed entirely: {e2}")
+
         self.app = FastAPI(
             title=f"MCP Agent: {mcp_server.name}",
             description="HTTP-enabled MCP agent for distributed communication",
+            lifespan=self._lifespan,
         )
         self.actual_port: int | None = None
         self.server: uvicorn.Server | None = None
@@ -105,6 +134,14 @@ class HttpMcpWrapper:
 
     async def setup(self):
         """Set up HTTP endpoints and middleware."""
+
+        # 0. Add request logging middleware
+        @self.app.middleware("http")
+        async def log_requests(request, call_next):
+            logger.debug(f"🌐 HTTP Request: {request.method} {request.url.path}")
+            response = await call_next(request)
+            logger.debug(f"🌐 HTTP Response: {response.status_code}")
+            return response
 
         # 1. Add metrics middleware
         @self.app.middleware("http")
@@ -150,22 +187,352 @@ class HttpMcpWrapper:
             )
 
         # 3. Mount MCP endpoints
-        try:
-            from mcp.server.fastapi import create_app
+        # Debug the FastMCP server instance first
+        logger.debug(f"🔍 DEBUG: FastMCP server type: {type(self.mcp_server)}")
+        logger.debug(
+            f"🔍 DEBUG: FastMCP server module: {type(self.mcp_server).__module__}"
+        )
 
-            mcp_app = create_app(self.mcp_server)
-            self.app.mount("/mcp", mcp_app)
-        except ImportError:
-            logger.warning(
-                "FastAPI MCP server not available, using fallback implementation"
+        # Determine which FastMCP version this server instance is from
+        if "fastmcp" in type(self.mcp_server).__module__:
+            logger.info(
+                "🆕 HTTP Wrapper: Server instance is from NEW FastMCP library (fastmcp)"
             )
-            self._setup_fallback_mcp_endpoints()
+        elif "mcp.server.fastmcp" in type(self.mcp_server).__module__:
+            logger.info(
+                "🔄 HTTP Wrapper: Server instance is from OLD FastMCP library (mcp.server.fastmcp)"
+            )
+        else:
+            logger.warning(
+                f"❓ HTTP Wrapper: Unknown FastMCP server type: {type(self.mcp_server).__module__}"
+            )
 
-        # 4. Add health endpoints for K8s
+        logger.debug(
+            f"🔍 DEBUG: FastMCP server dir: {[attr for attr in dir(self.mcp_server) if 'app' in attr.lower()]}"
+        )
+        logger.debug(f"🔍 DEBUG: Has http_app: {hasattr(self.mcp_server, 'http_app')}")
+
+        # 3.1. Add health endpoints BEFORE mounting FastMCP (to avoid conflicts)
         @self.app.get("/health")
         async def health():
             """Basic health check endpoint."""
             return {"status": "healthy", "agent": self.mcp_server.name}
+
+        @self.app.get("/mesh/info")
+        async def mesh_info():
+            """Mesh agent information endpoint."""
+            tools = []
+            if hasattr(self.mcp_server, "_tool_manager"):
+                for name, tool in self.mcp_server._tool_manager._tools.items():
+                    tools.append(
+                        {
+                            "name": name,
+                            "description": getattr(tool, "description", ""),
+                        }
+                    )
+
+            # Update tools gauge
+            mcp_tools_total.labels(agent=self.mcp_server.name).set(len(tools))
+
+            return {"tools": tools}
+
+        # 3.2. Add MCP proxy endpoint to handle session management
+        @self.app.post("/mcp")
+        async def mcp_proxy(request: Request):
+            """Proxy MCP requests with automatic session management."""
+            import json
+
+            try:
+                # Get request body
+                body = await request.body()
+                headers = dict(request.headers)
+
+                # Add required headers for FastMCP
+                headers["accept"] = "application/json, text/event-stream"
+                headers["content-type"] = "application/json"
+
+                logger.debug(
+                    "🔄 Proxying MCP request to FastMCP with session management"
+                )
+
+                # Forward to FastMCP endpoint - try with base session or create new
+                import aiohttp
+
+                async with aiohttp.ClientSession() as session:
+                    # Try the created session ID first
+                    try:
+                        session_id = "70f3698fa9784868b1da8215fc69fdc1"  # From logs
+                        url = f"http://127.0.0.1:{self.actual_port}/mcp-server/mcp/{session_id}"
+                        async with session.post(
+                            url, data=body, headers=headers
+                        ) as resp:
+                            if resp.status != 400:  # If not "Missing session ID"
+                                result = await resp.text()
+                                return Response(
+                                    content=result, media_type="application/json"
+                                )
+                    except Exception as e:
+                        logger.debug(f"Session proxy attempt failed: {e}")
+
+                # If session approach fails, try direct FastMCP tool calling
+                logger.debug("🔄 Falling back to direct FastMCP tool calling")
+
+                # Parse the JSON-RPC request
+                import json
+
+                try:
+                    rpc_request = json.loads(body.decode())
+                    method = rpc_request.get("method")
+                    params = rpc_request.get("params", {})
+                    request_id = rpc_request.get("id")
+
+                    if method == "tools/list":
+                        # Get tools directly from FastMCP server
+                        tools = await self.mcp_server.get_tools()
+                        logger.debug(f"🔍 Raw tools from FastMCP: {tools}")
+                        logger.debug(f"🔍 Tools type: {type(tools)}")
+
+                        # Handle tools as dictionary (name -> FunctionTool object)
+                        tool_list = []
+                        if isinstance(tools, dict):
+                            for tool_name, tool_obj in tools.items():
+                                tool_list.append(
+                                    {
+                                        "name": tool_name,
+                                        "description": getattr(
+                                            tool_obj,
+                                            "description",
+                                            f"Tool: {tool_name}",
+                                        ).strip(),
+                                    }
+                                )
+                        else:
+                            # Handle other formats
+                            for tool in tools:
+                                if isinstance(tool, str):
+                                    tool_list.append(
+                                        {"name": tool, "description": f"Tool: {tool}"}
+                                    )
+                                else:
+                                    tool_list.append(
+                                        {
+                                            "name": getattr(tool, "name", str(tool)),
+                                            "description": getattr(
+                                                tool,
+                                                "description",
+                                                f"Tool: {getattr(tool, 'name', str(tool))}",
+                                            ),
+                                        }
+                                    )
+
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {"tools": tool_list},
+                        }
+                        return Response(
+                            content=json.dumps(response), media_type="application/json"
+                        )
+
+                    elif method == "tools/call":
+                        # Call tool directly
+                        tool_name = params.get("name")
+                        arguments = params.get("arguments", {})
+
+                        logger.debug(
+                            f"🎯 Direct tool call: {tool_name} with {arguments}"
+                        )
+
+                        try:
+                            # Get the tool object and call it directly
+                            tools = await self.mcp_server.get_tools()
+                            if tool_name in tools:
+                                tool_obj = tools[tool_name]
+                                logger.debug(f"🔍 Tool object: {tool_obj}")
+                                logger.debug(f"🔍 Tool type: {type(tool_obj)}")
+
+                                # Check if tool has a callable function
+                                if hasattr(tool_obj, "fn"):
+                                    logger.debug(
+                                        f"🎯 Found tool function: {tool_obj.fn}"
+                                    )
+                                    logger.debug(
+                                        f"🎯 Function pointer: {tool_obj.fn} at {hex(id(tool_obj.fn))}"
+                                    )
+
+                                    # Call the function directly - this should trigger fastmcp_integration!
+                                    import inspect
+
+                                    if inspect.iscoroutinefunction(tool_obj.fn):
+                                        result = await tool_obj.fn(**arguments)
+                                    else:
+                                        result = tool_obj.fn(**arguments)
+
+                                    logger.debug(f"🎯 Tool call result: {result}")
+
+                                    # Convert result to proper MCP content format
+                                    if isinstance(result, str):
+                                        # String results -> text content
+                                        content = [{"type": "text", "text": result}]
+                                    elif isinstance(result, (dict, list)):
+                                        # Structured data -> object content
+                                        content = [{"type": "object", "object": result}]
+                                    else:
+                                        # Other types -> convert to text
+                                        content = [
+                                            {"type": "text", "text": str(result)}
+                                        ]
+
+                                    response = {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": {"content": content},
+                                    }
+                                    return Response(
+                                        content=json.dumps(response),
+                                        media_type="application/json",
+                                    )
+                                else:
+                                    logger.error(
+                                        f"Tool {tool_name} has no callable function"
+                                    )
+                                    error_response = {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "error": {
+                                            "code": -32603,
+                                            "message": f"Tool {tool_name} not callable",
+                                        },
+                                    }
+                                    return Response(
+                                        content=json.dumps(error_response),
+                                        media_type="application/json",
+                                    )
+                            else:
+                                # Tool not found
+                                error_response = {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32601,
+                                        "message": f"Tool not found: {tool_name}",
+                                    },
+                                }
+                                return Response(
+                                    content=json.dumps(error_response),
+                                    media_type="application/json",
+                                )
+
+                        except Exception as e:
+                            logger.error(f"Tool call error: {e}")
+                            error_response = {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": -32603,
+                                    "message": f"Tool call failed: {str(e)}",
+                                },
+                            }
+                            return Response(
+                                content=json.dumps(error_response),
+                                media_type="application/json",
+                            )
+
+                    else:
+                        # Unsupported method
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {
+                                "code": -32601,
+                                "message": f"Method not found: {method}",
+                            },
+                        }
+                        return Response(
+                            content=json.dumps(error_response),
+                            media_type="application/json",
+                            status_code=404,
+                        )
+
+                except json.JSONDecodeError:
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error"},
+                    }
+                    return Response(
+                        content=json.dumps(error_response),
+                        media_type="application/json",
+                        status_code=400,
+                    )
+
+            except Exception as e:
+                logger.error(f"MCP proxy error: {e}")
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32603, "message": f"Internal error: {str(e)}"},
+                }
+                return Response(
+                    content=json.dumps(error_response),
+                    media_type="application/json",
+                    status_code=500,
+                )
+
+        try:
+            # Use the pre-created FastMCP app with proper lifespan
+            if self._mcp_app is not None:
+                logger.debug(
+                    "🔍 DEBUG: Using pre-created FastMCP app with stateless transport"
+                )
+                logger.debug(f"🔍 DEBUG: FastMCP app type: {type(self._mcp_app)}")
+
+                # Mount FastMCP app at /mcp-server (following FastMCP docs pattern)
+                self.app.mount("/mcp-server", self._mcp_app)
+                logger.debug(
+                    "🌐 Successfully mounted NEW FastMCP stateless HTTP app at /mcp-server"
+                )
+                logger.debug("🔍 MCP endpoint will be available at /mcp-server/mcp")
+
+                # Debug: Check what routes the FastMCP app has
+                if hasattr(self._mcp_app, "routes"):
+                    logger.debug(
+                        f"🔍 DEBUG: FastMCP app routes: {[route.path for route in self._mcp_app.routes if hasattr(route, 'path')]}"
+                    )
+
+            elif hasattr(self.mcp_server, "streamable_http_app"):
+                logger.debug(
+                    "🔍 DEBUG: Falling back to OLD FastMCP streamable_http_app"
+                )
+                logger.debug(
+                    f"🔍 DEBUG: streamable_http_app type: {type(self.mcp_server.streamable_http_app)}"
+                )
+
+                # Get the streamable HTTP app
+                mcp_app = self.mcp_server.streamable_http_app
+                logger.debug(f"🔍 DEBUG: Got streamable_http_app: {type(mcp_app)}")
+
+                # Mount it at /mcp
+                self.app.mount("/mcp", mcp_app)
+                logger.debug(
+                    "🌐 Successfully mounted OLD FastMCP streamable_http_app at /mcp - MCP tools will go through FastMCP integration"
+                )
+
+            else:
+                logger.warning(
+                    "❌ FastMCP server doesn't have any supported HTTP app method"
+                )
+                raise AttributeError("No supported HTTP app method")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to mount FastMCP app: {e}")
+            import traceback
+
+            logger.debug(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
+            logger.debug("🔄 Falling back to manual MCP implementation")
+            self._setup_fallback_mcp_endpoints()
+
+        # 4. Add additional health endpoints for K8s (health already added above)
 
         @self.app.get("/ready")
         async def ready():
@@ -252,7 +619,14 @@ class HttpMcpWrapper:
                 if method == "tools/list":
                     # List available tools
                     tools = []
+                    logger.debug("🔍 DEBUG: Checking tools in FastMCP server")
+                    logger.debug(
+                        f"🔍 DEBUG: Server has _tool_manager: {hasattr(self.mcp_server, '_tool_manager')}"
+                    )
                     if hasattr(self.mcp_server, "_tool_manager"):
+                        logger.debug(
+                            f"🔍 DEBUG: Available tools: {list(self.mcp_server._tool_manager._tools.keys())}"
+                        )
                         for name, tool in self.mcp_server._tool_manager._tools.items():
                             tools.append(
                                 {
@@ -285,19 +659,27 @@ class HttpMcpWrapper:
                         # Check if function is async
                         import inspect
 
+                        logger.debug(
+                            f"🎯 HTTP Wrapper calling function: {tool.fn.__name__} at {hex(id(tool.fn))} | Full function: {tool.fn}"
+                        )
                         if inspect.iscoroutinefunction(tool.fn):
                             result = await tool.fn(**arguments)
                         else:
                             result = tool.fn(**arguments)
 
-                        # Convert result to JSON string
+                        # Convert result to proper MCP content format
                         if isinstance(result, str):
-                            result_text = result
+                            # String results -> text content
+                            content = [{"type": "text", "text": result}]
+                        elif isinstance(result, (dict, list)):
+                            # Structured data -> object content
+                            content = [{"type": "object", "object": result}]
                         else:
-                            result_text = json.dumps(result)
+                            # Other types -> convert to text
+                            content = [{"type": "text", "text": str(result)}]
 
                         result = {
-                            "content": [{"type": "text", "text": result_text}],
+                            "content": content,
                             "isError": False,
                         }
                         return result

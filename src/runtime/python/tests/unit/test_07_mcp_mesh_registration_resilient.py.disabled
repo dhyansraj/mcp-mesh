@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 import yaml
 
-from mcp_mesh.runtime.processor import DecoratorProcessor, MeshAgentProcessor
+from mcp_mesh.runtime.processor import MeshDecoratorProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
 
 
@@ -86,10 +86,7 @@ class TestResilientRegistration:
     @pytest.fixture
     def processor(self, mock_registry_client):
         """Create a processor with mocked registry client."""
-        processor = DecoratorProcessor("http://localhost:8000")
-        processor.registry_client = mock_registry_client
-        processor.mesh_agent_processor = MeshAgentProcessor(mock_registry_client)
-        processor.mesh_agent_processor.registry_client = mock_registry_client
+        processor = MeshDecoratorProcessor(mock_registry_client)
         return processor
 
     @pytest.mark.asyncio
