@@ -23,9 +23,9 @@ The configuration is stored in ~/.mcp_mesh/cli_config.json and can be
 managed through various subcommands.
 
 Examples:
-  mcp-mesh-dev config show              # Show current configuration
-  mcp-mesh-dev config set registry_port 9090  # Set configuration value
-  mcp-mesh-dev config reset             # Reset to defaults`,
+  meshctl config show              # Show current configuration
+  meshctl config set registry_port 9090  # Set configuration value
+  meshctl config reset             # Reset to defaults`,
 	}
 
 	// Add subcommands
@@ -47,8 +47,8 @@ func newConfigShowCommand() *cobra.Command {
 The configuration is loaded from environment variables, config file, and defaults.
 
 Examples:
-  mcp-mesh-dev config show              # Show in default format (YAML)
-  mcp-mesh-dev config show --format json # Show in JSON format`,
+  meshctl config show              # Show in default format (YAML)
+  meshctl config show --format json # Show in JSON format`,
 		RunE: runConfigShowCommand,
 	}
 
@@ -78,9 +78,9 @@ Valid configuration keys:
   pid_file                - PID file path (string)
 
 Examples:
-  mcp-mesh-dev config set registry_port 9090
-  mcp-mesh-dev config set log_level DEBUG
-  mcp-mesh-dev config set auto_restart false`,
+  meshctl config set registry_port 9090
+  meshctl config set log_level DEBUG
+  meshctl config set auto_restart false`,
 		Args: cobra.ExactArgs(2),
 		RunE: runConfigSetCommand,
 	}
@@ -98,7 +98,7 @@ This will overwrite the current config file with default settings.
 Environment variables will still override these defaults.
 
 Examples:
-  mcp-mesh-dev config reset`,
+  meshctl config reset`,
 		RunE: runConfigResetCommand,
 	}
 
@@ -112,7 +112,7 @@ func newConfigPathCommand() *cobra.Command {
 		Long: `Show the path to the configuration file.
 
 Examples:
-  mcp-mesh-dev config path`,
+  meshctl config path`,
 		RunE: runConfigPathCommand,
 	}
 
@@ -129,7 +129,7 @@ as the default configuration in the config file.
 This is useful for persisting environment-based settings.
 
 Examples:
-  mcp-mesh-dev config save`,
+  meshctl config save`,
 		RunE: runConfigSaveCommand,
 	}
 

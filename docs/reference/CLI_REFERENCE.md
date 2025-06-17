@@ -1,6 +1,6 @@
-# MCP Mesh Developer CLI Reference
+# MCP Mesh Control CLI Reference
 
-The MCP Mesh Developer CLI (`mcp-mesh-dev`) is a Go-based command-line tool for developing, debugging, and managing MCP (Model Context Protocol) agents and services in a mesh architecture.
+The MCP Mesh Control CLI (`meshctl`) is a Go-based command-line tool for developing, debugging, and managing MCP (Model Context Protocol) agents and services in a mesh architecture.
 
 ## Table of Contents
 
@@ -25,13 +25,13 @@ git clone https://github.com/yourusername/mcp-mesh.git
 cd mcp-mesh
 
 # Build the CLI
-go build -o mcp-mesh-dev cmd/mcp-mesh-dev/main.go
+go build -o meshctl cmd/meshctl/main.go
 
 # Build the registry
 go build -o mcp-mesh-registry cmd/mcp-mesh-registry/main.go
 
 # Verify installation
-./mcp-mesh-dev --version
+./meshctl --version
 ```
 
 ## Quick Start
@@ -41,19 +41,19 @@ go build -o mcp-mesh-registry cmd/mcp-mesh-registry/main.go
 ./mcp-mesh-registry
 
 # In another terminal, start an agent
-./mcp-mesh-dev start examples/hello_world.py
+./meshctl start examples/hello_world.py
 
 # Check status
-./mcp-mesh-dev status
+./meshctl status
 
 # View running agents
-./mcp-mesh-dev list
+./meshctl list
 
 # Stop an agent
-./mcp-mesh-dev stop hello-world
+./meshctl stop hello-world
 
 # Stop all agents
-./mcp-mesh-dev stop --all
+./meshctl stop --all
 ```
 
 ## Commands
@@ -65,7 +65,7 @@ Start an MCP agent and register it with the mesh.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev start <agent-file> [flags]
+meshctl start <agent-file> [flags]
 ```
 
 **Flags:**
@@ -79,16 +79,16 @@ mcp-mesh-dev start <agent-file> [flags]
 
 ```bash
 # Basic start
-mcp-mesh-dev start my_agent.py
+meshctl start my_agent.py
 
 # With custom name
-mcp-mesh-dev start my_agent.py --name my-custom-agent
+meshctl start my_agent.py --name my-custom-agent
 
 # With environment variables
-mcp-mesh-dev start my_agent.py --env API_KEY=xxx --env DEBUG=true
+meshctl start my_agent.py --env API_KEY=xxx --env DEBUG=true
 
 # With custom registry
-mcp-mesh-dev start my_agent.py --registry http://registry.example.com:8000
+meshctl start my_agent.py --registry http://registry.example.com:8000
 ```
 
 ### `stop` - Stop MCP Agent(s)
@@ -98,7 +98,7 @@ Stop one or more running MCP agents.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev stop [agent-name] [flags]
+meshctl stop [agent-name] [flags]
 ```
 
 **Flags:**
@@ -110,13 +110,13 @@ mcp-mesh-dev stop [agent-name] [flags]
 
 ```bash
 # Stop specific agent
-mcp-mesh-dev stop my-agent
+meshctl stop my-agent
 
 # Stop all agents
-mcp-mesh-dev stop --all
+meshctl stop --all
 
 # Force stop
-mcp-mesh-dev stop my-agent --force
+meshctl stop my-agent --force
 ```
 
 ### `status` - Show Status
@@ -126,7 +126,7 @@ Display status of registry and running agents.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev status [flags]
+meshctl status [flags]
 ```
 
 **Flags:**
@@ -138,13 +138,13 @@ mcp-mesh-dev status [flags]
 
 ```bash
 # Basic status
-mcp-mesh-dev status
+meshctl status
 
 # Detailed status
-mcp-mesh-dev status --verbose
+meshctl status --verbose
 
 # JSON output for scripting
-mcp-mesh-dev status --json
+meshctl status --json
 ```
 
 ### `list` - List Agents
@@ -154,7 +154,7 @@ List all registered agents in the mesh.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev list [flags]
+meshctl list [flags]
 ```
 
 **Flags:**
@@ -167,16 +167,16 @@ mcp-mesh-dev list [flags]
 
 ```bash
 # List all agents
-mcp-mesh-dev list
+meshctl list
 
 # Filter by capability
-mcp-mesh-dev list --filter file_operations --filter auth
+meshctl list --filter file_operations --filter auth
 
 # Filter by status
-mcp-mesh-dev list --status healthy
+meshctl list --status healthy
 
 # JSON output
-mcp-mesh-dev list --json
+meshctl list --json
 ```
 
 ### `logs` - View Agent Logs
@@ -186,7 +186,7 @@ Stream or view logs from running agents.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev logs <agent-name> [flags]
+meshctl logs <agent-name> [flags]
 ```
 
 **Flags:**
@@ -199,16 +199,16 @@ mcp-mesh-dev logs <agent-name> [flags]
 
 ```bash
 # View recent logs
-mcp-mesh-dev logs my-agent
+meshctl logs my-agent
 
 # Stream logs
-mcp-mesh-dev logs my-agent --follow
+meshctl logs my-agent --follow
 
 # Last 50 lines
-mcp-mesh-dev logs my-agent --tail 50
+meshctl logs my-agent --tail 50
 
 # Logs from last 10 minutes
-mcp-mesh-dev logs my-agent --since 10m
+meshctl logs my-agent --since 10m
 ```
 
 ### `restart` - Restart Agent
@@ -218,7 +218,7 @@ Restart a running agent.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev restart <agent-name> [flags]
+meshctl restart <agent-name> [flags]
 ```
 
 **Flags:**
@@ -229,10 +229,10 @@ mcp-mesh-dev restart <agent-name> [flags]
 
 ```bash
 # Basic restart
-mcp-mesh-dev restart my-agent
+meshctl restart my-agent
 
 # Restart with new environment
-mcp-mesh-dev restart my-agent --env DEBUG=false
+meshctl restart my-agent --env DEBUG=false
 ```
 
 ### `config` - Manage Configuration
@@ -242,7 +242,7 @@ View and manage CLI configuration.
 **Syntax:**
 
 ```bash
-mcp-mesh-dev config [subcommand] [flags]
+meshctl config [subcommand] [flags]
 ```
 
 **Subcommands:**
@@ -255,13 +255,13 @@ mcp-mesh-dev config [subcommand] [flags]
 
 ```bash
 # Show all config
-mcp-mesh-dev config show
+meshctl config show
 
 # Set registry URL
-mcp-mesh-dev config set registry.url http://localhost:8000
+meshctl config set registry.url http://localhost:8000
 
 # Get specific value
-mcp-mesh-dev config get registry.url
+meshctl config get registry.url
 ```
 
 ## Configuration
@@ -307,35 +307,35 @@ The following environment variables can be used:
 ./mcp-mesh-registry
 
 # 2. Start a file operations agent (in terminal 2)
-./mcp-mesh-dev start examples/file_agent.py
+./meshctl start examples/file_agent.py
 
 # 3. Start a system agent (in terminal 3)
-./mcp-mesh-dev start examples/system_agent.py
+./meshctl start examples/system_agent.py
 
 # 4. Check status
-./mcp-mesh-dev status
+./meshctl status
 
 # 5. View logs
-./mcp-mesh-dev logs file-agent --follow
+./meshctl logs file-agent --follow
 
 # 6. Stop all agents
-./mcp-mesh-dev stop --all
+./meshctl stop --all
 ```
 
 ### Development Workflow
 
 ```bash
 # Start agent with debugging
-./mcp-mesh-dev start my_agent.py --env MCP_MESH_DEBUG=true
+./meshctl start my_agent.py --env MCP_MESH_DEBUG=true
 
 # Monitor logs while developing
-./mcp-mesh-dev logs my-agent --follow
+./meshctl logs my-agent --follow
 
 # Restart after code changes
-./mcp-mesh-dev restart my-agent
+./meshctl restart my-agent
 
 # Check agent health
-./mcp-mesh-dev status --verbose
+./meshctl status --verbose
 ```
 
 ### Production Deployment
@@ -343,10 +343,10 @@ The following environment variables can be used:
 ```bash
 # Start with production config
 export MCP_MESH_CONFIG_PATH=/etc/mcp-mesh/prod.yaml
-./mcp-mesh-dev start production_agent.py
+./meshctl start production_agent.py
 
 # Monitor with JSON logs
-./mcp-mesh-dev logs production-agent --follow | jq '.'
+./meshctl logs production-agent --follow | jq '.'
 
 # Health check endpoint
 curl http://localhost:8000/health
@@ -386,16 +386,16 @@ The CLI automatically:
 ```bash
 # Start multiple agents from a directory
 for agent in agents/*.py; do
-  ./mcp-mesh-dev start "$agent"
+  ./meshctl start "$agent"
 done
 
 # Monitor all agents
-./mcp-mesh-dev status --verbose
+./meshctl status --verbose
 
 # Stop agents with specific capability
-./mcp-mesh-dev list --filter auth --json | \
+./meshctl list --filter auth --json | \
   jq -r '.agents[].name' | \
-  xargs -I {} ./mcp-mesh-dev stop {}
+  xargs -I {} ./meshctl stop {}
 ```
 
 ## Troubleshooting
@@ -409,17 +409,17 @@ done
    curl http://localhost:8000/health
 
    # Use custom registry URL
-   ./mcp-mesh-dev start agent.py --registry http://registry:8000
+   ./meshctl start agent.py --registry http://registry:8000
    ```
 
 2. **Agent Won't Start**
 
    ```bash
    # Check logs
-   ./mcp-mesh-dev logs agent-name --tail 50
+   ./meshctl logs agent-name --tail 50
 
    # Start with debug logging
-   ./mcp-mesh-dev start agent.py --env MCP_MESH_DEBUG=true
+   ./meshctl start agent.py --env MCP_MESH_DEBUG=true
    ```
 
 3. **Port Already in Use**
@@ -438,7 +438,7 @@ Enable debug mode for verbose output:
 
 ```bash
 export MCP_MESH_LOG_LEVEL=debug
-./mcp-mesh-dev status --verbose
+./meshctl status --verbose
 ```
 
 ## Migration from Python CLI
@@ -454,19 +454,19 @@ If you're migrating from the old Python CLI (`mcp_mesh_dev`):
 
 | Python CLI                | Go CLI                           | Notes                   |
 | ------------------------- | -------------------------------- | ----------------------- |
-| `mcp_mesh_dev`            | `mcp-mesh-dev`                   | Different binary name   |
+| `mcp_mesh_dev`            | `meshctl`                        | Different binary name   |
 | `~/.mcp-mesh/config.toml` | `~/.config/mcp-mesh/config.yaml` | New config location     |
 | Python 3.10+ required     | Standalone binary                | No runtime dependencies |
 | 100MB+ memory             | <20MB memory                     | Much more efficient     |
 
 ## Contributing
 
-The CLI is written in Go and located in `cmd/mcp-mesh-dev/`. Contributions welcome!
+The CLI is written in Go and located in `cmd/meshctl/`. Contributions welcome!
 
 ```bash
 # Run tests
 go test ./internal/cli/...
 
 # Build with version info
-go build -ldflags "-X main.Version=1.0.0" -o mcp-mesh-dev cmd/mcp-mesh-dev/main.go
+go build -ldflags "-X main.Version=1.0.0" -o meshctl cmd/meshctl/main.go
 ```

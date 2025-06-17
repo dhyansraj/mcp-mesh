@@ -9,7 +9,28 @@ import (
 	"time"
 
 	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/registry/generated"
 )
+
+// NotFoundError represents a resource not found error (should return 404)
+type NotFoundError struct {
+	Message string
+}
+
+func (e *NotFoundError) Error() string {
+	return e.Message
+}
+
+// isTableNotExistError checks if the error is due to missing database table
+func isTableNotExistError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "no such table") ||
+		   strings.Contains(errMsg, "table doesn't exist") ||
+		   strings.Contains(errMsg, "table not found")
+}
 
 // Service provides registry operations matching Python RegistryService exactly
 type Service struct {
@@ -114,12 +135,7 @@ type HeartbeatResponse struct {
 	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
 }
 
-// AgentsResponse matches Python AgentsResponse exactly
-type AgentsResponse struct {
-	Agents    []map[string]interface{} `json:"agents"`
-	Count     int                      `json:"count"`
-	Timestamp string                   `json:"timestamp"`
-}
+// AgentsResponse is now defined in generated package
 
 // CapabilitiesResponse matches Python CapabilitiesResponse exactly
 type CapabilitiesResponse struct {
@@ -555,11 +571,11 @@ func (s *Service) UpdateHeartbeatLegacy(req *HeartbeatRequest) (*HeartbeatRespon
 
 // ListAgents handles agent discovery with filtering
 // MUST match Python get_agents behavior exactly
-func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) {
+func (s *Service) ListAgents(params *AgentQueryParams) (*generated.AgentsListResponse, error) {
 	// Check cache first
 	cacheKey := s.cache.generateCacheKey("agents_list", params)
 	if cached := s.cache.get(cacheKey); cached != nil {
-		if response, ok := cached.(*AgentsResponse); ok {
+		if response, ok := cached.(*generated.AgentsListResponse); ok {
 			return response, nil
 		}
 	}
@@ -631,6 +647,15 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 	// Execute query
 	rows, err := s.db.Query(querySQL, args...)
 	if err != nil {
+		// Check if error is due to missing database table (no agents registered yet)
+		if isTableNotExistError(err) {
+			// Return empty list instead of error when table doesn't exist
+			return &generated.AgentsListResponse{
+				Agents:    []generated.AgentInfo{},
+				Count:     0,
+				Timestamp: time.Now(),
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to list agents: %w", err)
 	}
 	defer rows.Close()
@@ -744,8 +769,8 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 		agents = append(agents, agent)
 	}
 
-	// Now we need to add capabilities to each agent
-	agentMaps := make([]map[string]interface{}, 0, len(agents))
+	// Now we need to add capabilities to each agent and build proper AgentInfo structs
+	agentInfos := make([]generated.AgentInfo, 0, len(agents))
 	for _, agent := range agents {
 		// Get capabilities for this agent
 		agentID := agent["id"].(string)
@@ -755,24 +780,62 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*AgentsResponse, error) 
 			capabilities = []map[string]interface{}{} // Empty capabilities on error
 		}
 
-		// Extract capability names for the required "capabilities" field
-		capabilityNames := make([]string, len(capabilities))
+		// Build enhanced capabilities array with CapabilityInfo objects
+		capabilityInfos := make([]generated.CapabilityInfo, len(capabilities))
 		for i, cap := range capabilities {
-			if capName, ok := cap["capability"].(string); ok {
-				capabilityNames[i] = capName
+			capInfo := generated.CapabilityInfo{
+				Name:         cap["capability"].(string),
+				Version:      cap["version"].(string),
+				FunctionName: cap["function_name"].(string),
+			}
+
+			// Add optional description if present
+			if description, ok := cap["description"].(string); ok && description != "" {
+				capInfo.Description = &description
+			}
+
+			// Add tags if present and non-empty
+			if tags, ok := cap["tags"].([]interface{}); ok && len(tags) > 0 {
+				tagStrings := make([]string, len(tags))
+				for j, tag := range tags {
+					if tagStr, ok := tag.(string); ok {
+						tagStrings[j] = tagStr
+					}
+				}
+				capInfo.Tags = &tagStrings
+			}
+
+			capabilityInfos[i] = capInfo
+		}
+
+		// Build AgentInfo struct
+		agentInfo := generated.AgentInfo{
+			Id:                   agent["id"].(string),
+			Name:                 agent["name"].(string),
+			Status:               generated.AgentInfoStatus(agent["status"].(string)),
+			Endpoint:             agent["endpoint"].(string),
+			Capabilities:         capabilityInfos,
+			TotalDependencies:    int(agent["total_dependencies"].(int64)),
+			DependenciesResolved: int(agent["dependencies_resolved"].(int64)),
+		}
+
+		// Add optional fields
+		if version, ok := agent["version"].(string); ok {
+			agentInfo.Version = &version
+		}
+		if lastSeen, ok := agent["last_seen"].(string); ok {
+			if lastSeenTime, err := time.Parse(time.RFC3339, lastSeen); err == nil {
+				agentInfo.LastSeen = &lastSeenTime
 			}
 		}
-		agent["capabilities"] = capabilityNames
 
-		// Note: Dependencies field removed from API spec - we use real-time resolution instead
-
-		agentMaps = append(agentMaps, agent)
+		agentInfos = append(agentInfos, agentInfo)
 	}
 
-	response := &AgentsResponse{
-		Agents:    agentMaps,
-		Count:     len(agentMaps),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	response := &generated.AgentsListResponse{
+		Agents:    agentInfos,
+		Count:     len(agentInfos),
+		Timestamp: time.Now().UTC(),
 	}
 
 	// Cache the result

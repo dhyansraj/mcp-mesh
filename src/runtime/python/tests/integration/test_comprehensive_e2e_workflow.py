@@ -245,10 +245,10 @@ class IntegrationTestSuite:
         return {"success": False, "error": "Failed to get agents"}
 
     def run_mcp_mesh_dev_list(self) -> dict[str, Any]:
-        """Run mcp-mesh-dev list command"""
-        binary_path = self.project_root / "bin" / "mcp-mesh-dev"
+        """Run meshctl list command"""
+        binary_path = self.project_root / "bin" / "meshctl"
         if not binary_path.exists():
-            return {"success": False, "error": "mcp-mesh-dev binary not found"}
+            return {"success": False, "error": "meshctl binary not found"}
 
         try:
             result = subprocess.run(

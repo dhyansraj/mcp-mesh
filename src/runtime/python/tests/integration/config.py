@@ -25,7 +25,7 @@ BIN_DIR = PROJECT_ROOT / "bin"
 
 # Binary paths
 REGISTRY_BINARY = BIN_DIR / "mcp-mesh-registry"
-DEV_BINARY = BIN_DIR / "mcp-mesh-dev"
+DEV_BINARY = BIN_DIR / "meshctl"
 
 # Example script paths
 HELLO_WORLD_SCRIPT = EXAMPLES_DIR / "hello_world.py"

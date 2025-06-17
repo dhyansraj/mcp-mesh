@@ -19,9 +19,9 @@ func NewStatusCommand() *cobra.Command {
 This includes registry status, agent health, process information, and connectivity status.
 
 Examples:
-  mcp-mesh-dev status                  # Show basic status
-  mcp-mesh-dev status --verbose        # Show detailed information
-  mcp-mesh-dev status --json           # Output in JSON format`,
+  meshctl status                  # Show basic status
+  meshctl status --verbose        # Show detailed information
+  meshctl status --json           # Output in JSON format`,
 		RunE: runStatusCommand,
 	}
 
@@ -75,9 +75,6 @@ type SystemStatus struct {
 }
 
 func runStatusCommand(cmd *cobra.Command, args []string) error {
-	// Get process manager
-	pm := GetGlobalProcessManager()
-
 	// Load configuration
 	config, err := LoadConfig()
 	if err != nil {
@@ -85,98 +82,25 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get flags
-	verbose, _ := cmd.Flags().GetBool("verbose")
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
-	// Collect status information
-	status := StatusOutput{
-		Timestamp: time.Now(),
+	// Get enhanced agents using the same logic as list command
+	registryURL := determineRegistryURL(config, "", "", 0, "")
+	agents, err := getEnhancedAgents(registryURL)
+	if err != nil {
+		return fmt.Errorf("failed to get agents: %w", err)
 	}
 
-	// System status
-	status.System = SystemStatus{
-		ConfigPath:      "~/.mcp_mesh/cli_config.json", // Default config path
-		ProcessFilePath: pm.stateFile,
-		DatabasePath:    config.DBPath,
-		LogLevel:        config.LogLevel,
-	}
-
-	// Registry status
-	registryURL := config.GetRegistryURL()
-	var registryAgents []RegistryAgent
-
-	if IsRegistryRunning(registryURL) {
-		status.Registry = RegistryStatus{
-			Status: "running",
-			URL:    registryURL,
-		}
-
-		// Get agents from registry
-		agents, err := GetRegistryAgents(registryURL)
-		if err != nil {
-			status.Registry.Error = err.Error()
-		} else {
-			registryAgents = agents
-			status.Registry.AgentCount = len(agents)
-		}
-	} else {
-		status.Registry = RegistryStatus{
-			Status: "not running",
+	// Filter to only healthy agents
+	var healthyAgents []EnhancedAgent
+	for _, agent := range agents {
+		if agent.Status == "healthy" {
+			healthyAgents = append(healthyAgents, agent)
 		}
 	}
 
-	// Process status using process manager
-	processes := pm.GetAllProcesses()
-	status.Processes = make([]ProcessStatus, 0, len(processes))
-
-	for _, proc := range processes {
-		processStatus := ProcessStatus{
-			ProcessInfo: ProcessInfo{
-				PID:       proc.PID,
-				Name:      proc.Name,
-				Type:      proc.ServiceType,
-				Command:   proc.Command,
-				StartTime: proc.StartTime,
-				Status:    proc.Status,
-				FilePath:  proc.Command, // Use command as file path for compatibility
-			},
-			Uptime:       time.Since(proc.StartTime),
-			IsResponding: proc.Status == "running",
-		}
-
-		// Add resource usage if verbose
-		if verbose {
-			// Note: Would need additional libraries like gopsutil for detailed resource usage
-			processStatus.MemoryUsage = "N/A"
-			processStatus.CPUUsage = "N/A"
-		}
-
-		status.Processes = append(status.Processes, processStatus)
-	}
-
-	// Agent status - combine registry and process manager information
-	combinedAgents := combineAgentInfoFromPM(registryAgents, processes)
-	status.Agents = make([]AgentStatus, len(combinedAgents))
-
-	for i, agent := range combinedAgents {
-		agentStatus := AgentStatus{
-			EnhancedAgent: agent,
-			Health:        determineAgentHealth(agent),
-		}
-
-		if !agent.StartTime.IsZero() {
-			agentStatus.Uptime = time.Since(agent.StartTime)
-		}
-
-		status.Agents[i] = agentStatus
-	}
-
-	// Overall status
-	status.Overall = determineOverallStatus(status.Registry, status.Agents)
-
-	// Output results
 	if jsonOutput {
-		data, err := json.MarshalIndent(status, "", "  ")
+		data, err := json.MarshalIndent(healthyAgents, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal JSON: %w", err)
 		}
@@ -184,7 +108,27 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	return outputStatusHuman(status, verbose)
+	// Show detailed information for each healthy agent
+	if len(healthyAgents) == 0 {
+		fmt.Println("No healthy agents found")
+		return nil
+	}
+
+	fmt.Printf("Found %d healthy agent(s):\n\n", len(healthyAgents))
+
+	for i, agent := range healthyAgents {
+		if i > 0 {
+			fmt.Printf("\n%s\n\n", strings.Repeat("=", 80))
+		}
+
+		// Use the same detailed output function as list --id
+		err := outputAgentDetails([]EnhancedAgent{agent}, agent.ID, false)
+		if err != nil {
+			return fmt.Errorf("failed to output agent details: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func determineAgentHealth(agent EnhancedAgent) string {

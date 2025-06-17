@@ -2,11 +2,11 @@
 
 # Variables
 REGISTRY_NAME = mcp-mesh-registry
-DEV_NAME = mcp-mesh-dev
+DEV_NAME = meshctl
 VERSION = 1.0.0
 BUILD_DIR = bin
 REGISTRY_CMD_DIR = cmd/mcp-mesh-registry
-DEV_CMD_DIR = cmd/mcp-mesh-dev
+DEV_CMD_DIR = cmd/meshctl
 
 # OpenAPI and code generation (dual-contract support)
 REGISTRY_OPENAPI_SPEC = api/mcp-mesh-registry.openapi.yaml

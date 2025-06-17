@@ -11,12 +11,12 @@ Once MCP Mesh is open-sourced, you'll be able to install it directly:
 pip install mcp-mesh
 
 # Download the CLI tool (coming soon)
-curl -sSL https://github.com/mcp-mesh/mcp-mesh/releases/latest/download/mcp-mesh-dev -o mcp-mesh-dev
-chmod +x mcp-mesh-dev
-sudo mv mcp-mesh-dev /usr/local/bin/
+curl -sSL https://github.com/mcp-mesh/mcp-mesh/releases/latest/download/meshctl -o meshctl
+chmod +x meshctl
+sudo mv meshctl /usr/local/bin/
 
 # Verify installation
-mcp-mesh-dev --version
+meshctl --version
 ```
 
 ## Current Installation (Build from Source)
@@ -43,7 +43,7 @@ make install
 source .venv/bin/activate
 
 # Verify installation
-mcp-mesh-dev --version
+meshctl --version
 ```
 
 That's it! The `make install` command:
@@ -82,7 +82,7 @@ export PATH=$PATH:$(pwd)/bin
 When you install MCP Mesh, you get:
 
 1. **Python Package** (`mcp_mesh`): The decorators and runtime for your agents
-2. **CLI Tool** (`mcp-mesh-dev`): Go-based command-line tool for running agents
+2. **CLI Tool** (`meshctl`): Go-based command-line tool for running agents
 3. **Registry Binary** (`mcp-mesh-registry`): Go-based service registry
 
 ## System Requirements
@@ -115,16 +115,16 @@ Run a quick test to ensure everything is working:
 source .venv/bin/activate
 
 # Test the CLI
-mcp-mesh-dev --version
+meshctl --version
 
 # Test Python import
 python -c "from mcp_mesh import mesh_agent; print('✅ MCP Mesh is installed!')"
 
 # Start the registry (in one terminal)
-mcp-mesh-dev start --registry-only
+meshctl start --registry-only
 
 # Run an example agent (in another terminal)
-mcp-mesh-dev start examples/hello_world.py
+meshctl start examples/hello_world.py
 ```
 
 ## Your First Agent in 30 Seconds
@@ -150,7 +150,7 @@ Run it:
 
 ```bash
 # Start your agent (registry starts automatically)
-mcp-mesh-dev start hello.py  # or ./bin/mcp-mesh-dev start hello.py
+meshctl start hello.py  # or ./bin/meshctl start hello.py
 
 # Test it
 curl http://localhost:8000/hello_say_hello
@@ -160,19 +160,19 @@ That's it! You've just created and deployed your first MCP Mesh agent.
 
 ## Common Installation Issues
 
-### 1. Command 'mcp-mesh-dev' not found
+### 1. Command 'meshctl' not found
 
 **Solution**: Either add `/usr/local/bin` to your PATH or use the local binary:
 
 ```bash
 # Option 1: Use full path
-/usr/local/bin/mcp-mesh-dev --version
+/usr/local/bin/meshctl --version
 
 # Option 2: Add to PATH
 export PATH=$PATH:/usr/local/bin
 
 # Option 3: Use local binary
-./bin/mcp-mesh-dev --version
+./bin/meshctl --version
 ```
 
 ### 2. ImportError: No module named 'mcp_mesh'
@@ -208,7 +208,7 @@ lsof -i :8080
 kill <PID>
 
 # Or use a different port
-mcp-mesh-dev start --registry-port 8081
+meshctl start --registry-port 8081
 ```
 
 ## Next Steps

@@ -553,7 +553,7 @@ class TestComprehensiveIntegration:
         # Test list command
         list_result = subprocess.run(
             [
-                "/media/psf/Home/workspace/github/mcp-mesh/bin/mcp-mesh-dev",
+                "/media/psf/Home/workspace/github/mcp-mesh/bin/meshctl",
                 "list",
                 "--registry-url",
                 system_fixture.registry_url,
@@ -570,7 +570,7 @@ class TestComprehensiveIntegration:
         # Test status command
         status_result = subprocess.run(
             [
-                "/media/psf/Home/workspace/github/mcp-mesh/bin/mcp-mesh-dev",
+                "/media/psf/Home/workspace/github/mcp-mesh/bin/meshctl",
                 "status",
                 "--registry-url",
                 system_fixture.registry_url,

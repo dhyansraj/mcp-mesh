@@ -713,7 +713,16 @@ components:
 
     AgentInfo:
       type: object
-      required: [id, name, status, endpoint, capabilities]
+      required:
+        [
+          id,
+          name,
+          status,
+          endpoint,
+          capabilities,
+          total_dependencies,
+          dependencies_resolved,
+        ]
       properties:
         id:
           type: string
@@ -731,8 +740,28 @@ components:
         capabilities:
           type: array
           items:
-            type: string
-          example: ["greeting", "farewell"]
+            $ref: "#/components/schemas/CapabilityInfo"
+          example:
+            - name: "greeting"
+              version: "1.0.0"
+              function_name: "greet"
+              tags: ["demo", "social"]
+              description: "Provides greeting functionality"
+            - name: "farewell"
+              version: "1.0.0"
+              function_name: "goodbye"
+              tags: ["demo", "social"]
+              description: "Provides farewell functionality"
+        total_dependencies:
+          type: integer
+          minimum: 0
+          example: 5
+          description: "Total number of dependencies required by this agent"
+        dependencies_resolved:
+          type: integer
+          minimum: 0
+          example: 3
+          description: "Number of dependencies that have been resolved"
         last_seen:
           type: string
           format: date-time
@@ -740,6 +769,38 @@ components:
         version:
           type: string
           example: "1.0.0"
+
+    # Capability information schema
+    CapabilityInfo:
+      type: object
+      required: [name, version, function_name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: "greeting"
+          description: "Capability name"
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: "Capability version"
+        function_name:
+          type: string
+          minLength: 1
+          example: "greet"
+          description: "Name of the function that provides this capability"
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["demo", "social"]
+          description: "Tags associated with this capability"
+        description:
+          type: string
+          example: "Provides greeting functionality"
+          description: "Human-readable description of the capability"
 
     # Dependency resolution schemas
     DependencyInfo:

@@ -114,6 +114,7 @@ Class | Method | HTTP request | Description
  - [AgentRegistration](docs/AgentRegistration.md)
  - [AgentRegistrationMetadata](docs/AgentRegistrationMetadata.md)
  - [AgentsListResponse](docs/AgentsListResponse.md)
+ - [CapabilityInfo](docs/CapabilityInfo.md)
  - [DecoratorAgentMetadata](docs/DecoratorAgentMetadata.md)
  - [DecoratorAgentRequest](docs/DecoratorAgentRequest.md)
  - [DecoratorInfo](docs/DecoratorInfo.md)

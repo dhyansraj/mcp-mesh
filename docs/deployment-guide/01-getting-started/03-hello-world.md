@@ -10,10 +10,10 @@ Running MCP Mesh agents is as simple as running Python scripts. The mesh handles
 
 ```bash
 # 1. Start the first agent (provides system functions)
-mcp-mesh-dev start examples/system_agent.py
+meshctl start examples/system_agent.py
 
 # 2. Start the Hello World agent (uses system functions)
-mcp-mesh-dev start examples/hello_world.py
+meshctl start examples/hello_world.py
 
 # 3. Test it!
 curl http://localhost:8888/greet_from_mcp_mesh_dependency
@@ -66,7 +66,7 @@ The only difference? The `@mesh_agent()` decorator and the dependency parameter!
 
 ## Behind the Scenes
 
-When you run `mcp-mesh-dev start`, it automatically:
+When you run `meshctl start`, it automatically:
 
 1. **Starts the Registry** (if not already running) - A Go service that tracks all agents
 2. **Registers your agent** - Tells the registry what functions it provides
@@ -115,10 +115,10 @@ curl http://localhost:8080/docs  # System agent docs
 curl http://localhost:8888/docs  # Hello world docs
 
 # Check what's running
-mcp-mesh-dev status
+meshctl status
 
 # View logs
-mcp-mesh-dev logs hello_world
+meshctl logs hello_world
 ```
 
 ## Understanding the Architecture
@@ -173,7 +173,7 @@ if __name__ == "__main__":
 Run it:
 
 ```bash
-mcp-mesh-dev start my_agent.py
+meshctl start my_agent.py
 curl http://localhost:9000/weather_get_weather
 ```
 

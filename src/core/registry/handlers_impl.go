@@ -251,17 +251,8 @@ func (h *BusinessLogicHandlers) ListAgents(c *gin.Context) {
 		return
 	}
 
-	// Convert service response to generated response format
-	agents := make([]generated.AgentInfo, len(serviceResp.Agents))
-	for i, agentMap := range serviceResp.Agents {
-		agents[i] = convertMapToAgentInfo(agentMap)
-	}
-
-	response := generated.AgentsListResponse{
-		Agents:    agents,
-		Count:     serviceResp.Count,
-		Timestamp: time.Now(),
-	}
+	// Service response is already in the correct format
+	response := *serviceResp
 
 	c.JSON(http.StatusOK, response)
 }
@@ -386,54 +377,4 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	return result
 }
 
-// convertMapToAgentInfo converts service layer map[string]interface{} to generated.AgentInfo
-func convertMapToAgentInfo(agentMap map[string]interface{}) generated.AgentInfo {
-	agentInfo := generated.AgentInfo{}
-
-	// Required fields
-	if id, ok := agentMap["id"].(string); ok {
-		agentInfo.Id = id
-	}
-	if name, ok := agentMap["name"].(string); ok {
-		agentInfo.Name = name
-	}
-	if endpoint, ok := agentMap["endpoint"].(string); ok {
-		agentInfo.Endpoint = endpoint
-	}
-	if status, ok := agentMap["status"].(string); ok {
-		agentInfo.Status = generated.AgentInfoStatus(status)
-	}
-
-	// Capabilities (required field)
-	if caps, ok := agentMap["capabilities"].([]interface{}); ok {
-		capabilities := make([]string, len(caps))
-		for i, cap := range caps {
-			if capStr, ok := cap.(string); ok {
-				capabilities[i] = capStr
-			} else if capMap, ok := cap.(map[string]interface{}); ok {
-				// Extract name from capability object
-				if name, ok := capMap["name"].(string); ok {
-					capabilities[i] = name
-				}
-			}
-		}
-		agentInfo.Capabilities = capabilities
-	} else if caps, ok := agentMap["capabilities"].([]string); ok {
-		agentInfo.Capabilities = caps
-	}
-
-	// Optional fields
-	// Note: Dependencies field removed from API spec - using real-time resolution instead
-
-	if lastSeen, ok := agentMap["last_seen"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {
-			agentInfo.LastSeen = &t
-		}
-	}
-
-	if version, ok := agentMap["version"].(string); ok {
-		agentInfo.Version = &version
-	}
-
-	return agentInfo
-}
+// convertMapToAgentInfo function removed - service now returns proper types directly

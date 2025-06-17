@@ -22,6 +22,11 @@ const (
 	colorGray   = "\033[37m"
 )
 
+// Display constants
+const (
+	maxCapabilityDisplayWidth = 80 // Maximum width for capability display
+)
+
 // NewListCommand creates the list command
 func NewListCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -33,14 +38,14 @@ Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
 Examples:
-  mcp-mesh-dev list                                    # Show beautiful table with all agents
-  mcp-mesh-dev list --json                             # Output in JSON format
-  mcp-mesh-dev list --filter hello                     # Filter agents by name pattern
-  mcp-mesh-dev list --no-deps                          # Hide dependency status
-  mcp-mesh-dev list --wide                             # Show endpoints and tool counts
-  mcp-mesh-dev list --registry-url http://remote:8000  # Connect to remote registry
-  mcp-mesh-dev list --registry-host prod.example.com   # Connect to remote host
-  mcp-mesh-dev list --registry-port 9000               # Use custom port`,
+  meshctl list                                    # Show beautiful table with all agents
+  meshctl list --json                             # Output in JSON format
+  meshctl list --filter hello                     # Filter agents by name pattern
+  meshctl list --no-deps                          # Hide dependency status
+  meshctl list --wide                             # Show endpoints and tool counts
+  meshctl list --registry-url http://remote:8000  # Connect to remote registry
+  meshctl list --registry-host prod.example.com   # Connect to remote host
+  meshctl list --registry-port 9000               # Use custom port`,
 		RunE: runListCommand,
 	}
 
@@ -50,6 +55,11 @@ Examples:
 	cmd.Flags().Bool("verbose", false, "Show detailed information")
 	cmd.Flags().Bool("no-deps", false, "Hide dependency status")
 	cmd.Flags().Bool("wide", false, "Show additional columns")
+
+	// New enhanced filtering and display options
+	cmd.Flags().String("since", "", "Show agents active since duration (e.g., 1h, 30m, 24h)")
+	cmd.Flags().Bool("healthy-only", false, "Show only healthy agents")
+	cmd.Flags().String("id", "", "Show detailed information for specific agent ID")
 
 	// Remote registry connection flags
 	cmd.Flags().String("registry-url", "", "Registry URL (overrides host/port)")
@@ -105,7 +115,9 @@ type ToolInfo struct {
 	ID           int      `json:"id"`
 	Name         string   `json:"name"`
 	Capability   string   `json:"capability"`
+	FunctionName string   `json:"function_name"`
 	Version      string   `json:"version"`
+	Tags         []string `json:"tags,omitempty"`
 	Dependencies []string `json:"dependencies,omitempty"`
 }
 
@@ -130,6 +142,11 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	noDeps, _ := cmd.Flags().GetBool("no-deps")
 	wide, _ := cmd.Flags().GetBool("wide")
+
+	// New enhanced flags
+	sinceFlag, _ := cmd.Flags().GetString("since")
+	healthyOnly, _ := cmd.Flags().GetBool("healthy-only")
+	agentID, _ := cmd.Flags().GetString("id")
 
 	// Registry connection flags
 	registryURL, _ := cmd.Flags().GetString("registry-url")
@@ -179,9 +196,28 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = enrichWithProcessInfo(output.Agents, processes)
 	}
 
+	// Handle single agent details view
+	if agentID != "" {
+		return outputAgentDetails(output.Agents, agentID, jsonOutput)
+	}
+
 	// Apply filters
 	if filterPattern != "" {
 		output.Agents = filterEnhancedAgents(output.Agents, filterPattern)
+	}
+
+	// Apply time-based filtering
+	if sinceFlag != "" {
+		filtered, err := filterAgentsSince(output.Agents, sinceFlag)
+		if err != nil {
+			return fmt.Errorf("invalid --since duration: %w", err)
+		}
+		output.Agents = filtered
+	}
+
+	// Apply healthy-only filter
+	if healthyOnly {
+		output.Agents = filterHealthyAgents(output.Agents)
 	}
 
 	// Output results
@@ -223,6 +259,32 @@ func getRegistryStatus(registryURL string) RegistryStatus {
 	return status
 }
 
+// AgentInfoAPI represents the agent structure returned by the registry API
+type AgentInfoAPI struct {
+	ID                   string      `json:"id"`
+	Name                 string      `json:"name"`
+	Status               string      `json:"status"`
+	Endpoint             string      `json:"endpoint"`
+	Version              *string     `json:"version,omitempty"`
+	LastSeen             *time.Time  `json:"last_seen,omitempty"`
+	TotalDependencies    int         `json:"total_dependencies"`
+	DependenciesResolved int         `json:"dependencies_resolved"`
+	Capabilities         []struct {
+		Name         string   `json:"name"`
+		Version      string   `json:"version"`
+		FunctionName string   `json:"function_name"`
+		Description  *string  `json:"description,omitempty"`
+		Tags         []string `json:"tags,omitempty"`
+	} `json:"capabilities"`
+}
+
+// AgentsListResponseAPI represents the API response structure
+type AgentsListResponseAPI struct {
+	Agents    []AgentInfoAPI `json:"agents"`
+	Count     int            `json:"count"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
 // getDetailedAgents fetches detailed agent information from registry
 func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 	agentsURL := registryURL + "/agents"
@@ -233,19 +295,68 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("registry returned status %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			// Registry or endpoint not found - return empty list
+			return []map[string]interface{}{}, nil
+		case http.StatusServiceUnavailable:
+			return nil, fmt.Errorf("registry service unavailable (status %d)", resp.StatusCode)
+		case http.StatusInternalServerError:
+			return nil, fmt.Errorf("registry internal error (status %d)", resp.StatusCode)
+		default:
+			return nil, fmt.Errorf("registry returned status %d", resp.StatusCode)
+		}
 	}
 
-	var response struct {
-		Agents []map[string]interface{} `json:"agents"`
-		Count  int                      `json:"count"`
-	}
+	var response AgentsListResponseAPI
 
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("failed to decode registry response: %w", err)
 	}
 
-	return response.Agents, nil
+	// Convert structured response to map format for compatibility with existing code
+	agents := make([]map[string]interface{}, len(response.Agents))
+	for i, agent := range response.Agents {
+		agentMap := map[string]interface{}{
+			"id":                    agent.ID,
+			"name":                  agent.Name,
+			"status":                agent.Status,
+			"endpoint":              agent.Endpoint,
+			"total_dependencies":    agent.TotalDependencies,
+			"dependencies_resolved": agent.DependenciesResolved,
+		}
+
+		if agent.Version != nil {
+			agentMap["version"] = *agent.Version
+		}
+
+		if agent.LastSeen != nil {
+			agentMap["last_seen"] = agent.LastSeen.Format(time.RFC3339)
+		}
+
+		// Convert capabilities to the expected format ([]interface{} containing maps)
+		capabilities := make([]interface{}, len(agent.Capabilities))
+		for j, cap := range agent.Capabilities {
+			capMap := map[string]interface{}{
+				"name":          cap.Name,
+				"capability":    cap.Name, // Use name as capability for compatibility
+				"version":       cap.Version,
+				"function_name": cap.FunctionName,
+			}
+			if cap.Description != nil {
+				capMap["description"] = *cap.Description
+			}
+			if len(cap.Tags) > 0 {
+				capMap["tags"] = cap.Tags
+			}
+			capabilities[j] = capMap
+		}
+		agentMap["capabilities"] = capabilities
+
+		agents[i] = agentMap
+	}
+
+	return agents, nil
 }
 
 // getEnhancedAgents processes detailed agent data and creates enhanced agent objects
@@ -292,7 +403,12 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 			agent.UpdatedAt = t
 		}
 	}
-	if lastHeartbeatStr := getString(data, "last_heartbeat"); lastHeartbeatStr != "" {
+	// Try both field names for last heartbeat/seen
+	if lastSeenStr := getString(data, "last_seen"); lastSeenStr != "" {
+		if t, err := time.Parse(time.RFC3339, lastSeenStr); err == nil {
+			agent.LastHeartbeat = &t
+		}
+	} else if lastHeartbeatStr := getString(data, "last_heartbeat"); lastHeartbeatStr != "" {
 		if t, err := time.Parse(time.RFC3339, lastHeartbeatStr); err == nil {
 			agent.LastHeartbeat = &t
 		}
@@ -303,9 +419,35 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 		for _, cap := range capabilities {
 			if capMap, ok := cap.(map[string]interface{}); ok {
 				tool := ToolInfo{
-					Name:       getString(capMap, "name"),
-					Capability: getString(capMap, "capability"),
-					Version:    getString(capMap, "version"),
+					Name:         getString(capMap, "name"),        // capability name from API
+					Capability:   getString(capMap, "name"),        // same as name
+					FunctionName: getString(capMap, "function_name"),
+					Version:      getString(capMap, "version"),
+				}
+				// Parse tags if present
+				if tagsSlice, ok := capMap["tags"].([]string); ok {
+					tool.Tags = tagsSlice
+				} else if tagsData, ok := capMap["tags"].([]interface{}); ok {
+					for _, tag := range tagsData {
+						if tagStr, ok := tag.(string); ok {
+							tool.Tags = append(tool.Tags, tagStr)
+						}
+					}
+				} else if tagsStr, ok := capMap["tags"].(string); ok && tagsStr != "" && tagsStr != "[]" {
+					// Handle case where tags come as JSON string
+					var tags []string
+					if err := json.Unmarshal([]byte(tagsStr), &tags); err == nil {
+						tool.Tags = tags
+					} else {
+						// Handle case where tags come as plain string like "[system time clock]"
+						if strings.HasPrefix(tagsStr, "[") && strings.HasSuffix(tagsStr, "]") {
+							// Remove brackets and split by spaces
+							cleanTags := strings.Trim(tagsStr, "[]")
+							if cleanTags != "" {
+								tool.Tags = strings.Fields(cleanTags)
+							}
+						}
+					}
 				}
 				if id := getFloat(capMap, "id"); id > 0 {
 					tool.ID = int(id)
@@ -315,10 +457,16 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 		}
 	}
 
-	// Calculate dependencies (simplified for now - in real implementation, would query dependencies)
+	// Extract dependency counts from API response
+	if totalDeps := getFloat(data, "total_dependencies"); totalDeps >= 0 {
+		agent.DependenciesTotal = int(totalDeps)
+	}
+	if resolvedDeps := getFloat(data, "dependencies_resolved"); resolvedDeps >= 0 {
+		agent.DependenciesResolved = int(resolvedDeps)
+	}
+
+	// For now, use placeholder dependencies list (could be enhanced to show actual dependency details)
 	agent.Dependencies = calculateDependencies(agent.Tools)
-	agent.DependenciesTotal = len(agent.Dependencies)
-	agent.DependenciesResolved = countResolvedDependencies(agent.Dependencies)
 
 	return agent
 }
@@ -335,11 +483,18 @@ func getString(data map[string]interface{}, key string) string {
 
 func getFloat(data map[string]interface{}, key string) float64 {
 	if val, ok := data[key]; ok {
-		if f, ok := val.(float64); ok {
-			return f
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		case int32:
+			return float64(v)
 		}
 	}
-	return 0
+	return -1 // Return -1 to indicate field doesn't exist
 }
 
 func getMapInterface(data map[string]interface{}, key string) map[string]interface{} {
@@ -431,12 +586,12 @@ func outputDockerComposeStyle(output ListOutput, verbose, noDeps, wide bool) err
 	nameWidth, statusWidth, endpointWidth := calculateColumnWidths(output.Agents, wide)
 
 	// Print header
-	printTableHeader(nameWidth, statusWidth, endpointWidth, noDeps, wide)
-	printTableSeparator(nameWidth, statusWidth, endpointWidth, noDeps, wide)
+	printTableHeader(nameWidth, statusWidth, endpointWidth, noDeps, wide, verbose)
+	printTableSeparator(nameWidth, statusWidth, endpointWidth, noDeps, wide, verbose)
 
 	// Print agent rows
 	for _, agent := range output.Agents {
-		printAgentRow(agent, nameWidth, statusWidth, endpointWidth, noDeps, wide)
+		printAgentRow(agent, nameWidth, statusWidth, endpointWidth, noDeps, wide, verbose)
 	}
 
 	// Show additional details if verbose
@@ -482,7 +637,8 @@ func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, status
 		if len(agent.Status) > statusWidth {
 			statusWidth = len(agent.Status)
 		}
-		if wide && len(agent.Endpoint) > endpointWidth {
+		// Always calculate endpoint width for standard view
+		if len(agent.Endpoint) > endpointWidth {
 			endpointWidth = len(agent.Endpoint)
 		}
 	}
@@ -490,46 +646,60 @@ func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, status
 	// Add padding
 	nameWidth += 2
 	statusWidth += 2
-	if wide {
-		endpointWidth += 2
-	}
+	// Always add endpoint padding for standard view
+	endpointWidth += 2
 
 	return nameWidth, statusWidth, endpointWidth
 }
 
 // printTableHeader prints the docker-compose-style table header
-func printTableHeader(nameWidth, statusWidth, endpointWidth int, noDeps, wide bool) {
+func printTableHeader(nameWidth, statusWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	fmt.Printf("%-*s %-*s", nameWidth, "NAME", statusWidth, "STATUS")
 
 	if !noDeps {
 		fmt.Printf(" %-8s", "DEPS")
 	}
 
-	fmt.Printf(" %-12s", "SINCE")
+	// Always show endpoint in standard view, tools only in wide mode
+	fmt.Printf(" %-*s", endpointWidth, "ENDPOINT")
 
 	if wide {
-		fmt.Printf(" %-*s", endpointWidth, "ENDPOINT")
 		fmt.Printf(" %-6s", "TOOLS")
+		fmt.Printf(" %-12s", "SINCE")
+	} else {
+		// In standard view, SINCE goes at the end
+		fmt.Printf(" %-12s", "SINCE")
+	}
+
+	if verbose || wide {
+		fmt.Printf(" %-*s", maxCapabilityDisplayWidth, "CAPABILITIES")
 	}
 
 	fmt.Println()
 }
 
 // printTableSeparator prints a separator line
-func printTableSeparator(nameWidth, statusWidth, endpointWidth int, noDeps, wide bool) {
+func printTableSeparator(nameWidth, statusWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	totalWidth := nameWidth + statusWidth + 13 // base width
 	if !noDeps {
 		totalWidth += 9
 	}
+	// Always include endpoint width in standard view
+	totalWidth += endpointWidth + 1
+	// Always include SINCE width (12 + 1 for spacing)
+	totalWidth += 13
 	if wide {
-		totalWidth += endpointWidth + 7
+		totalWidth += 7 // for tools column
+	}
+	if verbose || wide {
+		totalWidth += maxCapabilityDisplayWidth + 1
 	}
 
 	fmt.Println(strings.Repeat("-", totalWidth))
 }
 
 // printAgentRow prints a single agent row in the table
-func printAgentRow(agent EnhancedAgent, nameWidth, statusWidth, endpointWidth int, noDeps, wide bool) {
+func printAgentRow(agent EnhancedAgent, nameWidth, statusWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	// Name column
 	fmt.Printf("%-*s", nameWidth, truncateStringForList(agent.Name, nameWidth-2))
 
@@ -540,21 +710,35 @@ func printAgentRow(agent EnhancedAgent, nameWidth, statusWidth, endpointWidth in
 	// Dependencies column (if not hidden)
 	if !noDeps {
 		depsStr := formatDependencies(agent.DependenciesResolved, agent.DependenciesTotal)
-		fmt.Printf(" %-8s", depsStr)
+		// Print dependency string without width specification to avoid color code issues
+		fmt.Printf(" %s", depsStr)
+		// Pad with spaces to maintain alignment (8 chars total: 3 for "X/Y" + padding)
+		depsVisualLen := len(fmt.Sprintf("%d/%d", agent.DependenciesResolved, agent.DependenciesTotal))
+		padding := 8 - depsVisualLen
+		if padding > 0 {
+			fmt.Printf("%s", strings.Repeat(" ", padding))
+		}
 	}
 
-	// Since column (uptime)
-	since := formatSince(agent)
-	fmt.Printf(" %-12s", since)
+	// Endpoint column (always shown)
+	endpoint := formatEndpoint(agent.Endpoint)
+	fmt.Printf(" %-*s", endpointWidth, truncateStringForList(endpoint, endpointWidth-2))
 
-	// Wide mode columns
+	// Tools count and SINCE (only in wide mode)
 	if wide {
-		// Endpoint column
-		endpoint := formatEndpoint(agent.Endpoint)
-		fmt.Printf(" %-*s", endpointWidth, truncateStringForList(endpoint, endpointWidth-2))
-
-		// Tools count
 		fmt.Printf(" %-6s", fmt.Sprintf("%d", len(agent.Tools)))
+		since := formatSince(agent)
+		fmt.Printf(" %-12s", since)
+	} else {
+		// In standard view, SINCE goes at the end
+		since := formatSince(agent)
+		fmt.Printf(" %-12s", since)
+	}
+
+	// Capabilities column (if verbose or wide) - always at the end
+	if verbose || wide {
+		capabilities := formatCapabilitiesForWide(agent.Tools)
+		fmt.Printf(" %-*s", maxCapabilityDisplayWidth, truncateStringForList(capabilities, maxCapabilityDisplayWidth))
 	}
 
 	fmt.Println()
@@ -575,22 +759,24 @@ func getStatusColor(status string) string {
 }
 
 func formatDependencies(resolved, total int) string {
-	if total == 0 {
-		return "-"
-	}
+	// Always show the dependency count, even if 0/0
 	color := colorGreen
 	if resolved < total {
-		color = colorYellow
+		if resolved == 0 {
+			color = colorRed    // No dependencies resolved
+		} else {
+			color = colorYellow // Partially resolved
+		}
 	}
-	if resolved == 0 && total > 0 {
-		color = colorRed
-	}
+	// Fully resolved (or no dependencies) = green
 	return fmt.Sprintf("%s%d/%d%s", color, resolved, total, colorReset)
 }
 
 func formatSince(agent EnhancedAgent) string {
 	var since time.Time
-	if !agent.StartTime.IsZero() {
+	if agent.LastHeartbeat != nil && !agent.LastHeartbeat.IsZero() {
+		since = *agent.LastHeartbeat
+	} else if !agent.StartTime.IsZero() {
 		since = agent.StartTime
 	} else if !agent.CreatedAt.IsZero() {
 		since = agent.CreatedAt
@@ -720,4 +906,233 @@ func configureHTTPClient(timeoutSeconds int) {
 	registryHTTPClient = &http.Client{
 		Timeout: time.Duration(timeoutSeconds) * time.Second,
 	}
+}
+
+// filterAgentsSince filters agents by last activity time
+func filterAgentsSince(agents []EnhancedAgent, since string) ([]EnhancedAgent, error) {
+	duration, err := time.ParseDuration(since)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration format: %s (use formats like 1h, 30m, 24h)", since)
+	}
+
+	cutoff := time.Now().Add(-duration)
+	var filtered []EnhancedAgent
+
+	for _, agent := range agents {
+		var lastActivity time.Time
+
+		if agent.LastHeartbeat != nil {
+			lastActivity = *agent.LastHeartbeat
+		} else if !agent.UpdatedAt.IsZero() {
+			lastActivity = agent.UpdatedAt
+		} else if !agent.CreatedAt.IsZero() {
+			lastActivity = agent.CreatedAt
+		} else {
+			continue // Skip agents with no time information
+		}
+
+		if lastActivity.After(cutoff) {
+			filtered = append(filtered, agent)
+		}
+	}
+
+	return filtered, nil
+}
+
+// filterHealthyAgents filters for only healthy agents
+func filterHealthyAgents(agents []EnhancedAgent) []EnhancedAgent {
+	var filtered []EnhancedAgent
+	for _, agent := range agents {
+		if strings.ToLower(agent.Status) == "healthy" || strings.ToLower(agent.Status) == "running" {
+			filtered = append(filtered, agent)
+		}
+	}
+	return filtered
+}
+
+// outputAgentDetails shows detailed information for a specific agent
+func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool) error {
+	var targetAgent *EnhancedAgent
+
+	// Find the requested agent
+	for _, agent := range agents {
+		if agent.ID == agentID {
+			targetAgent = &agent
+			break
+		}
+	}
+
+	if targetAgent == nil {
+		return fmt.Errorf("agent with ID '%s' not found", agentID)
+	}
+
+	if jsonOutput {
+		jsonData, err := json.MarshalIndent(targetAgent, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to encode agent details as JSON: %w", err)
+		}
+		fmt.Println(string(jsonData))
+		return nil
+	}
+
+	// Show detailed agent information in vertical format
+	fmt.Printf("%sAgent Details: %s%s\n", colorBlue, agentID, colorReset)
+	fmt.Println(strings.Repeat("=", 80))
+
+	// Basic information
+	fmt.Printf("%-20s: %s\n", "Name", targetAgent.Name)
+	fmt.Printf("%-20s: %s%s%s\n", "Status", getStatusColor(targetAgent.Status), targetAgent.Status, colorReset)
+	fmt.Printf("%-20s: %s\n", "Endpoint", targetAgent.Endpoint)
+	if targetAgent.Version != "" {
+		fmt.Printf("%-20s: %s\n", "Version", targetAgent.Version)
+	}
+
+	// Dependency information
+	depsStr := formatDependencies(targetAgent.DependenciesResolved, targetAgent.DependenciesTotal)
+	fmt.Printf("%-20s: %s\n", "Dependencies", depsStr)
+
+	// Timing information
+	if targetAgent.LastHeartbeat != nil {
+		fmt.Printf("%-20s: %s (%s ago)\n", "Last Seen",
+			targetAgent.LastHeartbeat.Format("2006-01-02 15:04:05"),
+			formatDuration(time.Since(*targetAgent.LastHeartbeat)))
+	}
+	if !targetAgent.CreatedAt.IsZero() {
+		fmt.Printf("%-20s: %s\n", "Created", targetAgent.CreatedAt.Format("2006-01-02 15:04:05"))
+	}
+	if !targetAgent.UpdatedAt.IsZero() {
+		fmt.Printf("%-20s: %s\n", "Updated", targetAgent.UpdatedAt.Format("2006-01-02 15:04:05"))
+	}
+
+	// Process information (if available)
+	if targetAgent.PID > 0 {
+		fmt.Printf("%-20s: %d\n", "PID", targetAgent.PID)
+	}
+	if targetAgent.FilePath != "" {
+		fmt.Printf("%-20s: %s\n", "File Path", targetAgent.FilePath)
+	}
+	if !targetAgent.StartTime.IsZero() {
+		fmt.Printf("%-20s: %s (running for %s)\n", "Start Time",
+			targetAgent.StartTime.Format("2006-01-02 15:04:05"),
+			formatDuration(time.Since(targetAgent.StartTime)))
+	}
+
+	// Capabilities/Tools
+	if len(targetAgent.Tools) > 0 {
+		fmt.Printf("\n%sCapabilities (%d):%s\n", colorBlue, len(targetAgent.Tools), colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+
+		// Print table header
+		fmt.Printf("%-25s %-30s %-10s %-15s\n", "CAPABILITY", "MCP TOOL", "VERSION", "TAGS")
+		fmt.Println(strings.Repeat("-", 80))
+
+		// Print each capability as a table row
+		for _, tool := range targetAgent.Tools {
+			capability := tool.Capability
+			if capability == "" {
+				capability = tool.Name
+			}
+
+			functionName := tool.FunctionName
+			if functionName == "" {
+				functionName = tool.Name
+			}
+
+			version := tool.Version
+			if version == "" {
+				version = "-"
+			}
+
+			tags := "-"
+			if len(tool.Tags) > 0 {
+				tags = strings.Join(tool.Tags, ",")
+			}
+
+			fmt.Printf("%-25s %-30s %-10s %-15s\n",
+				capability,
+				functionName,
+				version,
+				tags)
+		}
+	}
+
+	// Configuration (if available)
+	if len(targetAgent.Config) > 0 {
+		fmt.Printf("\n%sConfiguration:%s\n", colorBlue, colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+		for key, value := range targetAgent.Config {
+			fmt.Printf("  %s: %v\n", key, value)
+		}
+	}
+
+	// Labels (if available)
+	if len(targetAgent.Labels) > 0 {
+		fmt.Printf("\n%sLabels:%s\n", colorBlue, colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+		for key, value := range targetAgent.Labels {
+			fmt.Printf("  %s: %v\n", key, value)
+		}
+	}
+
+	return nil
+}
+
+// formatCapabilitiesForWide formats capabilities list for wide display with truncation
+func formatCapabilitiesForWide(tools []ToolInfo) string {
+	if len(tools) == 0 {
+		return "-"
+	}
+
+	var capabilities []string
+	for _, tool := range tools {
+		if tool.Name != "" {
+			capabilities = append(capabilities, tool.Name)
+		} else if tool.Capability != "" {
+			capabilities = append(capabilities, tool.Capability)
+		}
+	}
+
+	if len(capabilities) == 0 {
+		return "-"
+	}
+
+	// Join capabilities with commas
+	result := strings.Join(capabilities, ", ")
+
+	// Truncate if too long
+	if len(result) <= maxCapabilityDisplayWidth {
+		return result
+	}
+
+	// Find where to truncate and add "(X more)"
+	truncated := ""
+	count := 0
+	currentLen := 0
+
+	for i, cap := range capabilities {
+		newLen := currentLen + len(cap)
+		if i > 0 {
+			newLen += 2 // for ", "
+		}
+
+		// Check if adding this capability would exceed limit (accounting for "(X more)")
+		remaining := len(capabilities) - i - 1
+		if remaining > 0 {
+			moreText := fmt.Sprintf(" (%d more)", remaining)
+			if newLen+len(moreText) > maxCapabilityDisplayWidth {
+				truncated += fmt.Sprintf(" (%d more)", remaining)
+				break
+			}
+		}
+
+		if i > 0 {
+			truncated += ", "
+			currentLen += 2
+		}
+		truncated += cap
+		currentLen += len(cap)
+		count++
+	}
+
+	return truncated
 }

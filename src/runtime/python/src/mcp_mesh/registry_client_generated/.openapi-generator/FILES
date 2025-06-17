@@ -12,6 +12,7 @@ docs/AgentRegistration.md
 docs/AgentRegistrationMetadata.md
 docs/AgentsApi.md
 docs/AgentsListResponse.md
+docs/CapabilityInfo.md
 docs/DecoratorAgentMetadata.md
 docs/DecoratorAgentRequest.md
 docs/DecoratorInfo.md
@@ -50,6 +51,7 @@ mcp_mesh_registry_client/models/agent_metadata_dependencies_inner_one_of.py
 mcp_mesh_registry_client/models/agent_registration.py
 mcp_mesh_registry_client/models/agent_registration_metadata.py
 mcp_mesh_registry_client/models/agents_list_response.py
+mcp_mesh_registry_client/models/capability_info.py
 mcp_mesh_registry_client/models/decorator_agent_metadata.py
 mcp_mesh_registry_client/models/decorator_agent_request.py
 mcp_mesh_registry_client/models/decorator_info.py
@@ -86,6 +88,7 @@ test/test_agent_registration.py
 test/test_agent_registration_metadata.py
 test/test_agents_api.py
 test/test_agents_list_response.py
+test/test_capability_info.py
 test/test_decorator_agent_metadata.py
 test/test_decorator_agent_request.py
 test/test_decorator_info.py

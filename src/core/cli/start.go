@@ -29,10 +29,10 @@ If no registry is running, a local registry will be started automatically.
 The registry service can also be started independently using --registry-only.
 
 Examples:
-  mcp-mesh-dev start                              # Start registry only
-  mcp-mesh-dev start examples/hello_world.py     # Start agent (and registry if needed)
-  mcp-mesh-dev start --registry-only              # Start only the registry service
-  mcp-mesh-dev start agent1.py agent2.py         # Start multiple agents`,
+  meshctl start                              # Start registry only
+  meshctl start examples/hello_world.py     # Start agent (and registry if needed)
+  meshctl start --registry-only              # Start only the registry service
+  meshctl start agent1.py agent2.py         # Start multiple agents`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runStartCommand,
 	}
