@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "MCP Mesh Contributors" },
+    { name = "Dhyan Raj", email = "dhyanraj@gmail.com" },
 ]
 keywords = [
     "mcp",

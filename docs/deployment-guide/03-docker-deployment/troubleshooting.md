@@ -578,7 +578,7 @@ If these solutions don't resolve your issue:
 
 2. **Check GitHub issues:**
 
-   - https://github.com/anthropics/mcp-mesh/issues
+   - https://github.com/dhyansraj/mcp-mesh/issues
 
 3. **Community support:**
    - MCP Discord: https://discord.gg/mcp

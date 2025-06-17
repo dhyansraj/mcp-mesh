@@ -66,7 +66,9 @@ python:
       packageName: "mcp_mesh_registry_client"
       packageVersion: "1.0.0"
       projectName: "mcp-mesh-registry-client"
-      packageUrl: "https://github.com/anthropic/mcp-mesh"
+      packageUrl: "https://github.com/dhyansraj/mcp-mesh"
+      packageAuthor: "DhyanRaj"
+      packageAuthorEmail: "dhyanraj@gmail.com"
       modelPropertyNaming: "snake_case"
       generateSourceCodeOnly: true
       supportPython: ">=3.10"
@@ -80,7 +82,9 @@ python:
       packageName: "mcp_mesh_agent_server"
       packageVersion: "1.0.0"
       projectName: "mcp-mesh-agent-server"
-      packageUrl: "https://github.com/anthropic/mcp-mesh"
+      packageUrl: "https://github.com/dhyansraj/mcp-mesh"
+      packageAuthor: "DhyanRaj"
+      packageAuthorEmail: "dhyanraj@gmail.com"
       modelPropertyNaming: "snake_case"
       generateSourceCodeOnly: true
       supportPython: ">=3.10"

@@ -309,7 +309,7 @@ metadata:
   name: mcp-agent
 spec:
   source:
-    repoURL: https://github.com/your-org/mcp-mesh
+    repoURL: https://github.com/dhyansraj/mcp-mesh
     targetRevision: main
     path: helm/mcp-mesh-agent
     helm:

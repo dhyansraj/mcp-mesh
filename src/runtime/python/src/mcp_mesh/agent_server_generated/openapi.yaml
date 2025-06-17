@@ -1,8 +1,9 @@
 openapi: 3.0.3
 info:
   contact:
-    name: MCP Mesh Team
-    url: https://github.com/anthropic/mcp-mesh
+    name: Dhyan Raj
+    url: https://github.com/dhyansraj/mcp-mesh
+    email: dhyanraj@gmail.com
   description: |
     API contract for MCP Mesh Agent HTTP endpoints.
 

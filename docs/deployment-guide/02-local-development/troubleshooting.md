@@ -408,7 +408,7 @@ If these solutions don't resolve your issue:
 
 3. **Community Resources:**
 
-   - GitHub Issues: https://github.com/anthropics/mcp-mesh/issues
+   - GitHub Issues: https://github.com/dhyansraj/mcp-mesh/issues
    - Discord: [MCP Community](https://discord.gg/mcp)
    - Stack Overflow: Tag with `mcp-mesh`
 

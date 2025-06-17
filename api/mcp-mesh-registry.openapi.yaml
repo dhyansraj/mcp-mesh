@@ -17,8 +17,9 @@ info:
     - v1.0.0: Initial contract definition
   version: 1.0.0
   contact:
-    name: MCP Mesh Team
-    url: https://github.com/anthropic/mcp-mesh
+    name: Dhyan Raj
+    url: https://github.com/dhyansraj/mcp-mesh
+    email: dhyanraj@gmail.com
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT

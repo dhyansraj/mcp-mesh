@@ -20,8 +20,9 @@ info:
     - MCP protocol HTTP transport
   version: 1.0.0
   contact:
-    name: MCP Mesh Team
-    url: https://github.com/anthropic/mcp-mesh
+    name: Dhyan Raj
+    url: https://github.com/dhyansraj/mcp-mesh
+    email: dhyanraj@gmail.com
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -279,8 +280,8 @@ components:
               message:
                 type: string
           example:
-            mcp_server: {status: "pass", message: "Connected"}
-            registry: {status: "pass", message: "Registered"}
+            mcp_server: { status: "pass", message: "Connected" }
+            registry: { status: "pass", message: "Registered" }
 
     # Agent Mesh Schemas
     AgentMeshInfo:
@@ -327,8 +328,8 @@ components:
             file_operations:
               description: "File system operations"
               parameters:
-                operation: {type: "string", enum: ["read", "write", "list"]}
-                path: {type: "string"}
+                operation: { type: "string", enum: ["read", "write", "list"] }
+                path: { type: "string" }
 
     ToolInfo:
       type: object
@@ -343,8 +344,8 @@ components:
           additionalProperties: true
           description: Tool parameter schema
           example:
-            operation: {type: "string", enum: ["read", "write"]}
-            path: {type: "string"}
+            operation: { type: "string", enum: ["read", "write"] }
+            path: { type: "string" }
 
     # MCP Protocol Schemas
     McpRequest:

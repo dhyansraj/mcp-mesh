@@ -1,7 +1,7 @@
 # MCP Mesh SDK
 
-[![CI/CD Pipeline](https://github.com/yourusername/mcp-mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/mcp-mesh/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/yourusername/mcp-mesh/branch/main/graph/badge.svg)](https://codecov.io/gh/yourusername/mcp-mesh)
+[![CI/CD Pipeline](https://github.com/dhyansraj/mcp-mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/dhyansraj/mcp-mesh/branch/main/graph/badge.svg)](https://codecov.io/gh/dhyansraj/mcp-mesh)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compliance](https://img.shields.io/badge/MCP-compliant-green.svg)](https://github.com/anthropics/model-context-protocol)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

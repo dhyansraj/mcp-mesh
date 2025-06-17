@@ -190,7 +190,9 @@ generate_python_registry_client() {
         --additional-properties=packageName=mcp_mesh_registry_client \
         --additional-properties=packageVersion=1.0.0 \
         --additional-properties=projectName=mcp-mesh-registry-client \
-        --additional-properties=packageUrl=https://github.com/anthropic/mcp-mesh \
+        --additional-properties=packageUrl=https://github.com/dhyansraj/mcp-mesh \
+        --additional-properties=packageAuthor=DhyanRaj \
+        --additional-properties=packageAuthorEmail=dhyanraj@gmail.com \
         --skip-validate-spec
 
     # Add AI behavior guidance to __init__.py
@@ -273,7 +275,9 @@ generate_python_agent_server() {
         --additional-properties=packageName=mcp_mesh_agent_server \
         --additional-properties=packageVersion=1.0.0 \
         --additional-properties=projectName=mcp-mesh-agent-server \
-        --additional-properties=packageUrl=https://github.com/anthropic/mcp-mesh \
+        --additional-properties=packageUrl=https://github.com/dhyansraj/mcp-mesh \
+        --additional-properties=packageAuthor=DhyanRaj \
+        --additional-properties=packageAuthorEmail=dhyanraj@gmail.com \
         --skip-validate-spec
 
     # Add AI behavior guidance to main module

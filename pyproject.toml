@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "MCP Mesh Contributors" },
+    { name = "Dhyan Raj", email = "dhyanraj@gmail.com" },
 ]
 keywords = [
     "mcp",
@@ -54,10 +54,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/mcp-mesh"
+Homepage = "https://github.com/dhyansraj/mcp-mesh"
 Documentation = "https://mcp-mesh.readthedocs.io"
-Repository = "https://github.com/yourusername/mcp-mesh"
-Issues = "https://github.com/yourusername/mcp-mesh/issues"
+Repository = "https://github.com/dhyansraj/mcp-mesh"
+Issues = "https://github.com/dhyansraj/mcp-mesh/issues"
 
 # [project.scripts]
 # Python CLI and server entry points have been removed in favor of Go implementations
