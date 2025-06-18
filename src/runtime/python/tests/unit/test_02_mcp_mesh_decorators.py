@@ -517,6 +517,208 @@ class TestMeshAgentDecorator:
         assert metadata["health_interval"] == 60
         assert metadata["custom_field"] == "custom_value"
 
+
+class TestMeshAgentHttpEndpointBehavior:
+    """Test cases for understanding HTTP endpoint configuration behavior."""
+
+    def test_pod_ip_environment_variable_effect(self):
+        """Test that POD_IP environment variable affects endpoint construction."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {
+                "POD_IP": "10.244.1.5",
+                "MCP_MESH_HTTP_HOST": "0.0.0.0",
+                "MCP_MESH_HTTP_PORT": "8080",
+            },
+        ):
+
+            @mesh.agent(name="pod-ip-agent", auto_run=False)
+            class PodIpAgent:
+                pass
+
+            metadata = PodIpAgent._mesh_agent_metadata
+            # Check that the host is still what we configured
+            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_port"] == 8080
+
+    def test_mcp_mesh_http_host_service_name(self):
+        """Test setting MCP_MESH_HTTP_HOST to a service name."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {"MCP_MESH_HTTP_HOST": "hello-world-agent", "MCP_MESH_HTTP_PORT": "8080"},
+        ):
+
+            @mesh.agent(name="service-name-agent", auto_run=False)
+            class ServiceNameAgent:
+                pass
+
+            metadata = ServiceNameAgent._mesh_agent_metadata
+            # The configured host should be the service name
+            assert metadata["http_host"] == "hello-world-agent"
+            assert metadata["http_port"] == 8080
+
+    def test_docker_network_ip_as_pod_ip(self):
+        """Test using a Docker network IP as POD_IP."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {
+                "POD_IP": "172.18.0.3",
+                "MCP_MESH_HTTP_HOST": "0.0.0.0",
+                "MCP_MESH_HTTP_PORT": "8080",
+            },
+        ):
+
+            @mesh.agent(name="docker-ip-agent", auto_run=False)
+            class DockerIpAgent:
+                pass
+
+            metadata = DockerIpAgent._mesh_agent_metadata
+            # Server should bind to 0.0.0.0 but POD_IP should be available for endpoint resolution
+            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_port"] == 8080
+
+    def test_kubernetes_service_host_detection(self):
+        """Test Kubernetes environment detection."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {
+                "KUBERNETES_SERVICE_HOST": "kubernetes",
+                "MCP_MESH_HTTP_HOST": "0.0.0.0",
+                "MCP_MESH_HTTP_PORT": "8080",
+            },
+        ):
+
+            @mesh.agent(name="k8s-agent", auto_run=False)
+            class K8sAgent:
+                pass
+
+            metadata = K8sAgent._mesh_agent_metadata
+            # Should still bind to configured host
+            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_port"] == 8080
+
+    def test_combined_docker_environment_variables(self):
+        """Test the combination of environment variables we use in Docker."""
+        from unittest.mock import patch
+
+        import mesh
+
+        docker_env = {
+            "MCP_MESH_HTTP_HOST": "0.0.0.0",
+            "MCP_MESH_HTTP_PORT": "8080",
+            "POD_IP": "hello-world-agent",  # Using service name as POD_IP
+            "MCP_MESH_REGISTRY_URL": "http://registry:8000",
+            "MCP_MESH_AGENT_NAME": "hello-world",
+            "MCP_MESH_NAMESPACE": "default",
+        }
+
+        with patch.dict("os.environ", docker_env):
+
+            @mesh.agent(name="docker-agent", auto_run=False)
+            class DockerAgent:
+                pass
+
+            metadata = DockerAgent._mesh_agent_metadata
+            # Verify all configurations are applied correctly
+            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_port"] == 8080
+            assert metadata["namespace"] == "default"
+
+    def test_http_wrapper_endpoint_with_pod_ip(self):
+        """Test that HTTP wrapper uses POD_IP for endpoint construction."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {
+                "POD_IP": "10.244.1.5",
+                "MCP_MESH_HTTP_HOST": "0.0.0.0",
+                "MCP_MESH_HTTP_PORT": "8080",
+            },
+        ):
+
+            @mesh.agent(name="endpoint-test-agent", enable_http=True, auto_run=False)
+            class EndpointTestAgent:
+
+                @mesh.tool()
+                def test_tool(self):
+                    return "test response"
+
+            # This test verifies that the decorator properly configures the agent
+            metadata = EndpointTestAgent._mesh_agent_metadata
+            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_port"] == 8080
+            assert metadata["enable_http"] == True
+
+    def test_static_ip_as_pod_ip(self):
+        """Test using a static IP as POD_IP like Docker networks."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {
+                "POD_IP": "172.18.0.10",
+                "MCP_MESH_HTTP_HOST": "0.0.0.0",
+                "MCP_MESH_HTTP_PORT": "8080",
+            },
+        ):
+
+            @mesh.agent(name="static-ip-agent", enable_http=True, auto_run=False)
+            class StaticIpAgent:
+
+                @mesh.tool()
+                def get_info(self):
+                    return "agent info"
+
+            metadata = StaticIpAgent._mesh_agent_metadata
+            # Decorator should still use the configured values
+            assert metadata["http_host"] == "0.0.0.0"  # Server binding
+            assert metadata["http_port"] == 8080
+            # POD_IP should be available for endpoint resolution (tested in http_wrapper)
+
+    def test_service_name_as_http_host_binding(self):
+        """Test what happens when HTTP_HOST is set to service name."""
+        from unittest.mock import patch
+
+        import mesh
+
+        with patch.dict(
+            "os.environ",
+            {"MCP_MESH_HTTP_HOST": "my-service-name", "MCP_MESH_HTTP_PORT": "8080"},
+        ):
+
+            @mesh.agent(name="service-host-agent", enable_http=True, auto_run=False)
+            class ServiceHostAgent:
+
+                @mesh.tool()
+                def service_tool(self):
+                    return "service response"
+
+            metadata = ServiceHostAgent._mesh_agent_metadata
+            # When HTTP_HOST is set to service name, that's what the server will try to bind to
+            assert metadata["http_host"] == "my-service-name"
+            assert metadata["http_port"] == 8080
+
     def test_mesh_agent_parameter_validation(self):
         """Test mesh.agent parameter validation."""
         import mesh

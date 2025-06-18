@@ -171,11 +171,13 @@ func (s *Service) processDecoratorRegistration(request *DecoratorAgentRequest) (
 // processDecoratorHeartbeat handles the business logic for decorator-based heartbeat
 func (s *Service) processDecoratorHeartbeat(request *DecoratorAgentRequest) (*DecoratorAgentResponse, error) {
 	// Update last heartbeat
-	_, err := s.db.Exec(`
+	now := time.Now()
+	updateHeartbeatSQL := fmt.Sprintf(`
 		UPDATE agents
-		SET last_heartbeat = ?, updated_at = ?
-		WHERE id = ?
-	`, time.Now(), time.Now(), request.AgentID)
+		SET last_heartbeat = %s, updated_at = %s
+		WHERE id = %s`,
+		s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2), s.db.GetParameterPlaceholder(3))
+	_, err := s.db.Exec(updateHeartbeatSQL, now, now, request.AgentID)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to update heartbeat: %w", err)
@@ -209,27 +211,68 @@ func (s *Service) upsertDecoratorAgent(tx *sql.Tx, request *DecoratorAgentReques
 	// Prepare decorators JSON
 	decoratorsJSON, _ := json.Marshal(request.Metadata.Decorators)
 
-	// Use INSERT OR REPLACE for SQLite / UPSERT pattern
-	_, err := tx.Exec(`
-		INSERT OR REPLACE INTO agents (
-			id, name, namespace, endpoint, status,
-			created_at, updated_at, resource_version,
-			dependencies, config, agent_type, last_heartbeat
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		request.AgentID,
-		request.Metadata.Name,
-		request.Metadata.Namespace,
-		request.Metadata.Endpoint,
-		"healthy",
-		time.Now(),
-		time.Now(),
-		"1", // resource version
-		string(dependenciesJSON),
-		string(decoratorsJSON), // Store decorators in config field
-		request.Metadata.AgentType,
-		time.Now(),
-	)
+	// Use database-specific upsert pattern
+	now := time.Now()
+	var err error
+	
+	if s.db.IsPostgreSQL() {
+		// PostgreSQL UPSERT with ON CONFLICT
+		upsertSQL := fmt.Sprintf(`
+			INSERT INTO agents (
+				id, name, namespace, endpoint, status,
+				created_at, updated_at, resource_version,
+				dependencies, config, agent_type, last_heartbeat
+			) VALUES (%s)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				namespace = EXCLUDED.namespace,
+				endpoint = EXCLUDED.endpoint,
+				status = EXCLUDED.status,
+				updated_at = EXCLUDED.updated_at,
+				resource_version = EXCLUDED.resource_version,
+				dependencies = EXCLUDED.dependencies,
+				config = EXCLUDED.config,
+				agent_type = EXCLUDED.agent_type,
+				last_heartbeat = EXCLUDED.last_heartbeat`,
+			s.db.BuildParameterList(12))
+		_, err = tx.Exec(upsertSQL,
+			request.AgentID,
+			request.Metadata.Name,
+			request.Metadata.Namespace,
+			request.Metadata.Endpoint,
+			"healthy",
+			now,
+			now,
+			"1", // resource version
+			string(dependenciesJSON),
+			string(decoratorsJSON), // Store decorators in config field
+			request.Metadata.AgentType,
+			now,
+		)
+	} else {
+		// SQLite INSERT OR REPLACE
+		replaceSQL := fmt.Sprintf(`
+			INSERT OR REPLACE INTO agents (
+				id, name, namespace, endpoint, status,
+				created_at, updated_at, resource_version,
+				dependencies, config, agent_type, last_heartbeat
+			) VALUES (%s)`,
+			s.db.BuildParameterList(12))
+		_, err = tx.Exec(replaceSQL,
+			request.AgentID,
+			request.Metadata.Name,
+			request.Metadata.Namespace,
+			request.Metadata.Endpoint,
+			"healthy",
+			now,
+			now,
+			"1", // resource version
+			string(dependenciesJSON),
+			string(decoratorsJSON), // Store decorators in config field
+			request.Metadata.AgentType,
+			now,
+		)
+	}
 
 	return err
 }
@@ -237,7 +280,8 @@ func (s *Service) upsertDecoratorAgent(tx *sql.Tx, request *DecoratorAgentReques
 // upsertDecoratorTools inserts or updates tool records for each decorator
 func (s *Service) upsertDecoratorTools(tx *sql.Tx, request *DecoratorAgentRequest) error {
 	// Delete existing tools for this agent
-	_, err := tx.Exec("DELETE FROM tools WHERE agent_id = ?", request.AgentID)
+	deleteSQL := fmt.Sprintf("DELETE FROM tools WHERE agent_id = %s", s.db.GetParameterPlaceholder(1))
+	_, err := tx.Exec(deleteSQL, request.AgentID)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing tools: %w", err)
 	}
@@ -251,12 +295,13 @@ func (s *Service) upsertDecoratorTools(tx *sql.Tx, request *DecoratorAgentReques
 			"tags":          decorator.Tags,
 		})
 
-		_, err := tx.Exec(`
+		insertToolSQL := fmt.Sprintf(`
 			INSERT INTO tools (
 				agent_id, name, capability, version,
 				dependencies, config, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`,
+			) VALUES (%s)`,
+			s.db.BuildParameterList(8))
+		_, err := tx.Exec(insertToolSQL,
 			request.AgentID,
 			decorator.FunctionName,
 			decorator.Capability,
@@ -322,17 +367,19 @@ func (s *Service) resolveDependenciesForDecorator(decorator DecoratorInfo) ([]Re
 // resolveSingleDependency resolves a single dependency using complex tag/version matching
 func (s *Service) resolveSingleDependency(dep StandardizedDependency) (*ResolvedDependency, error) {
 	// Build query for capability matching
-	baseQuery := `
+	baseQuery := fmt.Sprintf(`
 		SELECT t.agent_id, a.endpoint, t.name, t.capability, t.config, a.status
 		FROM tools t
 		JOIN agents a ON t.agent_id = a.id
-		WHERE t.capability = ? AND a.status = 'healthy'
-	`
+		WHERE t.capability = %s AND a.status = 'healthy'
+	`, s.db.GetParameterPlaceholder(1))
 	args := []interface{}{dep.Capability}
+	paramCount := 1
 
 	// Add namespace filtering if specified
 	if dep.Namespace != "" && dep.Namespace != "default" {
-		baseQuery += " AND a.namespace = ?"
+		paramCount++
+		baseQuery += fmt.Sprintf(" AND a.namespace = %s", s.db.GetParameterPlaceholder(paramCount))
 		args = append(args, dep.Namespace)
 	}
 

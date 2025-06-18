@@ -1,0 +1,56 @@
+# Alternative Dockerfile using Debian base for better SQLite compatibility
+FROM golang:1.23-bullseye AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    gcc \
+    libc6-dev \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /src
+
+# Copy the entire project source
+COPY . .
+
+# Build the registry binary
+RUN cd cmd/mcp-mesh-registry && \
+    CGO_ENABLED=1 go build -o mcp-mesh-registry .
+
+# Runtime stage - use Debian slim for compatibility
+FROM debian:bullseye-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    sqlite3 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory for the database
+RUN mkdir -p /data
+
+# Create app user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /data
+
+# Copy the binary from builder
+COPY --from=builder /src/cmd/mcp-mesh-registry/mcp-mesh-registry /usr/local/bin/
+
+# Switch to app user
+USER appuser
+
+# Set working directory
+WORKDIR /data
+
+# Expose the registry port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8000/health || exit 1
+
+# Start the registry
+CMD ["mcp-mesh-registry"]

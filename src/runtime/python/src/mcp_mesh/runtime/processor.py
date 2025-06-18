@@ -535,9 +535,31 @@ class MeshToolProcessor:
                         # Create proxy using endpoint from registry
                         try:
                             endpoint = dep_info.get("endpoint", "")
-                            self.logger.debug(
-                                f"Creating proxy for tool dependency '{capability}' using endpoint: {endpoint}"
+                            status = dep_info.get("status", "unknown")
+                            agent_id = dep_info.get("agent_id", "unknown")
+                            function_name = dep_info.get("function_name", "unknown")
+
+                            self.logger.info(
+                                f"🔗 DEPENDENCY_SETUP: Creating proxy for '{capability}'"
                             )
+                            self.logger.info(f"🔗 DEPENDENCY_SETUP:   Status: {status}")
+                            self.logger.info(
+                                f"🔗 DEPENDENCY_SETUP:   Agent: {agent_id}"
+                            )
+                            self.logger.info(
+                                f"🔗 DEPENDENCY_SETUP:   Function: {function_name}"
+                            )
+                            self.logger.info(
+                                f"🔗 DEPENDENCY_SETUP:   Endpoint: {endpoint}"
+                            )
+
+                            # Check if dependency is available
+                            if status != "available":
+                                self.logger.warning(
+                                    f"🔗 DEPENDENCY_SETUP: Dependency '{capability}' status is '{status}', unregistering if exists"
+                                )
+                                await injector.unregister_dependency(capability)
+                                continue
 
                             # Check if this is an HTTP endpoint
                             if endpoint.startswith("http://") or endpoint.startswith(
@@ -547,27 +569,42 @@ class MeshToolProcessor:
                                 proxy = await self._create_http_proxy_for_tool(
                                     capability, dep_info
                                 )
+                                self.logger.info(
+                                    f"🔗 DEPENDENCY_SETUP: Created HTTP proxy for '{capability}'"
+                                )
                             else:
                                 # Create stdio-based proxy
                                 proxy = self._create_stdio_proxy_for_tool(
                                     capability, dep_info
                                 )
+                                self.logger.info(
+                                    f"🔗 DEPENDENCY_SETUP: Created stdio proxy for '{capability}'"
+                                )
 
                             # Register with injector using capability name
                             await injector.register_dependency(capability, proxy)
                             self.logger.info(
-                                f"🔗 Successfully registered proxy for tool dependency '{capability}'"
+                                f"🔗 DEPENDENCY_SETUP: Successfully registered proxy for '{capability}'"
                             )
 
                         except Exception as e:
                             self.logger.error(
-                                f"Failed to create proxy for tool dependency '{capability}': {e}"
+                                f"🔗 DEPENDENCY_SETUP: Failed to create proxy for '{capability}': {e}"
+                            )
+                            self.logger.info(
+                                f"🔗 DEPENDENCY_SETUP: Unregistering failed dependency '{capability}'"
                             )
                             await injector.unregister_dependency(capability)
                 else:
-                    self.logger.debug(
-                        f"No resolved dependencies found for function {func_name}"
+                    self.logger.info(
+                        f"🔗 DEPENDENCY_CLEANUP: No resolved dependencies found for function {func_name}, cleaning up existing dependencies"
                     )
+                    # When no dependencies are resolved, we need to unregister existing ones
+                    for dep in dependency_names:
+                        self.logger.info(
+                            f"🔗 DEPENDENCY_CLEANUP: Unregistering dependency '{dep}' for function {func_name}"
+                        )
+                        await injector.unregister_dependency(dep)
             else:
                 self.logger.debug("No dependencies_resolved in registry response")
 
@@ -855,11 +892,21 @@ class MeshToolProcessor:
                         self._last_dependencies_resolved[agent_id] = current_deps
 
                         # Update dependency injection for all tools with dependencies
+                        self.logger.info(
+                            "🔄 DEPENDENCY_REFRESH: Dependencies changed, updating all tools..."
+                        )
+                        self.logger.info(
+                            f"🔄 DEPENDENCY_REFRESH: Response dependencies_resolved: {response.get('dependencies_resolved', {})}"
+                        )
+
                         mesh_tools = DecoratorRegistry.get_mesh_tools()
                         for func_name, decorated_func in mesh_tools.items():
                             # Check if this tool has dependencies
                             metadata = decorated_func.metadata
                             if metadata.get("dependencies"):
+                                self.logger.info(
+                                    f"🔄 DEPENDENCY_REFRESH: Updating tool {func_name} with dependencies: {metadata.get('dependencies')}"
+                                )
                                 await self._setup_dependency_injection_for_tool(
                                     decorated_func, response
                                 )

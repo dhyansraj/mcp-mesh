@@ -56,7 +56,8 @@ data:
 
     # Registry configuration
     registry:
-      url: ${MCP_MESH_REGISTRY_URL}
+      host: ${MCP_MESH_REGISTRY_HOST}
+      port: ${MCP_MESH_REGISTRY_PORT}
       timeout: 30
       retry:
         enabled: true
@@ -113,16 +114,28 @@ data:
       port: 9090
       path: "/metrics"
 
+  # Registry connection (configurable for federated networks)
+  REGISTRY_HOST: "mcp-mesh-registry"
+  REGISTRY_PORT: "8000"
+
+  # Complete registry URL (primary variable used by runtime)
+  MCP_MESH_REGISTRY_URL: "http://mcp-mesh-registry:8000"
+
   # Environment defaults (can be overridden)
   env.properties: |
-    # Default environment variables
-    MCP_MESH_REGISTRY_URL=http://mcp-mesh-registry:8080
+    # Default environment variables - matches Docker setup
     MCP_MESH_HTTP_ENABLED=true
     MCP_MESH_HTTP_PORT=8080
     MCP_MESH_LOG_LEVEL=INFO
-    MCP_MESH_DEBUG=false
-    MCP_MESH_TRACING_ENABLED=false
-    MCP_MESH_METRICS_ENABLED=true
+    MCP_MESH_DEBUG_MODE=false
+    MCP_MESH_ENABLED=true
+    MCP_MESH_AUTO_RUN=true
+    MCP_MESH_AUTO_RUN_INTERVAL=30
+    MCP_MESH_HEALTH_INTERVAL=30
+    MCP_MESH_DYNAMIC_UPDATES=true
+    MCP_MESH_UPDATE_STRATEGY=immediate
+    MCP_MESH_NAMESPACE=default
+    HOST=0.0.0.0
 
     # Python runtime
     PYTHONUNBUFFERED=1

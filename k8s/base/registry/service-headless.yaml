@@ -13,7 +13,7 @@ spec:
     app.kubernetes.io/name: mcp-mesh-registry
     app.kubernetes.io/component: registry
   ports:
-    - port: 8080
-      targetPort: 8080
+    - port: 8000
+      targetPort: 8000
       protocol: TCP
       name: http

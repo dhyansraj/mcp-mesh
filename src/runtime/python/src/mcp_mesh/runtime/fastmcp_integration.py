@@ -73,6 +73,7 @@ def patch_fastmcp():
 
         # Check if the function has dependency metadata
         fn = tool.fn
+        logger.info(f"📞 FastMCP CALL: {name} with arguments: {arguments}")
         logger.debug(
             f"🎯 FastMCP calling function: {fn.__name__} at {hex(id(fn))} | Full function: {fn}"
         )
@@ -104,7 +105,9 @@ def patch_fastmcp():
                             logger.debug(f"Injected {dep_name} for tool {name}")
 
         # Call original with potentially modified arguments
-        return await _original_call_tool(self, name, arguments, context=context)
+        result = await _original_call_tool(self, name, arguments, context=context)
+        logger.info(f"📞 FastMCP RESPONSE: {name} returned: {result}")
+        return result
 
     # Create patched tool decorator
     def patched_tool(self, *args, **kwargs):
@@ -176,7 +179,13 @@ def patch_fastmcp():
         return wrapper
 
     # Apply patches
+    logger.info(
+        f"🔧 PATCH_DEBUG: Original ToolManager.call_tool: {ToolManager.call_tool}"
+    )
     ToolManager.call_tool = patched_call_tool
+    logger.info(
+        f"🔧 PATCH_DEBUG: Patched ToolManager.call_tool: {ToolManager.call_tool}"
+    )
     FastMCP.tool = patched_tool
     _patched = True
     logger.info("FastMCP patched for dependency injection and server tracking")

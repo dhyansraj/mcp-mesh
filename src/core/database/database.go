@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -28,6 +29,58 @@ type Config struct {
 type Database struct {
 	*sql.DB
 	config *Config
+}
+
+// Helper methods for database compatibility
+
+// IsPostgreSQL returns true if the database is PostgreSQL
+func (db *Database) IsPostgreSQL() bool {
+	isPostgres := strings.HasPrefix(db.config.DatabaseURL, "postgres://") || strings.HasPrefix(db.config.DatabaseURL, "postgresql://")
+	log.Printf("🐛 [Database DEBUG] IsPostgreSQL check: URL='%s' -> %t", db.config.DatabaseURL, isPostgres)
+	return isPostgres
+}
+
+// GetParameterPlaceholder returns the appropriate parameter placeholder for the database type
+func (db *Database) GetParameterPlaceholder(position int) string {
+	isPostgres := db.IsPostgreSQL()
+	var placeholder string
+	if isPostgres {
+		placeholder = fmt.Sprintf("$%d", position)
+	} else {
+		placeholder = "?"
+	}
+	log.Printf("🐛 [Database DEBUG] GetParameterPlaceholder(%d): isPostgreSQL=%t -> '%s'", position, isPostgres, placeholder)
+	return placeholder
+}
+
+// BuildParameterList returns a comma-separated list of parameter placeholders
+func (db *Database) BuildParameterList(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	
+	if db.IsPostgreSQL() {
+		params := make([]string, count)
+		for i := 0; i < count; i++ {
+			params[i] = fmt.Sprintf("$%d", i+1)
+		}
+		return strings.Join(params, ", ")
+	}
+	
+	// SQLite - just return question marks
+	params := make([]string, count)
+	for i := 0; i < count; i++ {
+		params[i] = "?"
+	}
+	return strings.Join(params, ", ")
+}
+
+// GetAutoIncrementSyntax returns the appropriate auto-increment syntax for the database type
+func (db *Database) GetAutoIncrementSyntax() string {
+	if db.IsPostgreSQL() {
+		return "SERIAL PRIMARY KEY"
+	}
+	return "INTEGER PRIMARY KEY AUTOINCREMENT"
 }
 
 // Initialize creates and configures the database connection
@@ -101,9 +154,12 @@ func Initialize(config *Config) (*Database, error) {
 	return database, nil
 }
 
-// initializeSchema creates all tables and indexes (OLD - for reference)
+// initializeSchema creates all tables and indexes with database-specific syntax
 // MUST match Python DatabaseSchema.SCHEMA_SQL and INDEXES exactly
 func (db *Database) initializeSchema() error {
+	// Use helper method for auto-increment syntax
+	autoIncrement := db.GetAutoIncrementSyntax()
+
 	// Create tables manually to avoid GORM association issues
 	schemas := []string{
 		`CREATE TABLE IF NOT EXISTS schema_version (
@@ -130,8 +186,8 @@ func (db *Database) initializeSchema() error {
 		)`,
 
 		// 2. CAPABILITIES table - What each agent provides
-		`CREATE TABLE IF NOT EXISTS capabilities (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS capabilities (
+			id %s,
 			agent_id TEXT NOT NULL,
 			function_name TEXT NOT NULL,               -- "smart_greet", "get_weather_report"
 			capability TEXT NOT NULL,                  -- "personalized_greeting", "weather_report"
@@ -144,17 +200,17 @@ func (db *Database) initializeSchema() error {
 
 			FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
 			UNIQUE(agent_id, function_name)
-		)`,
+		)`, autoIncrement),
 
 		// 3. REGISTRY_EVENTS table - Audit trail
-		`CREATE TABLE IF NOT EXISTS registry_events (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS registry_events (
+			id %s,
 			event_type TEXT NOT NULL,                  -- 'register', 'heartbeat', 'expire'
 			agent_id TEXT NOT NULL,
 			function_name TEXT,                        -- NULL for agent-level events
 			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			data TEXT DEFAULT '{}'                     -- JSON event data
-		)`,
+		)`, autoIncrement),
 
 	}
 
@@ -211,9 +267,11 @@ func (db *Database) checkSchemaVersion() error {
 	}
 
 	if currentVersion < currentSchemaVersion {
-		// Apply migration using raw SQL
-		_, err := db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-			currentSchemaVersion, time.Now().UTC())
+		// Apply migration using database-appropriate parameter syntax
+		insertSQL := fmt.Sprintf("INSERT INTO schema_version (version, applied_at) VALUES (%s, %s)", 
+			db.GetParameterPlaceholder(1), db.GetParameterPlaceholder(2))
+
+		_, err := db.Exec(insertSQL, currentSchemaVersion, time.Now().UTC())
 		if err != nil {
 			return fmt.Errorf("failed to update schema version: %w", err)
 		}
@@ -270,7 +328,8 @@ func (db *Database) GetStats() (map[string]interface{}, error) {
 	// Recent registry events count (last hour)
 	oneHourAgo := time.Now().UTC().Add(-time.Hour)
 	var recentEvents int64
-	err = db.QueryRow("SELECT COUNT(*) FROM registry_events WHERE timestamp > ?", oneHourAgo).Scan(&recentEvents)
+	recentEventsSQL := fmt.Sprintf("SELECT COUNT(*) FROM registry_events WHERE timestamp > %s", db.GetParameterPlaceholder(1))
+	err = db.QueryRow(recentEventsSQL, oneHourAgo).Scan(&recentEvents)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recent events count: %w", err)
 	}

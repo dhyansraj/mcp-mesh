@@ -1,0 +1,21 @@
+# Base requirements for MCP Mesh agents
+# The main mcp_mesh package is installed from source in the Dockerfile
+
+# FastAPI and HTTP server
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# HTTP client for inter-agent communication
+httpx>=0.25.0
+
+# Core Python async support
+asyncio
+
+# Data validation and serialization
+pydantic>=2.0.0
+
+# Optional: System monitoring (for system agent)
+psutil>=5.9.0
+
+# Optional: JSON handling
+orjson>=3.9.0

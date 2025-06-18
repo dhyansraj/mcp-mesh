@@ -142,15 +142,31 @@ func (s *Service) ResolveAllDependenciesFromMetadata(metadata map[string]interfa
 func (s *Service) findHealthyProviderWithTTL(dep database.Dependency) *DependencyResolution {
 	// Build query with TTL check using config timeout: updated_at + DEFAULT_TIMEOUT > NOW()
 	timeoutSeconds := s.config.DefaultTimeoutThreshold
-	query := `
-		SELECT c.agent_id, c.function_name, c.capability, c.version, c.tags,
-		       a.http_host, a.http_port, a.updated_at
-		FROM capabilities c
-		JOIN agents a ON c.agent_id = a.agent_id
-		WHERE c.capability = ?
-		AND datetime(a.updated_at, '+' || ? || ' seconds') > datetime('now')
-		ORDER BY a.updated_at DESC`
-
+	
+	var query string
+	if s.db.IsPostgreSQL() {
+		// PostgreSQL version with interval arithmetic and NOW()
+		query = fmt.Sprintf(`
+			SELECT c.agent_id, c.function_name, c.capability, c.version, c.tags,
+			       a.http_host, a.http_port, a.updated_at
+			FROM capabilities c
+			JOIN agents a ON c.agent_id = a.agent_id
+			WHERE c.capability = %s
+			AND a.updated_at + INTERVAL '1 second' * %s > NOW()
+			ORDER BY a.updated_at DESC`,
+			s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2))
+	} else {
+		// SQLite version with datetime functions
+		query = fmt.Sprintf(`
+			SELECT c.agent_id, c.function_name, c.capability, c.version, c.tags,
+			       a.http_host, a.http_port, a.updated_at
+			FROM capabilities c
+			JOIN agents a ON c.agent_id = a.agent_id
+			WHERE c.capability = %s
+			AND datetime(a.updated_at, '+' || %s || ' seconds') > datetime('now')
+			ORDER BY a.updated_at DESC`,
+			s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2))
+	}
 
 	rows, err := s.db.Query(query, dep.Capability, timeoutSeconds)
 	if err != nil {

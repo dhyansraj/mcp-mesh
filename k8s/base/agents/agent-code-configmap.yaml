@@ -4,308 +4,343 @@ metadata:
   name: mcp-agent-code
   namespace: mcp-mesh
 data:
-  # Example agent implementation
+  # Working hello world agent from Docker setup
   hello_world.py: |
     #!/usr/bin/env python3
-    """Example MCP Mesh agent with multiple capabilities."""
+    """
+    MCP Mesh Hello World Example
 
-    import os
-    import logging
-    from datetime import datetime
-    from typing import Optional
+    This example demonstrates the core concepts of MCP Mesh:
+    1. MCP Mesh tools with automatic dependency injection
+    2. Hybrid typing support for development flexibility
+    3. Pure simplicity - just decorators, no manual setup!
 
-    from fastmcp import FastMCP
-    from mcp_mesh import mesh_agent, depends, mesh_tool
+    Start this agent, then start system_agent.py to see dependency injection in action!
+    """
 
-    # Set up logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+    from typing import Any
 
-    # Create MCP server
-    mcp = FastMCP("hello-world-agent")
+    import mesh
+    from mcp_mesh import McpMeshAgent
 
 
-    @mcp.tool()
-    @mesh_agent(
-        capabilities=["greeting", "time_telling"],
-        version="1.0.0",
-        description="A friendly greeting agent",
-        enable_http=True,
-        health_interval=30,
+    @mesh.agent(name="hello-world", http_port=8080)
+    class HelloWorldAgent:
+        """Hello World agent demonstrating MCP Mesh features."""
+
+        pass
+
+
+    # ===== MESH FUNCTION WITH SIMPLE TYPING =====
+    # Uses Any type for maximum simplicity and flexibility
+
+
+    @mesh.tool(
+        capability="greeting",
+        dependencies=["date_service"],
+        description="Simple greeting with date dependency",
     )
-    def greet(name: str, language: str = "en") -> str:
-        """Greet someone in their preferred language."""
-        greetings = {
-            "en": f"Hello, {name}!",
-            "es": f"¡Hola, {name}!",
-            "fr": f"Bonjour, {name}!",
-            "de": f"Hallo, {name}!",
-            "it": f"Ciao, {name}!",
-            "pt": f"Olá, {name}!",
-            "ja": f"こんにちは、{name}さん!",
-            "zh": f"你好，{name}!",
-        }
+    def hello_mesh_simple(date_service: Any = None) -> str:
+        """
+        MCP Mesh greeting with simple typing.
 
-        greeting = greetings.get(language, greetings["en"])
-        logger.info(f"Greeting {name} in {language}: {greeting}")
-        return greeting
-
-
-    @mcp.tool()
-    @mesh_agent(
-        capabilities=["time_telling"],
-        version="1.0.0",
-        enable_http=True,
-    )
-    def get_current_time(timezone: Optional[str] = None) -> str:
-        """Get the current time, optionally in a specific timezone."""
-        from zoneinfo import ZoneInfo
-
-        if timezone:
-            try:
-                tz = ZoneInfo(timezone)
-                now = datetime.now(tz)
-                return f"Current time in {timezone}: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-            except Exception as e:
-                return f"Error getting time for timezone {timezone}: {str(e)}"
-        else:
-            now = datetime.now()
-            return f"Current time (local): {now.strftime('%Y-%m-%d %H:%M:%S')}"
-
-
-    @mcp.tool()
-    @mesh_agent(
-        capabilities=["translation"],
-        dependencies=["translation-service"],
-        version="1.0.0",
-        enable_http=True,
-        fallback_mode=True,
-    )
-    def translate(
-        text: str,
-        source_lang: str,
-        target_lang: str,
-        translation_service: Optional[Any] = depends("translation-service")
-    ) -> str:
-        """Translate text from one language to another."""
-        if translation_service:
-            # Use the injected translation service
-            try:
-                result = translation_service.translate(text, source_lang, target_lang)
-                return result
-            except Exception as e:
-                logger.error(f"Translation service error: {e}")
-
-        # Fallback mode - return a mock translation
-        return f"[Mock translation from {source_lang} to {target_lang}]: {text}"
-
-
-    @mcp.tool()
-    @mesh_tool(
-        capability="calculation",
-        version="1.0.0",
-        timeout=10,
-        cache_enabled=True,
-        cache_ttl=300,
-    )
-    def calculate(expression: str) -> float:
-        """Safely evaluate a mathematical expression."""
-        # Only allow safe operations
-        allowed_names = {
-            'abs': abs, 'round': round, 'min': min, 'max': max,
-            'sum': sum, 'pow': pow, 'len': len,
-        }
-
-        # Basic safety check
-        forbidden = ['import', 'exec', 'eval', '__', 'open', 'file']
-        if any(f in expression for f in forbidden):
-            raise ValueError("Unsafe expression")
+        Uses Any type for maximum flexibility - works with any proxy implementation.
+        Great for prototyping and simple use cases.
+        """
+        if date_service is None:
+            return "👋 Hello from MCP Mesh! (Date service not available yet)"
 
         try:
-            # Use eval with restricted globals
-            result = eval(expression, {"__builtins__": {}}, allowed_names)
-            return float(result)
+            # Call the injected function - proxy implements __call__()
+            current_date = date_service()
+            return f"👋 Hello from MCP Mesh! Today is {current_date}"
         except Exception as e:
-            raise ValueError(f"Invalid expression: {str(e)}")
+            return f"👋 Hello from MCP Mesh! (Error getting date: {e})"
 
 
-    # Health check endpoint (automatically created by mesh_agent)
-    @mcp.tool()
-    def health_check() -> dict:
-        """Custom health check implementation."""
+    # ===== MESH FUNCTION WITH TYPED INTERFACE =====
+    # Uses McpMeshAgent type for better IDE support and type safety
+
+
+    @mesh.tool(
+        capability="advanced_greeting",
+        dependencies=[
+            {
+                "capability": "info",
+                "tags": ["system", "general"],
+            }  # Tag-based dependency!
+        ],
+        description="Advanced greeting with smart tag-based dependency resolution",
+    )
+    def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
+        """
+        MCP Mesh greeting with smart tag-based dependency resolution.
+
+        This requests "info" capability with "system" + "general" tags.
+        Registry will match SystemAgent_getInfo (not get_disk_info) based on tags!
+        """
+        if info is None:
+            return "👋 Hello from smart MCP Mesh! (info service not available yet)"
+
+        try:
+            # This will call the general system info (not disk info) due to smart tag matching!
+            system_info = info()
+            uptime = system_info.get("uptime_formatted", "unknown")
+            server_name = system_info.get("server_name", "unknown")
+            return f"👋 Hello from smart MCP Mesh! Server: {server_name}, Uptime: {uptime}"
+        except Exception as e:
+            return f"👋 Hello from smart MCP Mesh! (Error getting info: {e})"
+
+
+    # ===== DEPENDENCY TEST FUNCTION =====
+    # Shows multiple dependencies with different typing approaches
+
+
+    @mesh.tool(
+        capability="dependency_test",
+        dependencies=[
+            "date_service",  # Simple string dependency
+            {
+                "capability": "info",
+                "tags": ["system", "disk"],
+            },  # Tag-based: will get DISK info!
+        ],
+        description="Test hybrid dependencies: simple + tag-based resolution",
+    )
+    def test_dependencies(
+        date_service: Any = None,
+        info: McpMeshAgent | None = None,  # This will get the DISK info service!
+    ) -> dict[str, Any]:
+        """
+        Test function showing hybrid dependency resolution.
+
+        Demonstrates both simple string and tag-based dependencies:
+        - date_service: simple string dependency
+        - info with [system,disk] tags: will get disk info (not general info)!
+        """
+        result = {
+            "test_name": "smart_dependency_demo",
+            "date_service": "not_available",
+            "disk_info_service": "not_available",  # This should get DISK info, not general info!
+        }
+
+        # Test simple Any type dependency
+        if date_service is not None:
+            try:
+                date = date_service()  # Direct call
+                result["date_service"] = f"available: {date}"
+            except Exception as e:
+                result["date_service"] = f"error: {e}"
+
+        # Test tag-based dependency - should get DISK info service
+        if info is not None:
+            try:
+                disk_info = (
+                    info()
+                )  # This should return disk/OS info, not general system info
+                info_type = disk_info.get("info_type", "unknown")
+                result["disk_info_service"] = (
+                    f"available: {info_type} (smart tag matching worked!)"
+                )
+            except Exception as e:
+                result["disk_info_service"] = f"error: {e}"
+
+        return result
+
+  # Working system agent from Docker setup
+  system_agent.py: |
+    #!/usr/bin/env python3
+    """
+    MCP Mesh System Agent Example
+
+    This agent provides system information capabilities that other agents can depend on.
+    Demonstrates the tools vs capabilities architecture:
+
+    - Tools: Function names (MCP function names)
+    - Capabilities: What others can depend on
+    - Pure simplicity: Just decorators, no manual setup!
+
+    Function names can be different from capability names for maximum flexibility.
+    """
+
+    from datetime import datetime
+    from typing import Any
+
+    import mesh
+    from mcp_mesh import McpMeshAgent
+
+
+    @mesh.agent(name="system-agent", http_port=8080)
+    class SystemAgent:
+        """System information agent providing date and info capabilities."""
+
+        pass
+
+
+    # Store start time for uptime calculations
+    start_time = datetime.now()
+
+    # ===== DATE SERVICE =====
+    # Tool: "get_current_time" | Capability: "date_service"
+
+
+    @mesh.tool(
+        capability="date_service",  # Capability name (what others depend on)
+        description="Get current system date and time",
+        version="1.0.0",
+        tags=["system", "time", "clock"],
+    )
+    def get_current_time() -> str:  # Function name can be anything!
+        """
+        Get the current system date and time.
+
+        This function provides the "date_service" capability.
+        Function name 'get_current_time' can be anything - capability name matters!
+
+        Returns:
+            Formatted date and time string
+        """
+        now = datetime.now()
+        return now.strftime("%B %d, %Y at %I:%M %p")
+
+
+    # ===== GENERAL SYSTEM INFO SERVICE =====
+    # Tool: "fetch_system_overview" | Capability: "info"
+
+
+    @mesh.tool(
+        capability="info",  # Generic capability name for smart matching
+        description="Get comprehensive system information",
+        version="1.0.0",
+        tags=["system", "general", "monitoring"],  # Tags for smart resolution
+    )
+    def fetch_system_overview() -> dict[str, Any]:  # Clear: function name ≠ capability
+        """
+        Get comprehensive system information.
+
+        This function provides the "info" capability with "system" + "general" tags.
+        Smart matching: hello_world dependency "info" with "system" tag will match this.
+
+        Returns:
+            Dictionary containing system information
+        """
+        uptime = datetime.now() - start_time
+
         return {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
+            "server_name": "system-agent",
+            "current_time": datetime.now().strftime("%B %d, %Y at %I:%M %p"),
+            "uptime_seconds": uptime.total_seconds(),
+            "uptime_formatted": f"{uptime.total_seconds():.1f} seconds",
             "version": "1.0.0",
-            "capabilities": ["greeting", "time_telling", "translation", "calculation"],
-            "metrics": {
-                "requests_processed": 0,  # Would track this in production
-                "average_response_time": 0.0,
-                "error_rate": 0.0,
-            }
+            "capabilities_provided": [
+                "date_service",  # From get_current_time() function
+                "info",  # From fetch_system_overview() function - generic capability with smart tag matching
+            ],
+            "agent_type": "system_service",
         }
 
 
-    if __name__ == "__main__":
-        # Run the MCP server
-        logger.info("Starting Hello World MCP Mesh Agent...")
-        mcp.run()
-
-  # Utility functions that can be imported by agents
-  utils.py: |
-    """Utility functions for MCP Mesh agents."""
-
-    import asyncio
-    import functools
-    import time
-    from typing import Any, Callable, Optional, TypeVar, Union
+    # ===== UPTIME SERVICE (Different function name vs capability) =====
+    # Tool: "get_uptime" | Capability: "uptime_info"
 
 
-    T = TypeVar('T')
+    @mesh.tool(
+        capability="uptime_info",  # Capability name (what others depend on)
+        description="Get system uptime information",
+        version="1.0.0",
+        tags=["system", "uptime"],
+    )
+    def check_how_long_running() -> str:  # Function name can be descriptive and different!
+        """
+        Get system uptime information.
+
+        This demonstrates function_name != capability:
+        - MCP calls: "check_how_long_running"
+        - Capability provided: "uptime_info"
+        - Dependencies declare: "uptime_info"
+
+        Returns:
+            Human-readable uptime string
+        """
+        uptime = datetime.now() - start_time
+        return f"System running for {uptime.total_seconds():.1f} seconds"
 
 
-    def retry(
-        max_attempts: int = 3,
-        delay: float = 1.0,
-        backoff: float = 2.0,
-        exceptions: tuple = (Exception,)
-    ) -> Callable:
-        """Decorator to retry a function on failure."""
-        def decorator(func: Callable[..., T]) -> Callable[..., T]:
-            @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs) -> T:
-                last_exception = None
-                current_delay = delay
-
-                for attempt in range(max_attempts):
-                    try:
-                        return await func(*args, **kwargs)
-                    except exceptions as e:
-                        last_exception = e
-                        if attempt < max_attempts - 1:
-                            await asyncio.sleep(current_delay)
-                            current_delay *= backoff
-
-                raise last_exception
-
-            @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs) -> T:
-                last_exception = None
-                current_delay = delay
-
-                for attempt in range(max_attempts):
-                    try:
-                        return func(*args, **kwargs)
-                    except exceptions as e:
-                        last_exception = e
-                        if attempt < max_attempts - 1:
-                            time.sleep(current_delay)
-                            current_delay *= backoff
-
-                raise last_exception
-
-            if asyncio.iscoroutinefunction(func):
-                return async_wrapper
-            else:
-                return sync_wrapper
-
-        return decorator
+    # ===== SECOND INFO SERVICE (Different Tags) =====
+    # Same capability "info" but different tags - shows tag-based filtering
 
 
-    def timeout(seconds: float) -> Callable:
-        """Decorator to add timeout to a function."""
-        def decorator(func: Callable[..., T]) -> Callable[..., T]:
-            @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs) -> T:
-                return await asyncio.wait_for(
-                    func(*args, **kwargs),
-                    timeout=seconds
-                )
+    @mesh.tool(
+        capability="info",  # Same capability name!
+        description="Get disk and OS information",
+        version="1.0.0",
+        tags=[
+            "system",
+            "disk",
+            "os",
+        ],  # Different tags - won't match "general" requests
+    )
+    def analyze_storage_and_os() -> dict[str, Any]:  # Completely different function name!
+        """
+        Get disk and OS information.
 
-            @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs) -> T:
-                # For sync functions, we'd need threading
-                # This is a simplified version
-                return func(*args, **kwargs)
+        This also provides "info" capability but with "disk" + "os" tags.
+        Smart matching: requests for "info" with "general" tags won't match this.
+        Only requests specifically wanting "disk" or "os" info will get this.
+        """
+        return {
+            "info_type": "disk_and_os",
+            "disk_usage": "simulated_75_percent",
+            "os_version": "simulated_linux_6.x",
+            "filesystem": "ext4",
+            "mount_points": ["/", "/home", "/var"],
+            "tags": ["disk", "os", "system"],
+            "note": "This provides 'info' capability but with different tags than general system info",
+        }
 
-            if asyncio.iscoroutinefunction(func):
-                return async_wrapper
-            else:
-                return sync_wrapper
 
-        return decorator
+    # ===== STATUS SERVICE WITH DEPENDENCY =====
 
 
-    class CircuitBreaker:
-        """Simple circuit breaker implementation."""
+    @mesh.tool(
+        capability="health_check",
+        dependencies=["date_service"],  # Depends on capability name, not function name!
+        description="Get system status with current time",
+        version="1.0.0",
+    )
+    def perform_health_diagnostic(
+        date_service: McpMeshAgent | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get system status including current time.
 
-        def __init__(
-            self,
-            failure_threshold: int = 5,
-            recovery_timeout: float = 30.0,
-            expected_exception: type = Exception
-        ):
-            self.failure_threshold = failure_threshold
-            self.recovery_timeout = recovery_timeout
-            self.expected_exception = expected_exception
-            self.failure_count = 0
-            self.last_failure_time = None
-            self.state = "closed"  # closed, open, half-open
+        This tool both provides AND consumes capabilities:
+        - Provides: "health_check" (via perform_health_diagnostic function)
+        - Consumes: "date_service" (from get_current_time function)
 
-        def __call__(self, func: Callable[..., T]) -> Callable[..., T]:
-            @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs) -> T:
-                if self.state == "open":
-                    if (
-                        self.last_failure_time and
-                        time.time() - self.last_failure_time > self.recovery_timeout
-                    ):
-                        self.state = "half-open"
-                    else:
-                        raise Exception("Circuit breaker is open")
+        Demonstrates how agents can be both providers and consumers.
+        """
+        uptime = datetime.now() - start_time
 
-                try:
-                    result = await func(*args, **kwargs)
-                    if self.state == "half-open":
-                        self.state = "closed"
-                        self.failure_count = 0
-                    return result
-                except self.expected_exception as e:
-                    self.failure_count += 1
-                    self.last_failure_time = time.time()
+        status = {
+            "status": "healthy",
+            "uptime_seconds": uptime.total_seconds(),
+            "memory_usage": "simulated_normal",
+            "cpu_usage": "simulated_low",
+            "service_name": "system-agent",
+        }
 
-                    if self.failure_count >= self.failure_threshold:
-                        self.state = "open"
+        # Use injected date service if available
+        if date_service is not None:
+            try:
+                current_time = date_service()
+                status["timestamp"] = current_time
+                status["time_service"] = "available"
+            except Exception as e:
+                status["timestamp"] = "error"
+                status["time_service"] = f"error: {e}"
+        else:
+            status["timestamp"] = "date_service_unavailable"
+            status["time_service"] = "not_injected"
 
-                    raise e
-
-            @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs) -> T:
-                if self.state == "open":
-                    if (
-                        self.last_failure_time and
-                        time.time() - self.last_failure_time > self.recovery_timeout
-                    ):
-                        self.state = "half-open"
-                    else:
-                        raise Exception("Circuit breaker is open")
-
-                try:
-                    result = func(*args, **kwargs)
-                    if self.state == "half-open":
-                        self.state = "closed"
-                        self.failure_count = 0
-                    return result
-                except self.expected_exception as e:
-                    self.failure_count += 1
-                    self.last_failure_time = time.time()
-
-                    if self.failure_count >= self.failure_threshold:
-                        self.state = "open"
-
-                    raise e
-
-            if asyncio.iscoroutinefunction(func):
-                return async_wrapper
-            else:
-                return sync_wrapper
+        return status

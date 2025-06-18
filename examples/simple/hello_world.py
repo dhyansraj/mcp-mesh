@@ -76,7 +76,7 @@ def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
 
     try:
         # This will call the general system info (not disk info) due to smart tag matching!
-        system_info = info.call()
+        system_info = info()
         uptime = system_info.get("uptime_formatted", "unknown")
         server_name = system_info.get("server_name", "unknown")
         return f"👋 Hello from smart MCP Mesh! Server: {server_name}, Uptime: {uptime}"
@@ -128,7 +128,7 @@ def test_dependencies(
     if info is not None:
         try:
             disk_info = (
-                info.call()
+                info()
             )  # This should return disk/OS info, not general system info
             info_type = disk_info.get("info_type", "unknown")
             result["disk_info_service"] = (

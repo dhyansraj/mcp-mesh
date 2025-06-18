@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: registry
 spec:
   serviceName: mcp-mesh-registry-headless
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: mcp-mesh-registry
@@ -90,11 +90,11 @@ spec:
 
       containers:
         - name: registry
-          image: localhost:5000/mcp-mesh-registry:go-latest
-          imagePullPolicy: Always
+          image: localhost:5000/mcp-mesh-registry:debug-latest
+          imagePullPolicy: Never
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8000
               protocol: TCP
             - name: metrics
               containerPort: 9090
@@ -131,7 +131,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
@@ -139,7 +139,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -147,7 +147,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: http
+              port: 8000
             initialDelaySeconds: 0
             periodSeconds: 10
             timeoutSeconds: 5

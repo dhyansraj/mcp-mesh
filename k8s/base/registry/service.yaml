@@ -18,7 +18,7 @@ spec:
     app.kubernetes.io/component: registry
   ports:
     - name: http
-      port: 8080
+      port: 8000
       targetPort: http
       protocol: TCP
     - name: metrics

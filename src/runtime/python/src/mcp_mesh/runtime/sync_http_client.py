@@ -1,10 +1,13 @@
 """Synchronous HTTP client for cross-service MCP calls."""
 
 import json
+import logging
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class SyncHttpClient:
@@ -58,7 +61,33 @@ class SyncHttpClient:
             # Make the request
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 response_data = response.read().decode("utf-8")
-                data = json.loads(response_data)
+
+                # Debug: Log raw response format to see if we're getting SSE
+                logger.debug(
+                    f"🔍 RAW_RESPONSE_FORMAT: First 100 chars: {response_data[:100]}"
+                )
+                logger.debug(
+                    f"🔍 RAW_RESPONSE_FORMAT: Starts with 'event: ': {response_data.startswith('event: ')}"
+                )
+
+                # Handle Server-Sent Events (SSE) format from FastMCP
+                if response_data.startswith("event: "):
+                    logger.debug("🔍 RAW_RESPONSE_FORMAT: Using SSE parsing path")
+                    # Parse SSE format: extract JSON from "data: {...}" line
+                    lines = response_data.strip().split("\n")
+                    for line in lines:
+                        if line.startswith("data: "):
+                            json_data = line[6:]  # Remove "data: " prefix
+                            data = json.loads(json_data)
+                            break
+                    else:
+                        raise RuntimeError("No data line found in SSE response")
+                else:
+                    logger.debug(
+                        "🔍 RAW_RESPONSE_FORMAT: Using regular JSON parsing path"
+                    )
+                    # Regular JSON response
+                    data = json.loads(response_data)
 
             # Check for JSON-RPC error
             if "error" in data:
@@ -128,7 +157,33 @@ class SyncHttpClient:
             # Make the request
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 response_data = response.read().decode("utf-8")
-                data = json.loads(response_data)
+
+                # Debug: Log raw response format to see if we're getting SSE
+                logger.debug(
+                    f"🔍 RAW_RESPONSE_FORMAT: First 100 chars: {response_data[:100]}"
+                )
+                logger.debug(
+                    f"🔍 RAW_RESPONSE_FORMAT: Starts with 'event: ': {response_data.startswith('event: ')}"
+                )
+
+                # Handle Server-Sent Events (SSE) format from FastMCP
+                if response_data.startswith("event: "):
+                    logger.debug("🔍 RAW_RESPONSE_FORMAT: Using SSE parsing path")
+                    # Parse SSE format: extract JSON from "data: {...}" line
+                    lines = response_data.strip().split("\n")
+                    for line in lines:
+                        if line.startswith("data: "):
+                            json_data = line[6:]  # Remove "data: " prefix
+                            data = json.loads(json_data)
+                            break
+                    else:
+                        raise RuntimeError("No data line found in SSE response")
+                else:
+                    logger.debug(
+                        "🔍 RAW_RESPONSE_FORMAT: Using regular JSON parsing path"
+                    )
+                    # Regular JSON response
+                    data = json.loads(response_data)
 
             if "result" in data:
                 return data["result"].get("tools", [])

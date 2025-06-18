@@ -22,7 +22,8 @@ func (s *Service) ProcessCapabilities(agentID string, metadata map[string]interf
 	}
 
 	// Delete existing capabilities for this agent
-	_, err := tx.Exec("DELETE FROM capabilities WHERE agent_id = ?", agentID)
+	deleteSQL := fmt.Sprintf("DELETE FROM capabilities WHERE agent_id = %s", s.db.GetParameterPlaceholder(1))
+	_, err := tx.Exec(deleteSQL, agentID)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing capabilities: %w", err)
 	}
@@ -56,10 +57,11 @@ func (s *Service) ProcessCapabilities(agentID string, metadata map[string]interf
 		}
 
 		// Insert capability
-		_, err := tx.Exec(`
+		insertSQL := fmt.Sprintf(`
 			INSERT INTO capabilities (agent_id, function_name, capability, version, description, tags, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			agentID, functionName, capability, version, description, tags, now, now)
+			VALUES (%s)`,
+			s.db.BuildParameterList(8))
+		_, err := tx.Exec(insertSQL, agentID, functionName, capability, version, description, tags, now, now)
 
 		if err != nil {
 			return fmt.Errorf("failed to insert capability %s: %w", functionName, err)
@@ -71,9 +73,10 @@ func (s *Service) ProcessCapabilities(agentID string, metadata map[string]interf
 
 // GetAgentCapabilities returns all capabilities for an agent
 func (s *Service) GetAgentCapabilities(agentID string) ([]map[string]interface{}, error) {
-	rows, err := s.db.Query(`
+	querySQL := fmt.Sprintf(`
 		SELECT function_name, capability, version, description, tags, created_at, updated_at
-		FROM capabilities WHERE agent_id = ? ORDER BY function_name`, agentID)
+		FROM capabilities WHERE agent_id = %s ORDER BY function_name`, s.db.GetParameterPlaceholder(1))
+	rows, err := s.db.Query(querySQL, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +130,12 @@ func (s *Service) GetAgentWithCapabilities(agentID string) (map[string]interface
 		UpdatedAt            time.Time
 	}
 
-	err := s.db.QueryRow(`
+	querySQL := fmt.Sprintf(`
 		SELECT agent_id, agent_type, name, version, http_host, http_port,
 		       namespace, total_dependencies, dependencies_resolved,
 		       created_at, updated_at
-		FROM agents WHERE agent_id = ?`, agentID).Scan(
+		FROM agents WHERE agent_id = %s`, s.db.GetParameterPlaceholder(1))
+	err := s.db.QueryRow(querySQL, agentID).Scan(
 		&agent.AgentID, &agent.AgentType, &agent.Name, &agent.Version,
 		&agent.HttpHost, &agent.HttpPort, &agent.Namespace,
 		&agent.TotalDependencies, &agent.DependenciesResolved,

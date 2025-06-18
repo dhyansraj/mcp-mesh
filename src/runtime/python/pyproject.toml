@@ -43,6 +43,8 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "prometheus-client>=0.18.0",
+    "urllib3>=2.0.0",
+    "python-dateutil>=2.8.0",
 ]
 
 [project.optional-dependencies]

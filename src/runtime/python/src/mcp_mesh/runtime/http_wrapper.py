@@ -742,7 +742,7 @@ class HttpMcpWrapper:
 
         config = uvicorn.Config(
             app=self.app,
-            host=self.config.host,
+            host=os.environ.get("HOST", self.config.host),
             port=self.actual_port,
             log_level=uvicorn_log_level,
             access_log=False,  # Reduce noise

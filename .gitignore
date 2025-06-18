@@ -173,6 +173,7 @@ capability_store/
 # Go binaries
 mcp-mesh-dev
 mcp-mesh-registry
+meshctl
 *.exe
 *.dll
 *.dylib

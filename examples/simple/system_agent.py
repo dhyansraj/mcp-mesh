@@ -182,7 +182,7 @@ def perform_health_diagnostic(
     # Use injected date service if available
     if date_service is not None:
         try:
-            current_time = date_service.call()
+            current_time = date_service()
             status["timestamp"] = current_time
             status["time_service"] = "available"
         except Exception as e:

@@ -132,17 +132,38 @@ class DependencyInjector:
     async def unregister_dependency(self, name: str) -> None:
         """Remove a dependency (e.g., service went down)."""
         async with self._lock:
-            logger.info(f"📤 Unregistering dependency: {name}")
+            logger.info(f"🗑️ INJECTOR: Unregistering dependency: {name}")
             if name in self._dependencies:
                 del self._dependencies[name]
+                logger.info(f"🗑️ INJECTOR: Removed {name} from dependencies registry")
 
                 # Notify all functions that depend on this
                 if name in self._dependency_mapping:
-                    for func_id in self._dependency_mapping[name]:
+                    affected_functions = self._dependency_mapping[name]
+                    logger.info(
+                        f"🗑️ INJECTOR: Updating {len(affected_functions)} functions affected by {name} removal"
+                    )
+
+                    for func_id in affected_functions:
                         if func_id in self._function_registry:
                             func = self._function_registry[func_id]
                             if hasattr(func, "_mesh_update_dependency"):
+                                logger.info(
+                                    f"🗑️ INJECTOR: Removing {name} from function {func_id}"
+                                )
                                 func._mesh_update_dependency(name, None)
+                            else:
+                                logger.warning(
+                                    f"🗑️ INJECTOR: Function {func_id} has no _mesh_update_dependency method"
+                                )
+                        else:
+                            logger.warning(
+                                f"🗑️ INJECTOR: Function {func_id} not found in registry"
+                            )
+                else:
+                    logger.info(f"🗑️ INJECTOR: No functions mapped to dependency {name}")
+            else:
+                logger.info(f"🗑️ INJECTOR: Dependency {name} was not registered (no-op)")
 
     def get_dependency(self, name: str) -> Any | None:
         """Get current instance of a dependency."""
@@ -181,16 +202,23 @@ class DependencyInjector:
             func._mesh_original_func = func
 
         # Create a wrapper function that handles dependency injection
+        # Capture logger in local scope to avoid NameError
+        wrapper_logger = logger
+
         @functools.wraps(func)
         def dependency_wrapper(*args, **kwargs):
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: Function {func.__name__} called")
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: args={args}, kwargs={kwargs}")
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: mesh_positions={mesh_positions}")
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}")
+            wrapper_logger.debug(
+                f"🔧 DEPENDENCY_WRAPPER: Function {func.__name__} called"
+            )
+            wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: args={args}, kwargs={kwargs}")
+            wrapper_logger.debug(
+                f"🔧 DEPENDENCY_WRAPPER: mesh_positions={mesh_positions}"
+            )
+            wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}")
 
             # If no mesh positions to inject into, call original function
             if not mesh_positions:
-                logger.debug(
+                wrapper_logger.debug(
                     "🔧 DEPENDENCY_WRAPPER: No mesh positions, calling original"
                 )
                 return func._mesh_original_func(*args, **kwargs)
@@ -200,8 +228,8 @@ class DependencyInjector:
             params = list(sig.parameters.keys())
             final_kwargs = kwargs.copy()
 
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: params={params}")
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: original kwargs={kwargs}")
+            wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: params={params}")
+            wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: original kwargs={kwargs}")
 
             # Inject dependencies as kwargs
             injected_count = 0
@@ -210,7 +238,7 @@ class DependencyInjector:
                     dep_name = dependencies[dep_index]
                     param_name = params[param_position]
 
-                    logger.debug(
+                    wrapper_logger.debug(
                         f"🔧 DEPENDENCY_WRAPPER: Processing dep {dep_index}: {dep_name} -> {param_name}"
                     )
 
@@ -223,33 +251,35 @@ class DependencyInjector:
                         dependency = dependency_wrapper._mesh_injected_deps.get(
                             dep_name
                         )
-                        logger.debug(
+                        wrapper_logger.debug(
                             f"🔧 DEPENDENCY_WRAPPER: From wrapper storage: {dependency}"
                         )
 
                         if dependency is None:
                             dependency = self.get_dependency(dep_name)
-                            logger.debug(
+                            wrapper_logger.debug(
                                 f"🔧 DEPENDENCY_WRAPPER: From global storage: {dependency}"
                             )
 
                         final_kwargs[param_name] = dependency
                         injected_count += 1
-                        logger.debug(
+                        wrapper_logger.debug(
                             f"🔧 DEPENDENCY_WRAPPER: Injected {dep_name} as {param_name}"
                         )
                     else:
-                        logger.debug(
+                        wrapper_logger.debug(
                             f"🔧 DEPENDENCY_WRAPPER: Skipping {param_name} - already provided"
                         )
 
-            logger.debug(
+            wrapper_logger.debug(
                 f"🔧 DEPENDENCY_WRAPPER: Injected {injected_count} dependencies"
             )
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}")
+            wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}")
 
             result = func._mesh_original_func(*args, **final_kwargs)
-            logger.debug(f"🔧 DEPENDENCY_WRAPPER: Original returned: {type(result)}")
+            wrapper_logger.debug(
+                f"🔧 DEPENDENCY_WRAPPER: Original returned: {type(result)}"
+            )
             return result
 
         # Store dependency state on wrapper
@@ -260,11 +290,11 @@ class DependencyInjector:
             """Called when a dependency changes."""
             if instance is None:
                 dependency_wrapper._mesh_injected_deps.pop(name, None)
-                logger.debug(f"Removed {name} from {func_id}")
+                wrapper_logger.debug(f"Removed {name} from {func_id}")
             else:
                 dependency_wrapper._mesh_injected_deps[name] = instance
-                logger.debug(f"Updated {name} for {func_id}")
-                logger.debug(
+                wrapper_logger.debug(f"Updated {name} for {func_id}")
+                wrapper_logger.debug(
                     f"🔗 Wrapper pointer receiving dependency: {dependency_wrapper} at {hex(id(dependency_wrapper))}"
                 )
 

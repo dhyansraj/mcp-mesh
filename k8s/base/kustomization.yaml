@@ -6,6 +6,10 @@ namespace: mcp-mesh
 resources:
   - namespace.yaml
   - crds/mcpagent-crd.yaml
+  # PostgreSQL database
+  - postgres/postgres-statefulset.yaml
+  - postgres/postgres-service.yaml
+  # Registry
   - registry/configmap.yaml
   - registry/secret.yaml
   - registry/serviceaccount.yaml
@@ -15,10 +19,12 @@ resources:
   - registry/statefulset.yaml
   - registry/pvc.yaml
   - registry/backup-cronjob.yaml
+  # Agents
   - agents/configmap.yaml
   - agents/agent-code-configmap.yaml
   - agents/secret.yaml
-  - agents/mcpagent-sample.yaml
+  - agents/hello-world-deployment.yaml
+  - agents/system-agent-deployment.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh

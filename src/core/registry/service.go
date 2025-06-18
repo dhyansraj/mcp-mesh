@@ -164,8 +164,18 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 
 	// Check if agent exists
 	var existingID string
-	err = tx.QueryRow("SELECT agent_id FROM agents WHERE agent_id = ?", req.AgentID).Scan(&existingID)
+	placeholder := s.db.GetParameterPlaceholder(1)
+	checkSQL := fmt.Sprintf("SELECT agent_id FROM agents WHERE agent_id = %s", placeholder)
+	
+	// DEBUG: PostgreSQL parameter debugging
+	log.Printf("🐛 [PostgreSQL DEBUG] Database type: isPostgreSQL=%t", s.db.IsPostgreSQL())
+	log.Printf("🐛 [PostgreSQL DEBUG] Parameter placeholder: '%s'", placeholder)
+	log.Printf("🐛 [PostgreSQL DEBUG] Generated SQL: '%s'", checkSQL)
+	log.Printf("🐛 [PostgreSQL DEBUG] Parameter value: '%s'", req.AgentID)
+	
+	err = tx.QueryRow(checkSQL, req.AgentID).Scan(&existingID)
 	if err != nil && err != sql.ErrNoRows {
+		log.Printf("🐛 [PostgreSQL DEBUG] Query error: %v", err)
 		return nil, fmt.Errorf("failed to check existing agent: %w", err)
 	}
 
@@ -248,20 +258,24 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 	now := time.Now().UTC()
 	if existingID != "" {
 		// Update existing agent
-		_, err = tx.Exec(`
+		updateSQL := fmt.Sprintf(`
 			UPDATE agents
-			SET agent_type = ?, name = ?, version = ?, http_host = ?, http_port = ?,
-			    namespace = ?, total_dependencies = ?, updated_at = ?
-			WHERE agent_id = ?`,
-			agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, now, req.AgentID)
+			SET agent_type = %s, name = %s, version = %s, http_host = %s, http_port = %s,
+			    namespace = %s, total_dependencies = %s, updated_at = %s
+			WHERE agent_id = %s`,
+			s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2), s.db.GetParameterPlaceholder(3),
+			s.db.GetParameterPlaceholder(4), s.db.GetParameterPlaceholder(5), s.db.GetParameterPlaceholder(6),
+			s.db.GetParameterPlaceholder(7), s.db.GetParameterPlaceholder(8), s.db.GetParameterPlaceholder(9))
+		_, err = tx.Exec(updateSQL, agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, now, req.AgentID)
 	} else {
 		// Insert new agent
-		_, err = tx.Exec(`
+		insertSQL := fmt.Sprintf(`
 			INSERT INTO agents (agent_id, agent_type, name, version, http_host, http_port,
 			                   namespace, total_dependencies, dependencies_resolved,
 			                   created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-			req.AgentID, agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, now, now)
+			VALUES (%s)`,
+			s.db.BuildParameterList(11))
+		_, err = tx.Exec(insertSQL, req.AgentID, agentType, agentName, version, httpHost, httpPort, namespace, totalDeps, 0, now, now)
 	}
 
 	if err != nil {
@@ -295,9 +309,10 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 	}
 
 	// Update dependencies_resolved count in database
-	_, err = s.db.DB.Exec(`
-		UPDATE agents SET dependencies_resolved = ? WHERE agent_id = ?`,
-		resolvedCount, req.AgentID)
+	updateDepsSQL := fmt.Sprintf(`
+		UPDATE agents SET dependencies_resolved = %s WHERE agent_id = %s`,
+		s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2))
+	_, err = s.db.DB.Exec(updateDepsSQL, resolvedCount, req.AgentID)
 	if err != nil {
 		log.Printf("Warning: Failed to update dependencies_resolved count: %v", err)
 		// Don't fail registration over this
@@ -324,10 +339,20 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 
 	// Check if agent exists
 	var existingID string
-	err := s.db.DB.QueryRow("SELECT agent_id FROM agents WHERE agent_id = ?", req.AgentID).Scan(&existingID)
+	placeholder := s.db.GetParameterPlaceholder(1)
+	checkSQL := fmt.Sprintf("SELECT agent_id FROM agents WHERE agent_id = %s", placeholder)
+	
+	// DEBUG: PostgreSQL parameter debugging (heartbeat)
+	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Database type: isPostgreSQL=%t", s.db.IsPostgreSQL())
+	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Parameter placeholder: '%s'", placeholder)
+	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Generated SQL: '%s'", checkSQL)
+	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Parameter value: '%s'", req.AgentID)
+	
+	err := s.db.DB.QueryRow(checkSQL, req.AgentID).Scan(&existingID)
 	agentExists := err == nil
 
 	if err != nil && err != sql.ErrNoRows {
+		log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Query error: %v", err)
 		return nil, fmt.Errorf("failed to check agent existence: %w", err)
 	}
 
@@ -394,45 +419,53 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	}
 
 	// Lightweight heartbeat - just update timestamp and basic metadata
-	updateSQL := `UPDATE agents SET updated_at = ?`
+	updateSQL := fmt.Sprintf(`UPDATE agents SET updated_at = %s`, s.db.GetParameterPlaceholder(1))
 	args := []interface{}{now}
+	paramCount := 1
 
 	// Optionally update basic metadata fields
 	if req.Metadata != nil {
 		if version, exists := req.Metadata["version"]; exists {
 			if vStr, ok := version.(string); ok {
-				updateSQL += ", version = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", version = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, vStr)
 			}
 		}
 		if namespace, exists := req.Metadata["namespace"]; exists {
 			if nsStr, ok := namespace.(string); ok {
-				updateSQL += ", namespace = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", namespace = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, nsStr)
 			}
 		}
 		if httpHost, exists := req.Metadata["http_host"]; exists {
 			if hostStr, ok := httpHost.(string); ok {
-				updateSQL += ", http_host = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", http_host = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, hostStr)
 			}
 		}
 		if httpPort, exists := req.Metadata["http_port"]; exists {
 			switch p := httpPort.(type) {
 			case float64:
-				updateSQL += ", http_port = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", http_port = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, int(p))
 			case int:
-				updateSQL += ", http_port = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", http_port = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, p)
 			case int64:
-				updateSQL += ", http_port = ?"
+				paramCount++
+				updateSQL += fmt.Sprintf(", http_port = %s", s.db.GetParameterPlaceholder(paramCount))
 				args = append(args, int(p))
 			}
 		}
 	}
 
-	updateSQL += " WHERE agent_id = ?"
+	paramCount++
+	updateSQL += fmt.Sprintf(" WHERE agent_id = %s", s.db.GetParameterPlaceholder(paramCount))
 	args = append(args, req.AgentID)
 
 	// Execute update
@@ -498,24 +531,30 @@ func (s *Service) UpdateHeartbeatLegacy(req *HeartbeatRequest) (*HeartbeatRespon
 
 	if hasEndpointUpdate {
 		// Update including endpoint
-		result, err = s.db.DB.Exec(`
+		updateWithEndpointSQL := fmt.Sprintf(`
 			UPDATE agents SET
-				last_heartbeat = ?,
-				status = ?,
-				updated_at = ?,
-				resource_version = ?,
-				endpoint = ?
-			WHERE id = ?`,
+				last_heartbeat = %s,
+				status = %s,
+				updated_at = %s,
+				resource_version = %s,
+				endpoint = %s
+			WHERE id = %s`,
+			s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2), s.db.GetParameterPlaceholder(3),
+			s.db.GetParameterPlaceholder(4), s.db.GetParameterPlaceholder(5), s.db.GetParameterPlaceholder(6))
+		result, err = s.db.DB.Exec(updateWithEndpointSQL,
 			updates["last_heartbeat"], updates["status"], updates["updated_at"], updates["resource_version"], endpointUpdate, req.AgentID)
 	} else {
 		// Update without endpoint
-		result, err = s.db.DB.Exec(`
+		updateWithoutEndpointSQL := fmt.Sprintf(`
 			UPDATE agents SET
-				last_heartbeat = ?,
-				status = ?,
-				updated_at = ?,
-				resource_version = ?
-			WHERE id = ?`,
+				last_heartbeat = %s,
+				status = %s,
+				updated_at = %s,
+				resource_version = %s
+			WHERE id = %s`,
+			s.db.GetParameterPlaceholder(1), s.db.GetParameterPlaceholder(2), s.db.GetParameterPlaceholder(3),
+			s.db.GetParameterPlaceholder(4), s.db.GetParameterPlaceholder(5))
+		result, err = s.db.DB.Exec(updateWithoutEndpointSQL,
 			updates["last_heartbeat"], updates["status"], updates["updated_at"], updates["resource_version"], req.AgentID)
 	}
 
@@ -580,18 +619,21 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*generated.AgentsListRes
 		}
 	}
 
-	// Build query conditions and arguments
+	// Build query conditions and arguments with database-specific placeholders
 	conditions := []string{}
 	args := []interface{}{}
+	paramCount := 0
 
 	// Apply basic filters (matches Python filtering logic)
 	if params.Namespace != "" {
-		conditions = append(conditions, "namespace = ?")
+		paramCount++
+		conditions = append(conditions, fmt.Sprintf("namespace = %s", s.db.GetParameterPlaceholder(paramCount)))
 		args = append(args, params.Namespace)
 	}
 
 	if params.Status != "" {
-		conditions = append(conditions, "status = ?")
+		paramCount++
+		conditions = append(conditions, fmt.Sprintf("status = %s", s.db.GetParameterPlaceholder(paramCount)))
 		args = append(args, params.Status)
 	}
 
@@ -602,13 +644,14 @@ func (s *Service) ListAgents(params *AgentQueryParams) (*generated.AgentsListRes
 		capabilityArgs := make([]interface{}, 0, len(params.Capabilities))
 
 		for _, cap := range params.Capabilities {
+			paramCount++
 			if params.FuzzyMatch {
 				// Fuzzy matching using LIKE (matches Python Levenshtein logic approximation)
-				capabilityConditions = append(capabilityConditions, "LOWER(capability) LIKE ?")
+				capabilityConditions = append(capabilityConditions, fmt.Sprintf("LOWER(capability) LIKE %s", s.db.GetParameterPlaceholder(paramCount)))
 				capabilityArgs = append(capabilityArgs, "%"+strings.ToLower(cap)+"%")
 			} else {
 				// Exact matching
-				capabilityConditions = append(capabilityConditions, "capability = ?")
+				capabilityConditions = append(capabilityConditions, fmt.Sprintf("capability = %s", s.db.GetParameterPlaceholder(paramCount)))
 				capabilityArgs = append(capabilityArgs, cap)
 			}
 		}
@@ -872,34 +915,42 @@ func (s *Service) SearchCapabilities(params *CapabilityQueryParams) (*Capabiliti
 		AgentEndpoint        string    `json:"agent_endpoint"`
 	}
 
-	// Build capability query conditions and arguments
+	// Build capability query conditions and arguments with database-specific placeholders
 	conditions := []string{}
 	args := []interface{}{}
+	paramCount := 0
 
 	// Apply agent-level filters first (matches Python agent filtering)
 	if params.AgentStatus != "" {
-		conditions = append(conditions, "a.status = ?")
+		paramCount++
+		conditions = append(conditions, fmt.Sprintf("a.status = %s", s.db.GetParameterPlaceholder(paramCount)))
 		args = append(args, params.AgentStatus)
 	} else {
 		// Default to healthy agents only (matches Python default behavior)
-		conditions = append(conditions, "a.status IN (?, ?)")
+		paramCount++
+		param1 := s.db.GetParameterPlaceholder(paramCount)
+		paramCount++
+		param2 := s.db.GetParameterPlaceholder(paramCount)
+		conditions = append(conditions, fmt.Sprintf("a.status IN (%s, %s)", param1, param2))
 		args = append(args, "healthy", "degraded")
 	}
 
 	if params.Namespace != "" {
-		conditions = append(conditions, "a.namespace = ?")
+		paramCount++
+		conditions = append(conditions, fmt.Sprintf("a.namespace = %s", s.db.GetParameterPlaceholder(paramCount)))
 		args = append(args, params.Namespace)
 	}
 
 	// Apply capability filters (matches Python capability filtering logic)
 	if params.Name != "" {
+		paramCount++
 		if params.FuzzyMatch {
 			// Fuzzy matching using LIKE (matches Python Levenshtein distance approximation)
-			conditions = append(conditions, "LOWER(t.name) LIKE ?")
+			conditions = append(conditions, fmt.Sprintf("LOWER(t.name) LIKE %s", s.db.GetParameterPlaceholder(paramCount)))
 			args = append(args, "%"+strings.ToLower(params.Name)+"%")
 		} else {
 			// Exact matching (case insensitive)
-			conditions = append(conditions, "LOWER(t.name) = ?")
+			conditions = append(conditions, fmt.Sprintf("LOWER(t.name) = %s", s.db.GetParameterPlaceholder(paramCount)))
 			args = append(args, strings.ToLower(params.Name))
 		}
 	}
@@ -908,8 +959,9 @@ func (s *Service) SearchCapabilities(params *CapabilityQueryParams) (*Capabiliti
 
 	// Version constraint filtering (implement semantic version matching when needed)
 	if params.Version != "" {
+		paramCount++
 		// For now, simple exact match - would need semantic version parsing for full compatibility
-		conditions = append(conditions, "t.version = ?")
+		conditions = append(conditions, fmt.Sprintf("t.version = %s", s.db.GetParameterPlaceholder(paramCount)))
 		args = append(args, params.Version)
 	}
 
@@ -1082,7 +1134,8 @@ func (s *Service) agentToMap(agent database.Agent) map[string]interface{} {
 	}
 
 	// Load tools separately using raw SQL
-	rows, err := s.db.DB.Query("SELECT id, agent_id, name, capability, version, created_at, updated_at FROM tools WHERE agent_id = ?", agent.ID)
+	toolsQuerySQL := fmt.Sprintf("SELECT id, agent_id, name, capability, version, created_at, updated_at FROM tools WHERE agent_id = %s", s.db.GetParameterPlaceholder(1))
+	rows, err := s.db.DB.Query(toolsQuerySQL, agent.ID)
 	if err != nil {
 		log.Printf("Warning: Failed to load capabilities for agent %s: %v", agent.ID, err)
 		// Return result with empty capabilities array

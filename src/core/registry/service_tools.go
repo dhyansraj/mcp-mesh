@@ -26,7 +26,8 @@ func (s *Service) ProcessTools(agentID string, metadata map[string]interface{}, 
 	}
 
 	// Delete existing tools for this agent
-	_, err := tx.Exec("DELETE FROM tools WHERE agent_id = ?", agentID)
+	deleteSQL := fmt.Sprintf("DELETE FROM tools WHERE agent_id = %s", s.db.GetParameterPlaceholder(1))
+	_, err := tx.Exec(deleteSQL, agentID)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing tools: %w", err)
 	}
@@ -76,10 +77,11 @@ func (s *Service) ProcessTools(agentID string, metadata map[string]interface{}, 
 		}
 
 		// Insert tool
-		_, err := tx.Exec(`
+		insertSQL := fmt.Sprintf(`
 			INSERT INTO tools (agent_id, name, capability, version, dependencies, config, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			agentID, name, capability, version, dependencies, configJSON, now, now)
+			VALUES (%s)`,
+			s.db.BuildParameterList(8))
+		_, err := tx.Exec(insertSQL, agentID, name, capability, version, dependencies, configJSON, now, now)
 
 		if err != nil {
 			return fmt.Errorf("failed to insert tool %s: %w", name, err)
@@ -105,10 +107,11 @@ func (s *Service) GetAgentWithTools(agentID string) (map[string]interface{}, err
 		UpdatedAt         time.Time
 	}
 
-	err := s.db.QueryRow(`
+	agentQuerySQL := fmt.Sprintf(`
 		SELECT id, name, namespace, endpoint, status, last_heartbeat,
 			   timeout_threshold, eviction_threshold, created_at, updated_at
-		FROM agents WHERE id = ?`, agentID).Scan(
+		FROM agents WHERE id = %s`, s.db.GetParameterPlaceholder(1))
+	err := s.db.QueryRow(agentQuerySQL, agentID).Scan(
 		&agent.ID, &agent.Name, &agent.Namespace, &agent.Endpoint, &agent.Status,
 		&agent.LastHeartbeat, &agent.TimeoutThreshold, &agent.EvictionThreshold,
 		&agent.CreatedAt, &agent.UpdatedAt)
@@ -149,9 +152,10 @@ func (s *Service) GetAgentWithTools(agentID string) (map[string]interface{}, err
 
 // GetAgentTools returns all tools for an agent
 func (s *Service) GetAgentTools(agentID string) ([]map[string]interface{}, error) {
-	rows, err := s.db.Query(`
+	toolsQuerySQL := fmt.Sprintf(`
 		SELECT name, capability, version, dependencies, config, created_at, updated_at
-		FROM tools WHERE agent_id = ? ORDER BY name`, agentID)
+		FROM tools WHERE agent_id = %s ORDER BY name`, s.db.GetParameterPlaceholder(1))
+	rows, err := s.db.Query(toolsQuerySQL, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +207,8 @@ func (s *Service) resolveAllDependencies(agentID string) map[string]interface{} 
 	resolved := make(map[string]interface{})
 
 	// Get all tools for this agent
-	rows, err := s.db.Query("SELECT name, dependencies FROM tools WHERE agent_id = ?", agentID)
+	depsQuerySQL := fmt.Sprintf("SELECT name, dependencies FROM tools WHERE agent_id = %s", s.db.GetParameterPlaceholder(1))
+	rows, err := s.db.Query(depsQuerySQL, agentID)
 	if err != nil {
 		log.Printf("Error fetching tools for dependency resolution: %v", err)
 		return resolved
@@ -240,11 +245,11 @@ func (s *Service) resolveAllDependencies(agentID string) map[string]interface{} 
 // findBestProvider finds the best provider for a dependency
 func (s *Service) findBestProvider(dep database.Dependency) map[string]interface{} {
 	// Build query for healthy providers
-	query := `
+	query := fmt.Sprintf(`
 		SELECT t.agent_id, t.name, t.version, t.config, a.endpoint
 		FROM tools t
 		JOIN agents a ON t.agent_id = a.id
-		WHERE t.capability = ? AND a.status = 'healthy'`
+		WHERE t.capability = %s AND a.status = 'healthy'`, s.db.GetParameterPlaceholder(1))
 
 	rows, err := s.db.Query(query, dep.Capability)
 	if err != nil {
