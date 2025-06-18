@@ -1,0 +1,245 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mcp-mesh-registry-backup
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: backup
+spec:
+  # Run backup every day at 2 AM
+  schedule: "0 2 * * *"
+
+  # Keep last 7 successful backups
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+
+  # Prevent concurrent backups
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-mesh-registry
+        app.kubernetes.io/component: backup
+    spec:
+      # Cleanup after 24 hours
+      ttlSecondsAfterFinished: 86400
+
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mcp-mesh-registry
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: mcp-mesh-registry
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+
+          initContainers:
+            # Create backup directory with timestamp
+            - name: prepare-backup
+              image: busybox:1.35
+              command: ["sh", "-c"]
+              args:
+                - |
+                  BACKUP_DIR="/backup/$(date +%Y%m%d-%H%M%S)"
+                  mkdir -p "$BACKUP_DIR"
+                  echo "$BACKUP_DIR" > /shared/backup-dir
+                  echo "Backup directory: $BACKUP_DIR"
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: shared
+                  mountPath: /shared
+
+          containers:
+            # SQLite backup
+            - name: sqlite-backup
+              image: mcp-mesh-registry:latest
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ "$DATABASE_TYPE" = "sqlite" ]; then
+                    BACKUP_DIR=$(cat /shared/backup-dir)
+                    echo "Backing up SQLite database to $BACKUP_DIR"
+
+                    # Use SQLite backup command
+                    sqlite3 /data/registry.db ".backup '$BACKUP_DIR/registry.db'"
+
+                    # Also create a SQL dump
+                    sqlite3 /data/registry.db .dump > "$BACKUP_DIR/registry.sql"
+
+                    # Create metadata file
+                    cat > "$BACKUP_DIR/metadata.json" <<EOF
+                  {
+                    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                    "type": "sqlite",
+                    "version": "$(sqlite3 /data/registry.db 'SELECT sqlite_version()')",
+                    "size": $(stat -c%s /data/registry.db),
+                    "checksum": "$(sha256sum /data/registry.db | cut -d' ' -f1)"
+                  }
+                  EOF
+
+                    echo "SQLite backup completed"
+                  else
+                    echo "Not using SQLite, skipping SQLite backup"
+                  fi
+              env:
+                - name: DATABASE_TYPE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: mcp-registry-config
+                      key: DATABASE_TYPE
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: backup
+                  mountPath: /backup
+                - name: shared
+                  mountPath: /shared
+                  readOnly: true
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+
+            # PostgreSQL backup (if using external DB)
+            - name: postgres-backup
+              image: postgres:15-alpine
+              command: ["sh", "-c"]
+              args:
+                - |
+                  if [ "$DATABASE_TYPE" = "postgres" ]; then
+                    BACKUP_DIR=$(cat /shared/backup-dir)
+                    echo "Backing up PostgreSQL database to $BACKUP_DIR"
+
+                    export PGPASSWORD="$DATABASE_PASSWORD"
+
+                    # Create backup
+                    pg_dump \
+                      -h "$DATABASE_HOST" \
+                      -p "$DATABASE_PORT" \
+                      -U "$DATABASE_USERNAME" \
+                      -d "$DATABASE_NAME" \
+                      -f "$BACKUP_DIR/registry.sql" \
+                      --verbose \
+                      --no-owner \
+                      --no-privileges
+
+                    # Compress the backup
+                    gzip "$BACKUP_DIR/registry.sql"
+
+                    # Create metadata file
+                    cat > "$BACKUP_DIR/metadata.json" <<EOF
+                  {
+                    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                    "type": "postgres",
+                    "host": "$DATABASE_HOST",
+                    "database": "$DATABASE_NAME",
+                    "compressed": true
+                  }
+                  EOF
+
+                    echo "PostgreSQL backup completed"
+                  else
+                    echo "Not using PostgreSQL, skipping PostgreSQL backup"
+                  fi
+              env:
+                - name: DATABASE_TYPE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: mcp-registry-config
+                      key: DATABASE_TYPE
+                - name: DATABASE_HOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: mcp-registry-config
+                      key: DATABASE_HOST
+                      optional: true
+                - name: DATABASE_PORT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: mcp-registry-config
+                      key: DATABASE_PORT
+                      optional: true
+                - name: DATABASE_NAME
+                  valueFrom:
+                    configMapKeyRef:
+                      name: mcp-registry-config
+                      key: DATABASE_NAME
+                      optional: true
+                - name: DATABASE_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-registry-secret
+                      key: database-username
+                      optional: true
+                - name: DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-registry-secret
+                      key: database-password
+                      optional: true
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: shared
+                  mountPath: /shared
+                  readOnly: true
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+
+            # Cleanup old backups
+            - name: cleanup
+              image: busybox:1.35
+              command: ["sh", "-c"]
+              args:
+                - |
+                  echo "Cleaning up old backups..."
+                  cd /backup
+
+                  # Keep only the last 7 backups
+                  ls -1dt */ 2>/dev/null | tail -n +8 | xargs -r rm -rf
+
+                  echo "Cleanup completed"
+                  echo "Current backups:"
+                  ls -la /backup/
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+                requests:
+                  cpu: 50m
+                  memory: 32Mi
+
+          volumes:
+            # Registry data (for SQLite)
+            - name: data
+              persistentVolumeClaim:
+                claimName: data-mcp-mesh-registry-0 # First replica's PVC
+
+            # Backup storage
+            - name: backup
+              persistentVolumeClaim:
+                claimName: mcp-mesh-registry-backup
+
+            # Shared temp volume
+            - name: shared
+              emptyDir: {}

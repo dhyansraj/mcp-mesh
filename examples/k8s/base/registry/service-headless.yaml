@@ -1,0 +1,19 @@
+# Headless service for StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-mesh-registry-headless
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: registry
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: mcp-mesh-registry
+    app.kubernetes.io/component: registry
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http

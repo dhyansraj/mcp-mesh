@@ -358,9 +358,9 @@ def _trigger_decorator_processing():
         logger.info("Started background decorator processing thread")
 
         # Register shutdown handler in main thread
-        import atexit
-
-        atexit.register(_cleanup_background_thread)
+        # NOTE: Disabled atexit for container deployment - containers handle process lifecycle
+        # import atexit
+        # atexit.register(_cleanup_background_thread)
 
 
 def _cleanup_background_thread():

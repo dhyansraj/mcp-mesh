@@ -9,7 +9,7 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import MeshDecoratorProcessor
+from mcp_mesh.runtime.processor import MeshToolProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
 from mcp_mesh.types import McpMeshAgent
 
@@ -130,7 +130,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor and process tools
-        processor = MeshDecoratorProcessor(mock_registry_client)
+        processor = MeshToolProcessor(mock_registry_client)
 
         # Mock HTTP proxy creation to return single-function bound proxies
         async def mock_create_http_proxy(dep_name, dep_info):
@@ -282,7 +282,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor
-        processor = MeshDecoratorProcessor(mock_registry_client)
+        processor = MeshToolProcessor(mock_registry_client)
 
         # Mock proxy creation to return single-function bound proxies
         def mock_create_stdio_proxy(dep_name, dep_info):

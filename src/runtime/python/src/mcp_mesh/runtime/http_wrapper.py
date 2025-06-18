@@ -194,13 +194,14 @@ class HttpMcpWrapper:
         )
 
         # Determine which FastMCP version this server instance is from
-        if "fastmcp" in type(self.mcp_server).__module__:
-            logger.info(
-                "🆕 HTTP Wrapper: Server instance is from NEW FastMCP library (fastmcp)"
-            )
-        elif "mcp.server.fastmcp" in type(self.mcp_server).__module__:
+        # Check OLD FastMCP first (more specific path)
+        if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
             logger.info(
                 "🔄 HTTP Wrapper: Server instance is from OLD FastMCP library (mcp.server.fastmcp)"
+            )
+        elif type(self.mcp_server).__module__.startswith("fastmcp"):
+            logger.info(
+                "🆕 HTTP Wrapper: Server instance is from NEW FastMCP library (fastmcp)"
             )
         else:
             logger.warning(
@@ -217,24 +218,6 @@ class HttpMcpWrapper:
         async def health():
             """Basic health check endpoint."""
             return {"status": "healthy", "agent": self.mcp_server.name}
-
-        @self.app.get("/mesh/info")
-        async def mesh_info():
-            """Mesh agent information endpoint."""
-            tools = []
-            if hasattr(self.mcp_server, "_tool_manager"):
-                for name, tool in self.mcp_server._tool_manager._tools.items():
-                    tools.append(
-                        {
-                            "name": name,
-                            "description": getattr(tool, "description", ""),
-                        }
-                    )
-
-            # Update tools gauge
-            mcp_tools_total.labels(agent=self.mcp_server.name).set(len(tools))
-
-            return {"tools": tools}
 
         # 3.2. Add MCP proxy endpoint to handle session management
         @self.app.post("/mcp")
@@ -287,8 +270,13 @@ class HttpMcpWrapper:
                     request_id = rpc_request.get("id")
 
                     if method == "tools/list":
-                        # Get tools directly from FastMCP server
-                        tools = await self.mcp_server.get_tools()
+                        # Get tools using version-appropriate method
+                        if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
+                            # OLD FastMCP - use list_tools()
+                            tools = await self.mcp_server.list_tools()
+                        else:
+                            # NEW FastMCP - use get_tools()
+                            tools = await self.mcp_server.get_tools()
                         logger.debug(f"🔍 Raw tools from FastMCP: {tools}")
                         logger.debug(f"🔍 Tools type: {type(tools)}")
 
@@ -344,84 +332,118 @@ class HttpMcpWrapper:
                         )
 
                         try:
-                            # Get the tool object and call it directly
-                            tools = await self.mcp_server.get_tools()
-                            if tool_name in tools:
-                                tool_obj = tools[tool_name]
-                                logger.debug(f"🔍 Tool object: {tool_obj}")
-                                logger.debug(f"🔍 Tool type: {type(tool_obj)}")
+                            # Get the tool object using version-appropriate method
+                            if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
+                                # OLD FastMCP - use call_tool directly
+                                logger.debug("🔄 Using OLD FastMCP call_tool method")
+                                result = await self.mcp_server.call_tool(
+                                    tool_name, arguments
+                                )
+                                logger.debug(f"🎯 OLD FastMCP result: {result}")
 
-                                # Check if tool has a callable function
-                                if hasattr(tool_obj, "fn"):
-                                    logger.debug(
-                                        f"🎯 Found tool function: {tool_obj.fn}"
-                                    )
-                                    logger.debug(
-                                        f"🎯 Function pointer: {tool_obj.fn} at {hex(id(tool_obj.fn))}"
-                                    )
-
-                                    # Call the function directly - this should trigger fastmcp_integration!
-                                    import inspect
-
-                                    if inspect.iscoroutinefunction(tool_obj.fn):
-                                        result = await tool_obj.fn(**arguments)
+                                # OLD FastMCP returns List[TextContent] directly
+                                content = []
+                                for item in result:
+                                    if hasattr(item, "text"):
+                                        content.append(
+                                            {"type": "text", "text": item.text}
+                                        )
                                     else:
-                                        result = tool_obj.fn(**arguments)
+                                        content.append(
+                                            {"type": "text", "text": str(item)}
+                                        )
 
-                                    logger.debug(f"🎯 Tool call result: {result}")
+                                response = {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "result": {"content": content},
+                                }
+                                return Response(
+                                    content=json.dumps(response),
+                                    media_type="application/json",
+                                )
 
-                                    # Convert result to proper MCP content format
-                                    if isinstance(result, str):
-                                        # String results -> text content
-                                        content = [{"type": "text", "text": result}]
-                                    elif isinstance(result, (dict, list)):
-                                        # Structured data -> object content
-                                        content = [{"type": "object", "object": result}]
+                            else:
+                                # NEW FastMCP - use get_tools()
+                                tools = await self.mcp_server.get_tools()
+                                if tool_name in tools:
+                                    tool_obj = tools[tool_name]
+                                    logger.debug(f"🔍 Tool object: {tool_obj}")
+                                    logger.debug(f"🔍 Tool type: {type(tool_obj)}")
+
+                                    # Check if tool has a callable function
+                                    if hasattr(tool_obj, "fn"):
+                                        logger.debug(
+                                            f"🎯 Found tool function: {tool_obj.fn}"
+                                        )
+                                        logger.debug(
+                                            f"🎯 Function pointer: {tool_obj.fn} at {hex(id(tool_obj.fn))}"
+                                        )
+
+                                        # Call the function directly - this should trigger fastmcp_integration!
+                                        import inspect
+
+                                        if inspect.iscoroutinefunction(tool_obj.fn):
+                                            result = await tool_obj.fn(**arguments)
+                                        else:
+                                            result = tool_obj.fn(**arguments)
+
+                                        logger.debug(f"🎯 Tool call result: {result}")
+
+                                        # Convert result to proper MCP content format
+                                        if isinstance(result, str):
+                                            # String results -> text content
+                                            content = [{"type": "text", "text": result}]
+                                        elif isinstance(result, (dict, list)):
+                                            # Structured data -> object content
+                                            content = [
+                                                {"type": "object", "object": result}
+                                            ]
+                                        else:
+                                            # Other types -> convert to text
+                                            content = [
+                                                {"type": "text", "text": str(result)}
+                                            ]
+
+                                        response = {
+                                            "jsonrpc": "2.0",
+                                            "id": request_id,
+                                            "result": {"content": content},
+                                        }
+                                        return Response(
+                                            content=json.dumps(response),
+                                            media_type="application/json",
+                                        )
                                     else:
-                                        # Other types -> convert to text
-                                        content = [
-                                            {"type": "text", "text": str(result)}
-                                        ]
-
-                                    response = {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {"content": content},
-                                    }
-                                    return Response(
-                                        content=json.dumps(response),
-                                        media_type="application/json",
-                                    )
+                                        logger.error(
+                                            f"Tool {tool_name} has no callable function"
+                                        )
+                                        error_response = {
+                                            "jsonrpc": "2.0",
+                                            "id": request_id,
+                                            "error": {
+                                                "code": -32603,
+                                                "message": f"Tool {tool_name} not callable",
+                                            },
+                                        }
+                                        return Response(
+                                            content=json.dumps(error_response),
+                                            media_type="application/json",
+                                        )
                                 else:
-                                    logger.error(
-                                        f"Tool {tool_name} has no callable function"
-                                    )
+                                    # Tool not found
                                     error_response = {
                                         "jsonrpc": "2.0",
                                         "id": request_id,
                                         "error": {
-                                            "code": -32603,
-                                            "message": f"Tool {tool_name} not callable",
+                                            "code": -32601,
+                                            "message": f"Tool not found: {tool_name}",
                                         },
                                     }
                                     return Response(
                                         content=json.dumps(error_response),
                                         media_type="application/json",
                                     )
-                            else:
-                                # Tool not found
-                                error_response = {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "error": {
-                                        "code": -32601,
-                                        "message": f"Tool not found: {tool_name}",
-                                    },
-                                }
-                                return Response(
-                                    content=json.dumps(error_response),
-                                    media_type="application/json",
-                                )
 
                         except Exception as e:
                             logger.error(f"Tool call error: {e}")
@@ -564,6 +586,17 @@ class HttpMcpWrapper:
             capabilities = self._get_capabilities()
             dependencies = self._get_dependencies()
 
+            # Get tools information
+            tools = []
+            if hasattr(self.mcp_server, "_tool_manager"):
+                for name, tool in self.mcp_server._tool_manager._tools.items():
+                    tools.append(
+                        {
+                            "name": name,
+                            "description": getattr(tool, "description", ""),
+                        }
+                    )
+
             # Update metrics gauges
             mcp_capabilities_total.labels(agent=self.mcp_server.name).set(
                 len(capabilities)
@@ -571,11 +604,13 @@ class HttpMcpWrapper:
             mcp_dependencies_total.labels(agent=self.mcp_server.name).set(
                 len(dependencies)
             )
+            mcp_tools_total.labels(agent=self.mcp_server.name).set(len(tools))
 
             return {
                 "agent_id": self.mcp_server.name,
                 "capabilities": capabilities,
                 "dependencies": dependencies,
+                "tools": tools,
                 "transport": ["stdio", "http"],
                 "http_endpoint": f"http://{self._get_host_ip()}:{self.actual_port}",
             }
@@ -773,7 +808,7 @@ class HttpMcpWrapper:
             if self._setup_task and not self._setup_task.done():
                 try:
                     await asyncio.wait_for(self._setup_task, timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(
                         f"HTTP server for {self.mcp_server.name} did not stop in time"
                     )
@@ -788,16 +823,24 @@ class HttpMcpWrapper:
 
     def _get_host_ip(self) -> str:
         """Get the host IP address."""
-        # Priority 1: Explicitly set POD_IP (Kubernetes)
+        # Priority 1: Auto-detect Kubernetes service DNS name (cleanest for K8s)
+        service_name = os.environ.get("SERVICE_NAME")
+        namespace = os.environ.get("NAMESPACE")
+        if service_name and namespace:
+            service_dns = f"{service_name}.{namespace}.svc.cluster.local"
+            logger.info(f"🎯 Using Kubernetes service DNS: {service_dns}")
+            return service_dns
+
+        # Priority 2: Explicitly set POD_IP (backward compatibility)
         pod_ip = os.environ.get("POD_IP")
         if pod_ip:
             logger.debug(f"Using POD_IP from environment: {pod_ip}")
             return pod_ip
 
-        # Priority 2: Check if running in Kubernetes (even without POD_IP set)
+        # Priority 3: Check if running in Kubernetes (even without SERVICE_NAME set)
         if os.environ.get("KUBERNETES_SERVICE_HOST"):
             logger.warning(
-                "Running in Kubernetes but POD_IP not set. Using hostname IP."
+                "Running in Kubernetes but SERVICE_NAME/NAMESPACE not set. Using hostname IP."
             )
             try:
                 # In K8s, hostname usually resolves to pod IP
@@ -810,7 +853,7 @@ class HttpMcpWrapper:
             except Exception as e:
                 logger.debug(f"Failed to resolve hostname to IP: {e}")
 
-        # Priority 3: For Docker or local, try to get external IP
+        # Priority 4: For Docker or local, try to get external IP
         try:
             # Connect to a public DNS server to find our IP
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:

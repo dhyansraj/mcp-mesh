@@ -188,74 +188,188 @@ docker-compose logs -f registry
 docker-compose down
 ```
 
-### 2. Using meshctl Dashboard
+### 2. Using meshctl Commands
 
 ```bash
 # From project root directory
 cd ../..
 
-# List all agents
-./bin/meshctl list --registry http://localhost:8000
+# Build meshctl if not already built
+make build
 
-# Get detailed status
-./bin/meshctl status --registry http://localhost:8000
+# List all registered agents and their capabilities
+./bin/meshctl list agents
 
-# Monitor in real-time
-./bin/meshctl status --registry http://localhost:8000 --follow
+# List specific agent details
+./bin/meshctl get agent hello-world
+./bin/meshctl get agent system-agent
+
+# Monitor registry health
+./bin/meshctl health
+
+# Get dependency graph
+./bin/meshctl dependencies
 ```
 
-### 3. Testing Agent Communication
+### 3. Testing MCP Function Calls with curl
 
 ```bash
-# Test hello-world agent
-curl http://localhost:8081/tools/greeting
+# Test hello world function (should get date from system agent)
+curl -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_simple",
+      "arguments": {}
+    }
+  }'
 
-# Test system agent
-curl http://localhost:8082/tools/date_service
+# Test system agent date service directly
+curl -X POST http://localhost:8082/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_current_time",
+      "arguments": {}
+    }
+  }'
 
-# Test dependency injection (once both agents are running)
-curl http://localhost:8081/tools/dependency_test
+# Test advanced greeting with system info
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_typed", "arguments": {}}}' | jq .
+
+# Test dependency test function (multiple dependencies)
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "test_dependencies", "arguments": {}}}' | jq .
 ```
 
-### 4. Direct Registry API
+### 4. Health Checks and Status
 
 ```bash
-# Get registry health
+# Check agent health endpoints
+curl http://localhost:8081/health
+curl http://localhost:8082/health
+
+# Check registry health
 curl http://localhost:8000/health
 
-# List registered agents
-curl http://localhost:8000/agents
-
-# Get agent details
-curl http://localhost:8000/agents/hello-world
+# List all tools available on each agent
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/list", "params": {}}' | jq .
+curl -s -X POST http://localhost:8082/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/list", "params": {}}' | jq .
 ```
 
-### 5. Testing Resilient Architecture
+### 5. Testing Resilience and Dependency Injection
 
 ```bash
 # Start all services
 docker-compose up -d
 
-# Test agents work standalone (before they register)
-curl http://localhost:8081/tools/greeting
-curl http://localhost:8082/tools/date_service
+# Test agents work standalone (before they register with registry)
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
 
-# Wait for registry connection (30 seconds)
+# Expected response: "Hello from MCP Mesh! (Date service not available yet)"
+
+# Wait for dependency injection to kick in (30-60 seconds)
+sleep 60
+
+# Test enhanced functionality with dependency injection
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+
+# Expected response: "Hello from MCP Mesh! Today is [current date]"
+
+# Test resilience: stop system agent
+docker-compose stop system-agent
+
+# Hello world should gracefully degrade
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+
+# Expected response: "Hello from MCP Mesh! (Date service not available yet)"
+
+# Restart system agent
+docker-compose start system-agent
+
+# Wait for reconnection and test recovery
 sleep 30
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
 
-# Test enhanced functionality (with dependency injection)
-curl http://localhost:8081/tools/dependency_test
+# Expected response: "Hello from MCP Mesh! Today is [current date]"
+```
 
-# Test resilience: stop registry
-docker-compose stop registry
+## 🧪 Complete Testing Workflow
 
-# Agents should continue working with cached connections
-curl http://localhost:8081/tools/dependency_test
+Here's a complete workflow combining meshctl and curl to test all functionality:
 
-# Restart registry
-docker-compose start registry
+```bash
+# 1. Start the mesh
+docker-compose up -d
 
-# Agents should reconnect automatically
+# 2. Build and use meshctl
+cd ../.. && make build
+
+# 3. Verify agents are registered
+./bin/meshctl list agents
+# Should show hello-world and system-agent
+
+# 4. Test individual agent health
+curl http://localhost:8081/health
+curl http://localhost:8082/health
+
+# 5. Test system agent capabilities
+curl -s -X POST http://localhost:8082/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {}}}' | jq .
+
+# 6. Test dependency injection (hello-world calling system-agent)
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+
+# 7. Test advanced dependencies
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "test_dependencies", "arguments": {}}}' | jq .
+
+# 8. Monitor with meshctl
+./bin/meshctl dependencies
+# Should show dependency graph between agents
+
+# 9. Test resilience by stopping system-agent
+docker-compose stop system-agent
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+# Should gracefully degrade
+
+# 10. Restart and verify recovery
+docker-compose start system-agent
+sleep 30
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+# Should work again with date injection
+
+# 11. Clean up
+docker-compose down
 ```
 
 ## 🔍 Understanding Dependency Injection

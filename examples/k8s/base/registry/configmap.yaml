@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-registry-config
+  namespace: mcp-mesh
+data:
+  # Database configuration - matches Docker setup
+  DATABASE_TYPE: "postgres"
+  DATABASE_HOST: "mcp-mesh-postgres"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "mcpmesh"
+  DATABASE_USERNAME: "mcpmesh"
+
+  # Registry server configuration - matches Docker setup
+  HOST: "0.0.0.0"
+  PORT: "8000"
+
+  # Logging configuration - matches Docker setup
+  MCP_MESH_LOG_LEVEL: "DEBUG"
+  MCP_MESH_DEBUG_MODE: "true"
+
+  # Connection pool configuration
+  DB_CONNECTION_TIMEOUT: "30"
+  DB_MAX_OPEN_CONNECTIONS: "25"
+  DB_MAX_IDLE_CONNECTIONS: "5"
+  DB_CONN_MAX_LIFETIME: "300"

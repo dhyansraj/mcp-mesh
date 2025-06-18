@@ -211,7 +211,7 @@ class TestMcpMeshAgentInjection:
 
         # Create test function with multiple args and kwargs
         def complex_greet(
-            name: str, date_svc: McpMeshAgent, age: int, greeting: str = "Hello"
+            name: str, age: int, date_svc: McpMeshAgent, greeting: str = "Hello"
         ) -> str:
             current_date = date_svc.get_date()
             return f"{greeting} {name}, you are {age} years old and today is {current_date}"

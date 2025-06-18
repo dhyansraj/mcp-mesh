@@ -1,0 +1,70 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Production overlay - extends base configuration
+# Uses examples/advanced/ agents for full functionality
+
+resources:
+  - ../../base
+  # Add production agent deployments
+  # Uncomment and customize as needed:
+  # - agent-deployments.yaml
+
+namespace: mcp-mesh
+
+namePrefix: prod-
+
+# Production-specific patches
+patchesStrategicMerge:
+  # Example patches - create these files as needed
+  # - registry-prod-patch.yaml
+  # - agents-prod-patch.yaml
+
+# Production-specific ConfigMaps
+configMapGenerator:
+  # Example: Generate agent code from advanced examples
+  # - name: agent-code-prod
+  #   files:
+  #     - weather_agent.py=../../../examples/advanced/weather_agent.py
+  #     - llm_chat_agent.py=../../../examples/advanced/llm_chat_agent.py
+  #     - system_agent.py=../../../examples/advanced/system_agent.py
+
+# Production-specific Secrets
+secretGenerator:
+  # Example: Production secrets (use external secret management in real deployments)
+  # - name: agent-secrets-prod
+  #   literals:
+  #     - WEATHER_API_KEY=${WEATHER_API_KEY}
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+# Production-specific labels
+commonLabels:
+  environment: production
+  version: stable
+
+# Production-specific annotations
+commonAnnotations:
+  deployment.environment: production
+  monitoring.enabled: "true"
+
+# Production replica counts
+replicas:
+  - name: mcp-mesh-registry
+    count: 3
+  # Uncomment when adding agent deployments
+  # - name: mcp-mesh-weather-agent
+  #   count: 5
+  # - name: mcp-mesh-llm-chat-agent
+  #   count: 3
+  # - name: mcp-mesh-system-agent
+  #   count: 2
+
+# Production resource limits
+patchesJson6902:
+  # Example: Increase registry resources for production
+  # - target:
+  #     group: apps
+  #     version: v1
+  #     kind: StatefulSet
+  #     name: mcp-mesh-registry
+  #   path: registry-resources-patch.yaml

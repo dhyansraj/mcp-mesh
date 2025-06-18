@@ -19,13 +19,17 @@ resources:
   - registry/statefulset.yaml
   - registry/pvc.yaml
   - registry/backup-cronjob.yaml
-  # Agents
+  # Agents - base configuration only, no specific deployments
   - agents/configmap.yaml
-  - agents/agent-code-configmap.yaml
   - agents/secret.yaml
-  - agents/hello-world-deployment.yaml
-  - agents/system-agent-deployment.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh
   app.kubernetes.io/managed-by: kustomize
+
+# ConfigMap generators for custom agents
+# Users can add their own agent configs here
+configMapGenerator: []
+
+# Secret generators for sensitive data
+secretGenerator: []

@@ -5,10 +5,10 @@
 replicaCount: 1
 
 image:
-  repository: mcp-mesh-agent
-  pullPolicy: IfNotPresent
+  repository: mcp-mesh-base  # Matches working examples
+  pullPolicy: Never  # For local development
   # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -26,9 +26,9 @@ serviceAccount:
 podAnnotations: {}
 
 podSecurityContext:
-  runAsNonRoot: true
-  runAsUser: 1000
-  fsGroup: 1000
+  runAsNonRoot: false  # Some agents need root for hello-world example
+  runAsUser: 0
+  fsGroup: 0
 
 securityContext:
   capabilities:
@@ -40,7 +40,7 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 8080
+  port: 8080  # Standard agent port
   targetPort: 8080
   annotations: {}
 
@@ -82,14 +82,28 @@ tolerations: []
 
 affinity: {}
 
+# Registry configuration (matches working examples)
+registry:
+  host: "mcp-mesh-registry"
+  port: "8000"
+  url: "http://mcp-mesh-registry:8000"
+
+# Mesh configuration
+mesh:
+  enabled: true
+  debug: false
+  logLevel: "INFO"
+  tracingEnabled: false
+  metricsEnabled: true
+
 # Agent-specific configuration
 agent:
   # Python script to run (required)
-  script: ""
+  script: "/app/agent.py"  # Matches working examples
   # Example: "/app/agents/hello_world.py"
 
   # Agent metadata for mesh registration
-  name: "" # If empty, uses pod name
+  name: "hello-world"  # Default agent name
   version: "1.0.0"
   description: ""
 
@@ -192,6 +206,34 @@ agentCode:
   configMapName: ""
   # Mount path
   mountPath: "/app/agent"
+
+# Health probe configurations (matches working examples)
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
 
 # Persistence configuration
 persistence:

@@ -25,7 +25,7 @@ class TestMeshCreateServer:
 
     def test_create_server_with_explicit_name(self):
         """Test creating server with explicit name."""
-        with patch("mcp.server.fastmcp.FastMCP") as mock_fastmcp:
+        with patch("fastmcp.FastMCP") as mock_fastmcp:
             mock_server = Mock()
             mock_fastmcp.return_value = mock_server
 
@@ -39,7 +39,7 @@ class TestMeshCreateServer:
         # Clear registry
         DecoratorRegistry.clear_all()
 
-        with patch("mcp.server.fastmcp.FastMCP") as mock_fastmcp:
+        with patch("fastmcp.FastMCP") as mock_fastmcp:
             mock_server = Mock()
             mock_fastmcp.return_value = mock_server
 
@@ -60,7 +60,7 @@ class TestMeshCreateServer:
         # Clear registry
         DecoratorRegistry.clear_all()
 
-        with patch("mcp.server.fastmcp.FastMCP") as mock_fastmcp:
+        with patch("fastmcp.FastMCP") as mock_fastmcp:
             mock_server = Mock()
             mock_fastmcp.return_value = mock_server
 
@@ -79,6 +79,8 @@ class TestMeshCreateServer:
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
+            if name == "fastmcp":
+                raise ImportError("No module named 'fastmcp'")
             if name == "mcp.server.fastmcp":
                 raise ImportError("No module named 'mcp'")
             return original_import(name, *args, **kwargs)
@@ -92,7 +94,7 @@ class TestMeshCreateServer:
         # Clear registry
         DecoratorRegistry.clear_all()
 
-        with patch("mcp.server.fastmcp.FastMCP") as mock_fastmcp:
+        with patch("fastmcp.FastMCP") as mock_fastmcp:
             mock_server = Mock()
             mock_fastmcp.return_value = mock_server
 
@@ -113,7 +115,7 @@ class TestMeshCreateServer:
         # Clear registry
         DecoratorRegistry.clear_all()
 
-        with patch("mcp.server.fastmcp.FastMCP") as mock_fastmcp:
+        with patch("fastmcp.FastMCP") as mock_fastmcp:
             mock_server = Mock()
             mock_fastmcp.return_value = mock_server
 

@@ -1,0 +1,177 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-agent-config
+  namespace: mcp-mesh
+data:
+  # Agent configuration
+  agent-config.yaml: |
+    # MCP Mesh Agent Configuration
+    agent:
+      # Agent name (defaults to pod name if not set)
+      name: ${AGENT_NAME}
+      version: "1.0.0"
+      description: "MCP Mesh Agent"
+
+      # Capabilities provided by this agent
+      capabilities:
+        - name: greeting
+          version: "1.0.0"
+          description: "Provides greeting functionality"
+          timeout: 30
+          retry_attempts: 3
+
+        - name: translation
+          version: "1.0.0"
+          description: "Provides translation services"
+          timeout: 60
+          retry_attempts: 5
+
+      # Dependencies required by this agent
+      dependencies:
+        - name: dictionary-service
+          version: ">=1.0.0"
+          optional: false
+
+        - name: cache-service
+          version: ">=2.0.0"
+          optional: true
+
+      # Health check configuration
+      health:
+        enabled: true
+        interval: 30
+        timeout: 10
+        retry_attempts: 3
+
+      # Performance configuration
+      performance:
+        max_concurrent: 10
+        queue_size: 100
+        timeout: 30
+        cache:
+          enabled: true
+          ttl: 300
+          max_size: 1000
+
+    # Registry configuration
+    registry:
+      host: ${MCP_MESH_REGISTRY_HOST}
+      port: ${MCP_MESH_REGISTRY_PORT}
+      timeout: 30
+      retry:
+        enabled: true
+        attempts: 3
+        delay: 5
+        max_delay: 30
+
+    # HTTP wrapper configuration
+    http:
+      enabled: ${MCP_MESH_HTTP_ENABLED}
+      host: "0.0.0.0"
+      port: ${MCP_MESH_HTTP_PORT}
+      cors:
+        enabled: true
+        allowed_origins:
+          - "*"
+        allowed_methods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        allowed_headers:
+          - "*"
+        allow_credentials: true
+
+    # Logging configuration
+    logging:
+      level: ${MCP_MESH_LOG_LEVEL}
+      format: "json"
+      structured: true
+      include_timestamp: true
+
+    # Security configuration
+    security:
+      auth:
+        enabled: false
+        type: "token"
+
+      tls:
+        enabled: false
+        verify: true
+
+    # Tracing configuration
+    tracing:
+      enabled: ${MCP_MESH_TRACING_ENABLED}
+      provider: "opentelemetry"
+      endpoint: "http://jaeger-collector:14268/api/traces"
+      sample_rate: 0.1
+
+    # Metrics configuration
+    metrics:
+      enabled: ${MCP_MESH_METRICS_ENABLED}
+      port: 9090
+      path: "/metrics"
+
+  # Registry connection (configurable for federated networks)
+  REGISTRY_HOST: "mcp-mesh-registry"
+  REGISTRY_PORT: "8000"
+
+  # Complete registry URL (primary variable used by runtime)
+  MCP_MESH_REGISTRY_URL: "http://mcp-mesh-registry:8000"
+
+  # Environment defaults (can be overridden)
+  env.properties: |
+    # Default environment variables - matches Docker setup
+    MCP_MESH_HTTP_ENABLED=true
+    MCP_MESH_HTTP_PORT=8080
+    MCP_MESH_LOG_LEVEL=INFO
+    MCP_MESH_DEBUG_MODE=false
+    MCP_MESH_ENABLED=true
+    MCP_MESH_AUTO_RUN=true
+    MCP_MESH_AUTO_RUN_INTERVAL=30
+    MCP_MESH_HEALTH_INTERVAL=30
+    MCP_MESH_DYNAMIC_UPDATES=true
+    MCP_MESH_UPDATE_STRATEGY=immediate
+    MCP_MESH_NAMESPACE=default
+    HOST=0.0.0.0
+
+    # Python runtime
+    PYTHONUNBUFFERED=1
+    PYTHONPATH=/app/lib:/app/agents
+
+    # Performance tuning
+    UVICORN_WORKERS=1
+    UVICORN_LOOP=auto
+    UVICORN_LIFESPAN=on
+
+  # Decorator metadata template
+  decorator-metadata.json: |
+    {
+      "mesh_agent": {
+        "enable_http": true,
+        "health_interval": 30,
+        "timeout": 60,
+        "retry_attempts": 3,
+        "enable_caching": true,
+        "cache_ttl": 300,
+        "fallback_mode": true,
+        "circuit_breaker": {
+          "enabled": true,
+          "failure_threshold": 5,
+          "recovery_timeout": 30,
+          "expected_exceptions": ["TimeoutError", "ConnectionError"]
+        },
+        "performance_profile": {
+          "max_concurrent": 10,
+          "queue_size": 100,
+          "request_timeout": 30
+        },
+        "resource_requirements": {
+          "cpu": "100m",
+          "memory": "256Mi",
+          "ephemeral_storage": "1Gi"
+        }
+      }
+    }

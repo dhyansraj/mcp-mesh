@@ -808,7 +808,11 @@ func TestCaptureDatabaseContent(t *testing.T) {
 		output.WriteString("----------------------------------------------------------------------------------------------------------------------\n")
 
 		for _, agent := range agents.Agents {
-			capabilities := strings.Join(agent.Capabilities, ",")
+			capabilityNames := make([]string, len(agent.Capabilities))
+			for i, cap := range agent.Capabilities {
+				capabilityNames[i] = cap.Name
+			}
+			capabilities := strings.Join(capabilityNames, ",")
 			lastSeen := "NULL"
 			if agent.LastSeen != nil {
 				lastSeen = agent.LastSeen.UTC().Format("15:04:05.000") + " UTC"
@@ -827,15 +831,15 @@ func TestCaptureDatabaseContent(t *testing.T) {
 		for _, agent := range agents.Agents {
 			for _, capability := range agent.Capabilities {
 				// Infer function name from our test setup
-				functionName := capability + "_func"
-				if agent.Name == "weather-provider" && capability == "weather_data" {
+				functionName := capability.Name + "_func"
+				if agent.Name == "weather-provider" && capability.Name == "weather_data" {
 					functionName = "weather_data_func"
-				} else if agent.Name == "weather-consumer" && capability == "weather_report" {
+				} else if agent.Name == "weather-consumer" && capability.Name == "weather_report" {
 					functionName = "weather_report_func"
 				}
 
 				output.WriteString(fmt.Sprintf("%-20s %-25s %-20s %-15s %-20s\n",
-					agent.Id, functionName, capability, "1.0.0", ""))
+					agent.Id, functionName, capability.Name, "1.0.0", ""))
 			}
 		}
 

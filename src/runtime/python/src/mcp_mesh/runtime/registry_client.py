@@ -7,7 +7,7 @@ Client for communicating with the mesh registry service.
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 try:
@@ -80,7 +80,7 @@ class RegistryClient:
     async def send_heartbeat(self, health_status: HealthStatus) -> bool:
         """Send periodic heartbeat to registry using same format as registration."""
         # Build MeshAgentRegistration payload for unified /heartbeat endpoint
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # Get cached agent data from DecoratorRegistry
         agent_id = health_status.agent_name
@@ -111,7 +111,7 @@ class RegistryClient:
             "tags": [],
             "version": health_status.version or "1.0.0",
             "description": health_status.metadata.get("description"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         self.logger.debug(f"💓 HEARTBEAT REQUEST for agent: {agent_id}")
@@ -134,7 +134,7 @@ class RegistryClient:
     ) -> dict | None:
         """Send periodic heartbeat to registry using same format as registration and return full response."""
         # Build MeshAgentRegistration payload for unified /heartbeat endpoint
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # Get cached agent data from DecoratorRegistry
         agent_id = health_status.agent_name
@@ -165,7 +165,7 @@ class RegistryClient:
             "tags": [],
             "version": health_status.version or "1.0.0",
             "description": health_status.metadata.get("description"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Send to /heartbeat endpoint with MeshAgentRegistration format
@@ -271,7 +271,7 @@ class RegistryClient:
         if aiohttp is None:
             # Fallback mode: simulate successful requests
             self.logger.warning("🔥 DEBUG: aiohttp is None, using fallback mode")
-            return {"status": "ok", "message": "fallback mode"}
+            return {"status": "success", "message": "fallback mode"}
 
         try:
             session = await self._get_session()
@@ -332,7 +332,7 @@ class RegistryClient:
                                     raise RegistryConnectionError(
                                         f"Registry returned {response.status}: {error_text}"
                                     )
-                        except asyncio.TimeoutError as e:
+                        except TimeoutError as e:
                             self.logger.error(
                                 f"POST request timed out on attempt {attempt + 1}: {e}"
                             )
@@ -369,7 +369,7 @@ class RegistryClient:
                                     f"Registry returned {response.status}"
                                 )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if attempt == self.retry_attempts - 1:
                         raise RegistryTimeoutError(
                             f"Registry request timed out after {self.retry_attempts} attempts"
@@ -444,7 +444,7 @@ class RegistryClient:
 
         except Exception as e:
             self.logger.error(f"❌ FALLBACK REQUEST FAILED: {e}")
-            raise RegistryConnectionError(f"Fallback request failed: {e}")
+            raise RegistryConnectionError(f"Fallback request failed: {e}") from e
 
     async def close(self) -> None:
         """Close the HTTP session."""

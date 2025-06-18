@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Development overlay - extends base configuration
+# Uses examples/simple/ agents for basic testing
+
+resources:
+  - ../../base
+  # Add agent deployments for development
+  # Uncomment and customize as needed:
+  # - agent-deployments.yaml
+
+namespace: mcp-mesh-dev
+
+namePrefix: dev-
+
+# Development-specific patches
+patchesStrategicMerge:
+  # Example patches - create these files as needed
+  # - registry-dev-patch.yaml
+  # - agents-dev-patch.yaml
+
+# Development-specific ConfigMaps
+configMapGenerator:
+  # Example: Generate agent code from examples
+  # - name: agent-code-dev
+  #   files:
+  #     - hello_world.py=../../../examples/simple/hello_world.py
+  #     - system_agent.py=../../../examples/simple/system_agent.py
+
+# Development-specific Secrets
+secretGenerator:
+  # Example: Development secrets
+  # - name: agent-secrets-dev
+  #   literals:
+  #     - API_KEY=dev-api-key
+  #     - DEBUG_MODE=true
+
+# Development-specific labels
+commonLabels:
+  environment: development
+  version: dev
+
+# Development-specific annotations
+commonAnnotations:
+  deployment.environment: development
+
+# Replica count adjustments for development
+replicas:
+  - name: mcp-mesh-registry
+    count: 1
+  # Uncomment when adding agent deployments
+  # - name: mcp-mesh-hello-world
+  #   count: 1
+  # - name: mcp-mesh-system-agent
+  #   count: 1

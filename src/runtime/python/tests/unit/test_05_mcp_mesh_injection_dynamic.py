@@ -42,10 +42,10 @@ class TestDependencyInjection:
         wrapped = injector.create_injection_wrapper(original_func, ["Database"])
 
         # Verify wrapper attributes
-        assert hasattr(wrapped, "_update_dependency")
-        assert hasattr(wrapped, "_original_func")
-        assert wrapped._original_func is original_func
-        assert wrapped._dependencies == ["Database"]
+        assert hasattr(wrapped, "_mesh_update_dependency")
+        assert hasattr(wrapped, "_mesh_original_func")
+        assert wrapped._mesh_original_func is original_func
+        assert wrapped._mesh_dependencies == ["Database"]
         assert wrapped.__name__ == original_func.__name__
 
     def test_explicit_override(self, injector, mock_services):

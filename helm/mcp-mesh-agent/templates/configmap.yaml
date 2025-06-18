@@ -12,60 +12,32 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 data:
-  # Agent configuration
-  AGENT_NAME: {{ include "mcp-mesh-agent.agentName" . | quote }}
-  AGENT_VERSION: {{ .Values.agent.version | quote }}
-  {{- if .Values.agent.description }}
-  AGENT_DESCRIPTION: {{ .Values.agent.description | quote }}
-  {{- end }}
+  # Registry connection (configurable for federated networks) - matches working examples
+  REGISTRY_HOST: {{ .Values.registry.host | default "mcp-mesh-registry" | quote }}
+  REGISTRY_PORT: {{ .Values.registry.port | default "8000" | quote }}
 
-  # Registry configuration
-  MCP_MESH_REGISTRY_URL: {{ .Values.registry.url | quote }}
-  REGISTRY_TIMEOUT: {{ .Values.registry.timeout | quote }}
-  REGISTRY_RETRY_ENABLED: {{ .Values.registry.retry.enabled | quote }}
-  REGISTRY_RETRY_ATTEMPTS: {{ .Values.registry.retry.attempts | quote }}
-  REGISTRY_RETRY_DELAY: {{ .Values.registry.retry.delay | quote }}
+  # Complete registry URL (primary variable used by runtime)
+  MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000") | quote }}
 
-  # Mesh configuration
-  MCP_MESH_ENABLED: {{ .Values.mesh.enabled | quote }}
-  MCP_MESH_DEBUG: {{ .Values.mesh.debug | quote }}
-  MCP_MESH_LOG_LEVEL: {{ .Values.mesh.logLevel | quote }}
-  MCP_MESH_TRACING_ENABLED: {{ .Values.mesh.tracingEnabled | quote }}
-  MCP_MESH_METRICS_ENABLED: {{ .Values.mesh.metricsEnabled | quote }}
+  # Environment defaults (can be overridden) - matches working examples
+  MCP_MESH_HTTP_ENABLED: {{ .Values.agent.http.enabled | default true | quote }}
+  MCP_MESH_HTTP_PORT: {{ .Values.agent.http.port | default 8080 | quote }}
+  MCP_MESH_LOG_LEVEL: {{ .Values.mesh.logLevel | default "INFO" | quote }}
+  MCP_MESH_DEBUG_MODE: {{ .Values.mesh.debug | default false | quote }}
+  MCP_MESH_ENABLED: {{ .Values.mesh.enabled | default true | quote }}
+  MCP_MESH_AUTO_RUN: "true"
+  MCP_MESH_AUTO_RUN_INTERVAL: "30"
+  MCP_MESH_HEALTH_INTERVAL: "30"
+  MCP_MESH_DYNAMIC_UPDATES: "true"
+  MCP_MESH_UPDATE_STRATEGY: "immediate"
+  MCP_MESH_NAMESPACE: "default"
+  HOST: "0.0.0.0"
 
-  # HTTP configuration
-  MCP_MESH_HTTP_ENABLED: {{ .Values.agent.http.enabled | quote }}
-  MCP_MESH_HTTP_HOST: {{ .Values.agent.http.host | quote }}
-  MCP_MESH_HTTP_PORT: {{ .Values.agent.http.port | quote }}
-  HTTP_CORS_ENABLED: {{ .Values.agent.http.cors.enabled | quote }}
-  HTTP_CORS_ORIGINS: {{ .Values.agent.http.cors.origins | join "," | quote }}
+  # Python runtime
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: "/app/lib:/app/agents"
 
-  # Health check configuration
-  HEALTH_CHECK_ENABLED: {{ .Values.agent.healthCheck.enabled | quote }}
-  HEALTH_CHECK_INTERVAL: {{ .Values.agent.healthCheck.interval | quote }}
-  HEALTH_CHECK_TIMEOUT: {{ .Values.agent.healthCheck.timeout | quote }}
-
-  # Retry configuration
-  RETRY_ATTEMPTS: {{ .Values.agent.retry.attempts | quote }}
-  RETRY_DELAY: {{ .Values.agent.retry.delay | quote }}
-  RETRY_MAX_DELAY: {{ .Values.agent.retry.maxDelay | quote }}
-
-  # Performance configuration
-  AGENT_TIMEOUT: {{ .Values.agent.performance.timeout | quote }}
-  AGENT_MAX_CONCURRENT: {{ .Values.agent.performance.maxConcurrent | quote }}
-  AGENT_CACHE_ENABLED: {{ .Values.agent.performance.cacheEnabled | quote }}
-  AGENT_CACHE_TTL: {{ .Values.agent.performance.cacheTTL | quote }}
-
-  # Capabilities and dependencies (as JSON)
-  AGENT_CAPABILITIES: {{ include "mcp-mesh-agent.capabilities" . | quote }}
-  AGENT_DEPENDENCIES: {{ include "mcp-mesh-agent.dependencies" . | quote }}
-
-  # Python configuration
-  {{- if .Values.agent.python.interpreter }}
-  PYTHON_INTERPRETER: {{ .Values.agent.python.interpreter | quote }}
-  {{- end }}
-
-  # Decorator metadata
-  {{- range $key, $value := .Values.mesh.decorators }}
-  DECORATOR_{{ $key | upper }}: {{ $value | toJson | quote }}
-  {{- end }}
+  # Performance tuning
+  UVICORN_WORKERS: "1"
+  UVICORN_LOOP: "auto"
+  UVICORN_LIFESPAN: "on"

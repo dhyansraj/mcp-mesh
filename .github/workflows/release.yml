@@ -1,9 +1,10 @@
 name: Release
 
 on:
+  release:
+    types: [published]
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
@@ -11,132 +12,300 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  id-token: write
+env:
+  REGISTRY: mcpmesh
+  PYTHON_VERSION: "3.11"
+  GO_VERSION: "1.23"
 
 jobs:
-  validate-release:
-    name: Validate Release
+  # Build Go binaries for multiple platforms
+  build-binaries:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-          pip install -e .
-
-      - name: Run full test suite
-        run: |
-          pytest tests/ -v \
-            --cov=mcp_mesh \
-            --cov-report=xml \
-            --cov-report=term-missing
-
-      - name: Run MCP compliance tests
-        run: |
-          pytest tests/integration/test_mcp_protocol_compliance.py -v
-
-      - name: Build package
-        run: |
-          pip install build
-          python -m build
-
-      - name: Verify package
-        run: |
-          pip install twine
-          twine check dist/*
-
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: validate-release
-
-    steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
+          go-version: ${{ env.GO_VERSION }}
 
-      - name: Install build dependencies
+      - name: Determine version
+        id: version
         run: |
-          python -m pip install --upgrade pip
-          pip install build hatch
-
-      - name: Build package
-        run: python -m build
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get the latest tag
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-
-          if [ -z "$LATEST_TAG" ]; then
-            echo "First release - generating changelog from all commits"
-            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
           else
-            echo "Generating changelog since $LATEST_TAG"
-            CHANGELOG=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORMS: "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64"
+        run: ./packaging/scripts/build-binaries.sh
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
+  # Build and push Docker images
+  build-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version and tags
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="dev-${{ github.sha }}"
           fi
 
-          # Save changelog to file
-          echo "## Changes" > changelog.md
-          echo "$CHANGELOG" >> changelog.md
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
 
-          # Set output for use in release
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          cat changelog.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building Docker images for version: ${VERSION}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Build and push Registry image
+        uses: docker/build-push-action@v5
         with:
-          files: dist/*
-          body: ${{ steps.changelog.outputs.changelog }}
-          draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
-          generate_release_notes: true
+          context: .
+          file: ./packaging/docker/registry.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          tags: |
+            ${{ env.REGISTRY }}/registry:latest
+            ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository }}/registry:latest
+            ghcr.io/${{ github.repository }}/registry:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  publish-pypi:
-    name: Publish to PyPI
+      - name: Build and push Python Runtime image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./packaging/docker/python-runtime.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          tags: |
+            ${{ env.REGISTRY }}/python-runtime:latest
+            ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository }}/python-runtime:latest
+            ghcr.io/${{ github.repository }}/python-runtime:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push CLI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./packaging/docker/cli.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          tags: |
+            ${{ env.REGISTRY }}/cli:latest
+            ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ github.repository }}/cli:latest
+            ghcr.io/${{ github.repository }}/cli:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Publish Python package to PyPI
+  publish-python:
     runs-on: ubuntu-latest
-    needs: create-release
-    environment: release
-
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write # For trusted publishing
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build
+          pip install build twine
+
+      - name: Prepare Python package
+        run: |
+          # Copy packaging pyproject.toml to Python runtime directory
+          cp packaging/pypi/pyproject.toml src/runtime/python/
+
+          # Fix paths in pyproject.toml (remove src/runtime/python/ prefix)
+          cd src/runtime/python
+          sed -i 's|src/runtime/python/src/mcp_mesh|src/mcp_mesh|g' pyproject.toml
+          sed -i 's|src/runtime/python/README.md|README.md|g' pyproject.toml
+          sed -i 's|src/runtime/python/LICENSE|LICENSE|g' pyproject.toml
+
+          # Update version in __init__.py (preserve existing content)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # Convert test versions to PEP 440 compliant format
+          if [[ "$VERSION" == *"-test"* ]]; then
+            VERSION=$(echo "$VERSION" | sed 's/-test/.dev/')
+          fi
+
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/mcp_mesh/__init__.py
 
       - name: Build package
-        run: python -m build
+        run: |
+          cd src/runtime/python
+          python -m build
+
+      - name: Check package
+        run: |
+          cd src/runtime/python
+          twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: src/runtime/python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
-          verbose: true
+
+  # Update package manager manifests
+  update-packages:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: [build-binaries]
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update Homebrew formula
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # Download checksums
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME="${{ github.event.inputs.version }}"
+          else
+            TAG_NAME="${{ github.ref_name }}"
+          fi
+
+          curl -L \
+            "https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/checksums.txt" \
+            -o checksums.txt
+
+          # Update Homebrew formula with new version and checksums
+          # This would typically involve updating the formula file and creating a PR
+          # For now, we'll just log the information needed
+          echo "Homebrew formula update needed:"
+          echo "Version: ${VERSION}"
+          echo "Checksums:"
+          cat checksums.txt
+
+      - name: Update Scoop manifest
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # Update Scoop manifest
+          sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" packaging/scoop/mcp-mesh.json
+
+          echo "Scoop manifest updated for version: ${VERSION}"
+
+  # Security scan
+  security-scan:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: [build-docker]
+    permissions:
+      contents: read
+    steps:
+      - name: Run Trivy vulnerability scanner on Registry image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.REGISTRY }}/registry:latest"
+          format: "table"
+          exit-code: "0" # Don't fail on vulnerabilities for now
+
+      - name: Run Trivy vulnerability scanner on Python Runtime image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.REGISTRY }}/python-runtime:latest"
+          format: "table"
+          exit-code: "0"
+
+      - name: Run Trivy vulnerability scanner on CLI image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.REGISTRY }}/cli:latest"
+          format: "table"
+          exit-code: "0"

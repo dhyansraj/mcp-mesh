@@ -11,17 +11,30 @@ pip install mcp-mesh
 ## Quick Start
 
 ```python
-from mcp_mesh import mesh_agent
-from mcp.server.fastmcp import FastMCP
+import mesh
+from mcp_mesh import McpMeshAgent
 
-# Create your MCP server
-server = FastMCP()
+# Define your agent
+@mesh.agent(name="hello-world", http_port=9090)
+class HelloWorldAgent:
+    """Hello World agent demonstrating MCP Mesh features."""
+    pass
 
-# Use mesh_agent decorator BEFORE server.tool()
-@mesh_agent(capability="greeting")
-@server.tool()
-def greet(name: str = "World") -> str:
-    """Simple greeting function."""
+# Create a greeting function with dependency injection
+@mesh.tool(
+    capability="greeting",
+    dependencies=["date_service"],
+    description="Greeting function with date dependency injection"
+)
+def greet(name: str = "World", systemDate: McpMeshAgent = None) -> str:
+    """Greeting function with automatic dependency injection."""
+    if systemDate is not None:
+        try:
+            current_date = systemDate()
+            return f"Hello, {name}! Today is {current_date}"
+        except Exception:
+            pass
+
     return f"Hello, {name}!"
 
 # The runtime auto-initializes when you import mcp_mesh
@@ -46,4 +59,4 @@ The runtime can be configured via environment variables:
 
 ## Documentation
 
-See the [main repository](https://github.com/mcp-mesh/mcp-mesh) for complete documentation.
+See the [main repository](https://github.com/dhyansraj/mcp-mesh) for complete documentation.

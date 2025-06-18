@@ -47,9 +47,9 @@ class TestFastAPIIntegration:
             info_response = client.get("/mesh/info")
             assert info_response.status_code == 200
             info_data = info_response.json()
-            assert info_data["agent_id"] == "test-server"
-            assert "capabilities" in info_data
-            assert "transport" in info_data
+            assert "tools" in info_data
+            assert len(info_data["tools"]) == 1
+            assert info_data["tools"][0]["name"] == "simple_greet"
 
             # Test ready endpoint
             ready_response = client.get("/ready")

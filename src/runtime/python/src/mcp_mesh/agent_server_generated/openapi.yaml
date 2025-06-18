@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   contact:
+    email: dhyanraj@gmail.com
     name: Dhyan Raj
     url: https://github.com/dhyansraj/mcp-mesh
-    email: dhyanraj@gmail.com
   description: |
     API contract for MCP Mesh Agent HTTP endpoints.
 
@@ -27,21 +27,21 @@ info:
   title: MCP Mesh Agent API
   version: 1.0.0
 servers:
-- description: Agent HTTP wrapper
-  url: "http://localhost:{port}"
-  variables:
-    port:
-      default: "8001"
-      description: Dynamic port assigned to agent
+  - description: Agent HTTP wrapper
+    url: "http://localhost:{port}"
+    variables:
+      port:
+        default: "8001"
+        description: Dynamic port assigned to agent
 tags:
-- description: Agent health and readiness endpoints
-  name: health
-- description: Agent mesh integration endpoints
-  name: mesh
-- description: MCP protocol endpoints
-  name: mcp
-- description: Metrics and monitoring endpoints
-  name: monitoring
+  - description: Agent health and readiness endpoints
+    name: health
+  - description: Agent mesh integration endpoints
+    name: mesh
+  - description: MCP protocol endpoints
+    name: mcp
+  - description: Metrics and monitoring endpoints
+    name: monitoring
 paths:
   /health:
     get:
@@ -56,17 +56,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentHealthResponse'
+                $ref: "#/components/schemas/AgentHealthResponse"
           description: Agent is healthy
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentHealthResponse'
+                $ref: "#/components/schemas/AgentHealthResponse"
           description: Agent is unhealthy
       summary: Agent health check
       tags:
-      - health
+        - health
   /ready:
     get:
       description: |
@@ -79,13 +79,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReadinessResponse'
+                $ref: "#/components/schemas/ReadinessResponse"
           description: Agent is ready
         "503":
           description: Agent is not ready
       summary: Agent readiness check
       tags:
-      - health
+        - health
   /livez:
     get:
       description: |
@@ -105,7 +105,7 @@ paths:
           description: Agent is not alive
       summary: Agent liveness check
       tags:
-      - health
+        - health
   /mesh/info:
     get:
       description: |
@@ -118,11 +118,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentMeshInfo'
+                $ref: "#/components/schemas/AgentMeshInfo"
           description: Agent mesh information
       summary: Agent mesh information
       tags:
-      - mesh
+        - mesh
   /mesh/tools:
     get:
       description: |
@@ -135,11 +135,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentToolsList'
+                $ref: "#/components/schemas/AgentToolsList"
           description: Agent tools list
       summary: List agent tools
       tags:
-      - mesh
+        - mesh
   /metrics:
     get:
       description: |
@@ -160,7 +160,7 @@ paths:
           description: Prometheus metrics
       summary: Agent metrics
       tags:
-      - monitoring
+        - monitoring
   /mcp:
     post:
       description: |
@@ -194,7 +194,7 @@ paths:
                       operation: read
                       path: /tmp/test.txt
             schema:
-              $ref: '#/components/schemas/McpRequest'
+              $ref: "#/components/schemas/McpRequest"
         description: MCP JSON-RPC message
         required: true
       responses:
@@ -202,17 +202,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/McpResponse'
+                $ref: "#/components/schemas/McpResponse"
           description: MCP response
         "400":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/McpErrorResponse'
+                $ref: "#/components/schemas/McpErrorResponse"
           description: Invalid MCP request
       summary: MCP protocol handler
       tags:
-      - mcp
+        - mcp
 components:
   schemas:
     AgentHealthResponse:
@@ -221,8 +221,8 @@ components:
         uptime_seconds: 3600
         mcp_server_status: connected
         transport:
-        - stdio
-        - http
+          - stdio
+          - http
         version: 1.0.0
         status: healthy
         timestamp: 2024-01-20T10:30:45Z
@@ -230,9 +230,9 @@ components:
         status:
           description: Overall agent health status
           enum:
-          - healthy
-          - degraded
-          - unhealthy
+            - healthy
+            - degraded
+            - unhealthy
           title: status
           type: string
         agent_id:
@@ -249,8 +249,8 @@ components:
         transport:
           description: Available transport methods
           example:
-          - stdio
-          - http
+            - stdio
+            - http
           items:
             type: string
           title: transport
@@ -269,17 +269,17 @@ components:
         mcp_server_status:
           description: MCP server connection status
           enum:
-          - connected
-          - disconnected
-          - error
+            - connected
+            - disconnected
+            - error
           example: connected
           title: mcp_server_status
           type: string
       required:
-      - agent_id
-      - status
-      - timestamp
-      - transport
+        - agent_id
+        - status
+        - timestamp
+        - transport
       title: AgentHealthResponse
       type: object
     ReadinessResponse:
@@ -306,7 +306,7 @@ components:
           type: string
         checks:
           additionalProperties:
-            $ref: '#/components/schemas/ReadinessResponse_checks_value'
+            $ref: "#/components/schemas/ReadinessResponse_checks_value"
           example:
             mcp_server:
               status: pass
@@ -317,22 +317,22 @@ components:
           title: checks
           type: object
       required:
-      - ready
-      - timestamp
+        - ready
+        - timestamp
       title: ReadinessResponse
       type: object
     AgentMeshInfo:
       example:
         capabilities:
-        - greeting
-        - farewell
+          - greeting
+          - farewell
         agent_id: hello-world
         http_endpoint: http://192.168.1.100:8001
         transport:
-        - stdio
-        - http
+          - stdio
+          - http
         dependencies:
-        - file-system
+          - file-system
       properties:
         agent_id:
           description: Agent identifier
@@ -342,8 +342,8 @@ components:
         capabilities:
           description: Agent capabilities
           example:
-          - greeting
-          - farewell
+            - greeting
+            - farewell
           items:
             type: string
           title: capabilities
@@ -351,7 +351,7 @@ components:
         dependencies:
           description: Agent dependencies
           example:
-          - file-system
+            - file-system
           items:
             type: string
           title: dependencies
@@ -359,8 +359,8 @@ components:
         transport:
           description: Available transport methods
           example:
-          - stdio
-          - http
+            - stdio
+            - http
           items:
             type: string
           title: transport
@@ -371,11 +371,11 @@ components:
           title: http_endpoint
           type: string
       required:
-      - agent_id
-      - capabilities
-      - dependencies
-      - http_endpoint
-      - transport
+        - agent_id
+        - capabilities
+        - dependencies
+        - http_endpoint
+        - transport
       title: AgentMeshInfo
       type: object
     AgentToolsList:
@@ -387,15 +387,15 @@ components:
               operation:
                 type: string
                 enum:
-                - read
-                - write
-                - list
+                  - read
+                  - write
+                  - list
               path:
                 type: string
       properties:
         tools:
           additionalProperties:
-            $ref: '#/components/schemas/ToolInfo'
+            $ref: "#/components/schemas/ToolInfo"
           description: Available tools mapping
           example:
             file_operations:
@@ -404,15 +404,15 @@ components:
                 operation:
                   type: string
                   enum:
-                  - read
-                  - write
-                  - list
+                    - read
+                    - write
+                    - list
                 path:
                   type: string
           title: tools
           type: object
       required:
-      - tools
+        - tools
       title: AgentToolsList
       type: object
     ToolInfo:
@@ -429,14 +429,14 @@ components:
             operation:
               type: string
               enum:
-              - read
-              - write
+                - read
+                - write
             path:
               type: string
           title: parameters
           type: object
       required:
-      - description
+        - description
       title: ToolInfo
       type: object
     McpRequest:
@@ -449,7 +449,7 @@ components:
         jsonrpc:
           description: JSON-RPC version
           enum:
-          - "2.0"
+            - "2.0"
           example: "2.0"
           title: jsonrpc
           type: string
@@ -470,17 +470,17 @@ components:
           title: params
           type: object
       required:
-      - id
-      - jsonrpc
-      - method
+        - id
+        - jsonrpc
+        - method
       title: McpRequest
       type: object
     McpResponse:
       example:
         result:
           tools:
-          - name: file_operations
-            description: File system operations
+            - name: file_operations
+              description: File system operations
         id: 1
         jsonrpc: "2.0"
         error:
@@ -491,7 +491,7 @@ components:
       properties:
         jsonrpc:
           enum:
-          - "2.0"
+            - "2.0"
           example: "2.0"
           title: jsonrpc
           type: string
@@ -505,15 +505,15 @@ components:
           description: Method result
           example:
             tools:
-            - name: file_operations
-              description: File system operations
+              - name: file_operations
+                description: File system operations
           title: result
           type: object
         error:
-          $ref: '#/components/schemas/McpError'
+          $ref: "#/components/schemas/McpError"
       required:
-      - id
-      - jsonrpc
+        - id
+        - jsonrpc
       title: McpResponse
       type: object
     McpErrorResponse:
@@ -528,7 +528,7 @@ components:
       properties:
         jsonrpc:
           enum:
-          - "2.0"
+            - "2.0"
           example: "2.0"
           title: jsonrpc
           type: string
@@ -537,11 +537,11 @@ components:
           title: id
           type: integer
         error:
-          $ref: '#/components/schemas/McpError'
+          $ref: "#/components/schemas/McpError"
       required:
-      - error
-      - id
-      - jsonrpc
+        - error
+        - id
+        - jsonrpc
       title: McpErrorResponse
       type: object
     McpError:
@@ -567,16 +567,16 @@ components:
           title: data
           type: object
       required:
-      - code
-      - message
+        - code
+        - message
       title: McpError
       type: object
     ReadinessResponse_checks_value:
       properties:
         status:
           enum:
-          - pass
-          - fail
+            - pass
+            - fail
           title: status
           type: string
         message:

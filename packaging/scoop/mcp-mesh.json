@@ -1,0 +1,20 @@
+{
+  "version": "0.1.0",
+  "description": "Kubernetes-native platform for distributed MCP applications",
+  "homepage": "https://github.com/dhyansraj/mcp-mesh",
+  "license": "MIT",
+  "notes": [
+    "Windows binaries are temporarily unavailable due to syscall compatibility issues.",
+    "Please use Docker or WSL2 with Linux binaries:",
+    "  docker run --rm mcpmesh/cli:latest version",
+    "",
+    "Alternative: Install Python runtime only:",
+    "  pip install mcp-mesh",
+    "",
+    "Documentation: https://github.com/dhyansraj/mcp-mesh/docs"
+  ],
+  "suggest": {
+    "Docker Desktop": "docker",
+    "WSL2": "wsl2"
+  }
+}

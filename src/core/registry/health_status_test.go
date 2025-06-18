@@ -38,9 +38,9 @@ func TestHealthStatusCalculation(t *testing.T) {
 
 		assert.Equal(t, 1, response.Count)
 		agent := response.Agents[0]
-		assert.Equal(t, "healthy", agent["status"])
+		assert.Equal(t, "healthy", string(agent.Status))
 
-		t.Logf("✅ Recent agent correctly shows: %s", agent["status"])
+		t.Logf("✅ Recent agent correctly shows: %s", string(agent.Status))
 	})
 
 	t.Run("HealthStatusThresholds", func(t *testing.T) {
@@ -125,9 +125,9 @@ func TestHealthStatusCalculation(t *testing.T) {
 
 		assert.Equal(t, 1, response.Count)
 		agent := response.Agents[0]
-		assert.Equal(t, "healthy", agent["status"])
+		assert.Equal(t, "healthy", string(agent.Status))
 
-		t.Logf("✅ Custom timeout test - agent status: %s", agent["status"])
+		t.Logf("✅ Custom timeout test - agent status: %s", string(agent.Status))
 		t.Logf("   With 30s timeout threshold:")
 		t.Logf("   - healthy: < 30s")
 		t.Logf("   - degraded: 30s - 60s")
@@ -166,11 +166,9 @@ func TestHealthStatusCalculation(t *testing.T) {
 		agent := response.Agents[0]
 
 		// Verify last_seen exists and is in RFC3339 format
-		lastSeenStr, ok := agent["last_seen"].(string)
-		require.True(t, ok, "last_seen should be a string")
+		require.NotNil(t, agent.LastSeen, "last_seen should be present")
 
-		lastSeen, err := time.Parse(time.RFC3339, lastSeenStr)
-		require.NoError(t, err, "last_seen should be in RFC3339 format")
+		lastSeen := *agent.LastSeen
 
 		// Verify timestamp is reasonable (within registration window)
 		assert.True(t, lastSeen.After(beforeRegistration.Add(-time.Second)),
@@ -178,7 +176,7 @@ func TestHealthStatusCalculation(t *testing.T) {
 		assert.True(t, lastSeen.Before(afterRegistration.Add(time.Second)),
 			"last_seen should be before registration end")
 
-		t.Logf("✅ last_seen field verified: %s", lastSeenStr)
+		t.Logf("✅ last_seen field verified: %s", lastSeen.Format(time.RFC3339))
 		t.Logf("   Parsed time: %v", lastSeen)
 		t.Logf("   Time since: %v", time.Since(lastSeen))
 	})

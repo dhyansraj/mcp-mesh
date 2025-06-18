@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-mesh-postgres
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-postgres
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: mcp-mesh-postgres
+    app.kubernetes.io/component: database
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-mesh-postgres-headless
+  namespace: mcp-mesh
+  labels:
+    app.kubernetes.io/name: mcp-mesh-postgres
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: mcp-mesh-postgres
+    app.kubernetes.io/component: database

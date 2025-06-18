@@ -1,57 +1,55 @@
-# Build stage - using debian for better compatibility
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.23-alpine AS builder
 
-WORKDIR /app
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    gcc \
+    musl-dev \
+    sqlite-dev \
+    build-base
 
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download
+# Set working directory
+WORKDIR /src
 
-# Copy source code
-COPY cmd/ cmd/
-COPY src/ src/
+# Copy the entire project source
+COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -o mcp-mesh-registry ./cmd/mcp-mesh-registry
+# Set environment variables for SQLite compilation on Alpine/musl
+ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 
-# Runtime stage - minimal debian
-FROM debian:bookworm-slim
+# Build the registry binary with SQLite compatibility flags
+RUN cd cmd/mcp-mesh-registry && \
+    go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o mcp-mesh-registry .
+
+# Runtime stage
+FROM alpine:latest
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk --no-cache add ca-certificates sqlite wget
 
-# Create non-root user
-RUN useradd -m -u 1000 mcp
+# Create directory for the database
+RUN mkdir -p /data
 
-# Create necessary directories
-RUN mkdir -p /data /etc/mcp-mesh && \
-    chown -R mcp:mcp /data /etc/mcp-mesh
+# Create app user for security
+RUN adduser -D -u 1000 appuser && \
+    chown -R appuser:appuser /data
 
-WORKDIR /app
+# Copy the binary from builder
+COPY --from=builder /src/cmd/mcp-mesh-registry/mcp-mesh-registry /usr/local/bin/
 
-# Copy binary from builder
-COPY --from=builder /app/mcp-mesh-registry /app/mcp-mesh-registry
+# Switch to app user
+USER appuser
 
-# Switch to non-root user
-USER mcp
+# Set working directory
+WORKDIR /data
 
-# Expose ports
-EXPOSE 8080 9090
-
-# Set default environment variables
-ENV HOST=0.0.0.0 \
-    PORT=8080 \
-    DATABASE_URL=/data/registry.db \
-    LOG_LEVEL=info \
-    HEALTH_CHECK_INTERVAL=30 \
-    CACHE_TTL=30
+# Expose the registry port
+EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/app/mcp-mesh-registry", "-version"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8000/health || exit 1
 
-# Run the registry
-ENTRYPOINT ["/app/mcp-mesh-registry"]
+# Start the registry
+CMD ["mcp-mesh-registry"]

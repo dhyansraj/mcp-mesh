@@ -8,13 +8,13 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import MeshDecoratorProcessor
+from mcp_mesh.runtime.processor import DecoratorProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
 from mcp_mesh.runtime.shared.types import MockHTTPResponse
 
 
-class TestMeshDecoratorProcessorAgentConfig:
-    """Test MeshDecoratorProcessor using agent configuration."""
+class TestDecoratorProcessorAgentConfig:
+    """Test DecoratorProcessor using agent configuration."""
 
     @pytest.fixture
     def mock_registry_client(self):
@@ -31,8 +31,12 @@ class TestMeshDecoratorProcessorAgentConfig:
 
     @pytest.fixture
     def processor(self, mock_registry_client):
-        """Create MeshDecoratorProcessor with mock client."""
-        return MeshDecoratorProcessor(mock_registry_client)
+        """Create DecoratorProcessor with mock client."""
+        with patch(
+            "mcp_mesh.runtime.processor.RegistryClient",
+            return_value=mock_registry_client,
+        ):
+            return DecoratorProcessor("http://mock-registry:8000")
 
     @pytest.mark.asyncio
     async def test_processor_uses_agent_config_values(self, processor):
@@ -42,7 +46,9 @@ class TestMeshDecoratorProcessorAgentConfig:
 
         # Mock HTTP wrapper setup to avoid actual server startup
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools", return_value=None
+            processor.mesh_tool_processor,
+            "_setup_http_wrapper_for_tools",
+            return_value=None,
         ):
             # Define agent with custom config - disable HTTP for simplicity in tests
             @mesh.agent(
@@ -61,11 +67,8 @@ class TestMeshDecoratorProcessorAgentConfig:
             def test_function():
                 return "test"
 
-            # Get registered tools
-            tools = DecoratorRegistry.get_mesh_tools()
-
-            # Process tools
-            results = await processor.process_tools(tools)
+            # Process all decorators (tools and agents)
+            results = await processor.process_all_decorators()
 
             # Verify registration call was made
             processor.registry_client.post.assert_called_once()
@@ -88,18 +91,17 @@ class TestMeshDecoratorProcessorAgentConfig:
 
         # Mock HTTP wrapper setup to avoid actual server startup
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools", return_value=None
+            processor.mesh_tool_processor,
+            "_setup_http_wrapper_for_tools",
+            return_value=None,
         ):
 
             @mesh.tool(capability="standalone_capability")
             def standalone_function():
                 return "standalone"
 
-            # Get registered tools
-            tools = DecoratorRegistry.get_mesh_tools()
-
-            # Process tools
-            results = await processor.process_tools(tools)
+            # Process all decorators (tools and agents)
+            results = await processor.process_all_decorators()
 
             # Verify registration call was made
             processor.registry_client.post.assert_called_once()
@@ -124,7 +126,9 @@ class TestMeshDecoratorProcessorAgentConfig:
 
         # Mock HTTP wrapper setup to avoid actual server startup
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools", return_value=None
+            processor.mesh_tool_processor,
+            "_setup_http_wrapper_for_tools",
+            return_value=None,
         ):
             # Test with environment variables
             with patch.dict(
@@ -152,11 +156,8 @@ class TestMeshDecoratorProcessorAgentConfig:
                 def env_function():
                     return "env test"
 
-                # Get registered tools
-                tools = DecoratorRegistry.get_mesh_tools()
-
-                # Process tools
-                results = await processor.process_tools(tools)
+                # Process all decorators (tools and agents)
+                results = await processor.process_all_decorators()
 
                 # Verify registration call was made
                 processor.registry_client.post.assert_called_once()
@@ -178,7 +179,9 @@ class TestMeshDecoratorProcessorAgentConfig:
 
         # Mock the HTTP wrapper setup method
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools", return_value=None
+            processor.mesh_tool_processor,
+            "_setup_http_wrapper_for_tools",
+            return_value=None,
         ) as mock_http_setup:
             # Test with enable_http=True
             @mesh.agent(
@@ -193,11 +196,8 @@ class TestMeshDecoratorProcessorAgentConfig:
             def http_function():
                 return "http test"
 
-            # Get registered tools
-            tools = DecoratorRegistry.get_mesh_tools()
-
-            # Process tools
-            results = await processor.process_tools(tools)
+            # Process all decorators (tools and agents)
+            results = await processor.process_all_decorators()
 
             # Verify HTTP wrapper setup was called
             mock_http_setup.assert_called_once()
@@ -210,7 +210,9 @@ class TestMeshDecoratorProcessorAgentConfig:
 
         # Mock the HTTP wrapper setup method
         with patch.object(
-            processor, "_setup_http_wrapper_for_tools", return_value=None
+            processor.mesh_tool_processor,
+            "_setup_http_wrapper_for_tools",
+            return_value=None,
         ) as mock_http_setup:
             # Test with enable_http=False
             @mesh.agent(
@@ -225,11 +227,8 @@ class TestMeshDecoratorProcessorAgentConfig:
             def no_http_function():
                 return "no http test"
 
-            # Get registered tools
-            tools = DecoratorRegistry.get_mesh_tools()
-
-            # Process tools
-            results = await processor.process_tools(tools)
+            # Process all decorators (tools and agents)
+            results = await processor.process_all_decorators()
 
             # Verify HTTP wrapper setup was NOT called
             mock_http_setup.assert_not_called()

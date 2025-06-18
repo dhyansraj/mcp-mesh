@@ -3,6 +3,7 @@ package registry
 import (
 	"testing"
 
+	"mcp-mesh/src/core/registry/generated"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,26 +53,29 @@ func TestAgentsEndpoint(t *testing.T) {
 		assert.Len(t, response.Agents, 1)
 
 		agent := response.Agents[0]
-		assert.Equal(t, "test-agent-1", agent["id"])
-		assert.Equal(t, "Test Agent One", agent["name"])
-		assert.Equal(t, "healthy", agent["status"]) // Should be healthy since just registered
-		assert.Equal(t, "2.1.0", agent["version"])
-		assert.Equal(t, "production", agent["namespace"])
-		assert.Equal(t, "http://localhost:8080", agent["endpoint"])
+		assert.Equal(t, "test-agent-1", agent.Id)
+		assert.Equal(t, "Test Agent One", agent.Name)
+		assert.Equal(t, "healthy", string(agent.Status)) // Should be healthy since just registered
+		assert.Equal(t, "2.1.0", *agent.Version)
+		// Note: namespace is not part of AgentInfo response per OpenAPI spec
+		assert.Equal(t, "http://localhost:8080", agent.Endpoint)
 
-		// Check capabilities
-		capabilities, ok := agent["capabilities"].([]string)
-		require.True(t, ok, "capabilities should be []string")
-		assert.ElementsMatch(t, []string{"greeting_service", "notification_service"}, capabilities)
+		// Check capabilities - now []CapabilityInfo, not []string
+		assert.Len(t, agent.Capabilities, 2)
+		capabilityNames := make([]string, len(agent.Capabilities))
+		for i, cap := range agent.Capabilities {
+			capabilityNames[i] = cap.Name
+		}
+		assert.ElementsMatch(t, []string{"greeting_service", "notification_service"}, capabilityNames)
 
 		// Note: Dependencies field removed from API - we use real-time resolution instead
 
 		t.Logf("✅ Agent listed successfully:")
-		t.Logf("   ID: %s", agent["id"])
-		t.Logf("   Name: %s", agent["name"])
-		t.Logf("   Status: %s", agent["status"])
-		t.Logf("   Capabilities: %v", capabilities)
-		t.Logf("   Endpoint: %s", agent["endpoint"])
+		t.Logf("   ID: %s", agent.Id)
+		t.Logf("   Name: %s", agent.Name)
+		t.Logf("   Status: %s", string(agent.Status))
+		t.Logf("   Capabilities: %v", capabilityNames)
+		t.Logf("   Endpoint: %s", agent.Endpoint)
 	})
 
 	t.Run("ListAgentsWithFiltering", func(t *testing.T) {
@@ -130,7 +134,7 @@ func TestAgentsEndpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, response.Count)
-		assert.Equal(t, "weather-agent", response.Agents[0]["id"])
+		assert.Equal(t, "weather-agent", response.Agents[0].Id)
 
 		// Test namespace filtering
 		params = &AgentQueryParams{
@@ -140,7 +144,7 @@ func TestAgentsEndpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, response.Count)
-		assert.Equal(t, "database-agent", response.Agents[0]["id"])
+		assert.Equal(t, "database-agent", response.Agents[0].Id)
 
 		// Test fuzzy capability matching
 		params = &AgentQueryParams{
@@ -151,7 +155,7 @@ func TestAgentsEndpoint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, response.Count)
-		assert.Equal(t, "weather-agent", response.Agents[0]["id"])
+		assert.Equal(t, "weather-agent", response.Agents[0].Id)
 
 		t.Logf("✅ Filtering tests passed")
 	})
@@ -184,9 +188,9 @@ func TestAgentsEndpoint(t *testing.T) {
 
 		assert.Equal(t, 1, response.Count)
 		agent := response.Agents[0]
-		assert.Equal(t, "healthy", agent["status"])
+		assert.Equal(t, "healthy", string(agent.Status))
 
-		t.Logf("✅ Health status correctly shows: %s", agent["status"])
+		t.Logf("✅ Health status correctly shows: %s", string(agent.Status))
 	})
 
 	t.Run("ListAgentsWithDependencies", func(t *testing.T) {
@@ -241,19 +245,17 @@ func TestAgentsEndpoint(t *testing.T) {
 		assert.Equal(t, 2, response.Count)
 
 		// Find consumer agent and check dependency tracking
-		var consumerAgent map[string]interface{}
+		var consumerAgent *generated.AgentInfo
 		for _, agent := range response.Agents {
-			if agent["id"] == "consumer-agent" {
-				consumerAgent = agent
+			if agent.Id == "consumer-agent" {
+				consumerAgent = &agent
 				break
 			}
 		}
 		require.NotNil(t, consumerAgent)
 
 		// Check that dependency counts are included (for CLI display)
-		if totalDeps, exists := consumerAgent["total_dependencies"]; exists {
-			assert.Equal(t, int64(1), totalDeps)
-		}
+		assert.Equal(t, 1, consumerAgent.TotalDependencies)
 
 		t.Logf("✅ Dependency tracking in agents list verified")
 	})

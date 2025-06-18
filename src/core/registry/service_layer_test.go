@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,20 +16,23 @@ import (
 
 // setupTestDatabase creates an in-memory database with the new schema
 func setupTestDatabase(t *testing.T) *database.Database {
-	// Create in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err, "Failed to create in-memory database")
+	// Use proper database initialization with in-memory SQLite config
+	config := &database.Config{
+		DatabaseURL:        ":memory:",
+		ConnectionTimeout:  30,
+		BusyTimeout:        5000,
+		JournalMode:        "WAL",
+		Synchronous:        "NORMAL",
+		CacheSize:          10000,
+		EnableForeignKeys:  true,
+		MaxOpenConnections: 25,
+		MaxIdleConnections: 5,
+		ConnMaxLifetime:    300,
+	}
 
-	// Load and execute the new schema
-	schemaPath := "../database/schema_v2.sql"
-	schemaSQL, err := os.ReadFile(schemaPath)
-	require.NoError(t, err, "Failed to read schema file")
+	db, err := database.Initialize(config)
+	require.NoError(t, err, "Failed to initialize test database")
 
-	_, err = sqlDB.Exec(string(schemaSQL))
-	require.NoError(t, err, "Failed to execute schema")
-
-	// Wrap in database.Database
-	db := &database.Database{DB: sqlDB}
 	return db
 }
 
