@@ -209,7 +209,16 @@ jobs:
             VERSION=$(echo "$VERSION" | sed 's/-test/.dev/')
           fi
 
+          # Debug output
+          echo "Event name: ${{ github.event_name }}"
+          echo "Ref name: ${{ github.ref_name }}"
+          echo "Detected version: ${VERSION}"
+          echo "Current version in file: $(grep '__version__' src/mcp_mesh/__init__.py)"
+          
           sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/mcp_mesh/__init__.py
+          
+          # Verify the version was updated
+          echo "Updated version to: $(grep '__version__' src/mcp_mesh/__init__.py)"
 
       - name: Build package
         run: |
