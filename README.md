@@ -13,19 +13,20 @@ A Kubernetes-native platform for building and orchestrating distributed MCP (Mod
 
 ## Key Features
 
-### **Simplified Development Experience**
+### **Dynamic Dependency Injection**
 
-- **Decorator-based architecture**: Build MCP tools with just `@mesh.agent` and `@mesh.tool` decorators
-- **Zero boilerplate**: No manual server setup, routing, or service discovery code required
+- **Pull-based capability discovery**: Agents declare what they need, registry coordinates who provides it
+- **Runtime function injection**: Python runtime automatically injects remote capabilities as function parameters
+- **Transparent remote calls**: Call functions on other agents exactly like local functions - no networking code required
+- **Hot-swappable dependencies**: Add, remove, or update capabilities without restarting services
 - **Graceful degradation**: Agents work standalone and enhance when dependencies become available
-- **Hot capability injection**: Add or remove capabilities without restarting services
 
-### **Resilient Service Discovery**
+### **Resilient Architecture**
 
-- **Registry-facilitated coordination**: Central discovery without being in the critical path
-- **Pull-based dependency injection**: Python runtime dynamically injects dependencies based on registry URLs
-- **Network-aware routing**: Python runtime generates HTTP proxies for seamless remote MCP calls
+- **Registry as facilitator, not gatekeeper**: Service discovery through registry, but MCP calls flow directly between agents
+- **Network-aware proxy generation**: Python runtime creates HTTP proxies for seamless remote MCP communication
 - **Fault tolerance**: Agents continue working if registry becomes unavailable
+- **Self-healing connections**: Automatic reconnection when services come back online
 
 ### **MCP Protocol Enhancement**
 
@@ -40,6 +41,13 @@ A Kubernetes-native platform for building and orchestrating distributed MCP (Mod
 - **Database flexibility**: SQLite for development, PostgreSQL for production
 - **Multi-environment support**: Local development, Docker Compose, and Kubernetes deployment
 - **Service mesh architecture**: Intelligent routing and load balancing between agents
+
+### **Developer Experience**
+
+- **Two-decorator architecture**: Build distributed MCP agents with just `@mesh.agent` and `@mesh.tool`
+- **Zero boilerplate**: No manual server setup, routing, or service discovery code required
+- **Local-to-distributed**: Same code works locally and scales to Kubernetes automatically
+- **Familiar patterns**: Standard Python functions become distributed capabilities
 
 ## Architecture Overview
 
@@ -428,31 +436,39 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ## Installation
 
-### Quick Start (Local Development)
+### One-Line Install (Recommended)
 
 ```bash
-# Clone the repository
-git clone https://github.com/dhyansraj/mcp-mesh
+# Install everything with one command (requires curl and Python 3.11+)
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+```
+
+### Package Manager Installation
+
+```bash
+# Python package from PyPI
+pip install mcp-mesh
+
+# Docker images
+docker pull mcpmesh/registry:latest
+docker pull mcpmesh/python-runtime:latest
+docker pull mcpmesh/cli:latest
+
+# Download CLI binary directly
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/latest/download/mcp-mesh_latest_linux_amd64.tar.gz | tar xz
+sudo mv meshctl /usr/local/bin/
+```
+
+### Development Installation
+
+```bash
+# Clone and build from source
+git clone https://github.com/dhyansraj/mcp-mesh.git
 cd mcp-mesh
-
-# Build the project
-make build
-
-# Start developing
-./bin/meshctl start --registry-only
+make install
 ```
 
-### Production (Kubernetes)
-
-```bash
-# Using Helm charts
-helm install mcp-mesh ./helm/mcp-mesh-registry --namespace mcp-mesh --create-namespace
-
-# Or using kubectl with our manifests
-kubectl apply -k k8s/base/
-```
-
-📚 **Comprehensive Installation Guide**: See our [detailed installation instructions](docs/01-getting-started.md) for step-by-step setup including prerequisites, development environment, Docker, and Kubernetes deployment options.
+For detailed installation options, see our [Installation Guide](docs/01-getting-started/02-installation.md).
 
 ## meshctl CLI Tool
 
