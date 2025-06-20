@@ -206,11 +206,10 @@ class MeshToolProcessor:
                 # The registry will construct the endpoint from http_host:http_port
 
                 self.logger.debug(
-                    f"📝 Registering {len(tools)} @mesh.tool functions with real endpoint info"
+                    f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
                 )
-                response = await self._register_with_generated_client(
-                    agent_registration
-                )
+                # Skip registration entirely - heartbeat will handle it
+                response = {"status": "success"}  # Dummy response to continue processing
 
             else:
                 # Fallback to manual JSON construction
@@ -329,109 +328,88 @@ class MeshToolProcessor:
                         f"📡 HTTP wrapper not enabled for @mesh.tool agent {agent_id}"
                     )
 
-                # Now register with the REAL endpoint information
+                # Skip registration entirely - heartbeat will handle it via upsert
                 self.logger.debug(
-                    f"📝 Registering {len(tools)} @mesh.tool functions with real endpoint info"
+                    f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
                 )
-                response = await self._register_with_mesh_registry(registration_data)
 
-            # Mark all tools as processed based on registration success
-            success = response and response.get("status") == "success"
+            # Always mark tools as processed and start heartbeat - no dependency on registration
             for func_name in tools:
-                results[func_name] = success
-                if success:
-                    self._processed_tools[func_name] = True
+                results[func_name] = True
+                self._processed_tools[func_name] = True
 
-            if success:
-                self.logger.info(
-                    f"✅ Successfully registered {len(tools)} tools as single agent: {agent_id}"
-                )
+            self.logger.info(
+                f"✅ Starting heartbeat monitoring for {len(tools)} tools as single agent: {agent_id}"
+            )
 
-                # Process dependency injection for tools with dependencies
-                if response and "dependencies_resolved" in response:
-                    self.logger.debug(
-                        f"🔧 Processing dependency injection for {len(tools)} tools"
-                    )
-                    for func_name, decorated_func in tools.items():
-                        try:
-                            await self._setup_dependency_injection_for_tool(
-                                decorated_func, response
-                            )
-                        except Exception as e:
-                            self.logger.error(
-                                f"Failed to setup DI for tool {func_name}: {e}"
-                            )
+            # ALWAYS start health monitoring - no dependency on registration success
+            # Use configuration from @mesh.agent if available, otherwise defaults
+            health_interval = 30  # Default interval
+            if agent_config:
+                health_interval = agent_config.get("health_interval", 30)
 
-                # Start health monitoring for the registered agent
-                # Use configuration from @mesh.agent if available, otherwise defaults
-                health_interval = 30  # Default interval
-                if agent_config:
-                    health_interval = agent_config.get("health_interval", 30)
+            self.logger.debug(
+                f"💓💓💓 Starting heartbeat monitoring for agent {agent_id} with interval {health_interval}s"
+            )
 
+            # Create agent metadata for health monitoring with REAL HTTP endpoint info
+            # Use the same http_host/http_port that was used in registration
+            final_http_host = "0.0.0.0"
+            final_http_port = 0
+
+            # If HTTP was enabled and endpoint was created, extract the real values
+            if enable_http and http_endpoint:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(http_endpoint)
+                final_http_host = parsed.hostname or "127.0.0.1"
+                final_http_port = parsed.port or 80
                 self.logger.debug(
-                    f"💓💓💓 Starting heartbeat monitoring for agent {agent_id} with interval {health_interval}s"
+                    f"💓 Using real HTTP endpoint for heartbeat: {final_http_host}:{final_http_port}"
                 )
-
-                # Create agent metadata for health monitoring with REAL HTTP endpoint info
-                # Use the same http_host/http_port that was used in registration
-                final_http_host = "0.0.0.0"
-                final_http_port = 0
-
-                # If HTTP was enabled and endpoint was created, extract the real values
-                if enable_http and http_endpoint:
-                    from urllib.parse import urlparse
-
-                    parsed = urlparse(http_endpoint)
-                    final_http_host = parsed.hostname or "127.0.0.1"
-                    final_http_port = parsed.port or 80
-                    self.logger.debug(
-                        f"💓 Using real HTTP endpoint for heartbeat: {final_http_host}:{final_http_port}"
-                    )
-                else:
-                    # Fallback to agent config values
-                    final_http_host = (
-                        agent_config.get("http_host", "0.0.0.0")
-                        if agent_config
-                        else "0.0.0.0"
-                    )
-                    final_http_port = (
-                        agent_config.get("http_port", 0) if agent_config else 0
-                    )
-
-                agent_metadata = {
-                    "agent_id": agent_id,
-                    "agent_type": "mcp_agent",
-                    "name": agent_id,
-                    "version": (
-                        agent_config.get("version", "1.0.0")
-                        if agent_config
-                        else "1.0.0"
-                    ),
-                    "namespace": (
-                        agent_config.get("namespace", "default")
-                        if agent_config
-                        else "default"
-                    ),
-                    "http_host": final_http_host,
-                    "http_port": final_http_port,
-                    "enable_http": enable_http,
-                    "tools": [func_name for func_name in tools],
-                    "capabilities": list(
-                        set(
-                            decorated_func.metadata.get("capability")
-                            for decorated_func in tools.values()
-                            if decorated_func.metadata.get("capability")
-                        )
-                    ),
-                }
-
-                # Create and start the health monitoring task
-                task = asyncio.create_task(
-                    self._health_monitor(agent_id, agent_metadata, health_interval)
-                )
-                self._health_tasks[agent_id] = task
             else:
-                self.logger.error(f"❌ Failed to register tools as agent: {agent_id}")
+                # Fallback to agent config values
+                final_http_host = (
+                    agent_config.get("http_host", "0.0.0.0")
+                    if agent_config
+                    else "0.0.0.0"
+                )
+                final_http_port = (
+                    agent_config.get("http_port", 0) if agent_config else 0
+                )
+
+            agent_metadata = {
+                "agent_id": agent_id,
+                "agent_type": "mcp_agent",
+                "name": agent_id,
+                "version": (
+                    agent_config.get("version", "1.0.0")
+                    if agent_config
+                    else "1.0.0"
+                ),
+                "namespace": (
+                    agent_config.get("namespace", "default")
+                    if agent_config
+                    else "default"
+                ),
+                "http_host": final_http_host,
+                "http_port": final_http_port,
+                "enable_http": enable_http,
+                "tools": [func_name for func_name in tools],
+                "capabilities": list(
+                    set(
+                        decorated_func.metadata.get("capability")
+                        for decorated_func in tools.values()
+                        if decorated_func.metadata.get("capability")
+                    )
+                ),
+            }
+
+            # Create and start the health monitoring task
+            task = asyncio.create_task(
+                self._health_monitor(agent_id, agent_metadata, health_interval)
+            )
+            self._health_tasks[agent_id] = task
 
         except Exception as e:
             self.logger.error(f"Error processing tools: {e}")
@@ -792,15 +770,12 @@ class MeshToolProcessor:
             f"💓 Health monitor started for tool agent {agent_id} (interval: {interval}s)"
         )
 
-        # Send initial heartbeat immediately
-        self.logger.debug(f"💓 Sending initial heartbeat for tool agent {agent_id}")
-        await self._send_heartbeat(agent_id, metadata)
-
+        # Start heartbeat loop - handle initial heartbeat errors properly
         while True:
             try:
-                await asyncio.sleep(interval)
-                self.logger.debug(f"💓 Sending heartbeat for tool agent {agent_id}")
+                self.logger.info(f"💓 Sending heartbeat for tool agent {agent_id}")
                 await self._send_heartbeat(agent_id, metadata)
+                await asyncio.sleep(interval)
 
             except asyncio.CancelledError:
                 self.logger.info(f"Health monitor cancelled for tool agent {agent_id}")
@@ -809,7 +784,8 @@ class MeshToolProcessor:
                 self.logger.error(
                     f"Error in health monitor for tool agent {agent_id}: {e}"
                 )
-                # Continue monitoring even on errors
+                # Continue monitoring even on errors - wait before retrying
+                await asyncio.sleep(interval)
 
     async def _send_heartbeat(self, agent_id: str, metadata: dict[str, Any]) -> bool:
         """Send a heartbeat to the registry for @mesh.tool agents.
@@ -876,7 +852,7 @@ class MeshToolProcessor:
             response = await self._send_heartbeat_request(heartbeat_data)
 
             if response and response.get("status") == "success":
-                self.logger.debug(
+                self.logger.info(
                     f"💚 Heartbeat sent successfully for tool agent {agent_id}"
                 )
 
@@ -895,7 +871,7 @@ class MeshToolProcessor:
                         self.logger.info(
                             "🔄 DEPENDENCY_REFRESH: Dependencies changed, updating all tools..."
                         )
-                        self.logger.info(
+                        self.logger.debug(
                             f"🔄 DEPENDENCY_REFRESH: Response dependencies_resolved: {response.get('dependencies_resolved', {})}"
                         )
 
@@ -1202,7 +1178,7 @@ class MeshAgentProcessor:
             )
 
             self.logger.debug(
-                f"🎯🎯🎯 ABOUT TO REGISTER {func_name} WITH MESH REGISTRY 🎯🎯🎯"
+                f"🎯🎯🎯 SKIPPING REGISTRATION FOR {func_name} - HEARTBEAT WILL HANDLE VIA UPSERT 🎯🎯🎯"
             )
 
             # Store the metadata BEFORE processing (needed for HTTP wrapper updates)
@@ -1213,41 +1189,30 @@ class MeshAgentProcessor:
             )
             self._agent_metadata[agent_name] = stored_metadata
 
-            # Register with mesh registry
-            response = await self._register_with_mesh_registry(registration_data)
+            # Skip registration entirely - heartbeat will handle it via upsert
+            self.logger.info(
+                f"✅ Agent {agent_name} setup complete - heartbeat will handle registration"
+            )
 
-            if response and response.get("status") == "success":
-                self.logger.info(
-                    f"🎉 Agent {agent_name} registered successfully with mesh registry"
-                )
+            # Always mark as successfully processed - no dependency on registration
+            self._processed_agents[agent_name] = True
 
-                # Mark as successfully processed
-                self._processed_agents[agent_name] = True
-
-                # Set up dependency injection for the function
-                await self._setup_dependency_injection(decorated_func, response)
-
-                # Check if HTTP wrapper should be enabled
-                http_enabled: bool = self._should_enable_http(metadata)
+            # Check if HTTP wrapper should be enabled
+            http_enabled: bool = self._should_enable_http(metadata)
+            self.logger.debug(
+                f"🔍 Checking HTTP for {func_name}: enable_http={metadata.get('enable_http')}, should_enable={http_enabled}"
+            )
+            if http_enabled:
                 self.logger.debug(
-                    f"🔍 Checking HTTP for {func_name}: enable_http={metadata.get('enable_http')}, should_enable={http_enabled}"
+                    f"🌐 HTTP wrapper should be enabled for {func_name}"
                 )
-                if http_enabled:
-                    self.logger.debug(
-                        f"🌐 HTTP wrapper should be enabled for {func_name}"
-                    )
-                    await self._setup_http_wrapper(func_name, decorated_func)
-                else:
-                    self.logger.debug(
-                        f"📡 HTTP wrapper not enabled for {func_name} (enable_http={metadata.get('enable_http', False)})"
-                    )
+                await self._setup_http_wrapper(func_name, decorated_func)
             else:
-                self.logger.warning(
-                    f"⚠️  Initial registration failed for {func_name}, will retry via heartbeat monitor"
+                self.logger.debug(
+                    f"📡 HTTP wrapper not enabled for {func_name} (enable_http={metadata.get('enable_http', False)})"
                 )
-                # Don't mark as processed - will retry in health monitor
 
-            # ALWAYS start health monitoring regardless of registration success
+            # ALWAYS start health monitoring - no dependency on registration
             # This allows agents to work standalone and connect when registry comes online
             health_interval = metadata.get("health_interval", 30)
             self.logger.debug(
@@ -1255,7 +1220,7 @@ class MeshAgentProcessor:
             )
 
             # Create and start the health monitoring task
-            # The health monitor will handle registration retries if needed
+            # The health monitor will handle registration via heartbeat upsert
             # Use the agent_id from registration_data to ensure consistency
             agent_id = registration_data["agent_id"]
             task = asyncio.create_task(
@@ -1265,7 +1230,7 @@ class MeshAgentProcessor:
             )
             self._health_tasks[agent_name] = task
 
-            # Return True even if registration failed - agent can work standalone
+            # Always return True - agent works standalone
             return True
 
         except Exception as e:
@@ -1660,22 +1625,20 @@ class MeshAgentProcessor:
             f"💓 Health monitor started for {agent_name} (interval: {interval}s)"
         )
 
-        # Send initial heartbeat immediately - registry will handle registration if needed
-        self.logger.debug(f"💓 Sending initial heartbeat for {agent_name}")
-        await self._send_heartbeat(agent_name, metadata)
-
+        # Start heartbeat loop - handle initial heartbeat errors properly
         while True:
             try:
-                await asyncio.sleep(interval)
-                self.logger.debug(f"💓 Sending heartbeat for {agent_name}")
+                self.logger.info(f"💓 Sending heartbeat for {agent_name}")
                 await self._send_heartbeat(agent_name, metadata)
+                await asyncio.sleep(interval)
 
             except asyncio.CancelledError:
                 self.logger.info(f"Health monitor cancelled for {agent_name}")
                 break
             except Exception as e:
                 self.logger.error(f"Error in health monitor for {agent_name}: {e}")
-                # Continue monitoring even on errors
+                # Continue monitoring even on errors - wait before retrying
+                await asyncio.sleep(interval)
 
     async def _send_heartbeat(self, agent_name: str, metadata: dict[str, Any]) -> bool:
         """Send a heartbeat to the registry and handle dependency updates.
@@ -1710,7 +1673,7 @@ class MeshAgentProcessor:
             )
 
             if response and response.get("status") == "success":
-                self.logger.debug(f"💚 Heartbeat sent successfully for {agent_name}")
+                self.logger.info(f"💚 Heartbeat sent successfully for {agent_name}")
 
                 # Check if dependencies have changed
                 if "dependencies_resolved" in response:
@@ -1990,7 +1953,7 @@ class DecoratorProcessor:
 
     def __init__(self, registry_url: str | None = None):
         self.registry_url = registry_url or self._get_registry_url_from_env()
-        self.registry_client = RegistryClient(self.registry_url)
+        self.registry_client = RegistryClient(self.registry_url, retry_attempts=1)
         self.logger = logging.getLogger(__name__)
 
         # Specialized processors
