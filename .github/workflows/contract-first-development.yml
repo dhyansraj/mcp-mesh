@@ -98,6 +98,9 @@ jobs:
           # Install Python code generator
           npm install -g @openapitools/openapi-generator-cli
 
+          # Install additional Python dependencies for validation
+          pip install openapi-spec-validator jsonschema pyyaml
+
       - name: Generate Go server stubs
         run: |
           echo "🤖 Generating Go server stubs..."
@@ -193,6 +196,7 @@ jobs:
 
           # Python dependencies
           pip install -r src/runtime/python/requirements.txt
+          pip install openapi-spec-validator jsonschema pyyaml
 
       - name: Regenerate code (ensure consistency)
         run: |
@@ -245,7 +249,7 @@ jobs:
       - name: Install test dependencies
         run: |
           go mod download
-          pip install pytest aiohttp openapi-spec-validator
+          pip install pytest aiohttp openapi-spec-validator jsonschema pyyaml
 
       - name: Run contract validation
         run: |
