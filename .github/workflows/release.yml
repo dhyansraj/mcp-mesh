@@ -8,9 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g., v1.0.0)"
+        description: "Version (e.g., v0.1.1)"
         required: true
-        type: string
+        default: "v0.1.1"
+      environment:
+        description: "Environment"
+        type: choice
+        options: [production, test]
+        default: test
 
 env:
   REGISTRY: mcpmesh
@@ -88,14 +93,18 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: >
+          github.event_name == 'release' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: >
+          github.event_name == 'release' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -125,7 +134,9 @@ jobs:
           context: .
           file: ./packaging/docker/registry.Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          push: >
+            ${{ github.event_name == 'release' ||
+            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
           tags: |
             ${{ env.REGISTRY }}/registry:latest
             ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.version }}
@@ -140,7 +151,9 @@ jobs:
           context: .
           file: ./packaging/docker/python-runtime.Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          push: >
+            ${{ github.event_name == 'release' ||
+            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
           tags: |
             ${{ env.REGISTRY }}/python-runtime:latest
             ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.version }}
@@ -155,7 +168,9 @@ jobs:
           context: .
           file: ./packaging/docker/cli.Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+          push: >
+            ${{ github.event_name == 'release' ||
+            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
           tags: |
             ${{ env.REGISTRY }}/cli:latest
             ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.version }}
@@ -167,7 +182,9 @@ jobs:
   # Publish Python package to PyPI
   publish-python:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     permissions:
       contents: read
       id-token: write # For trusted publishing
@@ -214,11 +231,11 @@ jobs:
           echo "Ref name: ${{ github.ref_name }}"
           echo "Detected version: ${VERSION}"
           echo "Current version in file: $(grep '__version__' src/mcp_mesh/__init__.py)"
-          
+
           # Update version in both __init__.py and pyproject.toml
           sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/mcp_mesh/__init__.py
           sed -i "s/version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
-          
+
           # Verify the versions were updated
           echo "Updated __init__.py version to: $(grep '__version__' src/mcp_mesh/__init__.py)"
           echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
@@ -242,7 +259,9 @@ jobs:
   # Update package manager manifests
   update-packages:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     needs: [build-binaries]
     permissions:
       contents: write
@@ -296,7 +315,9 @@ jobs:
   # Security scan
   security-scan:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     needs: [build-docker]
     permissions:
       contents: read
