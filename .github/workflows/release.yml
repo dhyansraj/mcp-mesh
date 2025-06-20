@@ -215,10 +215,13 @@ jobs:
           echo "Detected version: ${VERSION}"
           echo "Current version in file: $(grep '__version__' src/mcp_mesh/__init__.py)"
           
+          # Update version in both __init__.py and pyproject.toml
           sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/mcp_mesh/__init__.py
+          sed -i "s/version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
           
-          # Verify the version was updated
-          echo "Updated version to: $(grep '__version__' src/mcp_mesh/__init__.py)"
+          # Verify the versions were updated
+          echo "Updated __init__.py version to: $(grep '__version__' src/mcp_mesh/__init__.py)"
+          echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
 
       - name: Build package
         run: |
