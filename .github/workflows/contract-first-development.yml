@@ -6,16 +6,24 @@ name: Contract-First Development
 on:
   push:
     branches: [main, develop, alpha-4.0]
+    paths:
+      # Only run on OpenAPI/tooling changes for push events
+      - "api/**/*.yaml"
+      - "tools/codegen/**"
+      - "tools/validation/**"
+      - "tools/detection/**"
   pull_request:
     branches: [main, develop]
-  # Run on OpenAPI spec changes
-  paths:
-    - "api/**/*.yaml"
-    - "src/**/*.go"
-    - "src/**/*.py"
-    - "tools/codegen/**"
-    - "tools/validation/**"
-    - "tools/detection/**"
+    paths:
+      # Run on broader changes for PR validation
+      - "api/**/*.yaml"
+      - "src/**/*.go"
+      - "src/**/*.py"
+      - "tools/codegen/**"
+      - "tools/validation/**"
+      - "tools/detection/**"
+  workflow_dispatch:
+    # Allow manual testing
 
 # 🤖 AI BEHAVIOR GUIDANCE:
 # This workflow ensures contract-first development.
@@ -137,7 +145,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml
+          pip install openapi-spec-validator jsonschema pyyaml
 
       - name: Detect endpoints not in OpenAPI spec
         run: |
