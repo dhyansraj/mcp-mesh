@@ -131,7 +131,7 @@ from .versioning import (
     VersioningProtocol,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.1.1"
 
 # Store reference to runtime processor if initialized
 _runtime_processor = None
