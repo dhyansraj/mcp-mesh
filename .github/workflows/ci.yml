@@ -15,6 +15,9 @@ jobs:
   lint-and-format:
     name: Code Quality Checks
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/runtime/python
     steps:
       - uses: actions/checkout@v4
 
@@ -30,20 +33,23 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run ruff linting
-        run: ruff check packages tests
+        run: ruff check src/mcp_mesh tests
 
       - name: Run ruff formatting check
-        run: ruff format --check packages tests
+        run: ruff format --check src/mcp_mesh tests
 
       - name: Run black formatting check
-        run: black --check packages tests
+        run: black --check src/mcp_mesh tests
 
       - name: Run isort import sorting check
-        run: isort --check-only packages tests
+        run: isort --check-only src/mcp_mesh tests
 
   type-check:
     name: Type Checking
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/runtime/python
     steps:
       - uses: actions/checkout@v4
 
@@ -59,11 +65,14 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run mypy type checking
-        run: mypy packages
+        run: mypy src/mcp_mesh
 
   test:
     name: Test Suite
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/runtime/python
     strategy:
       fail-fast: false
       matrix:
@@ -89,8 +98,7 @@ jobs:
         if: matrix.test-group == 'unit'
         run: |
           pytest tests/unit/ -v \
-            --cov=packages/mcp_mesh/src/mcp_mesh \
-            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
+            --cov=src/mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-unit-${{ matrix.python-version }}.xml
@@ -99,8 +107,7 @@ jobs:
         if: matrix.test-group == 'integration'
         run: |
           pytest tests/integration/ -v \
-            --cov=packages/mcp_mesh/src/mcp_mesh \
-            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
+            --cov=src/mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-integration-${{ matrix.python-version }}.xml
@@ -109,8 +116,7 @@ jobs:
         if: matrix.test-group == 'e2e'
         run: |
           pytest tests/e2e/ -v \
-            --cov=packages/mcp_mesh/src/mcp_mesh \
-            --cov=packages/mcp_mesh_runtime/src/mcp_mesh_runtime \
+            --cov=src/mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-e2e-${{ matrix.python-version }}.xml
