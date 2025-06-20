@@ -7,7 +7,6 @@ on:
   push:
     branches: [main, develop, alpha-4.0]
     paths:
-      # Only run on OpenAPI/tooling changes for push events
       - "api/**/*.yaml"
       - "tools/codegen/**"
       - "tools/validation/**"
@@ -15,7 +14,6 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      # Run on broader changes for PR validation
       - "api/**/*.yaml"
       - "src/**/*.go"
       - "src/**/*.py"
@@ -23,7 +21,6 @@ on:
       - "tools/validation/**"
       - "tools/detection/**"
   workflow_dispatch:
-    # Allow manual testing
 
 # 🤖 AI BEHAVIOR GUIDANCE:
 # This workflow ensures contract-first development.
