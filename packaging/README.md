@@ -143,6 +143,24 @@ twine check dist/*
 gh workflow run release.yml -f version=v1.0.0
 ```
 
+### Release Re-runs:
+
+When a release workflow fails (e.g., PyPI conflicts, Docker registry issues), you can re-run the workflow without recreating the GitHub release:
+
+```bash
+# Re-run for production deployment (pushes to registries and PyPI)
+gh workflow run release.yml -f version=v1.0.1 -f environment=production
+
+# Re-run for testing (builds only, no publishing)
+gh workflow run release.yml -f version=v1.0.1 -f environment=test
+```
+
+**Benefits:**
+- Preserves original release timestamp and history
+- No need to delete and recreate GitHub releases
+- Allows iterative fixes without losing release context
+- Supports both production deploys and test builds
+
 ## 📋 Supported Architectures
 
 ### Docker Images:
