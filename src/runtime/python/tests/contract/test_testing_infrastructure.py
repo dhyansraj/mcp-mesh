@@ -11,6 +11,7 @@ But don't change them just to make them pass if they reveal real infrastructure 
 
 import asyncio
 import tempfile
+from datetime import UTC
 from pathlib import Path
 
 from tests.contract.test_metadata import (
@@ -220,7 +221,7 @@ class TestMockRegistryClient:
         )
 
         # Create health status for heartbeat
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from mcp_mesh.runtime.shared.types import HealthStatus, HealthStatusType
 
@@ -228,7 +229,7 @@ class TestMockRegistryClient:
             agent_name="consumer",
             status=HealthStatusType.HEALTHY,
             capabilities=["consumer_capability"],
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             version="1.0.0",
             metadata={},
         )
@@ -258,7 +259,7 @@ class TestMockRegistryClient:
         assert not success, "Registration should fail with high failure rate"
 
         # Test heartbeat failure
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from mcp_mesh.runtime.shared.types import HealthStatus, HealthStatusType
 
@@ -266,7 +267,7 @@ class TestMockRegistryClient:
             agent_name="test-agent",
             status=HealthStatusType.HEALTHY,
             capabilities=["capability"],
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             version="1.0.0",
             metadata={},
         )

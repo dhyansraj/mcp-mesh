@@ -301,7 +301,7 @@ class MeshServiceProxy(MeshServiceProxyInterface):
                 result = await self._simulate_mcp_call(call_data)
                 return result
 
-            except (RegistryConnectionError, asyncio.TimeoutError) as e:
+            except (TimeoutError, RegistryConnectionError) as e:
                 last_exception = e
                 if attempt < max_retries:
                     # Exponential backoff

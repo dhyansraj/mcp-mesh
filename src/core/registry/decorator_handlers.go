@@ -214,7 +214,7 @@ func (s *Service) upsertDecoratorAgent(tx *sql.Tx, request *DecoratorAgentReques
 	// Use database-specific upsert pattern
 	now := time.Now()
 	var err error
-	
+
 	if s.db.IsPostgreSQL() {
 		// PostgreSQL UPSERT with ON CONFLICT
 		upsertSQL := fmt.Sprintf(`

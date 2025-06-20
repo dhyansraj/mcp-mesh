@@ -7,7 +7,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -658,8 +658,8 @@ class AgentRegistration(BaseModel):
     annotations: dict[str, str] = Field(default_factory=dict)
 
     # Registration metadata
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     resource_version: str = Field(default_factory=lambda: str(int(time.time() * 1000)))
 
     # Agent information

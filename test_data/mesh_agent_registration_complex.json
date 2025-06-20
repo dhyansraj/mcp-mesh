@@ -21,7 +21,7 @@
           "namespace": "production"
         },
         {
-          "capability": "cache_service", 
+          "capability": "cache_service",
           "tags": ["redis", "memory"],
           "version": ">=6.0.0",
           "namespace": "production"
@@ -51,7 +51,7 @@
         },
         {
           "capability": "pdf_service",
-          "tags": ["conversion", "documents"], 
+          "tags": ["conversion", "documents"],
           "version": ">=1.8.0",
           "namespace": "production"
         },

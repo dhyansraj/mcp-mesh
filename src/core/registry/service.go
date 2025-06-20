@@ -166,13 +166,13 @@ func (s *Service) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrati
 	var existingID string
 	placeholder := s.db.GetParameterPlaceholder(1)
 	checkSQL := fmt.Sprintf("SELECT agent_id FROM agents WHERE agent_id = %s", placeholder)
-	
+
 	// DEBUG: PostgreSQL parameter debugging
 	log.Printf("🐛 [PostgreSQL DEBUG] Database type: isPostgreSQL=%t", s.db.IsPostgreSQL())
 	log.Printf("🐛 [PostgreSQL DEBUG] Parameter placeholder: '%s'", placeholder)
 	log.Printf("🐛 [PostgreSQL DEBUG] Generated SQL: '%s'", checkSQL)
 	log.Printf("🐛 [PostgreSQL DEBUG] Parameter value: '%s'", req.AgentID)
-	
+
 	err = tx.QueryRow(checkSQL, req.AgentID).Scan(&existingID)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("🐛 [PostgreSQL DEBUG] Query error: %v", err)
@@ -341,13 +341,13 @@ func (s *Service) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, er
 	var existingID string
 	placeholder := s.db.GetParameterPlaceholder(1)
 	checkSQL := fmt.Sprintf("SELECT agent_id FROM agents WHERE agent_id = %s", placeholder)
-	
+
 	// DEBUG: PostgreSQL parameter debugging (heartbeat)
 	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Database type: isPostgreSQL=%t", s.db.IsPostgreSQL())
 	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Parameter placeholder: '%s'", placeholder)
 	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Generated SQL: '%s'", checkSQL)
 	log.Printf("🐛 [PostgreSQL DEBUG - Heartbeat] Parameter value: '%s'", req.AgentID)
-	
+
 	err := s.db.DB.QueryRow(checkSQL, req.AgentID).Scan(&existingID)
 	agentExists := err == nil
 

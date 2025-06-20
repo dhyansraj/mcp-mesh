@@ -549,7 +549,13 @@ class EnhancedProxyFactory:
                     return False
 
             # Check return annotations
-            return not ((proxy_sig.return_annotation != inspect.Signature.empty and contract_sig.return_annotation != inspect.Signature.empty) and proxy_sig.return_annotation != contract_sig.return_annotation)
+            return not (
+                (
+                    proxy_sig.return_annotation != inspect.Signature.empty
+                    and contract_sig.return_annotation != inspect.Signature.empty
+                )
+                and proxy_sig.return_annotation != contract_sig.return_annotation
+            )
 
         except Exception:
             return False

@@ -142,7 +142,7 @@ func (s *Service) ResolveAllDependenciesFromMetadata(metadata map[string]interfa
 func (s *Service) findHealthyProviderWithTTL(dep database.Dependency) *DependencyResolution {
 	// Build query with TTL check using config timeout: updated_at + DEFAULT_TIMEOUT > NOW()
 	timeoutSeconds := s.config.DefaultTimeoutThreshold
-	
+
 	var query string
 	if s.db.IsPostgreSQL() {
 		// PostgreSQL version with interval arithmetic and NOW()

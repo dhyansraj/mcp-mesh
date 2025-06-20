@@ -93,6 +93,12 @@ Flow: Agents register capabilities → Registry provides dependency URLs →
 
 ## Quick Start
 
+### See MCP Mesh in Action
+
+![MCP Mesh Demo](demo.gif)
+
+_MCP Mesh sets the stage, but MCP agents steal the show! Watch as agents dynamically discover dependencies, gracefully degrade when services go down, and seamlessly reconnect when they come back online._
+
 ### Simple Agent Example
 
 ```python

@@ -5,7 +5,7 @@ Defines interfaces and types for registry-level lifecycle management.
 Focus on registration events, not server start/stop operations.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Protocol
 
@@ -46,7 +46,7 @@ class RegistrationResult(BaseModel):
     message: str
     warnings: list[str] = Field(default_factory=list)
     lifecycle_status: LifecycleStatus = LifecycleStatus.ACTIVE
-    registered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     errors: list[str] = Field(default_factory=list)
 
 
@@ -57,9 +57,7 @@ class DeregistrationResult(BaseModel):
     agent_id: str
     message: str
     graceful: bool = True
-    deregistered_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    deregistered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     cleanup_completed: bool = True
     errors: list[str] = Field(default_factory=list)
 
@@ -72,9 +70,7 @@ class DrainResult(BaseModel):
     message: str
     connections_terminated: int = 0
     pending_requests: int = 0
-    drain_started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    drain_started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     drain_completed_at: datetime | None = None
     drain_timeout_seconds: int = 300
     errors: list[str] = Field(default_factory=list)
@@ -104,7 +100,7 @@ class LifecycleEventData(BaseModel):
     agent_id: str
     agent_name: str
     namespace: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     old_status: LifecycleStatus | None = None
     new_status: LifecycleStatus | None = None
     message: str

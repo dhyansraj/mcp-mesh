@@ -9,7 +9,7 @@ the heavy lifting of transforming decorator metadata into proper service registr
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
@@ -193,7 +193,7 @@ class MeshToolProcessor:
                     ),
                     http_host=http_host,
                     http_port=http_port,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     namespace=(
                         agent_config.get("namespace", "default")
                         if agent_config
@@ -209,7 +209,9 @@ class MeshToolProcessor:
                     f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
                 )
                 # Skip registration entirely - heartbeat will handle it
-                response = {"status": "success"}  # Dummy response to continue processing
+                response = {
+                    "status": "success"
+                }  # Dummy response to continue processing
 
             else:
                 # Fallback to manual JSON construction
@@ -284,7 +286,7 @@ class MeshToolProcessor:
                     "http_port": (
                         agent_config.get("http_port", 0) if agent_config else 0
                     ),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "namespace": (
                         agent_config.get("namespace", "default")
                         if agent_config
@@ -383,9 +385,7 @@ class MeshToolProcessor:
                 "agent_type": "mcp_agent",
                 "name": agent_id,
                 "version": (
-                    agent_config.get("version", "1.0.0")
-                    if agent_config
-                    else "1.0.0"
+                    agent_config.get("version", "1.0.0") if agent_config else "1.0.0"
                 ),
                 "namespace": (
                     agent_config.get("namespace", "default")
@@ -843,7 +843,7 @@ class MeshToolProcessor:
                 "version": metadata.get("version", "1.0.0"),
                 "http_host": metadata.get("http_host", "0.0.0.0"),
                 "http_port": metadata.get("http_port", 0),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "namespace": metadata.get("namespace", "default"),
                 "tools": tool_list,
             }
@@ -1063,7 +1063,7 @@ class MeshToolProcessor:
                 "http_host": http_host,
                 "http_port": http_port,
                 "endpoint": http_endpoint,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
 
             self.logger.debug(
@@ -1203,9 +1203,7 @@ class MeshAgentProcessor:
                 f"🔍 Checking HTTP for {func_name}: enable_http={metadata.get('enable_http')}, should_enable={http_enabled}"
             )
             if http_enabled:
-                self.logger.debug(
-                    f"🌐 HTTP wrapper should be enabled for {func_name}"
-                )
+                self.logger.debug(f"🌐 HTTP wrapper should be enabled for {func_name}")
                 await self._setup_http_wrapper(func_name, decorated_func)
             else:
                 self.logger.debug(
@@ -1303,7 +1301,7 @@ class MeshAgentProcessor:
                 # Remove invalid fields: retry_attempts, enable_caching, fallback_mode,
                 # performance_profile, resource_requirements, nested metadata
             },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         return registration_data
@@ -1361,7 +1359,7 @@ class MeshAgentProcessor:
                 "tags": metadata.get("tags", []),
                 "version": metadata.get("version", "1.0.0"),
                 "description": metadata.get("description"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
 
             # Call the registration endpoint directly
@@ -1654,7 +1652,7 @@ class MeshAgentProcessor:
                 agent_name=agent_name,
                 status=HealthStatusType.HEALTHY,
                 capabilities=current_metadata.get("capabilities", []),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 version=current_metadata.get("version", "1.0.0"),
                 metadata=current_metadata,
             )
@@ -2028,7 +2026,7 @@ class DecoratorProcessor:
 
         results = {
             "mesh_agents": {},
-            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "processed_at": datetime.now(UTC).isoformat(),
             "registry_url": self.registry_url,
             "total_processed": 0,
             "total_successful": 0,
@@ -2143,7 +2141,7 @@ class DecoratorProcessor:
                     ),
                     timeout=5.0,  # 5 second timeout for cleanup
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.logger.warning("Some health monitoring tasks did not stop in time")
             finally:
                 self.mesh_agent_processor._health_tasks.clear()

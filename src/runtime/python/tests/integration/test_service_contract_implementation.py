@@ -7,7 +7,7 @@ including storage, retrieval, validation, and performance requirements.
 import asyncio
 import inspect
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from mcp_mesh_runtime.method_metadata import MethodMetadata, MethodType, ServiceContract
@@ -304,7 +304,7 @@ class TestServiceContractImplementation:
 
         # Verify timestamp is recent
         timestamp = datetime.fromisoformat(metrics["timestamp"].replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_diff = abs((now - timestamp).total_seconds())
         assert time_diff < 60, "Timestamp should be recent"
 

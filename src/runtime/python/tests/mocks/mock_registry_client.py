@@ -26,7 +26,7 @@ TEST METADATA:
 import asyncio
 import copy
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp_mesh.runtime.shared.types import HealthStatus, MockHTTPResponse
@@ -74,7 +74,7 @@ class MockAgent:
         self.endpoint = endpoint or f"stdio://{agent_id}"
         self.status = status
         self.version = version
-        self.last_seen = datetime.now(timezone.utc)
+        self.last_seen = datetime.now(UTC)
         self.metadata = {}
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,7 +99,7 @@ class MockRequest:
         self.method = method
         self.endpoint = endpoint
         self.payload = payload or {}
-        self.timestamp = datetime.now(timezone.utc)
+        self.timestamp = datetime.now(UTC)
 
 
 class MockRegistryClient:
@@ -137,7 +137,7 @@ class MockRegistryClient:
         self.agents: dict[str, MockAgent] = {}
         self.requests: list[MockRequest] = []
         self.dependencies_resolved: dict[str, dict[str, Any]] = {}
-        self.start_time = datetime.now(timezone.utc)
+        self.start_time = datetime.now(UTC)
 
         # Request history for test verification
         self._request_count = 0
@@ -418,7 +418,7 @@ class MockRegistryClient:
 
         # Update agent's last seen time
         if health_status.agent_name in self.agents:
-            self.agents[health_status.agent_name].last_seen = datetime.now(timezone.utc)
+            self.agents[health_status.agent_name].last_seen = datetime.now(UTC)
             self.agents[health_status.agent_name].status = (
                 health_status.status.value
                 if hasattr(health_status.status, "value")
@@ -468,7 +468,7 @@ class MockRegistryClient:
         # Update agent state
         agent = self.agents.get(health_status.agent_name)
         if agent:
-            agent.last_seen = datetime.now(timezone.utc)
+            agent.last_seen = datetime.now(UTC)
             agent.status = (
                 health_status.status.value
                 if hasattr(health_status.status, "value")
@@ -478,7 +478,7 @@ class MockRegistryClient:
             # Build response with dependency resolution
             response = {
                 "status": "success",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "message": "Heartbeat received",
             }
 
@@ -497,7 +497,7 @@ class MockRegistryClient:
 
         return {
             "status": "error",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent not registered",
         }
 
@@ -589,7 +589,7 @@ class MockRegistryClient:
         agent = self.agents.get(agent_id)
         if agent:
             agent.status = health_data.get("status", agent.status)
-            agent.last_seen = datetime.now(timezone.utc)
+            agent.last_seen = datetime.now(UTC)
             return True
 
         return False
@@ -654,7 +654,7 @@ class MockRegistryClient:
 
             response_data = {
                 "status": "success",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "message": "Agent registered successfully",
                 "agent_id": agent_id,
             }
@@ -675,11 +675,11 @@ class MockRegistryClient:
             agent = self.agents.get(agent_id)
 
             if agent:
-                agent.last_seen = datetime.now(timezone.utc)
+                agent.last_seen = datetime.now(UTC)
 
                 response_data = {
                     "status": "success",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "message": "Heartbeat received",
                 }
 
@@ -751,7 +751,7 @@ class MockRegistryClient:
 
         response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Multi-tool agent registered successfully",
             "agent_id": agent_id,
         }
@@ -842,7 +842,7 @@ class MockRegistryClient:
         """Simulate an agent timing out."""
         if agent_id in self.agents:
             self.agents[agent_id].status = "unhealthy"
-            self.agents[agent_id].last_seen = datetime.now(timezone.utc).replace(
+            self.agents[agent_id].last_seen = datetime.now(UTC).replace(
                 minute=0
             )  # Old timestamp
 
@@ -884,7 +884,7 @@ class MockRegistryClient:
         # Return exact Go response format with updated agent ID and timestamp
         response = copy.deepcopy(self._go_responses["register_decorators"])
         response["agent_id"] = agent_id
-        response["timestamp"] = datetime.now(timezone.utc).isoformat()
+        response["timestamp"] = datetime.now(UTC).isoformat()
 
         return MockHTTPResponse(response, 201)
 
@@ -902,12 +902,12 @@ class MockRegistryClient:
 
         # Update agent last seen if it exists
         if agent_id in self.agents:
-            self.agents[agent_id].last_seen = datetime.now(timezone.utc)
+            self.agents[agent_id].last_seen = datetime.now(UTC)
 
         # Return exact Go response format with updated agent ID and timestamp
         response = copy.deepcopy(self._go_responses["heartbeat_decorators"])
         response["agent_id"] = agent_id
-        response["timestamp"] = datetime.now(timezone.utc).isoformat()
+        response["timestamp"] = datetime.now(UTC).isoformat()
 
         return MockHTTPResponse(response, 200)
 
@@ -975,7 +975,7 @@ class MockRegistryClient:
                 "status": "success",
                 "agent_id": agent_id,
                 "message": "Agent registered successfully",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
             201,
         )
@@ -987,7 +987,7 @@ class MockRegistryClient:
             {
                 "status": "success",
                 "message": "Heartbeat received",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
             200,
         )

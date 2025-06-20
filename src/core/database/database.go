@@ -58,7 +58,7 @@ func (db *Database) BuildParameterList(count int) string {
 	if count <= 0 {
 		return ""
 	}
-	
+
 	if db.IsPostgreSQL() {
 		params := make([]string, count)
 		for i := 0; i < count; i++ {
@@ -66,7 +66,7 @@ func (db *Database) BuildParameterList(count int) string {
 		}
 		return strings.Join(params, ", ")
 	}
-	
+
 	// SQLite - just return question marks
 	params := make([]string, count)
 	for i := 0; i < count; i++ {
@@ -268,7 +268,7 @@ func (db *Database) checkSchemaVersion() error {
 
 	if currentVersion < currentSchemaVersion {
 		// Apply migration using database-appropriate parameter syntax
-		insertSQL := fmt.Sprintf("INSERT INTO schema_version (version, applied_at) VALUES (%s, %s)", 
+		insertSQL := fmt.Sprintf("INSERT INTO schema_version (version, applied_at) VALUES (%s, %s)",
 			db.GetParameterPlaceholder(1), db.GetParameterPlaceholder(2))
 
 		_, err := db.Exec(insertSQL, currentSchemaVersion, time.Now().UTC())

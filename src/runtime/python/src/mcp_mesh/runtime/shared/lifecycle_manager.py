@@ -7,7 +7,7 @@ Focuses on registration events, not server start/stop operations.
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp_mesh import (
@@ -175,7 +175,7 @@ class LifecycleManager(LifecycleProtocol):
 
             # Update lifecycle status to deregistering
             self._agent_lifecycle_states[agent_id] = LifecycleStatus.DEREGISTERING
-            self._deregistering_agents[agent_id] = datetime.now(timezone.utc)
+            self._deregistering_agents[agent_id] = datetime.now(UTC)
 
             # Emit deregistration started event
             await self._emit_lifecycle_event(
@@ -267,7 +267,7 @@ class LifecycleManager(LifecycleProtocol):
 
             # Update lifecycle status to draining
             self._agent_lifecycle_states[agent_id] = LifecycleStatus.DRAINING
-            self._draining_agents[agent_id] = datetime.now(timezone.utc)
+            self._draining_agents[agent_id] = datetime.now(UTC)
 
             # Emit drain started event
             await self._emit_lifecycle_event(
@@ -283,7 +283,7 @@ class LifecycleManager(LifecycleProtocol):
             # Mark agent as degraded in storage to remove from selection pool
             # but keep it registered for graceful shutdown
             agent.status = "degraded"
-            agent.updated_at = datetime.now(timezone.utc)
+            agent.updated_at = datetime.now(UTC)
             agent.resource_version = str(int(time.time() * 1000))
 
             await self.storage.register_agent(agent)  # Update status
@@ -294,7 +294,7 @@ class LifecycleManager(LifecycleProtocol):
             await asyncio.sleep(1)  # Simulate drain time
 
             # Complete drain
-            drain_completed_at = datetime.now(timezone.utc)
+            drain_completed_at = datetime.now(UTC)
             self._draining_agents.pop(agent_id, None)
 
             # Emit drain completed event
@@ -416,7 +416,7 @@ class LifecycleManager(LifecycleProtocol):
 
     async def cleanup_stale_operations(self) -> None:
         """Clean up stale lifecycle operations."""
-        current_time = datetime.now(timezone.utc)
+        current_time = datetime.now(UTC)
 
         # Clean up stale draining operations
         stale_draining = []

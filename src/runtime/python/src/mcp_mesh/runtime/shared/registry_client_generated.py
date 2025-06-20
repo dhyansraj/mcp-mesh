@@ -17,27 +17,27 @@ TO UPDATE CLIENT:
 4. Update tests to match new contract
 """
 
-import asyncio
-from typing import Any, Dict, List, Optional
 from datetime import datetime
+from typing import Any
 
 # Import generated client (will be available after generation)
 try:
     from mcp_mesh.registry_client_generated import ApiClient, Configuration, DefaultApi
     from mcp_mesh.registry_client_generated.models import (
         AgentRegistration,
-        HeartbeatRequest,
+        AgentsListResponse,
         HealthResponse,
-        RegistrationResponse,
+        HeartbeatRequest,
         HeartbeatResponse,
-        AgentsListResponse
+        RegistrationResponse,
     )
+
     GENERATED_CLIENT_AVAILABLE = True
 except ImportError:
     GENERATED_CLIENT_AVAILABLE = False
 
+from .exceptions import RegistryConnectionError
 from .types import HealthStatus
-from .exceptions import RegistryConnectionError, RegistryTimeoutError
 
 
 class GeneratedRegistryClient:
@@ -63,9 +63,9 @@ class GeneratedRegistryClient:
     async def register_agent(
         self,
         agent_name: str,
-        capabilities: List[str],
-        dependencies: List[str],
-        security_context: Optional[str] = None,
+        capabilities: list[str],
+        dependencies: list[str],
+        security_context: str | None = None,
     ) -> bool:
         """Register agent with the registry using generated client."""
         try:
@@ -81,7 +81,7 @@ class GeneratedRegistryClient:
                     "health_interval": 30,
                     "version": "1.0.0",
                 },
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().isoformat(),
             )
 
             response: RegistrationResponse = await self.api.register_agent(registration)
@@ -95,13 +95,21 @@ class GeneratedRegistryClient:
         try:
             heartbeat = HeartbeatRequest(
                 agent_id=health_status.agent_name,
-                status=health_status.status.value if hasattr(health_status.status, 'value') else health_status.status,
+                status=(
+                    health_status.status.value
+                    if hasattr(health_status.status, "value")
+                    else health_status.status
+                ),
                 metadata={
                     "capabilities": health_status.capabilities,
-                    "timestamp": health_status.timestamp.isoformat() if health_status.timestamp else None,
+                    "timestamp": (
+                        health_status.timestamp.isoformat()
+                        if health_status.timestamp
+                        else None
+                    ),
                     "uptime_seconds": health_status.uptime_seconds,
                     "version": health_status.version,
-                }
+                },
             )
 
             response: HeartbeatResponse = await self.api.send_heartbeat(heartbeat)
@@ -112,18 +120,26 @@ class GeneratedRegistryClient:
 
     async def send_heartbeat_with_response(
         self, health_status: HealthStatus
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Send heartbeat and return full response."""
         try:
             heartbeat = HeartbeatRequest(
                 agent_id=health_status.agent_name,
-                status=health_status.status.value if hasattr(health_status.status, 'value') else health_status.status,
+                status=(
+                    health_status.status.value
+                    if hasattr(health_status.status, "value")
+                    else health_status.status
+                ),
                 metadata={
                     "capabilities": health_status.capabilities,
-                    "timestamp": health_status.timestamp.isoformat() if health_status.timestamp else None,
+                    "timestamp": (
+                        health_status.timestamp.isoformat()
+                        if health_status.timestamp
+                        else None
+                    ),
                     "uptime_seconds": health_status.uptime_seconds,
                     "version": health_status.version,
-                }
+                },
             )
 
             response: HeartbeatResponse = await self.api.send_heartbeat(heartbeat)
@@ -133,13 +149,15 @@ class GeneratedRegistryClient:
                 "status": response.status,
                 "timestamp": response.timestamp,
                 "message": response.message,
-                "dependencies_resolved": getattr(response, 'dependencies_resolved', None)
+                "dependencies_resolved": getattr(
+                    response, "dependencies_resolved", None
+                ),
             }
 
         except Exception as e:
             raise RegistryConnectionError(f"Heartbeat failed: {e}")
 
-    async def get_all_agents(self) -> List[Dict[str, Any]]:
+    async def get_all_agents(self) -> list[dict[str, Any]]:
         """Get all registered agents."""
         try:
             response: AgentsListResponse = await self.api.list_agents()
@@ -152,9 +170,9 @@ class GeneratedRegistryClient:
                     "status": agent.status,
                     "endpoint": agent.endpoint,
                     "capabilities": agent.capabilities,
-                    "dependencies": getattr(agent, 'dependencies', []),
-                    "last_seen": getattr(agent, 'last_seen', None),
-                    "version": getattr(agent, 'version', None),
+                    "dependencies": getattr(agent, "dependencies", []),
+                    "last_seen": getattr(agent, "last_seen", None),
+                    "version": getattr(agent, "version", None),
                 }
                 for agent in response.agents
             ]
@@ -164,7 +182,7 @@ class GeneratedRegistryClient:
 
     async def close(self) -> None:
         """Close the client session."""
-        if hasattr(self.api_client, 'close'):
+        if hasattr(self.api_client, "close"):
             await self.api_client.close()
 
 

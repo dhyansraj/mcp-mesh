@@ -117,7 +117,7 @@ class MeshRemoteProxyResolver(RemoteProxyResolver):
             agent = agents[0]
             return agent.endpoint
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.debug(f"Service discovery timeout for {service_type}")
             return None
         except Exception as e:
@@ -447,7 +447,7 @@ class MeshFallbackChain(FallbackChainInterface):
 
             return result.instance if result else None
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             total_time_ms = (time.perf_counter() - start_time) * 1000
             self.logger.warning(
                 f"Dependency resolution timeout for {dependency_type.__name__} "

@@ -5,6 +5,7 @@ These tests define the expected behavior BEFORE implementation (TDD).
 """
 
 import os
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -254,11 +255,11 @@ class TestDependencyInjection:
         mock_registry = AsyncMock(spec=RegistryClient)
 
         # First, create the expected response structure using new format and validate it against schema
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         dependencies_resolved_response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent registered successfully",
             "agent_id": "agent-test123",
             "dependencies_resolved": {
@@ -395,11 +396,11 @@ class TestDependencyInjection:
         mock_registry = AsyncMock(spec=RegistryClient)
 
         # Create response with multiple dependencies resolved using new format
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         multiple_dependencies_response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent registered successfully",
             "agent_id": "agent-multi-deps",
             "dependencies_resolved": {
@@ -585,11 +586,11 @@ class TestDependencyInjection:
         mock_registry = AsyncMock(spec=RegistryClient)
 
         # Create response with dependencies for all functions resolved
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         multi_function_dependencies_response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent registered successfully",
             "agent_id": "agent-multi-funcs",
             "dependencies_resolved": {
@@ -870,11 +871,11 @@ class TestDependencyInjection:
         mock_registry = AsyncMock(spec=RegistryClient)
 
         # Create response for agent registration
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         agent_class_response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent registered successfully",
             "agent_id": "custom-calculator-agent",  # This should match our decoration
         }
@@ -1045,11 +1046,11 @@ class TestDependencyInjection:
         mock_registry = AsyncMock(spec=RegistryClient)
 
         # Create response with HTTP endpoints for testing remote calls
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         remote_call_response = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": "Agent registered successfully",
             "agent_id": "remote-test-agent",
             "dependencies_resolved": {

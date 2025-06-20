@@ -108,7 +108,7 @@ build_binary() {
             cmd_path="./cmd/$cmd"
             ;;
     esac
-    
+
     # Execute build
     if go build -ldflags="${ldflags[*]}" -o "$output_path" "$cmd_path"; then
         success "Built $cmd for $platform: $output_path"

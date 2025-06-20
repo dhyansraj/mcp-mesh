@@ -260,7 +260,7 @@ class RegistryClient:
                                     f"Registry returned {response.status}"
                                 )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if attempt == self.retry_attempts - 1:
                         raise RegistryTimeoutError(
                             f"Registry request timed out after {self.retry_attempts} attempts"

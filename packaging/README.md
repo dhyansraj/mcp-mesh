@@ -51,7 +51,7 @@ curl -L https://github.com/dhyansraj/mcp-mesh/releases/latest/download/mcp-mesh_
 docker run --rm mcpmesh/cli:latest version
 ```
 
-**Supported Platforms**: Linux, macOS (AMD64 + ARM64)  
+**Supported Platforms**: Linux, macOS (AMD64 + ARM64)
 **Note**: Windows binaries temporarily unavailable due to syscall compatibility issues. Use Docker or WSL2.
 
 ### Python Package

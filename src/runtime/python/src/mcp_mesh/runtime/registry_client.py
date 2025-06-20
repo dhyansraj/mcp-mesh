@@ -280,21 +280,15 @@ class RegistryClient:
 
             for attempt in range(self.retry_attempts):
                 try:
-                    self.logger.debug(
-                        f"Attempt {attempt + 1}/{self.retry_attempts}"
-                    )
+                    self.logger.debug(f"Attempt {attempt + 1}/{self.retry_attempts}")
 
                     if method == "GET":
                         self.logger.debug(f"Making GET request to {url}")
                         async with session.get(url) as response:
-                            self.logger.debug(
-                                f"GET response status: {response.status}"
-                            )
+                            self.logger.debug(f"GET response status: {response.status}")
                             if response.status == 200:
                                 result = await response.json()
-                                self.logger.debug(
-                                    f"GET success, result: {result}"
-                                )
+                                self.logger.debug(f"GET success, result: {result}")
                                 return result
                             else:
                                 raise RegistryConnectionError(
@@ -309,12 +303,8 @@ class RegistryClient:
                             self.logger.debug(f"Payload: {payload}")
 
                             async with session.post(url, json=payload) as response:
-                                self.logger.debug(
-                                    "AIOHTTP RESPONSE RECEIVED"
-                                )
-                                self.logger.debug(
-                                    f"Status: {response.status}"
-                                )
+                                self.logger.debug("AIOHTTP RESPONSE RECEIVED")
+                                self.logger.debug(f"Status: {response.status}")
 
                                 if response.status in [200, 201]:
                                     response_data = (
