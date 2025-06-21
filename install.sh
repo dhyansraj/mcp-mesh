@@ -106,7 +106,7 @@ done
 detect_platform() {
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
     local arch=$(uname -m)
-    
+
     case $os in
         linux)
             OS="linux"
@@ -119,7 +119,7 @@ detect_platform() {
             exit 1
             ;;
     esac
-    
+
     case $arch in
         x86_64|amd64)
             ARCH="amd64"
@@ -132,7 +132,7 @@ detect_platform() {
             exit 1
             ;;
     esac
-    
+
     PLATFORM="${OS}-${ARCH}"
     print_info "Detected platform: $PLATFORM"
 }
@@ -151,41 +151,45 @@ get_latest_version() {
 # Generic function to download and install a binary
 install_binary() {
     local binary_name="$1"
-    local download_url="https://github.com/$REPO/releases/download/$VERSION/mcp-mesh_${VERSION}_$PLATFORM.tar.gz"
+    # Convert platform dashes to underscores for release asset naming
+    local platform_for_url="${PLATFORM//-/_}"
+    local download_url="https://github.com/$REPO/releases/download/$VERSION/mcp-mesh_${VERSION}_$platform_for_url.tar.gz"
     local temp_dir=$(mktemp -d)
-    
+
     print_info "Downloading $binary_name $VERSION for $PLATFORM..."
     print_info "URL: $download_url"
-    
+
     # Download the archive
     if ! curl -sSL "$download_url" -o "$temp_dir/mcp-mesh.tar.gz"; then
         print_error "Failed to download from $download_url"
         print_error "Please check if the version and platform are correct"
         exit 1
     fi
-    
+
     # Extract the binary
     print_info "Extracting $binary_name..."
     if ! tar -xzf "$temp_dir/mcp-mesh.tar.gz" -C "$temp_dir"; then
         print_error "Failed to extract archive"
         exit 1
     fi
-    
+
     # Create install directory if it doesn't exist
     if [[ ! -d "$INSTALL_DIR" ]]; then
         print_info "Creating install directory: $INSTALL_DIR"
         sudo mkdir -p "$INSTALL_DIR"
     fi
-    
+
     # Install the binary
     print_info "Installing $binary_name to $INSTALL_DIR..."
     local extracted_binary
+    # Use the same platform format as the release assets (with underscores)
+    local platform_for_path="${PLATFORM//-/_}"
     if [[ "$binary_name" == "registry" ]]; then
-        extracted_binary="$temp_dir/$PLATFORM/registry"
+        extracted_binary="$temp_dir/$platform_for_path/registry"
     else
-        extracted_binary="$temp_dir/$PLATFORM/$binary_name"
+        extracted_binary="$temp_dir/$platform_for_path/$binary_name"
     fi
-    
+
     if [[ -w "$INSTALL_DIR" ]]; then
         cp "$extracted_binary" "$INSTALL_DIR/$binary_name"
         chmod +x "$INSTALL_DIR/$binary_name"
@@ -193,17 +197,17 @@ install_binary() {
         sudo cp "$extracted_binary" "$INSTALL_DIR/$binary_name"
         sudo chmod +x "$INSTALL_DIR/$binary_name"
     fi
-    
+
     # Cleanup
     rm -rf "$temp_dir"
-    
+
     print_info "✅ $binary_name installed successfully!"
 }
 
 # Install meshctl
 install_meshctl() {
     install_binary "meshctl"
-    
+
     # Verify installation
     if command -v meshctl >/dev/null 2>&1; then
         print_info "Verification: $(meshctl version 2>/dev/null || echo 'meshctl is installed')"
@@ -216,7 +220,7 @@ install_meshctl() {
 # Install mcp-mesh-registry
 install_registry() {
     install_binary "registry"
-    
+
     # Verify installation
     if command -v registry >/dev/null 2>&1; then
         print_info "Verification: registry installed to $INSTALL_DIR/registry"
@@ -230,26 +234,26 @@ install_registry() {
 main() {
     print_info "MCP Mesh Binary Installer"
     print_info "========================="
-    
+
     detect_platform
-    
+
     # Get latest version if not specified
     if [[ "$VERSION" == "latest" ]]; then
         get_latest_version
     fi
-    
+
     # Install selected binaries
     local installed_count=0
     if [[ "$INSTALL_MESHCTL" == "true" ]]; then
         install_meshctl
         installed_count=$((installed_count + 1))
     fi
-    
+
     if [[ "$INSTALL_REGISTRY" == "true" ]]; then
         install_registry
         installed_count=$((installed_count + 1))
     fi
-    
+
     # Final message
     print_info ""
     if [[ $installed_count -eq 0 ]]; then

@@ -183,6 +183,45 @@ curl http://localhost:9090/mcp -X POST \
 
 **The magic**: `hello_world.py` automatically discovered and connected to `system_agent.py` without any manual configuration!
 
+## 📦 Installation
+
+### Python Package (Recommended)
+
+```bash
+# Install the latest stable version
+pip install mcp-mesh==0.1.1
+```
+
+### CLI Tools
+
+```bash
+# Install meshctl and registry binaries
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+```
+
+### Docker Images
+
+```bash
+# Registry service
+docker pull mcpmesh/registry:0.1.1
+
+# Python runtime for agents
+docker pull mcpmesh/python-runtime:0.1.1
+
+# CLI tools
+docker pull mcpmesh/cli:0.1.1
+```
+
+### Quick Setup Options
+
+| Method             | Best For                | Command                                            |
+| ------------------ | ----------------------- | -------------------------------------------------- |
+| **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
+| **Python Package** | Agent development       | `pip install mcp-mesh==0.1.1`                      |
+| **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
+
+> **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
+
 ### Real-World Example: Distributed Chat History Service
 
 Here's a more practical example showing how MCP Mesh handles distributed data services like Redis caching for chat history - a common requirement in AI applications:

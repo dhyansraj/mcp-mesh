@@ -2,33 +2,34 @@
 
 This directory contains a complete Docker Compose setup demonstrating the MCP Mesh architecture with:
 
-- **Go-based Registry**: Service discovery and coordination
-- **Python Agents**: Multiple containerized agents with dependency injection
+- **Go-based Registry**: Service discovery and coordination (published image)
+- **Python Agents**: Multiple containerized agents with dependency injection (published images)
 - **Automatic Service Discovery**: Agents automatically find and communicate with each other
-- **Source Installation**: All components built from source for development
+- **Published Docker Images**: Fast startup with pre-built, tested images
 
 ## 🚀 Quick Start
 
 ```bash
-# Clone the repository
+# Clone the repository (for agent code)
 git clone https://github.com/dhyansraj/mcp-mesh.git
 cd mcp-mesh/examples/docker-examples
 
-# Start the entire mesh
-docker-compose up --build
+# Start the entire mesh (no build required!)
+docker-compose up
 
-# In another terminal, use meshctl to interact with the mesh
-cd ../..  # Back to project root
-./bin/meshctl list --registry http://localhost:8000
+# In another terminal, install and use meshctl
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.1
+meshctl list --registry http://localhost:8000
 ```
 
 That's it! The mesh will automatically:
 
-1. Start the Go registry on port 8000
-2. Build and start Python agents
-3. Agents auto-register with the registry
-4. Dependency injection happens automatically
-5. You can interact with the mesh using `meshctl`
+1. Download published Docker images (mcpmesh/registry:0.1.1, mcpmesh/python-runtime:0.1.1)
+2. Start the Go registry on port 8000
+3. Start Python agents with your local code
+4. Agents auto-register with the registry
+5. Dependency injection happens automatically
+6. You can interact with the mesh using `meshctl`
 
 ## 🏗️ Resilient Architecture
 

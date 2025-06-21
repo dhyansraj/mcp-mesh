@@ -4,21 +4,21 @@ This directory contains examples demonstrating different deployment scenarios fo
 
 ## 🚀 Quick Start Options
 
-### 1. **Docker Compose** (Recommended for Development)
+### 1. **Docker Compose** (Recommended for Getting Started)
 
-**Best for**: Local development, testing, and learning MCP Mesh concepts.
+**Best for**: Quick setup with published Docker images, learning MCP Mesh concepts.
 
 ```bash
 cd docker-examples/
-docker-compose up --build
+docker-compose up
 ```
 
 **Features**:
 
 - 🔄 Automatic service discovery and dependency injection
-- 🐳 Isolated containers with proper networking
+- 🐳 Uses published Docker images (no build required)
 - 📊 Built-in monitoring and health checks
-- 🛠️ Easy to modify and experiment with agents
+- ⚡ Fast startup with pre-built images
 
 **→ [Full Docker Guide](docker-examples/README.md)**
 
@@ -45,21 +45,24 @@ kubectl apply -k base/
 
 ---
 
-### 3. **Local Development** (Manual Setup)
+### 3. **Local Development** (Published Packages)
 
-**Best for**: Understanding internals, debugging, and custom development.
+**Best for**: Understanding internals, developing agents, using published packages.
 
 ```bash
+# Install MCP Mesh
+pip install mcp-mesh==0.1.1
+
 cd simple/
 # See simple/README.md for detailed instructions
 ```
 
 **Features**:
 
-- 🔧 Direct binary execution and debugging
+- 📦 Uses published PyPI packages (pip install)
 - 🧪 Perfect for agent development and testing
 - ⚡ Fast iteration cycles
-- 🎯 Minimal overhead for development
+- 🎯 Latest stable version
 
 **→ [Local Development Guide](simple/README.md)**
 
@@ -69,9 +72,9 @@ cd simple/
 
 | Scenario                  | Recommended Option | Why                                  |
 | ------------------------- | ------------------ | ------------------------------------ |
-| **Learning MCP Mesh**     | Docker Compose     | Complete environment, easy setup     |
-| **Developing new agents** | Local Development  | Fast feedback, easy debugging        |
-| **Testing integrations**  | Docker Compose     | Realistic network conditions         |
+| **Learning MCP Mesh**     | Docker Compose     | Complete environment, no build time  |
+| **Developing new agents** | Local Development  | Fast feedback, published packages    |
+| **Testing integrations**  | Docker Compose     | Realistic network, published images  |
 | **Production deployment** | Kubernetes         | Scalability, reliability, monitoring |
 | **Cloud/enterprise**      | Kubernetes         | Cloud-native, enterprise features    |
 
@@ -106,15 +109,18 @@ All examples demonstrate the same core MCP Mesh architecture:
 Once you have any example running, test the core functionality:
 
 ```bash
-# 1. Check agent registration
-./bin/meshctl list agents
+# 1. Install meshctl CLI (optional)
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.1
 
-# 2. Test basic functionality
+# 2. Check agent registration
+meshctl list agents
+
+# 3. Test basic functionality
 curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
 
-# 3. Test dependency injection
+# 4. Test dependency injection
 curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
   -d '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {}}}' | jq .
@@ -138,5 +144,5 @@ Each directory contains detailed README files with step-by-step instructions, tr
 
 - 📖 Check the specific README in each example directory
 - 🐛 Look at logs: `docker-compose logs` or `kubectl logs`
-- 🔧 Use meshctl for debugging: `./bin/meshctl status --verbose`
+- 🔧 Use meshctl for debugging: `meshctl status --verbose`
 - 💬 Review the main project documentation
