@@ -156,12 +156,21 @@ class TestBatchedRegistration:
 
         await processor.process_all_decorators()
 
-        # Should make exactly ONE registration call
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
+        # Should make exactly ONE heartbeat call (registration now happens via heartbeat)
         assert mock_registry.post.call_count == 1
 
-        # Check the payload
+        # Check the payload - should be sent to /heartbeat endpoint
         call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
         payload = call_args[1]["json"]
+
+        # Verify it's a heartbeat call, not registration
+        assert endpoint == "/heartbeat"
 
         # CRITICAL: First validate against OpenAPI schema
         validate_agent_registration_request(payload)
@@ -177,7 +186,7 @@ class TestBatchedRegistration:
         assert "goodbye" in tool_names
 
     @pytest.mark.asyncio
-    async def test_registration_payload_structure(self):
+    async def test_heartbeat_payload_structure(self):
         """Test the structure of the batched registration payload."""
         # Clear any existing decorators first
         from mcp_mesh import DecoratorRegistry
@@ -189,6 +198,8 @@ class TestBatchedRegistration:
         async def capture_payload(endpoint, **kwargs):
             nonlocal captured_payload
             captured_payload = kwargs.get("json")
+            # Verify this is sent to the heartbeat endpoint
+            assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
             return MagicMock(
                 status=201, json=AsyncMock(return_value={"status": "success"})
             )
@@ -222,6 +233,11 @@ class TestBatchedRegistration:
         processor.mesh_tool_processor.registry_client = mock_registry
 
         await processor.process_all_decorators()
+
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
 
         # Verify payload structure (flattened schema)
         assert captured_payload is not None
@@ -331,16 +347,25 @@ class TestDependencyInjection:
         # Process all decorators (should trigger registration and DI)
         await processor.process_all_decorators()
 
-        # Verify that registry was called correctly
-        assert mock_registry.post.call_count == 1, "Should have called registration"
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
 
-        # Verify the registration payload was correct
+        await asyncio.sleep(0.1)
+
+        # Verify that registry was called correctly (heartbeat, not registration)
+        assert mock_registry.post.call_count == 1, "Should have called heartbeat"
+
+        # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
         payload = call_args[1]["json"]
 
-        # Validate the registration payload against OpenAPI schema
+        # Verify it's a heartbeat call
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
+
+        # Validate the heartbeat payload against OpenAPI schema (same format as registration)
         validate_agent_registration_request(payload)
-        print("✅ Registration payload validates against OpenAPI schema")
+        print("✅ Heartbeat payload validates against OpenAPI schema")
 
         # Verify DI was processed - check for dependency injection setup
         # The dependency injector should have been called to register the date_service proxy
@@ -501,12 +526,21 @@ class TestDependencyInjection:
         # Process all decorators (should trigger registration and DI)
         await processor.process_all_decorators()
 
-        # Verify that registry was called correctly
-        assert mock_registry.post.call_count == 1, "Should have called registration"
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
 
-        # Verify the registration payload was correct
+        await asyncio.sleep(0.1)
+
+        # Verify that registry was called correctly
+        assert mock_registry.post.call_count == 1, "Should have called heartbeat"
+
+        # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
         payload = call_args[1]["json"]
+
+        # Verify it's a heartbeat call
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
 
         # Validate the registration payload against OpenAPI schema
         validate_agent_registration_request(payload)
@@ -751,14 +785,23 @@ class TestDependencyInjection:
         # Process all decorators (should trigger registration and DI)
         await processor.process_all_decorators()
 
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
         # Verify that registry was called correctly
         assert (
             mock_registry.post.call_count == 1
-        ), "Should have called registration once for batched tools"
+        ), "Should have called heartbeat once for batched tools"
 
-        # Verify the registration payload was correct
+        # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
         payload = call_args[1]["json"]
+
+        # Verify it's a heartbeat call
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
 
         # Validate the registration payload against OpenAPI schema
         validate_agent_registration_request(payload)
@@ -949,14 +992,23 @@ class TestDependencyInjection:
         # Process all decorators (should trigger registration and DI)
         await processor.process_all_decorators()
 
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
         # Verify that registry was called correctly
         assert (
             mock_registry.post.call_count == 1
-        ), "Should have called registration once for agent class"
+        ), "Should have called heartbeat once for agent class"
 
-        # Verify the registration payload was correct
+        # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
         payload = call_args[1]["json"]
+
+        # Verify it's a heartbeat call
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
 
         # Validate the registration payload against OpenAPI schema
         validate_agent_registration_request(payload)
@@ -1124,12 +1176,20 @@ class TestDependencyInjection:
         # Process all decorators
         await processor.process_all_decorators()
 
-        # Verify registration occurred
-        assert (
-            mock_registry.post.call_count == 1
-        ), "Should have called registration once"
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
 
-        print("✅ Registration completed, now testing actual proxy calls...")
+        await asyncio.sleep(0.1)
+
+        # Verify registration occurred
+        assert mock_registry.post.call_count == 1, "Should have called heartbeat once"
+
+        # Verify the heartbeat payload was correct and sent to right endpoint
+        call_args = mock_registry.post.call_args
+        endpoint = call_args[0][0]  # First positional argument is the endpoint
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
+
+        print("✅ Heartbeat completed, now testing actual proxy calls...")
 
         # Get the registered functions to test their injected dependencies
         from mcp_mesh import DecoratorRegistry
@@ -1288,12 +1348,21 @@ class TestHeartbeatBatching:
         # Register the tools first
         await processor.process_all_decorators()
 
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
         # Verify registration happened with unified format
         assert mock_registry.post.call_count == 1
 
-        # Get the registration payload
+        # Get the heartbeat payload and verify endpoint
         reg_call_args = mock_registry.post.call_args
+        endpoint = reg_call_args[0][0]  # First positional argument is the endpoint
         registration_payload = reg_call_args[1]["json"]
+
+        # Verify it's a heartbeat call
+        assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
 
         # Verify it uses the flattened MeshAgentRegistration schema
         assert "agent_id" in registration_payload
