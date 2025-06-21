@@ -1,12 +1,16 @@
 # coding: utf-8
 
-from fastapi.testclient import TestClient
-
-
-from pydantic import StrictStr  # noqa: F401
 from typing import Any  # noqa: F401
-from mcp_mesh_agent_server.models.agent_health_response import AgentHealthResponse  # noqa: F401
-from mcp_mesh_agent_server.models.readiness_response import ReadinessResponse  # noqa: F401
+
+from fastapi.testclient import TestClient
+from pydantic import StrictStr  # noqa: F401
+
+from mcp_mesh_agent_server.models.agent_health_response import (  # noqa: F401
+    AgentHealthResponse,
+)
+from mcp_mesh_agent_server.models.readiness_response import (  # noqa: F401
+    ReadinessResponse,
+)
 
 
 def test_get_agent_health(client: TestClient):
@@ -15,17 +19,16 @@ def test_get_agent_health(client: TestClient):
     Agent health check
     """
 
-    headers = {
-    }
+    headers = {}
     # uncomment below to make a request
-    #response = client.request(
+    # response = client.request(
     #    "GET",
     #    "/health",
     #    headers=headers,
-    #)
+    # )
 
     # uncomment below to assert the status code of the HTTP response
-    #assert response.status_code == 200
+    # assert response.status_code == 200
 
 
 def test_get_agent_liveness(client: TestClient):
@@ -34,17 +37,16 @@ def test_get_agent_liveness(client: TestClient):
     Agent liveness check
     """
 
-    headers = {
-    }
+    headers = {}
     # uncomment below to make a request
-    #response = client.request(
+    # response = client.request(
     #    "GET",
     #    "/livez",
     #    headers=headers,
-    #)
+    # )
 
     # uncomment below to assert the status code of the HTTP response
-    #assert response.status_code == 200
+    # assert response.status_code == 200
 
 
 def test_get_agent_readiness(client: TestClient):
@@ -53,15 +55,13 @@ def test_get_agent_readiness(client: TestClient):
     Agent readiness check
     """
 
-    headers = {
-    }
+    headers = {}
     # uncomment below to make a request
-    #response = client.request(
+    # response = client.request(
     #    "GET",
     #    "/ready",
     #    headers=headers,
-    #)
+    # )
 
     # uncomment below to assert the status code of the HTTP response
-    #assert response.status_code == 200
-
+    # assert response.status_code == 200

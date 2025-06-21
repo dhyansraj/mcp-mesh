@@ -657,7 +657,6 @@ class TestMeshAgentHttpEndpointBehavior:
 
             @mesh.agent(name="endpoint-test-agent", enable_http=True, auto_run=False)
             class EndpointTestAgent:
-
                 @mesh.tool()
                 def test_tool(self):
                     return "test response"
@@ -685,7 +684,6 @@ class TestMeshAgentHttpEndpointBehavior:
 
             @mesh.agent(name="static-ip-agent", enable_http=True, auto_run=False)
             class StaticIpAgent:
-
                 @mesh.tool()
                 def get_info(self):
                     return "agent info"
@@ -709,7 +707,6 @@ class TestMeshAgentHttpEndpointBehavior:
 
             @mesh.agent(name="service-host-agent", enable_http=True, auto_run=False)
             class ServiceHostAgent:
-
                 @mesh.tool()
                 def service_tool(self):
                     return "service response"

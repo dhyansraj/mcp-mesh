@@ -120,7 +120,9 @@ class RegistryClient:
         return response.get("value") if response else None
 
     async def register_agent_with_metadata(
-        self, agent_id: str, metadata: Any  # MeshAgentMetadata
+        self,
+        agent_id: str,
+        metadata: Any,  # MeshAgentMetadata
     ) -> bool:
         """Register agent with enhanced metadata for capability discovery."""
         # Convert capability metadata to dict format

@@ -2,7 +2,6 @@
 
 from fastapi.testclient import TestClient
 
-
 from mcp_mesh_agent_server.models.agent_mesh_info import AgentMeshInfo  # noqa: F401
 from mcp_mesh_agent_server.models.agent_tools_list import AgentToolsList  # noqa: F401
 
@@ -13,17 +12,16 @@ def test_get_agent_mesh_info(client: TestClient):
     Agent mesh information
     """
 
-    headers = {
-    }
+    headers = {}
     # uncomment below to make a request
-    #response = client.request(
+    # response = client.request(
     #    "GET",
     #    "/mesh/info",
     #    headers=headers,
-    #)
+    # )
 
     # uncomment below to assert the status code of the HTTP response
-    #assert response.status_code == 200
+    # assert response.status_code == 200
 
 
 def test_list_agent_tools(client: TestClient):
@@ -32,15 +30,13 @@ def test_list_agent_tools(client: TestClient):
     List agent tools
     """
 
-    headers = {
-    }
+    headers = {}
     # uncomment below to make a request
-    #response = client.request(
+    # response = client.request(
     #    "GET",
     #    "/mesh/tools",
     #    headers=headers,
-    #)
+    # )
 
     # uncomment below to assert the status code of the HTTP response
-    #assert response.status_code == 200
-
+    # assert response.status_code == 200
