@@ -48,12 +48,12 @@ That's it! The function automatically discovers and uses the system agent's date
 **Easiest way to get started:**
 
 ```bash
-# 1. Clone the repository
+# 1. Clone the repository (for agent code)
 git clone https://github.com/dhyansraj/mcp-mesh.git
 cd mcp-mesh/examples/docker-examples
 
-# 2. Start everything
-docker-compose up --build
+# 2. Start everything (uses published Docker images)
+docker-compose up
 
 # 3. Test it (in another terminal)
 curl -s -X POST http://localhost:8081/mcp \
@@ -70,6 +70,32 @@ curl -s -X POST http://localhost:8081/mcp \
 ```
 
 That's it! You now have a working distributed MCP service mesh! 🎉
+
+## Alternative: Python Package (3 Minutes)
+
+**For Python development with published packages:**
+
+```bash
+# 1. Install MCP Mesh
+pip install mcp-mesh==0.1.1
+
+# 2. Download and start registry
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.1.1
+registry --host 0.0.0.0 --port 8000 &
+
+# 3. Download example agents
+git clone https://github.com/dhyansraj/mcp-mesh.git
+cd mcp-mesh/examples/simple
+
+# 4. Run agents
+python system_agent.py &
+python hello_world.py &
+
+# 5. Test it
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+```
 
 ## Alternative: Local Development (5 Minutes)
 

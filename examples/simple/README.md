@@ -1,23 +1,26 @@
-# MCP Mesh Local Development
+# MCP Mesh Simple Examples
 
-This directory contains simple Python agents for local development and testing. Perfect for understanding MCP Mesh internals, developing new agents, and debugging.
+This directory contains simple Python agents that demonstrate MCP Mesh capabilities using published packages. Perfect for getting started quickly and understanding MCP Mesh concepts.
+
+> **🔧 For Contributors:** If you're developing MCP Mesh itself, see the [development setup guide](../../docs/02-local-development.md) for building from source.
 
 ## 🚀 Quick Start
 
-### 1. Build the Project
+### 1. Install MCP Mesh
 
 ```bash
-# From project root
-make install-dev
+# Install from PyPI
+pip install mcp-mesh==0.1.1
 ```
 
-This installs MCP Mesh in development mode with all dependencies.
+This installs the latest stable version of MCP Mesh and all dependencies.
 
 ### 2. Start the Registry
 
 ```bash
-# Start the Go registry service
-./bin/meshctl start-registry
+# Download and start the registry service
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.1.1
+registry --host 0.0.0.0 --port 8000
 ```
 
 The registry will start on `http://localhost:8000` and handle agent discovery and coordination.
@@ -29,13 +32,13 @@ Open separate terminals for each agent:
 **Terminal 1 - Hello World Agent:**
 
 ```bash
-./bin/meshctl start examples/simple/hello_world.py
+python hello_world.py
 ```
 
 **Terminal 2 - System Agent:**
 
 ```bash
-./bin/meshctl start examples/simple/system_agent.py
+python system_agent.py
 ```
 
 Both agents will:
@@ -49,19 +52,22 @@ Both agents will:
 ### 1. Check Agent Registration
 
 ```bash
+# Install meshctl CLI tool first
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.1
+
 # List all registered agents
-./bin/meshctl list agents
+meshctl list agents
 
 # Get detailed agent information
-./bin/meshctl get agent hello-world
-./bin/meshctl get agent system-agent
+meshctl get agent hello-world
+meshctl get agent system-agent
 ```
 
 ### 2. Test Individual Agent Capabilities
 
 ```bash
 # Find agent ports (auto-assigned)
-./bin/meshctl list agents | grep http_port
+meshctl list agents | grep http_port
 
 # Test system agent directly (replace PORT with actual port)
 curl -s -X POST http://localhost:PORT/mcp \
@@ -127,10 +133,10 @@ System monitoring agent that provides:
 
 ```bash
 # Edit agent file
-vim examples/simple/hello_world.py
+vim hello_world.py
 
 # Restart the agent (Ctrl+C, then restart)
-./bin/meshctl start examples/simple/hello_world.py
+python hello_world.py
 ```
 
 Changes are picked up immediately on restart.
@@ -163,14 +169,15 @@ def tool_with_dependency(date_service=None):
 ### 4. Debug Issues
 
 ```bash
-# Check logs with verbose output
-./bin/meshctl start examples/simple/hello_world.py --verbose
+# Run agent with debug logging
+export MCP_MESH_LOG_LEVEL=DEBUG
+python hello_world.py
 
 # Check registry status
-./bin/meshctl status
+meshctl status
 
 # Check dependency graph
-./bin/meshctl dependencies
+meshctl dependencies
 ```
 
 ## 🌐 Network Configuration
@@ -180,10 +187,10 @@ By default, agents use auto-assigned ports. To use specific ports:
 ```bash
 # Set environment variables
 export MCP_MESH_HTTP_PORT=8081
-./bin/meshctl start examples/simple/hello_world.py
+python hello_world.py
 
 export MCP_MESH_HTTP_PORT=8082
-./bin/meshctl start examples/simple/system_agent.py
+python system_agent.py
 ```
 
 Or modify the `@mesh.agent` decorator:
@@ -220,11 +227,11 @@ export MCP_MESH_AUTO_RUN_INTERVAL=30
 
 ```bash
 # Start registry on different port
-./bin/meshctl start-registry --port 9000
+registry --host 0.0.0.0 --port 9000
 
 # Connect agents to custom registry
 export MCP_MESH_REGISTRY_URL=http://localhost:9000
-./bin/meshctl start examples/simple/hello_world.py
+python hello_world.py
 ```
 
 ## 🐛 Troubleshooting
@@ -237,7 +244,7 @@ netstat -tlnp | grep :8080
 
 # Try different port
 export MCP_MESH_HTTP_PORT=8090
-./bin/meshctl start examples/simple/hello_world.py
+python hello_world.py
 ```
 
 ### Registry Connection Issues
@@ -254,10 +261,10 @@ ping localhost
 
 ```bash
 # Verify both agents are registered
-./bin/meshctl list agents
+meshctl list agents
 
 # Check dependency resolution
-./bin/meshctl dependencies
+meshctl dependencies
 
 # Look for errors in agent logs
 ```
@@ -275,5 +282,5 @@ The local development setup is perfect for rapid prototyping and understanding M
 
 - 📖 Check the main [examples README](../README.md) for other deployment options
 - 🐛 Use `--verbose` flag for detailed logging
-- 🔧 Try `./bin/meshctl --help` for all available commands
+- 🔧 Try `meshctl --help` for CLI commands or check [install guide](../../README.md) for setup
 - 💬 Review agent logs for specific error messages

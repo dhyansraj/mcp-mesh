@@ -2,26 +2,31 @@
 
 > Get MCP Mesh running in under 2 minutes
 
-## Quick Install (Recommended - When Available)
+## Quick Install (Recommended)
 
-Once MCP Mesh is open-sourced, you'll be able to install it directly:
+Install MCP Mesh using published packages:
 
 ```bash
-# Install MCP Mesh from PyPI (coming soon)
-pip install mcp-mesh
+# Install MCP Mesh from PyPI
+pip install mcp-mesh==0.1.1
 
-# Download the CLI tool (coming soon)
-curl -sSL https://github.com/mcp-mesh/mcp-mesh/releases/latest/download/meshctl -o meshctl
-chmod +x meshctl
-sudo mv meshctl /usr/local/bin/
+# Download the CLI tools
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
 
 # Verify installation
 meshctl --version
+registry --version
 ```
 
-## Current Installation (Build from Source)
+**What this installs:**
 
-Until the public release, you'll need to build from source:
+- 📦 **Python package**: MCP Mesh runtime for building agents
+- 🔧 **meshctl**: CLI tool for managing the mesh
+- 🏗️ **registry**: Service discovery and coordination server
+
+## Alternative: Build from Source
+
+For contributors or advanced users who want to build from source:
 
 ### Prerequisites
 
