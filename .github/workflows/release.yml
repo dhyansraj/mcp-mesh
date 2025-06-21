@@ -148,6 +148,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Test Registry image functionality
+        run: |
+          # Build test image locally to validate before pushing
+          docker build -f ./packaging/docker/registry.Dockerfile -t test-registry:validation .
+
+          # Test 1: Verify binary works and shows help
+          echo "Testing registry binary help..."
+          docker run --rm test-registry:validation --help
+
+          # Test 2: Start registry and test SQLite functionality
+          echo "Testing SQLite functionality..."
+          CONTAINER_ID=$(docker run -d -p 28000:8000 test-registry:validation)
+          sleep 5
+
+          # Test health endpoint (verifies SQLite is working)
+          HEALTH_RESPONSE=$(curl -s http://localhost:28000/health || echo "FAILED")
+          echo "Health response: $HEALTH_RESPONSE"
+
+          # Verify health response contains expected fields
+          if echo "$HEALTH_RESPONSE" | grep -q '"status":"healthy"'; then
+            echo "✅ Registry health check passed - SQLite is working"
+          else
+            echo "❌ Registry health check failed - SQLite may not be working"
+            docker logs $CONTAINER_ID
+            exit 1
+          fi
+
+          # Test 3: Verify SQLite database was created
+          docker exec $CONTAINER_ID ls -la /data/
+
+          # Clean up
+          docker stop $CONTAINER_ID
+          docker rm $CONTAINER_ID
+
+          echo "✅ All registry functionality tests passed"
+
       - name: Build and push Python Runtime image
         uses: docker/build-push-action@v5
         with:
