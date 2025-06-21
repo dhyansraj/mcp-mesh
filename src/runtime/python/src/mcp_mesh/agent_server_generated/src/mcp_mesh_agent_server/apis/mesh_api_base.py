@@ -12,15 +12,15 @@ class BaseMeshApi:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         BaseMeshApi.subclasses = BaseMeshApi.subclasses + (cls,)
+
     async def get_agent_mesh_info(
         self,
     ) -> AgentMeshInfo:
-        """Returns agent capabilities, dependencies, and mesh integration info.  🤖 AI CRITICAL: This provides agent discovery information for mesh routing. """
+        """Returns agent capabilities, dependencies, and mesh integration info.  🤖 AI CRITICAL: This provides agent discovery information for mesh routing."""
         ...
-
 
     async def list_agent_tools(
         self,
     ) -> AgentToolsList:
-        """Returns list of tools available from this agent.  🤖 AI NOTE: Used for tool discovery in mesh routing. """
+        """Returns list of tools available from this agent.  🤖 AI NOTE: Used for tool discovery in mesh routing."""
         ...

@@ -12,8 +12,6 @@ Do not edit the class manually.
 
 from typing import Annotated, Any
 
-from pydantic import Field, StrictFloat, StrictInt, StrictStr, validate_call
-
 from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import (
     ApiClient,
     RequestSerialized,
@@ -33,6 +31,7 @@ from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_reg
 from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.rest import (
     RESTResponseType,
 )
+from pydantic import Field, StrictFloat, StrictInt, StrictStr, validate_call
 
 
 class AgentsApi:
@@ -230,7 +229,6 @@ class AgentsApi:
         _headers,
         _host_index,
     ) -> RequestSerialized:
-
         _host = None
 
         _collection_formats: dict[str, str] = {}
@@ -479,7 +477,6 @@ class AgentsApi:
         _headers,
         _host_index,
     ) -> RequestSerialized:
-
         _host = None
 
         _collection_formats: dict[str, str] = {}
@@ -743,7 +740,6 @@ class AgentsApi:
         _headers,
         _host_index,
     ) -> RequestSerialized:
-
         _host = None
 
         _collection_formats: dict[str, str] = {}
