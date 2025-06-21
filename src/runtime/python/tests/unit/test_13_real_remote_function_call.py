@@ -67,9 +67,13 @@ class MockRegistryServer:
 
         @self.app.post("/heartbeat")
         async def heartbeat(request_data: dict):
+            self.requests_received.append(
+                request_data
+            )  # Capture heartbeat requests too
             print(
                 f"💓 Mock registry received heartbeat: {request_data.get('agent_id')}"
             )
+            print(f"📊 Total requests received so far: {len(self.requests_received)}")
 
             # Return same dependency resolution as registration
             return {
@@ -117,7 +121,7 @@ class MockRegistryServer:
                 if response.status_code == 200:
                     print(f"✅ Mock registry started on port {self.port}")
                     return
-            except:
+            except (httpx.ConnectError, httpx.TimeoutException, Exception):
                 time.sleep(0.1)
 
         raise RuntimeError(f"Mock registry failed to start on port {self.port}")
@@ -423,7 +427,7 @@ print("✅ Agent script setup complete")
             # Clean up temp file
             try:
                 os.unlink(script_file)
-            except:
+            except (FileNotFoundError, OSError):
                 pass
 
             print("🧹 Cleanup complete")

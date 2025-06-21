@@ -68,13 +68,20 @@ class TestDecoratorProcessorAgentConfig:
                 return "test"
 
             # Process all decorators (tools and agents)
-            results = await processor.process_all_decorators()
+            await processor.process_all_decorators()
 
-            # Verify registration call was made
+            # Wait for asynchronous heartbeat to complete
+            import asyncio
+
+            await asyncio.sleep(0.1)
+
+            # Verify heartbeat call was made (registration now via heartbeat)
             processor.registry_client.post.assert_called_once()
 
-            # Get the actual registration data from the post call
+            # Get the actual heartbeat data from the post call
             call_args = processor.registry_client.post.call_args
+            endpoint = call_args.args[0]  # First positional argument is the endpoint
+            assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
             registration_data = call_args.kwargs["json"]  # JSON payload
 
             # Verify agent config values are used
@@ -101,10 +108,20 @@ class TestDecoratorProcessorAgentConfig:
                 return "standalone"
 
             # Process all decorators (tools and agents)
-            results = await processor.process_all_decorators()
+            await processor.process_all_decorators()
 
-            # Verify registration call was made
+            # Wait for asynchronous heartbeat to complete
+            import asyncio
+
+            await asyncio.sleep(0.1)
+
+            # Verify heartbeat call was made (registration now via heartbeat)
             processor.registry_client.post.assert_called_once()
+
+            # Get the actual heartbeat data and verify endpoint
+            call_args = processor.registry_client.post.call_args
+            endpoint = call_args.args[0]  # First positional argument is the endpoint
+            assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
 
             # Get the actual registration data
             call_args = processor.registry_client.post.call_args
@@ -157,13 +174,22 @@ class TestDecoratorProcessorAgentConfig:
                     return "env test"
 
                 # Process all decorators (tools and agents)
-                results = await processor.process_all_decorators()
+                await processor.process_all_decorators()
 
-                # Verify registration call was made
+                # Wait for asynchronous heartbeat to complete
+                import asyncio
+
+                await asyncio.sleep(0.1)
+
+                # Verify heartbeat call was made (registration now via heartbeat)
                 processor.registry_client.post.assert_called_once()
 
-                # Get the actual registration data
+                # Get the actual heartbeat data and verify endpoint
                 call_args = processor.registry_client.post.call_args
+                endpoint = call_args.args[
+                    0
+                ]  # First positional argument is the endpoint
+                assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
                 registration_data = call_args.kwargs["json"]
 
                 # Verify environment variables take precedence
@@ -197,7 +223,7 @@ class TestDecoratorProcessorAgentConfig:
                 return "http test"
 
             # Process all decorators (tools and agents)
-            results = await processor.process_all_decorators()
+            await processor.process_all_decorators()
 
             # Verify HTTP wrapper setup was called
             mock_http_setup.assert_called_once()
@@ -228,7 +254,7 @@ class TestDecoratorProcessorAgentConfig:
                 return "no http test"
 
             # Process all decorators (tools and agents)
-            results = await processor.process_all_decorators()
+            await processor.process_all_decorators()
 
             # Verify HTTP wrapper setup was NOT called
             mock_http_setup.assert_not_called()

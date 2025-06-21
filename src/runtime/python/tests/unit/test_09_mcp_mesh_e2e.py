@@ -9,7 +9,6 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import MeshToolProcessor
 from mcp_mesh.runtime.registry_client import RegistryClient
 from mcp_mesh.types import McpMeshAgent
 
@@ -130,7 +129,11 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor and process tools
-        processor = MeshToolProcessor(mock_registry_client)
+        from mcp_mesh.runtime.processor import DecoratorProcessor
+
+        processor = DecoratorProcessor("http://localhost:8080")
+        processor.registry_client = mock_registry_client
+        processor.mesh_tool_processor.registry_client = mock_registry_client
 
         # Mock HTTP proxy creation to return single-function bound proxies
         async def mock_create_http_proxy(dep_name, dep_info):
@@ -155,7 +158,9 @@ class TestMcpMeshAgentE2E:
             )
             return mock_proxy
 
-        processor._create_http_proxy_for_tool = mock_create_http_proxy
+        processor.mesh_tool_processor._create_http_proxy_for_tool = (
+            mock_create_http_proxy
+        )
 
         def mock_create_stdio_proxy(dep_name, dep_info):
             function_name = dep_info.get("function_name", "unknown")
@@ -179,21 +184,26 @@ class TestMcpMeshAgentE2E:
             )
             return mock_proxy
 
-        processor._create_stdio_proxy_for_tool = mock_create_stdio_proxy
+        processor.mesh_tool_processor._create_stdio_proxy_for_tool = (
+            mock_create_stdio_proxy
+        )
 
         # Process the tools
-        results = await processor.process_tools(mesh_tools)
+        await processor.process_all_decorators()
 
-        # Verify processing succeeded
-        assert results["time_greet"] is True
-        assert results["weather_greet"] is True
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
 
-        # Verify registry was called
+        await asyncio.sleep(0.1)
+
+        # Verify registry was called (heartbeat, not registration)
         mock_registry_client.post.assert_called_once()
         call_args = mock_registry_client.post.call_args
-        assert call_args[0][0] == "/agents/register"  # endpoint
+        assert (
+            call_args[0][0] == "/heartbeat"
+        )  # endpoint (registration now via heartbeat)
 
-        # Verify the registration payload
+        # Verify the heartbeat payload (same format as registration)
         registration_data = call_args[1]["json"]
         assert registration_data["agent_id"]
         assert len(registration_data["tools"]) == 2
@@ -282,7 +292,11 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor
-        processor = MeshToolProcessor(mock_registry_client)
+        from mcp_mesh.runtime.processor import DecoratorProcessor
+
+        processor = DecoratorProcessor("http://localhost:8080")
+        processor.registry_client = mock_registry_client
+        processor.mesh_tool_processor.registry_client = mock_registry_client
 
         # Mock proxy creation to return single-function bound proxies
         def mock_create_stdio_proxy(dep_name, dep_info):
@@ -301,17 +315,23 @@ class TestMcpMeshAgentE2E:
                 mock_proxy.invoke.return_value = "2023-12-25"
             return mock_proxy
 
-        processor._create_stdio_proxy_for_tool = mock_create_stdio_proxy
-        processor._create_http_proxy_for_tool = mock_create_http_proxy
+        processor.mesh_tool_processor._create_stdio_proxy_for_tool = (
+            mock_create_stdio_proxy
+        )
+        processor.mesh_tool_processor._create_http_proxy_for_tool = (
+            mock_create_http_proxy
+        )
 
         # Process the tools
-        mesh_tools = DecoratorRegistry.get_mesh_tools()
-        results = await processor.process_tools(mesh_tools)
+        await processor.process_all_decorators()
 
-        # Verify processing succeeded
-        assert results["flexible_greet"] is True
+        # Wait for asynchronous heartbeat to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
 
         # Test the enhanced function with different argument patterns
+        mesh_tools = DecoratorRegistry.get_mesh_tools()
         decorated_func = mesh_tools["flexible_greet"]
 
         # Test with minimal arguments (using defaults)
