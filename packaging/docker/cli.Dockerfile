@@ -1,59 +1,10 @@
-# Multi-stage build for MCP Mesh CLI Tools
+# MCP Mesh CLI Tools - Downloads from releases and PyPI
 # Supports linux/amd64, linux/arm64
 
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS go-builder
+FROM --platform=$TARGETPLATFORM python:3.11-slim
 
 ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates
-
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code
-COPY . ./
-
-# Build CLI tools for target architecture
-ENV CGO_ENABLED=0
-ENV GOOS=$TARGETOS
-ENV GOARCH=$TARGETARCH
-
-RUN go build -ldflags="-w -s" -o meshctl ./cmd/meshctl
-RUN go build -ldflags="-w -s" -o registry ./cmd/mcp-mesh-registry
-
-# Python stage for runtime tools
-FROM --platform=$BUILDPLATFORM python:3.11-slim AS python-builder
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy Python runtime source
-COPY src/runtime/python/ ./
-
-# Copy and fix pyproject.toml paths
-COPY packaging/pypi/pyproject.toml ./
-RUN sed -i 's|src/runtime/python/src/mcp_mesh|src/mcp_mesh|g' pyproject.toml && \
-    sed -i 's|src/runtime/python/README.md|README.md|g' pyproject.toml && \
-    sed -i 's|src/runtime/python/LICENSE|LICENSE|g' pyproject.toml
-
-# Build wheel
-RUN pip install --no-cache-dir build wheel
-RUN python -m build --wheel
-
-# Final stage - CLI tools image
-FROM --platform=$TARGETPLATFORM python:3.11-slim
+ARG VERSION
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -64,14 +15,14 @@ RUN apt-get update && apt-get install -y \
     && groupadd -r mcp-mesh \
     && useradd -r -g mcp-mesh mcp-mesh
 
-# Copy Go binaries
-COPY --from=go-builder /build/meshctl /usr/local/bin/meshctl
-COPY --from=go-builder /build/registry /usr/local/bin/registry
+# Install both meshctl and registry using install.sh script
+RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
+    echo "Installing meshctl and registry ${VERSION} using install.sh..." && \
+    curl -sSL "https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh" | bash -s -- --all --version ${VERSION} --install-dir /usr/local/bin
 
-# Copy and install Python wheel
-COPY --from=python-builder /build/dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl \
-    && rm -rf /tmp/*.whl
+# Install mcp-mesh package from PyPI
+RUN echo "Installing mcp-mesh==${VERSION} from PyPI" && \
+    pip install --no-cache-dir mcp-mesh==${VERSION}
 
 # Create workspace
 RUN mkdir -p /workspace && chown mcp-mesh:mcp-mesh /workspace
