@@ -125,9 +125,12 @@ jobs:
 
           # Remove 'v' prefix if present
           VERSION=${VERSION#v}
+          # For install script in Dockerfiles, we need the v prefix
+          VERSION_WITH_V="v${VERSION}"
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Building Docker images for version: ${VERSION}"
+          echo "version_with_v=${VERSION_WITH_V}" >> $GITHUB_OUTPUT
+          echo "Building Docker images for version: ${VERSION} (install script version: ${VERSION_WITH_V})"
 
       - name: Build and push Registry image
         uses: docker/build-push-action@v5
@@ -210,7 +213,7 @@ jobs:
           file: ./packaging/docker/cli.Dockerfile
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.meta.outputs.version_with_v }}
           push: >
             ${{ github.event_name == 'release' ||
             (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
