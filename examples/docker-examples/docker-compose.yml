@@ -1,12 +1,12 @@
 version: "3.8"
 
 # MCP Mesh Docker Compose Example
-# Demonstrates Go registry + Python agents using published Docker images
+# Demonstrates Go registry + Python agents architecture using published images
 #
 # Services:
-# - registry: Go-based registry (mcpmesh/registry:0.1.1)
-# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:0.1.1)
-# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:0.1.1)
+# - registry: Go-based registry with SQLite storage (published image)
+# - hello-world-agent: Python agent with greeting capabilities (published runtime)
+# - system-agent: Python agent with system monitoring capabilities (published runtime)
 #
 # Usage:
 #   docker-compose up
@@ -18,9 +18,9 @@ version: "3.8"
 #   - Use meshctl to interact with the mesh
 
 services:
-  # Go-based registry service - uses published Docker image
+  # Go-based registry service (published image with working SQLite support)
   registry:
-    image: mcpmesh/registry:0.1.1
+    image: mcpmesh/registry:0.1.2
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -52,7 +52,7 @@ services:
 
   # Hello World Python agent - uses published Docker image
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.1.1
+    image: mcpmesh/python-runtime:0.1.2
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -83,9 +83,9 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      # Wait for registry to be ready
+      # Optional dependency on registry (resilient architecture - works without)
       registry:
-        condition: service_healthy
+        condition: service_started
     networks:
       - mcp-mesh
     healthcheck:
@@ -104,7 +104,7 @@ services:
 
   # System Agent Python service - uses published Docker image
   system-agent:
-    image: mcpmesh/python-runtime:0.1.1
+    image: mcpmesh/python-runtime:0.1.2
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -135,9 +135,9 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      # Wait for registry to be ready
+      # Optional dependency on registry (resilient architecture - works without)
       registry:
-        condition: service_healthy
+        condition: service_started
     networks:
       - mcp-mesh
     healthcheck:

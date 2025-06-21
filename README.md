@@ -479,22 +479,22 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ```bash
 # Install everything with one command (requires curl and Python 3.11+)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1.2
 ```
 
 ### Package Manager Installation
 
 ```bash
 # Python package from PyPI
-pip install mcp-mesh
+pip install mcp-mesh==0.1.2
 
 # Docker images
-docker pull mcpmesh/registry:latest
-docker pull mcpmesh/python-runtime:latest
-docker pull mcpmesh/cli:latest
+docker pull mcpmesh/registry:0.1.2
+docker pull mcpmesh/python-runtime:0.1.2
+docker pull mcpmesh/cli:0.1.2
 
 # Download CLI binary directly
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/latest/download/mcp-mesh_latest_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.1.2/mcp-mesh_v0.1.2_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 

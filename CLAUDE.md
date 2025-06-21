@@ -1,1 +1,1 @@
-~/mcp-mesh-CLAUDE.md
+/home/dhyanraj/mcp-mesh-CLAUDE.md
