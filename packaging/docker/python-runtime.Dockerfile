@@ -1,34 +1,9 @@
-# Multi-stage build for MCP Mesh Python Runtime
+# MCP Mesh Python Runtime - Installs from PyPI
 # Supports linux/amd64, linux/arm64, linux/arm/v7
 
-FROM --platform=$BUILDPLATFORM python:3.11-slim AS builder
-
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy Python runtime source
-COPY src/runtime/python/ ./
-
-# Copy and fix pyproject.toml paths
-COPY packaging/pypi/pyproject.toml ./
-RUN sed -i 's|src/runtime/python/src/mcp_mesh|src/mcp_mesh|g' pyproject.toml && \
-    sed -i 's|src/runtime/python/README.md|README.md|g' pyproject.toml && \
-    sed -i 's|src/runtime/python/LICENSE|LICENSE|g' pyproject.toml
-
-# Install build dependencies and build wheel
-RUN pip install --no-cache-dir build wheel
-RUN python -m build --wheel
-
-# Final stage - runtime image
 FROM --platform=$TARGETPLATFORM python:3.11-slim
+
+ARG VERSION
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -38,10 +13,10 @@ RUN apt-get update && apt-get install -y \
     && groupadd -r mcp-mesh \
     && useradd -r -g mcp-mesh mcp-mesh
 
-# Copy and install wheel from builder
-COPY --from=builder /build/dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl \
-    && rm -rf /tmp/*.whl
+# Install mcp-mesh package from PyPI
+RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
+    echo "Installing mcp-mesh==${VERSION} from PyPI" && \
+    pip install --no-cache-dir mcp-mesh==${VERSION}
 
 # Create app directory
 RUN mkdir -p /app && chown mcp-mesh:mcp-mesh /app

@@ -1,45 +1,28 @@
-# Multi-stage build for MCP Mesh Registry
+# MCP Mesh Registry - Downloads from GitHub releases
 # Supports linux/amd64, linux/arm64
 
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
+FROM --platform=$TARGETPLATFORM alpine:3.19
 
 ARG TARGETPLATFORM
-ARG BUILDPLATFORM
+ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
-
-# Copy go mod files first for better caching
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code
-COPY . ./
-
-# Build for target architecture
-ENV CGO_ENABLED=0
-ENV GOOS=$TARGETOS
-ENV GOARCH=$TARGETARCH
-
-RUN go build -ldflags="-w -s" -o registry ./cmd/mcp-mesh-registry
-
-# Final stage - minimal runtime image
-FROM --platform=$TARGETPLATFORM alpine:3.19
 
 # Install runtime dependencies
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     sqlite \
+    curl \
+    wget \
+    bash \
     && addgroup -g 1001 -S mcp-mesh \
     && adduser -u 1001 -S mcp-mesh -G mcp-mesh
 
-# Copy binary from builder
-COPY --from=builder /build/registry /usr/local/bin/registry
+# Install registry binary using install.sh script
+RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
+    echo "Installing registry ${VERSION} using install.sh..." && \
+    curl -sSL "https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh" | bash -s -- --registry-only --version ${VERSION} --install-dir /usr/local/bin
 
 # Create data directory
 RUN mkdir -p /data && chown mcp-mesh:mcp-mesh /data
