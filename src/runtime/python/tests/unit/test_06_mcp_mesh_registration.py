@@ -159,7 +159,7 @@ class TestBatchedRegistration:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Should make exactly ONE heartbeat call (registration now happens via heartbeat)
         assert mock_registry.post.call_count == 1
@@ -237,7 +237,7 @@ class TestBatchedRegistration:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify payload structure (flattened schema)
         assert captured_payload is not None
@@ -350,7 +350,7 @@ class TestDependencyInjection:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify that registry was called correctly (heartbeat, not registration)
         assert mock_registry.post.call_count == 1, "Should have called heartbeat"
@@ -529,7 +529,7 @@ class TestDependencyInjection:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify that registry was called correctly
         assert mock_registry.post.call_count == 1, "Should have called heartbeat"
@@ -788,7 +788,7 @@ class TestDependencyInjection:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify that registry was called correctly
         assert (
@@ -995,7 +995,7 @@ class TestDependencyInjection:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify that registry was called correctly
         assert (
@@ -1179,7 +1179,7 @@ class TestDependencyInjection:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify registration occurred
         assert mock_registry.post.call_count == 1, "Should have called heartbeat once"
@@ -1351,7 +1351,7 @@ class TestHeartbeatBatching:
         # Wait for asynchronous heartbeat to complete
         import asyncio
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased for GitHub CI runners
 
         # Verify registration happened with unified format
         assert mock_registry.post.call_count == 1
