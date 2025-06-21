@@ -139,6 +139,7 @@ ignore = [
 "__init__.py" = ["F401"]
 "**/agent_server_generated/**" = ["ALL"]  # Ignore all linting for generated files
 "**/registry_client_generated/**" = ["ALL"]  # Ignore all linting for generated files
+"tests/**" = ["E712", "F841", "B007", "C401", "F401"]  # Relax style requirements for test files
 
 [tool.mypy]
 python_version = "3.11"
@@ -150,6 +151,7 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_return_any = true
+exclude = ["tests/"]  # Skip type checking for test files
 
 [tool.pytest.ini_options]
 minversion = "7.0"
