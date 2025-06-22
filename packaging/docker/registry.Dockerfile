@@ -1,19 +1,20 @@
 # MCP Mesh Registry - Downloads pre-built binary from GitHub releases
 # Supports linux/amd64, linux/arm64
 
-FROM --platform=$TARGETPLATFORM alpine:3.19
+FROM --platform=$TARGETPLATFORM debian:12-slim
 
 ARG TARGETPLATFORM
 ARG VERSION
 
 # Install runtime dependencies (including wget for health checks)
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     ca-certificates \
     tzdata \
-    sqlite \
+    sqlite3 \
     wget \
-    && addgroup -g 1001 -S mcp-mesh \
-    && adduser -u 1001 -S mcp-mesh -G mcp-mesh
+    && groupadd -g 1001 mcp-mesh \
+    && useradd -u 1001 -g mcp-mesh mcp-mesh \
+    && rm -rf /var/lib/apt/lists/*
 
 # Download and extract registry binary based on platform
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
