@@ -188,3 +188,9 @@ vendor/
 config/local.yaml
 *.db-shm
 *.db-wal
+
+# Packaging build-time files (copied by CI)
+packaging/pypi/src/
+packaging/pypi/README.md
+packaging/pypi/LICENSE
+packaging/pypi/dist/
