@@ -158,7 +158,7 @@ jobs:
     needs: [test]
     defaults:
       run:
-        working-directory: src/runtime/python
+        working-directory: packaging/pypi
 
     steps:
       - uses: actions/checkout@v4
