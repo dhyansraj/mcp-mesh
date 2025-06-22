@@ -51,7 +51,7 @@ kubectl apply -k base/
 
 ```bash
 # Install MCP Mesh
-pip install mcp-mesh==0.1.4
+pip install mcp-mesh==0.1.5
 
 cd simple/
 # See simple/README.md for detailed instructions
@@ -110,7 +110,7 @@ Once you have any example running, test the core functionality:
 
 ```bash
 # 1. Install meshctl CLI (optional)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.5
 
 # 2. Check agent registration
 meshctl list agents
