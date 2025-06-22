@@ -2,7 +2,7 @@
 
 This directory contains a complete Docker Compose setup demonstrating the MCP Mesh architecture with:
 
-- **Go-based Registry**: Service discovery and coordination (published image)
+- **Go-based Registry**: Service discovery and coordination (published image with semantic versioning)
 - **Python Agents**: Multiple containerized agents with dependency injection (published images)
 - **Automatic Service Discovery**: Agents automatically find and communicate with each other
 - **Published Docker Images**: Fast startup with pre-built, tested images
@@ -18,13 +18,13 @@ cd mcp-mesh/examples/docker-examples
 docker-compose up
 
 # In another terminal, install and use meshctl
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.5
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1
 meshctl list --registry http://localhost:8000
 ```
 
 That's it! The mesh will automatically:
 
-1. Download published Docker images (mcpmesh/registry:0.1.5, mcpmesh/python-runtime:0.1.5)
+1. Download published Docker images (mcpmesh/registry:0.1, mcpmesh/python-runtime:0.1)
 2. Start the Go registry on port 8000
 3. Start Python agents with your local code
 4. Agents auto-register with the registry

@@ -55,14 +55,8 @@ Examples:
     # Install only registry (useful for Docker)
     curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only
 
-    # Install specific patch version
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1.6
-
-    # Install latest patch in v0.1.x series (recommended)
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1
-
-    # Install latest in v0.x.x series
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0
+    # Install specific version of both
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1.1
 
     # Install to custom directory
     curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --install-dir /usr/bin
@@ -152,65 +146,6 @@ get_latest_version() {
         exit 1
     fi
     print_info "Latest version: $VERSION"
-}
-
-# Resolve minor version (e.g., v0.1) to latest patch version (e.g., v0.1.6)
-resolve_minor_version() {
-    local requested_version="$1"
-
-    # If it's already a full version (e.g., v0.1.6), return as-is
-    if [[ "$requested_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$requested_version"
-        return
-    fi
-
-    # If it's a minor version (e.g., v0.1), find the latest patch
-    if [[ "$requested_version" =~ ^v[0-9]+\.[0-9]+$ ]]; then
-        print_info "Resolving minor version $requested_version to latest patch..." >&2
-
-        # Get all releases and filter for the requested minor version
-        local latest_patch
-        latest_patch=$(curl -sSL "https://api.github.com/repos/$REPO/releases" | \
-            grep '"tag_name":' | \
-            cut -d'"' -f4 | \
-            grep "^${requested_version}\." | \
-            sort -V | \
-            tail -1)
-
-        if [[ -z "$latest_patch" ]]; then
-            print_error "No releases found for version $requested_version" >&2
-            exit 1
-        fi
-
-        print_info "Resolved $requested_version to $latest_patch" >&2
-        echo "$latest_patch"
-        return
-    fi
-
-    # If it's a major version (e.g., v0), find the latest minor.patch
-    if [[ "$requested_version" =~ ^v[0-9]+$ ]]; then
-        print_info "Resolving major version $requested_version to latest minor.patch..." >&2
-
-        local latest_release
-        latest_release=$(curl -sSL "https://api.github.com/repos/$REPO/releases" | \
-            grep '"tag_name":' | \
-            cut -d'"' -f4 | \
-            grep "^${requested_version}\." | \
-            sort -V | \
-            tail -1)
-
-        if [[ -z "$latest_release" ]]; then
-            print_error "No releases found for version $requested_version" >&2
-            exit 1
-        fi
-
-        print_info "Resolved $requested_version to $latest_release" >&2
-        echo "$latest_release"
-        return
-    fi
-
-    # If it's not a semantic version pattern, return as-is (e.g., "latest")
-    echo "$requested_version"
 }
 
 # Generic function to download and install a binary
@@ -305,9 +240,6 @@ main() {
     # Get latest version if not specified
     if [[ "$VERSION" == "latest" ]]; then
         get_latest_version
-    else
-        # Resolve minor/major versions to specific patch versions
-        VERSION=$(resolve_minor_version "$VERSION")
     fi
 
     # Install selected binaries

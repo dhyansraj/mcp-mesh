@@ -20,8 +20,10 @@ rules:
     indent-sequences: true
     check-multi-line-strings: false
 
-  # Document start/end - optional for config files
+  # Document start/end - optional for config files, allow multiple documents
   document-start:
+    present: false
+  document-end:
     present: false
 
   # Truthy values - be flexible for boolean configs
@@ -57,6 +59,7 @@ ignore: |
   k8s/base/registry/rbac.yaml
   k8s/base/registry/pvc.yaml
   k8s/base/agents/mcpagent-sample.yaml
+  examples/k8s/base/agents/*-deployment.yaml
 
   # Node modules and build artifacts
   node_modules/**
