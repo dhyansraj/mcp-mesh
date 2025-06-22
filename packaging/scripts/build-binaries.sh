@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Configuration
 VERSION="${VERSION:-dev}"
-PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64,darwin/amd64,darwin/arm64}"
+PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist}"
 COMPRESS="${COMPRESS:-true}"
 
@@ -99,11 +99,6 @@ build_binary() {
                     # Native build, use default GCC
                     unset CC
                 fi
-                ;;
-            "darwin-amd64"|"darwin-arm64")
-                # macOS cross-compilation is complex, skip for now
-                warn "CGO cross-compilation to macOS not supported, skipping registry for $goos-$goarch"
-                return 2  # Return 2 for intentional skips
                 ;;
         esac
     else
@@ -250,14 +245,8 @@ build_all_binaries() {
         # Build meshctl
         if build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
             # Build registry
-            build_binary "registry" "$goos" "$goarch" "registry"
-            registry_result=$?
-            if [[ $registry_result -eq 0 ]]; then
+            if build_binary "registry" "$goos" "$goarch" "registry"; then
                 built_platforms+=("${goos}_${goarch}")
-            elif [[ $registry_result -eq 2 ]]; then
-                # Intentional skip (e.g., Darwin CGO), still count platform as built for meshctl
-                built_platforms+=("${goos}_${goarch}")
-                warn "Registry skipped for ${goos}_${goarch}, but meshctl built successfully"
             else
                 failed_builds+=("registry-${goos}_${goarch}")
             fi
@@ -296,7 +285,7 @@ Build MCP Mesh binaries for multiple platforms.
 
 Environment Variables:
     VERSION      Version to embed (default: dev)
-    PLATFORMS    Target platforms (default: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64)
+    PLATFORMS    Target platforms (default: linux/amd64,linux/arm64)
     OUTPUT_DIR   Output directory (default: ./dist)
     COMPRESS     Create compressed archives (default: true)
 
@@ -305,7 +294,7 @@ Examples:
     $0
 
     # Build specific platforms
-    PLATFORMS=linux/amd64,darwin/arm64 $0
+    PLATFORMS=linux/amd64 $0
 
     # Build with version
     VERSION=v1.0.0 $0
