@@ -21,14 +21,12 @@ RUN apk add --no-cache \
     sqlite-dev \
     build-base
 
-# Download source from GitHub release
-RUN if [ -n "$VERSION" ]; then \
-        wget -O source.tar.gz "https://github.com/dhyansraj/mcp-mesh/archive/v${VERSION}.tar.gz" && \
-        tar --strip-components=1 -xzf source.tar.gz && \
-        rm source.tar.gz; \
-    else \
-        echo "VERSION build arg is required" && exit 1; \
-    fi
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . ./
 
 # Build for target architecture with SQLite support
 ENV CGO_ENABLED=1
