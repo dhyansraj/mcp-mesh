@@ -85,8 +85,30 @@ build_binary() {
     # Enable CGO for registry (needs SQLite), disable for others
     if [[ "$cmd" == "registry" ]]; then
         export CGO_ENABLED=1
+
+        # Set cross-compilation tools for CGO
+        case "$goos-$goarch" in
+            "linux-arm64")
+                export CC=aarch64-linux-gnu-gcc
+                ;;
+            "linux-amd64")
+                # Check if we're cross-compiling (ARM64 host to AMD64 target)
+                if [[ "$(uname -m)" == "aarch64" ]]; then
+                    export CC=x86_64-linux-gnu-gcc
+                else
+                    # Native build, use default GCC
+                    unset CC
+                fi
+                ;;
+            "darwin-amd64"|"darwin-arm64")
+                # macOS cross-compilation is complex, skip for now
+                warn "CGO cross-compilation to macOS not supported, skipping registry for $goos-$goarch"
+                return 1
+                ;;
+        esac
     else
         export CGO_ENABLED=0
+        unset CC
     fi
     export GOOS="$goos"
     export GOARCH="$goarch"
