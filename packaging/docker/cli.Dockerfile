@@ -20,9 +20,10 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
     echo "Installing meshctl and registry ${VERSION} using install.sh..." && \
     curl -sSL "https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh" | bash -s -- --all --version ${VERSION} --install-dir /usr/local/bin
 
-# Install mcp-mesh package from PyPI
-RUN echo "Installing mcp-mesh==${VERSION} from PyPI" && \
-    pip install --no-cache-dir mcp-mesh==${VERSION}
+# Install mcp-mesh package from PyPI (remove 'v' prefix if present)
+RUN VERSION_NO_V="${VERSION#v}" && \
+    echo "Installing mcp-mesh==${VERSION_NO_V} from PyPI" && \
+    pip install --no-cache-dir mcp-mesh==${VERSION_NO_V}
 
 # Create workspace
 RUN mkdir -p /workspace && chown mcp-mesh:mcp-mesh /workspace
