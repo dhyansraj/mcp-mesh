@@ -39,6 +39,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+
       - name: Determine version
         id: version
         run: |
@@ -138,6 +143,8 @@ jobs:
           context: .
           file: ./packaging/docker/registry.Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           push: >
             ${{ github.event_name == 'release' ||
             (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
