@@ -103,7 +103,7 @@ build_binary() {
             "darwin-amd64"|"darwin-arm64")
                 # macOS cross-compilation is complex, skip for now
                 warn "CGO cross-compilation to macOS not supported, skipping registry for $goos-$goarch"
-                return 1
+                return 2  # Return 2 for intentional skips
                 ;;
         esac
     else
@@ -250,8 +250,13 @@ build_all_binaries() {
         # Build meshctl
         if build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
             # Build registry
-            if build_binary "registry" "$goos" "$goarch" "registry"; then
+            registry_result=$(build_binary "registry" "$goos" "$goarch" "registry"; echo $?)
+            if [[ $registry_result -eq 0 ]]; then
                 built_platforms+=("${goos}_${goarch}")
+            elif [[ $registry_result -eq 2 ]]; then
+                # Intentional skip (e.g., Darwin CGO), still count platform as built for meshctl
+                built_platforms+=("${goos}_${goarch}")
+                warn "Registry skipped for ${goos}_${goarch}, but meshctl built successfully"
             else
                 failed_builds+=("registry-${goos}_${goarch}")
             fi

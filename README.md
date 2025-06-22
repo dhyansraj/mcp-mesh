@@ -189,7 +189,7 @@ curl http://localhost:9090/mcp -X POST \
 
 ```bash
 # Install the latest stable version
-pip install mcp-mesh==0.1.4
+pip install mcp-mesh==0.1.5
 ```
 
 ### CLI Tools
@@ -203,13 +203,13 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 
 ```bash
 # Registry service
-docker pull mcpmesh/registry:0.1.4
+docker pull mcpmesh/registry:0.1.5
 
 # Python runtime for agents
-docker pull mcpmesh/python-runtime:0.1.4
+docker pull mcpmesh/python-runtime:0.1.5
 
 # CLI tools
-docker pull mcpmesh/cli:0.1.4
+docker pull mcpmesh/cli:0.1.5
 ```
 
 ### Quick Setup Options
@@ -217,7 +217,7 @@ docker pull mcpmesh/cli:0.1.4
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install mcp-mesh==0.1.4`                      |
+| **Python Package** | Agent development       | `pip install mcp-mesh==0.1.5`                      |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
@@ -486,12 +486,12 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 
 ```bash
 # Python package from PyPI
-pip install mcp-mesh==0.1.4
+pip install mcp-mesh==0.1.5
 
 # Docker images
-docker pull mcpmesh/registry:0.1.4
-docker pull mcpmesh/python-runtime:0.1.4
-docker pull mcpmesh/cli:0.1.4
+docker pull mcpmesh/registry:0.1.5
+docker pull mcpmesh/python-runtime:0.1.5
+docker pull mcpmesh/cli:0.1.5
 
 # Download CLI binary directly
 curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.1.2/mcp-mesh_v0.1.2_linux_amd64.tar.gz | tar xz
