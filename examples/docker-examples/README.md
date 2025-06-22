@@ -18,13 +18,13 @@ cd mcp-mesh/examples/docker-examples
 docker-compose up
 
 # In another terminal, install and use meshctl
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.3
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1.4
 meshctl list --registry http://localhost:8000
 ```
 
 That's it! The mesh will automatically:
 
-1. Download published Docker images (mcpmesh/registry:0.1.3, mcpmesh/python-runtime:0.1.3)
+1. Download published Docker images (mcpmesh/registry:0.1.4, mcpmesh/python-runtime:0.1.4)
 2. Start the Go registry on port 8000
 3. Start Python agents with your local code
 4. Agents auto-register with the registry

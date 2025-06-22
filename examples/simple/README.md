@@ -10,7 +10,7 @@ This directory contains simple Python agents that demonstrate MCP Mesh capabilit
 
 ```bash
 # Install from PyPI
-pip install mcp-mesh==0.1.1
+pip install mcp-mesh==0.1.4
 ```
 
 This installs the latest stable version of MCP Mesh and all dependencies.

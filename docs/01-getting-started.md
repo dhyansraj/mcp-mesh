@@ -77,7 +77,7 @@ That's it! You now have a working distributed MCP service mesh! 🎉
 
 ```bash
 # 1. Install MCP Mesh
-pip install mcp-mesh==0.1.1
+pip install mcp-mesh==0.1.4
 
 # 2. Download and start registry
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.1.1

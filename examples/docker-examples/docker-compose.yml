@@ -18,7 +18,7 @@
 services:
   # Go-based registry service (published image with working SQLite support)
   registry:
-    image: mcpmesh/registry:0.1.3
+    image: mcpmesh/registry:0.1.4
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -50,7 +50,7 @@ services:
 
   # Hello World Python agent - uses published Docker image
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.1.3
+    image: mcpmesh/python-runtime:0.1.4
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -102,7 +102,7 @@ services:
 
   # System Agent Python service - uses published Docker image
   system-agent:
-    image: mcpmesh/python-runtime:0.1.3
+    image: mcpmesh/python-runtime:0.1.4
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
