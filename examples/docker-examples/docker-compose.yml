@@ -1,5 +1,3 @@
-version: "3.8"
-
 # MCP Mesh Docker Compose Example
 # Demonstrates Go registry + Python agents architecture using published images
 #
@@ -20,7 +18,7 @@ version: "3.8"
 services:
   # Go-based registry service (published image with working SQLite support)
   registry:
-    image: mcpmesh/registry:0.1.2
+    image: mcpmesh/registry:0.1.3
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -52,7 +50,7 @@ services:
 
   # Hello World Python agent - uses published Docker image
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.1.2
+    image: mcpmesh/python-runtime:0.1.3
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -61,7 +59,7 @@ services:
       # Mount agent code from outside
       - ../simple/hello_world.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -78,8 +76,8 @@ services:
       - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
       - MCP_MESH_AUTO_RUN_INTERVAL=${MCP_MESH_AUTO_RUN_INTERVAL:-30}
       - MCP_MESH_HEALTH_INTERVAL=${MCP_MESH_HEALTH_INTERVAL:-30}
-      - MCP_MESH_LOG_LEVEL=${MCP_MESH_LOG_LEVEL:-INFO}
-      - MCP_MESH_DEBUG_MODE=${MCP_MESH_DEBUG_MODE:-false}
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
@@ -104,7 +102,7 @@ services:
 
   # System Agent Python service - uses published Docker image
   system-agent:
-    image: mcpmesh/python-runtime:0.1.2
+    image: mcpmesh/python-runtime:0.1.3
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -113,7 +111,7 @@ services:
       # Mount agent code from outside
       - ../simple/system_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["python", "agent.py"]
+    command: ["agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -130,8 +128,8 @@ services:
       - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
       - MCP_MESH_AUTO_RUN_INTERVAL=${MCP_MESH_AUTO_RUN_INTERVAL:-30}
       - MCP_MESH_HEALTH_INTERVAL=${MCP_MESH_HEALTH_INTERVAL:-30}
-      - MCP_MESH_LOG_LEVEL=${MCP_MESH_LOG_LEVEL:-INFO}
-      - MCP_MESH_DEBUG_MODE=${MCP_MESH_DEBUG_MODE:-false}
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:

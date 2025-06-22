@@ -21,12 +21,14 @@ RUN apk add --no-cache \
     sqlite-dev \
     build-base
 
-# Copy go mod files first for better caching
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code
-COPY . ./
+# Download source from GitHub release
+RUN if [ -n "$VERSION" ]; then \
+        wget -O source.tar.gz "https://github.com/dhyansraj/mcp-mesh/archive/v${VERSION}.tar.gz" && \
+        tar --strip-components=1 -xzf source.tar.gz && \
+        rm source.tar.gz; \
+    else \
+        echo "VERSION build arg is required" && exit 1; \
+    fi
 
 # Build for target architecture with SQLite support
 ENV CGO_ENABLED=1
@@ -34,7 +36,8 @@ ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 ENV GOOS=$TARGETOS
 ENV GOARCH=$TARGETARCH
 
-RUN go build -tags "sqlite_omit_load_extension" -ldflags="-w -s" -o registry ./cmd/mcp-mesh-registry
+RUN go mod download && \
+    go build -tags "sqlite_omit_load_extension" -ldflags="-w -s" -o registry ./cmd/mcp-mesh-registry
 
 # Final stage - minimal runtime image
 FROM --platform=$TARGETPLATFORM alpine:3.19
