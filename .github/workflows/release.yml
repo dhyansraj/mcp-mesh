@@ -248,18 +248,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install build twine
 
-      - name: Prepare Python package
+      - name: Prepare packaging files
+        working-directory: packaging/pypi
         run: |
-          # Copy packaging pyproject.toml to Python runtime directory
-          cp packaging/pypi/pyproject.toml src/runtime/python/
+          cp ../../src/runtime/python/README.md .
+          cp ../../LICENSE .
+          cp -r ../../src/runtime/python/src .
 
-          # Fix paths in pyproject.toml (remove src/runtime/python/ prefix)
-          cd src/runtime/python
-          sed -i 's|src/runtime/python/src/mcp_mesh|src/mcp_mesh|g' pyproject.toml
-          sed -i 's|src/runtime/python/README.md|README.md|g' pyproject.toml
-          sed -i 's|src/runtime/python/LICENSE|LICENSE|g' pyproject.toml
-
-          # Update version in __init__.py (preserve existing content)
+      - name: Update version in packaging files
+        working-directory: packaging/pypi
+        run: |
+          # Determine version
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             VERSION="${{ github.event.inputs.version }}"
           else
@@ -287,19 +286,17 @@ jobs:
           echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
 
       - name: Build package
-        run: |
-          cd src/runtime/python
-          python -m build
+        working-directory: packaging/pypi
+        run: python -m build
 
       - name: Check package
-        run: |
-          cd src/runtime/python
-          twine check dist/*
+        working-directory: packaging/pypi
+        run: twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: src/runtime/python/dist/
+          packages-dir: packaging/pypi/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
 
   # Update package manager manifests

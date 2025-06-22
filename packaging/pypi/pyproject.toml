@@ -85,14 +85,14 @@ mesh = "mcp_mesh.cli:main"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/runtime/python/src/mcp_mesh", "src/runtime/python/src/mesh"]
+packages = ["src/mcp_mesh", "src/mesh"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/src/runtime/python/src/mcp_mesh",
-    "/src/runtime/python/src/mesh",
-    "/src/runtime/python/README.md",
-    "/src/runtime/python/LICENSE"
+    "/src/mcp_mesh",
+    "/src/mesh",
+    "/README.md",
+    "/LICENSE"
 ]
 
 [tool.black]
