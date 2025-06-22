@@ -82,7 +82,12 @@ build_binary() {
     mkdir -p "$output_dir"
 
     # Set build environment
-    export CGO_ENABLED=0
+    # Enable CGO for registry (needs SQLite), disable for others
+    if [[ "$cmd" == "registry" ]]; then
+        export CGO_ENABLED=1
+    else
+        export CGO_ENABLED=0
+    fi
     export GOOS="$goos"
     export GOARCH="$goarch"
 
