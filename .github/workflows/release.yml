@@ -160,7 +160,7 @@ jobs:
           file: ./packaging/docker/registry.Dockerfile
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.meta.outputs.version_with_v }}
           push: >
             ${{ github.event_name == 'release' ||
             (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
@@ -179,7 +179,9 @@ jobs:
       - name: Test Registry image functionality
         run: |
           # Build test image locally to validate before pushing
-          docker build -f ./packaging/docker/registry.Dockerfile -t test-registry:validation .
+          docker build -f ./packaging/docker/registry.Dockerfile \
+            --build-arg VERSION=${{ steps.meta.outputs.version_with_v }} \
+            -t test-registry:validation .
 
           # Test 1: Verify binary works and shows help
           echo "Testing registry binary help..."
