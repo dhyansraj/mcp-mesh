@@ -9,7 +9,8 @@ repos:
           (?x)^(
             helm/.*/templates/.*\.yaml|
             k8s/base/registry/(rbac|pvc)\.yaml|
-            k8s/base/agents/mcpagent-sample\.yaml
+            k8s/base/agents/mcpagent-sample\.yaml|
+            examples/k8s/base/agents/.*-deployment\.yaml
           )$
       - id: check-toml
       - id: check-json
@@ -88,7 +89,12 @@ repos:
     hooks:
       - id: detect-unauthorized-endpoints
         name: Detect Unauthorized Endpoints
-        entry: bash -c 'python3 tools/detection/detect_endpoints.py api/mcp-mesh-registry.openapi.yaml api/mcp-mesh-agent.openapi.yaml src/core/registry'
+        entry: bash
+        args:
+          [
+            -c,
+            "python3 tools/detection/detect_endpoints.py api/mcp-mesh-registry.openapi.yaml api/mcp-mesh-agent.openapi.yaml src/core/registry",
+          ]
         language: system
         files: ^(src/core/registry/.*\.(go|py)|api/.*\.yaml)$
         description: "🤖 Ensures all endpoints exist in OpenAPI specification"
@@ -99,10 +105,13 @@ repos:
       - id: check-generated-code
         name: Check Generated Code Up to Date
         entry: bash
-        args:
-          [
+        args: [
             -c,
-            'echo "Checking if generated code is up to date..."; make generate > /dev/null 2>&1; if ! git diff --exit-code src/core/registry/generated/ src/runtime/python/src/mcp_mesh/registry_client_generated/ > /dev/null 2>&1; then echo "Generated code is out of date!"; echo "Run: make generate"; exit 1; fi; echo "Generated code is up to date"',
+            'echo "Checking if generated code is up to date...";
+            make generate > /dev/null 2>&1;
+            if ! git diff --exit-code src/core/registry/generated/ src/runtime/python/src/mcp_mesh/registry_client_generated/ > /dev/null 2>&1;
+            then echo "Generated code is out of date!"; echo "Run: make generate"; exit 1;
+            fi; echo "Generated code is up to date"',
           ]
         language: system
         files: ^api/.*\.yaml$
@@ -114,10 +123,14 @@ repos:
       - id: prevent-generated-code-modification
         name: Prevent Generated Code Modification
         entry: bash
-        args:
-          [
+        args: [
             -c,
-            'echo "Direct modification of generated code is not allowed!"; echo "To make changes:"; echo "1. Update api/mcp-mesh-registry.openapi.yaml"; echo "2. Run: make generate"; echo "3. Implement business logic in handlers_impl.go"; exit 1',
+            'echo "Direct modification of generated code is not allowed!";
+            echo "To make changes:";
+            echo "1. Update api/mcp-mesh-registry.openapi.yaml";
+            echo "2. Run: make generate";
+            echo "3. Implement business logic in handlers_impl.go";
+            exit 1',
           ]
         language: system
         files: ^src/core/registry/generated/.*$
@@ -129,10 +142,14 @@ repos:
       - id: validate-go-contract
         name: Validate Go Contract Compliance
         entry: bash
-        args:
-          [
+        args: [
             -c,
-            'echo "Validating Go code contract compliance..."; if ! go build -o /tmp/registry ./src/core/registry > /dev/null 2>&1; then echo "Go code does not compile with generated handlers!"; echo "Fix compilation errors in business logic"; exit 1; fi; echo "Go contract validation passed"',
+            'echo "Validating Go code contract compliance...";
+            if ! go build -o /tmp/registry ./src/core/registry > /dev/null 2>&1;
+            then echo "Go code does not compile with generated handlers!";
+            echo "Fix compilation errors in business logic";
+            exit 1;
+            fi; echo "Go contract validation passed"',
           ]
         language: system
         files: ^src/core/registry/.*\.go$

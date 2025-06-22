@@ -188,8 +188,8 @@ curl http://localhost:9090/mcp -X POST \
 ### Python Package (Recommended)
 
 ```bash
-# Install the latest stable version
-pip install mcp-mesh==0.1.5
+# Install with semantic versioning (allows patches, not minor versions)
+pip install "mcp-mesh>=0.1.0,<0.2.0"
 ```
 
 ### CLI Tools
@@ -202,14 +202,14 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 ### Docker Images
 
 ```bash
-# Registry service
-docker pull mcpmesh/registry:0.1.5
+# Registry service (gets latest patches for 0.1.x)
+docker pull mcpmesh/registry:0.1
 
-# Python runtime for agents
-docker pull mcpmesh/python-runtime:0.1.5
+# Python runtime for agents (gets latest patches for 0.1.x)
+docker pull mcpmesh/python-runtime:0.1
 
-# CLI tools
-docker pull mcpmesh/cli:0.1.5
+# CLI tools (gets latest patches for 0.1.x)
+docker pull mcpmesh/cli:0.1
 ```
 
 ### Quick Setup Options
@@ -217,7 +217,7 @@ docker pull mcpmesh/cli:0.1.5
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install mcp-mesh==0.1.5`                      |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.1.0,<0.2.0"`             |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
@@ -479,22 +479,22 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ```bash
 # Install everything with one command (requires curl and Python 3.11+)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1.2
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1
 ```
 
 ### Package Manager Installation
 
 ```bash
-# Python package from PyPI
-pip install mcp-mesh==0.1.5
+# Python package from PyPI (allows patch updates)
+pip install "mcp-mesh>=0.1.0,<0.2.0"
 
-# Docker images
-docker pull mcpmesh/registry:0.1.5
-docker pull mcpmesh/python-runtime:0.1.5
-docker pull mcpmesh/cli:0.1.5
+# Docker images (use minor version tag for latest patches)
+docker pull mcpmesh/registry:0.1
+docker pull mcpmesh/python-runtime:0.1
+docker pull mcpmesh/cli:0.1
 
-# Download CLI binary directly
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.1.2/mcp-mesh_v0.1.2_linux_amd64.tar.gz | tar xz
+# Download CLI binary directly (specific version)
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.1.6/mcp-mesh_v0.1.6_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 
