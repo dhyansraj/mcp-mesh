@@ -24,9 +24,9 @@ spec:
         fsGroup: 65534
       containers:
         - name: system-agent
-          image: mcp-mesh-base:latest
-          imagePullPolicy: Never
-          command: ["python", "/app/agent.py"]
+          image: mcpmesh/python-runtime:0.1.3
+          imagePullPolicy: IfNotPresent
+          command: ["/app/agent.py"]
           ports:
             - name: http
               containerPort: 8080
