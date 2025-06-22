@@ -250,7 +250,8 @@ build_all_binaries() {
         # Build meshctl
         if build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
             # Build registry
-            registry_result=$(build_binary "registry" "$goos" "$goarch" "registry"; echo $?)
+            build_binary "registry" "$goos" "$goarch" "registry"
+            registry_result=$?
             if [[ $registry_result -eq 0 ]]; then
                 built_platforms+=("${goos}_${goarch}")
             elif [[ $registry_result -eq 2 ]]; then
