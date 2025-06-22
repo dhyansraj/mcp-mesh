@@ -51,7 +51,7 @@ kubectl apply -k base/
 
 ```bash
 # Install MCP Mesh
-pip install mcp-mesh==0.1.1
+pip install mcp-mesh==0.1.4
 
 cd simple/
 # See simple/README.md for detailed instructions
