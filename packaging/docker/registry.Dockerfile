@@ -1,44 +1,10 @@
-# MCP Mesh Registry - Multi-stage build with CGO support
+# MCP Mesh Registry - Downloads pre-built binary from GitHub releases
 # Supports linux/amd64, linux/arm64
 
-# Build stage
-FROM --platform=$TARGETPLATFORM golang:1.23-alpine AS builder
+FROM --platform=$TARGETPLATFORM alpine:3.19
 
 ARG TARGETPLATFORM
 ARG VERSION
-ARG TARGETOS
-ARG TARGETARCH
-
-WORKDIR /build
-
-# Install build dependencies (including SQLite build tools)
-RUN apk add --no-cache \
-    git \
-    ca-certificates \
-    tzdata \
-    gcc \
-    musl-dev \
-    sqlite-dev \
-    build-base
-
-# Copy go mod files first for better caching
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code
-COPY . ./
-
-# Build for target architecture with SQLite support
-ENV CGO_ENABLED=1
-ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
-ENV GOOS=$TARGETOS
-ENV GOARCH=$TARGETARCH
-
-RUN go mod download && \
-    go build -tags "sqlite_omit_load_extension" -ldflags="-w -s" -o registry ./cmd/mcp-mesh-registry
-
-# Final stage - minimal runtime image
-FROM --platform=$TARGETPLATFORM alpine:3.19
 
 # Install runtime dependencies (including wget for health checks)
 RUN apk add --no-cache \
@@ -49,8 +15,18 @@ RUN apk add --no-cache \
     && addgroup -g 1001 -S mcp-mesh \
     && adduser -u 1001 -S mcp-mesh -G mcp-mesh
 
-# Copy binary from builder stage
-COPY --from=builder /build/registry /usr/local/bin/registry
+# Download and extract registry binary based on platform
+RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
+    case "$TARGETPLATFORM" in \
+        "linux/amd64") ARCH="amd64" ;; \
+        "linux/arm64") ARCH="arm64" ;; \
+        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
+    esac && \
+    wget -O registry.tar.gz "https://github.com/dhyansraj/mcp-mesh/releases/download/v${VERSION}/mcp-mesh_v${VERSION}_linux_${ARCH}.tar.gz" && \
+    tar -xzf registry.tar.gz && \
+    cp linux_${ARCH}/registry /usr/local/bin/registry && \
+    chmod +x /usr/local/bin/registry && \
+    rm -rf registry.tar.gz linux_${ARCH}
 
 # Create data directory
 RUN mkdir -p /data && chown mcp-mesh:mcp-mesh /data
