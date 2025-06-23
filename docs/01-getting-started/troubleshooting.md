@@ -484,7 +484,7 @@ curl http://localhost:8000/health > health.json
 
 1. [FAQ](../faq.md)
 2. [GitHub Issues](https://github.com/mcp-mesh/mcp-mesh/issues)
-3. [Discord Community](https://discord.gg/mcp-mesh)
+3. [Discord Community](https://discord.gg/KDFDREphWn)
 4. [Stack Overflow](https://stackoverflow.com/questions/tagged/mcp-mesh)
 
 ### 3. Report Issues
@@ -513,4 +513,4 @@ Include in your report:
 
 💡 **Quick Fix**: Most issues are resolved by: 1) Checking the registry is running, 2) Verifying ports are available, 3) Ensuring virtual environment is activated.
 
-📚 **Next Steps**: If you're still having issues, check our [Advanced Troubleshooting Guide](../../10-operations/03-troubleshooting.md) or ask in the [community Discord](https://discord.gg/mcp-mesh).
+📚 **Next Steps**: If you're still having issues, check our [Advanced Troubleshooting Guide](../../10-operations/03-troubleshooting.md) or ask in the [community Discord](https://discord.gg/KDFDREphWn).
