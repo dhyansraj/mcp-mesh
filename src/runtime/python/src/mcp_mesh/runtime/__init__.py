@@ -19,7 +19,13 @@ def __getattr__(name):
 
         return DecoratorProcessor
     elif name == "RegistryClient":
-        from .registry_client import RegistryClient
+        # Try to use generated client first, fallback to manual client
+        try:
+            from .generated_registry_client import GeneratedRegistryClient
 
-        return RegistryClient
+            return GeneratedRegistryClient
+        except ImportError:
+            from .registry_client import RegistryClient
+
+            return RegistryClient
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

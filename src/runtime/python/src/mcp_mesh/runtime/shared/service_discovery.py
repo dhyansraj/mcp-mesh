@@ -23,7 +23,13 @@ from mcp_mesh import (
 )
 
 from .capability_matching import CapabilityMatcher
-from .registry_client import RegistryClient
+
+# Try to use generated client first, fallback to manual client
+try:
+    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+except ImportError:
+    from ..registry_client import RegistryClient
+
 from .types import EndpointInfo, HealthStatusType
 
 

@@ -26,7 +26,13 @@ from mcp_mesh import (
 
 from .exceptions import MeshAgentError
 from .fallback_chain import MeshFallbackChain
-from .registry_client import RegistryClient
+
+# Try to use generated client first, fallback to manual client
+try:
+    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+except ImportError:
+    from ..registry_client import RegistryClient
+
 from .service_discovery import ServiceDiscoveryService
 
 

@@ -11,7 +11,17 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 # Import the classes we'll be testing/implementing
-from mcp_mesh.runtime.registry_client import RegistryClient
+# Try to use generated client first, fallback to manual client
+try:
+    from mcp_mesh.runtime.generated_registry_client import (
+        GeneratedRegistryClient as RegistryClient,
+    )
+
+    USING_GENERATED_CLIENT = True
+except ImportError:
+    from mcp_mesh.runtime.registry_client import RegistryClient
+
+    USING_GENERATED_CLIENT = False
 from mcp_mesh.runtime.shared.types import HealthStatus
 
 

@@ -17,7 +17,12 @@ from mcp_mesh import (
     ServiceContractError,
 )
 
-from ..shared.registry_client import RegistryClient
+# Try to use generated client first, fallback to manual client
+try:
+    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+except ImportError:
+    from ..registry_client import RegistryClient
+
 from ..shared.service_proxy import MeshServiceProxy
 from ..shared.types import EndpointInfo
 
