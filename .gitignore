@@ -218,6 +218,12 @@ requirements*.txt
 # OpenAPI generator config (use tools/codegen/config.yaml instead)
 openapitools.json
 
+# Manual environment activation scripts (use .venv directly)
+activate-env.sh
+
+# Abandoned workflow directories
+.github-issues/pending/
+
 # Packaging build-time files (copied by CI)
 packaging/pypi/src/
 packaging/pypi/README.md
