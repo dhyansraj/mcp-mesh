@@ -5,6 +5,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://hub.docker.com/u/mcpmesh)
 [![Kubernetes](https://img.shields.io/badge/kubernetes-ready-green.svg)](https://kubernetes.io)
+[![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
 [![License](https://img.shields.io/badge/license-Open%20Source-blue.svg)](#license)
 
 > **MCP Mesh extends the MCP ecosystem** to Kubernetes and distributed environments, bringing the same elegant simplicity of MCP to production-scale deployments with just two Python decorators. **MCP is revolutionizing AI tool integration** - but what if you could scale MCP applications across distributed infrastructure as easily as running them locally?
@@ -696,6 +697,7 @@ We welcome contributions from the community! MCP Mesh is designed to be a collab
 
 ### Getting Help
 
+- **[Discord Community](https://discord.gg/KDFDREphWn)** - Join our community for real-time discussions and support
 - **[GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions)** - Ask questions and share ideas
 - **[Documentation](docs/)** - Comprehensive guides and references
 - **[Examples](examples/)** - Working code examples and patterns
