@@ -421,3 +421,47 @@ jobs:
   #         image-ref: "${{ env.REGISTRY }}/cli:latest"
   #         format: "table"
   #         exit-code: "0"
+
+  # Discord notification for successful releases
+  notify-discord:
+    runs-on: ubuntu-latest
+    needs: [build-binaries, publish-python, build-docker, update-packages]
+    if: >
+      ${{ success() && (github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')) }}
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Discord Webhook Notification
+        uses: Ilshidur/action-discord@master
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        with:
+          args: |
+            🚀 **New MCP Mesh Release!**
+
+            **Version:** ${{ steps.version.outputs.version }}
+            **Release Notes:** ${{ github.event.release.html_url ||
+            format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }}
+
+            📦 **Download:**
+            • [GitHub Release](${{ github.event.release.html_url ||
+            format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }})
+            • [PyPI Package](https://pypi.org/project/mcp-mesh/)
+            • [Docker Images](https://hub.docker.com/u/mcpmesh)
+
+            🎉 **What's New:**
+            • Kubernetes-native MCP service mesh
+            • Dynamic dependency injection with Python decorators
+            • Multi-platform Docker images (amd64, arm64)
+            • Production-ready registry with SQLite/PostgreSQL support
