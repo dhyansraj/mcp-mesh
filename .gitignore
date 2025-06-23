@@ -127,6 +127,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+mcp-env/
 
 # Spyder project settings
 .spyderproject
@@ -188,6 +189,34 @@ vendor/
 config/local.yaml
 *.db-shm
 *.db-wal
+
+# Coverage reports
+coverage.xml
+
+# Node.js dependencies
+node_modules/
+
+
+# Stray command files
+pip
+python
+
+# Test installation artifacts
+test-install/
+
+# Abandoned test data (duplicated in proper testdata/ locations)
+test_data/
+
+# Temporary feedback files
+feedback-*.md
+
+# Legacy requirements files (use pyproject.toml instead)
+requirements*.txt
+!src/**/requirements.txt
+!examples/**/requirements.txt
+
+# OpenAPI generator config (use tools/codegen/config.yaml instead)
+openapitools.json
 
 # Packaging build-time files (copied by CI)
 packaging/pypi/src/
