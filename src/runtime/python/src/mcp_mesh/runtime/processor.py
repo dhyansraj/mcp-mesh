@@ -15,10 +15,21 @@ from typing import Any
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
 
 from .logging_config import configure_logging
-from .registry_client import RegistryClient
 from .shared.types import HealthStatus, HealthStatusType
 
-# Import generated client models for structured API calls
+# Try to use generated client first, fallback to manual client
+try:
+    from .generated_registry_client import GeneratedRegistryClient as RegistryClient
+
+    USING_GENERATED_CLIENT = True
+    logging.getLogger(__name__).info("🎯 Using generated OpenAPI registry client")
+except ImportError:
+    from .registry_client import RegistryClient
+
+    USING_GENERATED_CLIENT = False
+    logging.getLogger(__name__).warning("⚠️ Falling back to manual registry client")
+
+# Import generated client models for structured API calls (legacy - now handled in adapter)
 try:
     from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.agents_api import (
         AgentsApi,
@@ -32,9 +43,7 @@ try:
 
     GENERATED_CLIENT_AVAILABLE = True
 except ImportError as e:
-    logging.getLogger(__name__).warning(
-        f"Generated client not available, falling back to manual HTTP calls: {e}"
-    )
+    logging.getLogger(__name__).warning(f"Generated client models not available: {e}")
     GENERATED_CLIENT_AVAILABLE = False
 
 # Ensure logging is configured
