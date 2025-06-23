@@ -14,7 +14,7 @@ PYTEST_BIN="$SCRIPT_DIR/.venv/bin/pytest"
 # Check if .venv exists
 if [ ! -f "$PYTHON_BIN" ]; then
     echo "❌ Error: .venv not found at $PYTHON_BIN"
-    echo "Please run: python -m venv .venv && .venv/bin/pip install -e ."
+    echo "Please run: python -m venv .venv && .venv/bin/pip install -e src/runtime/python/"
     exit 1
 fi
 
