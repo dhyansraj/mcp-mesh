@@ -489,17 +489,37 @@ class MeshToolProcessor:
                         if dep_info is None:
                             continue
 
-                        capability = dep_info.get("capability", "")
+                        capability = (
+                            dep_info.capability
+                            if hasattr(dep_info, "capability")
+                            else ""
+                        )
                         self.logger.debug(
                             f"Processing dependency resolution for capability: {capability}"
                         )
 
                         # Create proxy using endpoint from registry
                         try:
-                            endpoint = dep_info.get("endpoint", "")
-                            status = dep_info.get("status", "unknown")
-                            agent_id = dep_info.get("agent_id", "unknown")
-                            function_name = dep_info.get("function_name", "unknown")
+                            endpoint = (
+                                dep_info.endpoint
+                                if hasattr(dep_info, "endpoint")
+                                else ""
+                            )
+                            status = (
+                                dep_info.status
+                                if hasattr(dep_info, "status")
+                                else "unknown"
+                            )
+                            agent_id = (
+                                dep_info.agent_id
+                                if hasattr(dep_info, "agent_id")
+                                else "unknown"
+                            )
+                            function_name = (
+                                dep_info.function_name
+                                if hasattr(dep_info, "function_name")
+                                else "unknown"
+                            )
 
                             self.logger.info(
                                 f"🔗 DEPENDENCY_SETUP: Creating proxy for '{capability}'"
@@ -603,10 +623,10 @@ class MeshToolProcessor:
 
         return create_proxy(
             dep_name,
-            dep_info.get("endpoint", ""),
-            dep_info.get("agent_id", ""),
+            dep_info.endpoint if hasattr(dep_info, "endpoint") else "",
+            dep_info.agent_id if hasattr(dep_info, "agent_id") else "",
             "healthy",
-            dep_info.get("function_name", ""),
+            dep_info.function_name if hasattr(dep_info, "function_name") else "",
         )
 
     async def _create_http_proxy_for_tool(
@@ -614,9 +634,11 @@ class MeshToolProcessor:
     ):
         """Create an HTTP-based proxy for tool dependencies that makes real HTTP calls."""
 
-        endpoint = dep_info.get("endpoint")
-        agent_id = dep_info.get("agent_id")
-        function_name = dep_info.get("function_name")
+        endpoint = dep_info.endpoint if hasattr(dep_info, "endpoint") else ""
+        agent_id = dep_info.agent_id if hasattr(dep_info, "agent_id") else ""
+        function_name = (
+            dep_info.function_name if hasattr(dep_info, "function_name") else ""
+        )
 
         # For stdio-based agents, fall back to stdio proxy
         if not endpoint or not endpoint.startswith("http"):
@@ -666,9 +688,9 @@ class MeshToolProcessor:
                 return f"<HttpServiceProxy {self.function_name} -> {self.endpoint}>"
 
         return HttpServiceProxy(
-            dep_info.get("endpoint", ""),
-            dep_info.get("agent_id", ""),
-            dep_info.get("function_name", ""),
+            dep_info.endpoint if hasattr(dep_info, "endpoint") else "",
+            dep_info.agent_id if hasattr(dep_info, "agent_id") else "",
+            dep_info.function_name if hasattr(dep_info, "function_name") else "",
         )
 
     async def _register_with_generated_client(
@@ -894,32 +916,73 @@ class MeshToolProcessor:
             Registry response with dependencies_resolved or None if failed
         """
         try:
-            from .shared.types import HealthStatus, HealthStatusType
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                MeshAgentRegistration,
+            )
 
             self.logger.debug(
                 f"💓 Sending heartbeat to registry with {len(heartbeat_data.get('tools', []))} tools"
             )
 
-            # Extract capabilities from tools
-            capabilities = [tool.get("capability") for tool in heartbeat_data.get("tools", []) if tool.get("capability")]
-
-            # Create HealthStatus object for proper heartbeat method
-            health_status = HealthStatus(
-                agent_name=heartbeat_data.get("agent_id", "unknown"),
-                status=HealthStatusType.HEALTHY,
-                capabilities=capabilities,
-                timestamp=datetime.now(UTC),
-                uptime_seconds=0,
+            # Create MeshAgentRegistration directly with actual tools data
+            heartbeat_registration = MeshAgentRegistration(
+                agent_id=heartbeat_data.get("agent_id", "unknown"),
+                name=heartbeat_data.get(
+                    "name", heartbeat_data.get("agent_id", "unknown")
+                ),
+                agent_type=heartbeat_data.get("agent_type", "mcp_agent"),
+                http_host=heartbeat_data.get("http_host", "127.0.0.1"),
+                http_port=heartbeat_data.get("http_port", 0),
+                namespace=heartbeat_data.get("namespace", "default"),
+                status="healthy",
                 version=heartbeat_data.get("version", "1.0.0"),
-                metadata=heartbeat_data,
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                tools=heartbeat_data.get(
+                    "tools", []
+                ),  # Include actual tools for dependency resolution
+                uptime_seconds=0,
+                last_activity=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                checks={},
+                errors=[],
+                capabilities=[
+                    tool.get("capability")
+                    for tool in heartbeat_data.get("tools", [])
+                    if tool.get("capability")
+                ],
+                metadata={},
             )
 
-            # Use the proper heartbeat method that handles MeshRegistrationResponse
-            response = await self.registry_client.send_heartbeat_with_response(health_status)
-            
+            # Debug log the request payload
+            self.logger.debug(
+                f"🔍 HEARTBEAT_REQUEST: {heartbeat_registration.model_dump()}"
+            )
+
+            # Use the direct OpenAPI client method
+            response = self.registry_client.agents_api.send_heartbeat(
+                heartbeat_registration
+            )
+
             if response:
-                self.logger.debug(f"💓 Heartbeat successful: {response}")
-                return response
+                # Convert Pydantic response to dict
+                response_dict = {
+                    "status": response.status,
+                    "timestamp": (
+                        response.timestamp.isoformat()
+                        if hasattr(response.timestamp, "isoformat")
+                        else str(response.timestamp)
+                    ),
+                    "message": response.message,
+                    "agent_id": response.agent_id,
+                }
+
+                # Add dependencies_resolved if present (include even if empty for unwiring)
+                if hasattr(response, "dependencies_resolved"):
+                    response_dict["dependencies_resolved"] = (
+                        response.dependencies_resolved
+                    )
+
+                self.logger.debug(f"💓 Heartbeat successful: {response_dict}")
+                return response_dict
             else:
                 self.logger.error("💔 Heartbeat failed - no response")
                 return None

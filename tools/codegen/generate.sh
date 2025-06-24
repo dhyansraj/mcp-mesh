@@ -168,7 +168,7 @@ EOF
 
 # Generate Python registry client code
 generate_python_registry_client() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/src/mcp_mesh/registry_client_generated"
+    local output_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated"
 
     log_info "Generating Python registry client code..."
 
@@ -179,7 +179,26 @@ generate_python_registry_client() {
     fi
 
     # Create parent directory
-    mkdir -p "$(dirname "$output_dir")"
+    mkdir -p "$output_dir"
+
+    # Create ignore file to skip packaging files
+    cat > "$output_dir/.openapi-generator-ignore" << 'EOF'
+# Skip packaging files - we use this as part of our main package
+pyproject.toml
+setup.py
+setup.cfg
+requirements.txt
+test-requirements.txt
+README.md
+tox.ini
+.travis.yml
+.gitlab-ci.yml
+.github/
+git_push.sh
+.gitignore
+test/
+docs/
+EOF
 
     # Generate Python client using openapi-generator
     log_info "Running openapi-generator for Python registry client..."
@@ -228,15 +247,15 @@ EOF
     # Only match paths that are NOT already corrected
     declare -a patterns=(
         # Only replace if it's NOT already prefixed with our target path
-        's|from mcp_mesh_registry_client\.|from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.|g'
-        's|import mcp_mesh_registry_client\.|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.|g'
+        's|from mcp_mesh_registry_client\.|from mcp_mesh.generated.mcp_mesh_registry_client.|g'
+        's|import mcp_mesh_registry_client\.|import mcp_mesh.generated.mcp_mesh_registry_client.|g'
         # Handle getattr() and direct references separately - be very specific
-        's|getattr(mcp_mesh_registry_client\.models,|getattr(mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models,|g'
-        's|import mcp_mesh_registry_client\.models|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models|g'
-        's|import mcp_mesh_registry_client\.api|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api|g'
-        's|from mcp_mesh_registry_client import|from mcp_mesh.registry_client_generated.mcp_mesh_registry_client import|g'
+        's|getattr(mcp_mesh_registry_client\.models,|getattr(mcp_mesh.generated.mcp_mesh_registry_client.models,|g'
+        's|import mcp_mesh_registry_client\.models|import mcp_mesh.generated.mcp_mesh_registry_client.models|g'
+        's|import mcp_mesh_registry_client\.api|import mcp_mesh.generated.mcp_mesh_registry_client.api|g'
+        's|from mcp_mesh_registry_client import|from mcp_mesh.generated.mcp_mesh_registry_client import|g'
         # Most general pattern last - for standalone imports only at line boundaries
-        's|^import mcp_mesh_registry_client$|import mcp_mesh.registry_client_generated.mcp_mesh_registry_client|g'
+        's|^import mcp_mesh_registry_client$|import mcp_mesh.generated.mcp_mesh_registry_client|g'
     )
 
     # Apply all patterns in a single sed command to avoid double-replacement
@@ -253,7 +272,7 @@ EOF
 
 # Generate Python agent server code
 generate_python_agent_server() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/src/mcp_mesh/agent_server_generated"
+    local output_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated"
 
     log_info "Generating Python agent server code..."
 
@@ -326,15 +345,15 @@ validate_generated_code() {
     fi
 
     # Validate Python registry client imports
-    local python_registry_client_dir="$PROJECT_ROOT/src/runtime/python/src/mcp_mesh/registry_client_generated"
+    local python_registry_client_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated/mcp_mesh_registry_client"
     if [[ -d "$python_registry_client_dir" ]]; then
         log_info "Checking Python registry client imports..."
         cd "$PROJECT_ROOT/src/runtime/python"
         if ! python3 -c "
 import sys
-sys.path.insert(0, 'src')
+sys.path.insert(0, '.')
 try:
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client import AgentsApi, HealthApi
+    from mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
     print('✅ Python registry client imports successfully')
 except ImportError as e:
     print(f'❌ Python registry client import failed: {e}')
@@ -348,7 +367,7 @@ except ImportError as e:
     fi
 
     # Check Python agent server generation
-    local python_agent_server_dir="$PROJECT_ROOT/src/runtime/python/src/mcp_mesh/agent_server_generated"
+    local python_agent_server_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated/mcp_mesh_agent_server"
     if [[ -d "$python_agent_server_dir" ]]; then
         log_success "Python agent server code structure created"
     fi
@@ -413,17 +432,13 @@ main() {
         "python")
             check_prerequisites
             validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            validate_openapi_spec "$AGENT_SPEC" "Agent"
             generate_python_registry_client
-            generate_python_agent_server
             ;;
         "all"|"")
             check_prerequisites
             validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            validate_openapi_spec "$AGENT_SPEC" "Agent"
             generate_go_registry_server
             generate_python_registry_client
-            generate_python_agent_server
             validate_generated_code
             update_dependencies
             ;;
