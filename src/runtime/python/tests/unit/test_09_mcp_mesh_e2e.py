@@ -179,7 +179,7 @@ class TestMcpMeshAgentE2E:
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.agents_api = mock_agents_api
-        
+
         # Cancel any existing health monitoring tasks to prevent background connections
         for task in processor.mesh_tool_processor._health_tasks.values():
             if not task.done():
@@ -244,14 +244,17 @@ class TestMcpMeshAgentE2E:
         )
 
         # Process the tools with health monitoring disabled
-        with patch.object(
-            processor.mesh_tool_processor,
-            "_health_monitor",
-            return_value=None,
-        ), patch.object(
-            processor.mesh_agent_processor,
-            "_health_monitor", 
-            return_value=None,
+        with (
+            patch.object(
+                processor.mesh_tool_processor,
+                "_health_monitor",
+                return_value=None,
+            ),
+            patch.object(
+                processor.mesh_agent_processor,
+                "_health_monitor",
+                return_value=None,
+            ),
         ):
             await processor.process_all_decorators()
 
@@ -366,7 +369,7 @@ class TestMcpMeshAgentE2E:
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.agents_api = mock_agents_api
-        
+
         # Cancel any existing health monitoring tasks to prevent background connections
         for task in processor.mesh_tool_processor._health_tasks.values():
             if not task.done():
@@ -402,14 +405,17 @@ class TestMcpMeshAgentE2E:
         )
 
         # Process the tools with health monitoring disabled
-        with patch.object(
-            processor.mesh_tool_processor,
-            "_health_monitor",
-            return_value=None,
-        ), patch.object(
-            processor.mesh_agent_processor,
-            "_health_monitor", 
-            return_value=None,
+        with (
+            patch.object(
+                processor.mesh_tool_processor,
+                "_health_monitor",
+                return_value=None,
+            ),
+            patch.object(
+                processor.mesh_agent_processor,
+                "_health_monitor",
+                return_value=None,
+            ),
         ):
             await processor.process_all_decorators()
 

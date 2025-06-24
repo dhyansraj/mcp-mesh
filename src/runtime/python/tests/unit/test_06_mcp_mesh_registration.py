@@ -1143,50 +1143,54 @@ class TestDependencyInjection:
                 return f"Formula {formula_name} from {self.math_service}"
 
         # Process registration and DI
-        # CRITICAL: Mock RegistryClientWrapper class globally and replace the constructor  
+        # CRITICAL: Mock RegistryClientWrapper class globally and replace the constructor
         # Import first, then patch all locations where RegistryClientWrapper is used
-        from mcp_mesh.engine.processor import DecoratorProcessor
         from mcp_mesh.engine import processor as processor_module
+        from mcp_mesh.engine.processor import DecoratorProcessor
         from mcp_mesh.shared import registry_client_wrapper as wrapper_module
-        
+
         # Store original classes
         original_wrapper_class = processor_module.RegistryClientWrapper
         original_wrapper_class_in_module = wrapper_module.RegistryClientWrapper
-        
+
         # Create a mock class that always returns our mock instance
         def mock_wrapper_constructor(*args, **kwargs):
             return mock_wrapper
-            
+
         # Replace the class in BOTH modules to catch all import paths
         processor_module.RegistryClientWrapper = mock_wrapper_constructor
         wrapper_module.RegistryClientWrapper = mock_wrapper_constructor
-        
+
         try:
             processor = DecoratorProcessor("http://localhost:8080")
             processor.registry_client = mock_registry
             processor.mesh_tool_processor.registry_client = mock_registry
             processor.mesh_agent_processor.registry_client = mock_registry
-            
+
             # CRITICAL: Also force the wrapper to be our mock for existing instances
             processor.mesh_tool_processor.registry_wrapper = mock_wrapper
             processor.mesh_agent_processor.registry_wrapper = mock_wrapper
-            
+
             # Verify that the mocked wrapper was used during construction
 
             # Process all decorators (should trigger registration and DI)
             # Mock HTTP wrapper setup and health monitoring to avoid background tasks
-            with patch.object(
-                processor.mesh_tool_processor,
-                "_setup_http_wrapper_for_tools",
-                return_value=None,
-            ), patch.object(
-                processor.mesh_tool_processor,
-                "_health_monitor",
-                return_value=None,
-            ), patch.object(
-                processor.mesh_agent_processor,
-                "_health_monitor", 
-                return_value=None,
+            with (
+                patch.object(
+                    processor.mesh_tool_processor,
+                    "_setup_http_wrapper_for_tools",
+                    return_value=None,
+                ),
+                patch.object(
+                    processor.mesh_tool_processor,
+                    "_health_monitor",
+                    return_value=None,
+                ),
+                patch.object(
+                    processor.mesh_agent_processor,
+                    "_health_monitor",
+                    return_value=None,
+                ),
             ):
                 await processor.process_all_decorators()
 
@@ -1194,13 +1198,19 @@ class TestDependencyInjection:
 
             # Verify that registry was called correctly - we're not expecting heartbeats since health monitoring is disabled
             # Instead, check that the registration wrapper was set up correctly
-            assert processor.mesh_tool_processor.registry_wrapper is mock_wrapper, "Tool processor should use mock wrapper"
-            assert processor.mesh_agent_processor.registry_wrapper is mock_wrapper, "Agent processor should use mock wrapper"
+            assert (
+                processor.mesh_tool_processor.registry_wrapper is mock_wrapper
+            ), "Tool processor should use mock wrapper"
+            assert (
+                processor.mesh_agent_processor.registry_wrapper is mock_wrapper
+            ), "Agent processor should use mock wrapper"
 
             # Since health monitoring is disabled, we focus on verifying that the mock wrapper setup worked
             # The main goal is to test that @mesh.agent decorator configuration is properly used
             print("✅ Mock wrapper setup completed successfully")
-            print("✅ @mesh.agent decorator configuration properly integrated with processor setup")
+            print(
+                "✅ @mesh.agent decorator configuration properly integrated with processor setup"
+            )
 
             # Verify DI was processed for the agent class
             try:
