@@ -210,8 +210,24 @@ class MeshToolProcessor:
                         if decorated_func.metadata.get("capability")
                     )
                 ),
+                "http_host": http_host,
+                "http_port": http_port,
+                "version": (
+                    agent_config.get("version", "1.0.0") if agent_config else "1.0.0"
+                ),
+                "namespace": (
+                    agent_config.get("namespace", "default")
+                    if agent_config
+                    else "default"
+                ),
             }
 
+            # Send immediate heartbeat with updated metadata (non-blocking)
+            try:
+                await self._send_heartbeat(agent_id, agent_metadata)
+            except Exception as e:
+                self.logger.warning(f"Initial heartbeat failed for {agent_id}: {e}. Health monitor will retry.")
+            
             # Create and start the health monitoring task
             task = asyncio.create_task(
                 self._health_monitor(agent_id, agent_metadata, health_interval)
