@@ -456,25 +456,30 @@ class TestDependencyInjection:
         # Process registration and DI
         from mcp_mesh.engine.processor import DecoratorProcessor
 
-        processor = DecoratorProcessor("http://localhost:8080")
-        processor.registry_client = mock_registry
-        processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
+        # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
+        with patch(
+            "mcp_mesh.engine.processor.RegistryClientWrapper"
+        ) as mock_wrapper_class:
+            mock_wrapper_class.return_value = mock_wrapper
+            processor = DecoratorProcessor("http://localhost:8080")
+            processor.registry_client = mock_registry
+            processor.mesh_tool_processor.registry_client = mock_registry
+            processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
-        # Process all decorators (should trigger registration and DI)
-        # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(
-            processor.mesh_tool_processor,
-            "_setup_http_wrapper_for_tools",
-            return_value=None,
-        ):
+            # Process all decorators (should trigger registration and DI)
             # Mock HTTP wrapper setup to avoid actual server startup
             with patch.object(
                 processor.mesh_tool_processor,
                 "_setup_http_wrapper_for_tools",
                 return_value=None,
             ):
-                await processor.process_all_decorators()
+                # Mock HTTP wrapper setup to avoid actual server startup
+                with patch.object(
+                    processor.mesh_tool_processor,
+                    "_setup_http_wrapper_for_tools",
+                    return_value=None,
+                ):
+                    await processor.process_all_decorators()
 
         # Wait for asynchronous heartbeat to complete
         import asyncio
@@ -1140,17 +1145,17 @@ class TestDependencyInjection:
         # Process registration and DI
         from mcp_mesh.engine.processor import DecoratorProcessor
 
-        # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
+        # CRITICAL: Mock RegistryClientWrapper class BEFORE creating processor
+        # so all instances (including background tasks) use the mock
         with patch(
             "mcp_mesh.engine.processor.RegistryClientWrapper"
         ) as mock_wrapper_class:
             mock_wrapper_class.return_value = mock_wrapper
+
             processor = DecoratorProcessor("http://localhost:8080")
             processor.registry_client = mock_registry
-            # With our new integrated approach, @mesh.tool handles registration (using @mesh.agent config)
             processor.mesh_tool_processor.registry_client = mock_registry
             processor.mesh_agent_processor.registry_client = mock_registry
-            processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
             # Process all decorators (should trigger registration and DI)
             # Mock HTTP wrapper setup to avoid actual server startup
@@ -1167,68 +1172,70 @@ class TestDependencyInjection:
                 ):
                     await processor.process_all_decorators()
 
-        # Wait for asynchronous heartbeat to complete
-        import asyncio
+            # Wait for asynchronous heartbeat to complete
+            import asyncio
 
-        await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
+            await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
-        # Verify that registry was called correctly
-        assert (
-            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
-        ), "Should have called heartbeat once for agent class"
+            # Verify that registry was called correctly
+            assert (
+                mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
+            ), "Should have called heartbeat once for agent class"
 
-        # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
-        # Extract MeshAgentRegistration object from call
-        payload = extract_heartbeat_payload(call_args)
+            # Verify the heartbeat payload was correct and sent to right endpoint
+            call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
+            # Extract MeshAgentRegistration object from call
+            payload = extract_heartbeat_payload(call_args)
 
-        # Verify it's a heartbeat call
-        # Heartbeat is now sent via agents_api.send_heartbeat()# Validate the registration payload against OpenAPI schema
-        validate_agent_registration_request(payload)
-        print(
-            "✅ @mesh.agent class registration payload validates against OpenAPI schema"
-        )
+            # Verify it's a heartbeat call
+            # Heartbeat is now sent via agents_api.send_heartbeat()# Validate the registration payload against OpenAPI schema
+            validate_agent_registration_request(payload)
+            print(
+                "✅ @mesh.agent class registration payload validates against OpenAPI schema"
+            )
 
-        # KEY TEST: Verify agent_id starts with name from @mesh.agent decoration, not default "agent"
-        assert payload["agent_id"].startswith(
-            "custom-calculator-agent"
-        ), f"Agent ID should start with 'custom-calculator-agent', got '{payload['agent_id']}'"
+            # KEY TEST: Verify agent_id starts with name from @mesh.agent decoration, not default "agent"
+            assert payload["agent_id"].startswith(
+                "custom-calculator-agent"
+            ), f"Agent ID should start with 'custom-calculator-agent', got '{payload['agent_id']}'"
 
-        # Verify name has the same agent name (includes UUID suffix) in flattened schema
-        assert (
-            payload["name"] == payload["agent_id"]
-        ), f"Agent name should match agent_id '{payload['agent_id']}', got '{payload['name']}'"
+            # Verify name has the same agent name (includes UUID suffix) in flattened schema
+            assert (
+                payload["name"] == payload["agent_id"]
+            ), f"Agent name should match agent_id '{payload['agent_id']}', got '{payload['name']}'"
 
-        # Verify agent_type is correct for class-based agents in flattened schema
-        assert (
-            payload["agent_type"] == "mcp_agent"
-        ), f"Agent type should be 'mcp_agent', got '{payload['agent_type']}'"
+            # Verify agent_type is correct for class-based agents in flattened schema
+            assert (
+                payload["agent_type"] == "mcp_agent"
+            ), f"Agent type should be 'mcp_agent', got '{payload['agent_type']}'"
 
-        # Verify @mesh.agent configuration was used
-        assert (
-            payload["version"] == "2.0.0"
-        ), f"Version should be '2.0.0' from @mesh.agent, got '{payload['version']}'"
-        # Note: description is not part of MeshAgentRegisterMetadata schema, so it gets filtered out
+            # Verify @mesh.agent configuration was used
+            assert (
+                payload["version"] == "2.0.0"
+            ), f"Version should be '2.0.0' from @mesh.agent, got '{payload['version']}'"
+            # Note: description is not part of MeshAgentRegisterMetadata schema, so it gets filtered out
 
-        # Verify tools are present (from @mesh.tool decorators)
-        assert "tools" in payload, "Payload should contain tools array"
-        assert (
-            len(payload["tools"]) == 2
-        ), f"Should have 2 tools, got {len(payload['tools'])}"
+            # Verify tools are present (from @mesh.tool decorators)
+            assert "tools" in payload, "Payload should contain tools array"
+            assert (
+                len(payload["tools"]) == 2
+            ), f"Should have 2 tools, got {len(payload['tools'])}"
 
-        tool_capabilities = [tool["capability"] for tool in payload["tools"]]
-        assert (
-            "calculate_complex" in tool_capabilities
-        ), "Should have calculate_complex capability"
-        assert "get_formula" in tool_capabilities, "Should have get_formula capability"
+            tool_capabilities = [tool["capability"] for tool in payload["tools"]]
+            assert (
+                "calculate_complex" in tool_capabilities
+            ), "Should have calculate_complex capability"
+            assert (
+                "get_formula" in tool_capabilities
+            ), "Should have get_formula capability"
 
-        print(f"✅ Agent ID: {payload['agent_id']} (starts with custom name)")
-        print(f"✅ Agent version: {payload['version']} (from @mesh.agent)")
-        print(f"✅ Tool capabilities: {tool_capabilities} (from @mesh.tool)")
+            print(f"✅ Agent ID: {payload['agent_id']} (starts with custom name)")
+            print(f"✅ Agent version: {payload['version']} (from @mesh.agent)")
+            print(f"✅ Tool capabilities: {tool_capabilities} (from @mesh.tool)")
 
-        print(
-            "✅ @mesh.agent decorator configuration successfully applied to @mesh.tool registration"
-        )
+            print(
+                "✅ @mesh.agent decorator configuration successfully applied to @mesh.tool registration"
+            )
         print("✅ Integrated @mesh.agent + @mesh.tool approach works correctly")
 
         # Verify DI was processed for the agent class
@@ -1555,10 +1562,9 @@ class TestHeartbeatBatching:
         # Verify registration happened with unified format
         assert mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
 
-        # Get the heartbeat payload and verify endpoint
+        # Get the heartbeat payload using the helper function
         reg_call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
-        endpoint = reg_call_args[0][0]  # First positional argument is the endpoint
-        registration_payload = reg_call_args[1]["json"]
+        registration_payload = extract_heartbeat_payload(reg_call_args)
 
         # Verify it's a heartbeat call
         # Heartbeat is now sent via agents_api.send_heartbeat()# Verify it uses the flattened MeshAgentRegistration schema

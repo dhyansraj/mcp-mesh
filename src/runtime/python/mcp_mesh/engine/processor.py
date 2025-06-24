@@ -772,6 +772,12 @@ class MeshToolProcessor:
             )
 
             # Use wrapper for clean, type-safe heartbeat
+            self.logger.error(
+                f"🔍 MeshToolProcessor._send_heartbeat_request: Using registry_wrapper {type(self.registry_wrapper)} at {hex(id(self.registry_wrapper))}"
+            )
+            self.logger.error(
+                f"🔍 MeshToolProcessor._send_heartbeat_request: Calling send_heartbeat_with_dependency_resolution for {agent_id}"
+            )
             response = (
                 await self.registry_wrapper.send_heartbeat_with_dependency_resolution(
                     health_status
@@ -1524,8 +1530,16 @@ class MeshAgentProcessor:
             )
 
             # Get the full response with dependencies_resolved
-            response = await self.registry_client.send_heartbeat_with_response(
-                health_status
+            self.logger.error(
+                f"🔍 MeshAgentProcessor._send_heartbeat: Using registry_wrapper {type(self.registry_wrapper)} at {hex(id(self.registry_wrapper))}"
+            )
+            self.logger.error(
+                f"🔍 MeshAgentProcessor._send_heartbeat: Calling send_heartbeat_with_dependency_resolution for {agent_name}"
+            )
+            response = (
+                await self.registry_wrapper.send_heartbeat_with_dependency_resolution(
+                    health_status
+                )
             )
 
             if response and response.get("status") == "success":
