@@ -12,7 +12,9 @@ import pytest
 
 # Import the classes we'll be testing/implementing
 from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import (
+    ApiClient as RegistryClient,
+)
 from mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 
@@ -414,8 +416,11 @@ class TestBackwardCompatibility:
 
     @pytest.fixture
     def registry_client(self):
-        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
         from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
+        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import (
+            Configuration,
+        )
+
         config = Configuration(host="http://localhost:8080")
         api_client = RegistryClient(configuration=config)
         api_client.agents_api = AgentsApi(api_client)
@@ -473,8 +478,11 @@ class TestErrorHandling:
 
     @pytest.fixture
     def registry_client(self):
-        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
         from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
+        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import (
+            Configuration,
+        )
+
         config = Configuration(host="http://localhost:8080")
         api_client = RegistryClient(configuration=config)
         api_client.agents_api = AgentsApi(api_client)
