@@ -312,37 +312,17 @@ class MeshToolProcessor:
                         if dep_info is None:
                             continue
 
-                        capability = (
-                            dep_info.capability
-                            if hasattr(dep_info, "capability")
-                            else ""
-                        )
+                        capability = dep_info.get("capability", "")
                         self.logger.debug(
                             f"Processing dependency resolution for capability: {capability}"
                         )
 
                         # Create proxy using endpoint from registry
                         try:
-                            endpoint = (
-                                dep_info.endpoint
-                                if hasattr(dep_info, "endpoint")
-                                else ""
-                            )
-                            status = (
-                                dep_info.status
-                                if hasattr(dep_info, "status")
-                                else "unknown"
-                            )
-                            agent_id = (
-                                dep_info.agent_id
-                                if hasattr(dep_info, "agent_id")
-                                else "unknown"
-                            )
-                            function_name = (
-                                dep_info.function_name
-                                if hasattr(dep_info, "function_name")
-                                else "unknown"
-                            )
+                            endpoint = dep_info.get("endpoint", "")
+                            status = dep_info.get("status", "unknown")
+                            agent_id = dep_info.get("agent_id", "unknown")
+                            function_name = dep_info.get("function_name", "unknown")
 
                             self.logger.info(
                                 f"🔗 DEPENDENCY_SETUP: Creating proxy for '{capability}'"
@@ -446,10 +426,10 @@ class MeshToolProcessor:
 
         return create_proxy(
             dep_name,
-            dep_info.endpoint if hasattr(dep_info, "endpoint") else "",
-            dep_info.agent_id if hasattr(dep_info, "agent_id") else "",
+            dep_info.get("endpoint", ""),
+            dep_info.get("agent_id", ""),
             "healthy",
-            dep_info.function_name if hasattr(dep_info, "function_name") else "",
+            dep_info.get("function_name", ""),
         )
 
     async def _create_http_proxy_for_tool(
@@ -457,11 +437,9 @@ class MeshToolProcessor:
     ):
         """Create an HTTP-based proxy for tool dependencies that makes real HTTP calls."""
 
-        endpoint = dep_info.endpoint if hasattr(dep_info, "endpoint") else ""
-        agent_id = dep_info.agent_id if hasattr(dep_info, "agent_id") else ""
-        function_name = (
-            dep_info.function_name if hasattr(dep_info, "function_name") else ""
-        )
+        endpoint = dep_info.get("endpoint", "")
+        agent_id = dep_info.get("agent_id", "")
+        function_name = dep_info.get("function_name", "")
 
         # For stdio-based agents, fall back to stdio proxy
         if not endpoint or not endpoint.startswith("http"):
@@ -772,12 +750,6 @@ class MeshToolProcessor:
             )
 
             # Use wrapper for clean, type-safe heartbeat
-            self.logger.error(
-                f"🔍 MeshToolProcessor._send_heartbeat_request: Using registry_wrapper {type(self.registry_wrapper)} at {hex(id(self.registry_wrapper))}"
-            )
-            self.logger.error(
-                f"🔍 MeshToolProcessor._send_heartbeat_request: Calling send_heartbeat_with_dependency_resolution for {agent_id}"
-            )
             response = (
                 await self.registry_wrapper.send_heartbeat_with_dependency_resolution(
                     health_status
@@ -1530,12 +1502,6 @@ class MeshAgentProcessor:
             )
 
             # Get the full response with dependencies_resolved
-            self.logger.error(
-                f"🔍 MeshAgentProcessor._send_heartbeat: Using registry_wrapper {type(self.registry_wrapper)} at {hex(id(self.registry_wrapper))}"
-            )
-            self.logger.error(
-                f"🔍 MeshAgentProcessor._send_heartbeat: Calling send_heartbeat_with_dependency_resolution for {agent_name}"
-            )
             response = (
                 await self.registry_wrapper.send_heartbeat_with_dependency_resolution(
                     health_status

@@ -174,10 +174,21 @@ class TestMcpMeshAgentE2E:
         # Create processor and process tools
         from mcp_mesh.engine.processor import DecoratorProcessor
 
+        # Create processor and process tools
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.agents_api = mock_agents_api
+        
+        # Cancel any existing health monitoring tasks to prevent background connections
+        for task in processor.mesh_tool_processor._health_tasks.values():
+            if not task.done():
+                task.cancel()
+        for task in processor.mesh_agent_processor._health_tasks.values():
+            if not task.done():
+                task.cancel()
+        processor.mesh_tool_processor._health_tasks.clear()
+        processor.mesh_agent_processor._health_tasks.clear()
 
         # Mock HTTP proxy creation to return single-function bound proxies
         async def mock_create_http_proxy(dep_name, dep_info):
@@ -232,8 +243,17 @@ class TestMcpMeshAgentE2E:
             mock_create_stdio_proxy
         )
 
-        # Process the tools
-        await processor.process_all_decorators()
+        # Process the tools with health monitoring disabled
+        with patch.object(
+            processor.mesh_tool_processor,
+            "_health_monitor",
+            return_value=None,
+        ), patch.object(
+            processor.mesh_agent_processor,
+            "_health_monitor", 
+            return_value=None,
+        ):
+            await processor.process_all_decorators()
 
         # Wait for asynchronous heartbeat to complete
         import asyncio
@@ -346,6 +366,16 @@ class TestMcpMeshAgentE2E:
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.agents_api = mock_agents_api
+        
+        # Cancel any existing health monitoring tasks to prevent background connections
+        for task in processor.mesh_tool_processor._health_tasks.values():
+            if not task.done():
+                task.cancel()
+        for task in processor.mesh_agent_processor._health_tasks.values():
+            if not task.done():
+                task.cancel()
+        processor.mesh_tool_processor._health_tasks.clear()
+        processor.mesh_agent_processor._health_tasks.clear()
 
         # Mock proxy creation to return single-function bound proxies
         def mock_create_stdio_proxy(dep_name, dep_info):
@@ -371,8 +401,17 @@ class TestMcpMeshAgentE2E:
             mock_create_http_proxy
         )
 
-        # Process the tools
-        await processor.process_all_decorators()
+        # Process the tools with health monitoring disabled
+        with patch.object(
+            processor.mesh_tool_processor,
+            "_health_monitor",
+            return_value=None,
+        ), patch.object(
+            processor.mesh_agent_processor,
+            "_health_monitor", 
+            return_value=None,
+        ):
+            await processor.process_all_decorators()
 
         # Wait for asynchronous heartbeat to complete
         import asyncio
