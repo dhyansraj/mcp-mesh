@@ -139,6 +139,15 @@ def create_mock_registry_client(response_override=None):
     mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = response
     mock_wrapper.register_multi_tool_agent.return_value = response
 
+    # CRITICAL: Mock the underlying call_api method to prevent actual HTTP calls
+    # This prevents the processor from making real network calls during tests
+    mock_response_obj = MagicMock()
+    mock_response_obj.model_dump.return_value = response
+    mock_api_client.call_api.return_value = MagicMock()
+    mock_api_client.response_deserialize.return_value = MagicMock(
+        data=mock_response_obj
+    )
+
     # For backward compatibility, also create the old mock structure
     # so existing test code can still access mock_agents_api if needed
     mock_agents_api = AsyncMock()
@@ -148,6 +157,10 @@ def create_mock_registry_client(response_override=None):
     mock_registry = AsyncMock(spec=ApiClient)
     mock_registry.agents_api = mock_agents_api
     mock_registry._wrapper = mock_wrapper  # Store wrapper for easy access
+
+    # CRITICAL: Also mock call_api on the main registry to prevent HTTP calls
+    mock_registry.call_api = mock_api_client.call_api
+    mock_registry.response_deserialize = mock_api_client.response_deserialize
 
     return mock_registry, mock_wrapper
 
@@ -1127,26 +1140,32 @@ class TestDependencyInjection:
         # Process registration and DI
         from mcp_mesh.engine.processor import DecoratorProcessor
 
-        processor = DecoratorProcessor("http://localhost:8080")
-        processor.registry_client = mock_registry
-        # With our new integrated approach, @mesh.tool handles registration (using @mesh.agent config)
-        processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_agent_processor.registry_client = mock_registry
+        # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
+        with patch(
+            "mcp_mesh.engine.processor.RegistryClientWrapper"
+        ) as mock_wrapper_class:
+            mock_wrapper_class.return_value = mock_wrapper
+            processor = DecoratorProcessor("http://localhost:8080")
+            processor.registry_client = mock_registry
+            # With our new integrated approach, @mesh.tool handles registration (using @mesh.agent config)
+            processor.mesh_tool_processor.registry_client = mock_registry
+            processor.mesh_agent_processor.registry_client = mock_registry
+            processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
-        # Process all decorators (should trigger registration and DI)
-        # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(
-            processor.mesh_tool_processor,
-            "_setup_http_wrapper_for_tools",
-            return_value=None,
-        ):
+            # Process all decorators (should trigger registration and DI)
             # Mock HTTP wrapper setup to avoid actual server startup
             with patch.object(
                 processor.mesh_tool_processor,
                 "_setup_http_wrapper_for_tools",
                 return_value=None,
             ):
-                await processor.process_all_decorators()
+                # Mock HTTP wrapper setup to avoid actual server startup
+                with patch.object(
+                    processor.mesh_tool_processor,
+                    "_setup_http_wrapper_for_tools",
+                    return_value=None,
+                ):
+                    await processor.process_all_decorators()
 
         # Wait for asynchronous heartbeat to complete
         import asyncio
@@ -1503,25 +1522,30 @@ class TestHeartbeatBatching:
         # Process registration
         from mcp_mesh.engine.processor import DecoratorProcessor
 
-        processor = DecoratorProcessor("http://localhost:8080")
-        processor.registry_client = mock_registry
-        processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
+        # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
+        with patch(
+            "mcp_mesh.engine.processor.RegistryClientWrapper"
+        ) as mock_wrapper_class:
+            mock_wrapper_class.return_value = mock_wrapper
+            processor = DecoratorProcessor("http://localhost:8080")
+            processor.registry_client = mock_registry
+            processor.mesh_tool_processor.registry_client = mock_registry
+            processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
-        # Register the tools first
-        # Mock HTTP wrapper setup to avoid actual server startup
-        with patch.object(
-            processor.mesh_tool_processor,
-            "_setup_http_wrapper_for_tools",
-            return_value=None,
-        ):
+            # Register the tools first
             # Mock HTTP wrapper setup to avoid actual server startup
             with patch.object(
                 processor.mesh_tool_processor,
                 "_setup_http_wrapper_for_tools",
                 return_value=None,
             ):
-                await processor.process_all_decorators()
+                # Mock HTTP wrapper setup to avoid actual server startup
+                with patch.object(
+                    processor.mesh_tool_processor,
+                    "_setup_http_wrapper_for_tools",
+                    return_value=None,
+                ):
+                    await processor.process_all_decorators()
 
         # Wait for asynchronous heartbeat to complete
         import asyncio
