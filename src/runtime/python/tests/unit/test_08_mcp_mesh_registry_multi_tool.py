@@ -11,10 +11,31 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 # Import the classes we'll be testing/implementing
-from mcp_mesh.engine.generated_registry_client import (
-    GeneratedRegistryClient as RegistryClient,
-)
-from mcp_mesh.engine.shared.types import HealthStatus, HealthStatusType
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
+
+
+def create_mock_registry_client(response_override=None):
+    """Create a mock registry client with proper agents_api setup."""
+    mock_registry = AsyncMock(spec=ApiClient)
+    mock_agents_api = AsyncMock()
+    mock_registry.agents_api = mock_agents_api
+    
+    # Create default response
+    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+    default_response = MeshRegistrationResponse(
+        status="success",
+        timestamp="2023-01-01T00:00:00Z",
+        message="Registration successful",
+        agent_id="test-agent-id",
+        dependencies_resolved={}
+    )
+    
+    response = response_override if response_override else default_response
+    mock_agents_api.register_agent.return_value = response
+    mock_agents_api.send_heartbeat.return_value = response
+    
+    return mock_registry, mock_agents_api
 
 
 class TestMultiToolRegistrationFormat:
@@ -23,7 +44,8 @@ class TestMultiToolRegistrationFormat:
     @pytest.fixture
     def registry_client(self):
         """Create a registry client for testing."""
-        return RegistryClient(url="http://localhost:8080", timeout=10)
+        mock_registry, mock_agents_api = create_mock_registry_client()
+        return mock_registry
 
     @pytest.fixture
     def mock_session(self):

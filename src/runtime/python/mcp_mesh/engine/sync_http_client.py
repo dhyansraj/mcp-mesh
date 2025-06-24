@@ -199,14 +199,17 @@ class SyncHttpClient:
             True if healthy, False otherwise
         """
         try:
-            response = self.session.get(f"{self.base_url}/health", timeout=5.0)
-            return response.status_code == 200
-        except requests.exceptions.RequestException:
+            url = f"{self.base_url}/health"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=5.0) as response:
+                return response.getcode() == 200
+        except (urllib.error.URLError, urllib.error.HTTPError):
             return False
 
     def close(self):
         """Close the HTTP session."""
-        self.session.close()
+        # No persistent session to close with urllib
+        pass
 
     def __enter__(self):
         """Context manager entry."""

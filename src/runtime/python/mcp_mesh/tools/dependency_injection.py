@@ -16,11 +16,7 @@ from mcp_mesh import (
     ValidationResult,
 )
 
-# Use generated OpenAPI client directly
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api.agents_api import (
-    AgentsApi,
-)
-
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from ..shared.exceptions import MeshAgentError
 from ..shared.service_discovery import ServiceDiscoveryService
 from ..shared.unified_dependency_resolver import MeshUnifiedDependencyResolver
@@ -30,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def resolve_dependency(
     dependency_spec: str | type,
-    registry_client: AgentsApi = None,
+    registry_client: RegistryClient = None,
     service_discovery: ServiceDiscoveryService = None,
     context: dict = None,
 ) -> Any:
@@ -117,7 +113,7 @@ def resolve_dependency(
 
 async def resolve_dependency_async(
     dependency_spec: str | type,
-    registry_client: AgentsApi = None,
+    registry_client: RegistryClient = None,
     service_discovery: ServiceDiscoveryService = None,
     context: dict = None,
 ) -> Any:

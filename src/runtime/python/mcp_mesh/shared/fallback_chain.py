@@ -25,17 +25,7 @@ from mcp_mesh import (
     RemoteProxyResolver,
 )
 
-# Use generated OpenAPI client directly
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api.agents_api import (
-    AgentsApi,
-)
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api_client import (
-    ApiClient,
-)
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.configuration import (
-    Configuration,
-)
-
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .service_discovery import ServiceDiscoveryService
 from .service_proxy import MeshServiceProxy
 
@@ -47,7 +37,7 @@ class MeshRemoteProxyResolver(RemoteProxyResolver):
 
     def __init__(
         self,
-        registry_client: AgentsApi,
+        registry_client: RegistryClient,
         service_discovery: ServiceDiscoveryService,
         timeout_ms: float = 150.0,
     ):
@@ -346,7 +336,7 @@ class MeshFallbackChain(FallbackChainInterface):
 
     def __init__(
         self,
-        registry_client: AgentsApi | None = None,
+        registry_client: RegistryClient | None = None,
         service_discovery: ServiceDiscoveryService | None = None,
         config: FallbackConfiguration | None = None,
         monitor: FallbackMonitor | None = None,
@@ -371,7 +361,7 @@ class MeshFallbackChain(FallbackChainInterface):
 
     def _initialize_default_resolvers(
         self,
-        registry_client: AgentsApi | None,
+        registry_client: RegistryClient | None,
         service_discovery: ServiceDiscoveryService | None,
     ) -> None:
         """Initialize default resolvers based on configuration."""

@@ -13,10 +13,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mcp_mesh.engine.generated_registry_client import (
-    GeneratedRegistryClient as RegistryClient,
-)
-from mcp_mesh.engine.shared.types import HealthStatus
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+from mcp_mesh.shared.support_types import HealthStatus
 
 # Import SDK components for testing
 # FileOperations has been removed

@@ -49,7 +49,7 @@ from .decorator_registry import (
 
 # Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
 # Import mesh.tool and mesh.agent instead
-from .exceptions import PermissionDeniedError, SecurityValidationError
+from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .fallback import (
     DependencyResolver,
     FallbackChainInterface,
@@ -152,13 +152,7 @@ def initialize_runtime():
         _runtime_processor = DecoratorProcessor()
         _runtime_processor.start()
 
-        # Enhance the mesh_agent decorator with runtime capabilities
-        from . import decorators
-
-        if hasattr(decorators, "_enhance_mesh_agent"):
-            decorators._enhance_mesh_agent(_runtime_processor)
-
-        # Also enhance the new mesh decorators
+        # Enhance the new mesh decorators
         try:
             import mesh.decorators
 

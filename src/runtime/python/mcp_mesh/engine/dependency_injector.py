@@ -12,7 +12,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .signature_analyzer import get_mesh_agent_positions
+from ..signature_analyzer import get_mesh_agent_positions
 
 logger = logging.getLogger(__name__)
 

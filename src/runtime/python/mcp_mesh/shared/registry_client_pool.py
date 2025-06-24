@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 from weakref import WeakValueDictionary
 
-from ..engine.generated_registry_client import GeneratedRegistryClient as RegistryClient
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 
 logger = logging.getLogger(__name__)
 

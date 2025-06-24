@@ -8,9 +8,38 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.engine.generated_registry_client import GeneratedRegistryClient
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from mcp_mesh.engine.processor import DecoratorProcessor
-from mcp_mesh.engine.shared.types import MockHTTPResponse
+from mcp_mesh.shared.support_types import MockHTTPResponse
+
+
+def create_mock_registry_client(response_override=None):
+    """Create a mock registry client with proper agents_api setup."""
+    mock_registry = AsyncMock(spec=ApiClient)
+    mock_agents_api = AsyncMock()
+    mock_registry.agents_api = mock_agents_api
+    
+    # Create default response
+    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+    default_response = MeshRegistrationResponse(
+        status="success",
+        timestamp="2023-01-01T00:00:00Z",
+        message="Agent registered via heartbeat",
+        agent_id="test-agent"
+    )
+    
+    mock_agents_api.send_heartbeat = AsyncMock(return_value=response_override or default_response)
+    return mock_registry, mock_agents_api
+
+
+def extract_heartbeat_payload(call_args):
+    """Extract and properly serialize heartbeat payload from mock call args."""
+    heartbeat_registration = call_args[0][0]  # First positional argument is MeshAgentRegistration
+    if hasattr(heartbeat_registration, 'model_dump'):
+        # Use mode='json' to properly serialize datetime fields
+        return heartbeat_registration.model_dump(mode='json')
+    else:
+        return heartbeat_registration
 
 
 class TestDecoratorProcessorAgentConfig:
@@ -19,24 +48,20 @@ class TestDecoratorProcessorAgentConfig:
     @pytest.fixture
     def mock_registry_client(self):
         """Create a mock registry client."""
-        client = Mock(spec=GeneratedRegistryClient)
-
-        # Mock the post method to return MockHTTPResponse like the real client
-        mock_response = MockHTTPResponse(
-            {"status": "success", "dependencies_resolved": {}}, 201
-        )
-
-        client.post = AsyncMock(return_value=mock_response)
-        return client
+        mock_registry, mock_agents_api = create_mock_registry_client()
+        return mock_registry, mock_agents_api
 
     @pytest.fixture
     def processor(self, mock_registry_client):
         """Create DecoratorProcessor with mock client."""
+        mock_registry, mock_agents_api = mock_registry_client
         with patch(
-            "mcp_mesh.engine.processor.RegistryClient",
-            return_value=mock_registry_client,
+            "mcp_mesh.engine.processor.ApiClient",
+            return_value=mock_registry,
         ):
-            return DecoratorProcessor("http://mock-registry:8000")
+            processor = DecoratorProcessor("http://mock-registry:8000")
+            processor.mesh_tool_processor.agents_api = mock_agents_api
+            return processor
 
     @pytest.mark.asyncio
     async def test_processor_uses_agent_config_values(self, processor):
@@ -76,13 +101,11 @@ class TestDecoratorProcessorAgentConfig:
             await asyncio.sleep(0.1)
 
             # Verify heartbeat call was made (registration now via heartbeat)
-            processor.registry_client.post.assert_called_once()
+            processor.registry_client.agents_api.send_heartbeat.assert_called_once()
 
-            # Get the actual heartbeat data from the post call
-            call_args = processor.registry_client.post.call_args
-            endpoint = call_args.args[0]  # First positional argument is the endpoint
-            assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
-            registration_data = call_args.kwargs["json"]  # JSON payload
+            # Get the actual heartbeat data from the heartbeat call
+            call_args = processor.registry_client.agents_api.send_heartbeat.call_args
+            registration_data = extract_heartbeat_payload(call_args)
 
             # Verify agent config values are used
             assert registration_data["version"] == "2.1.0"
@@ -116,16 +139,11 @@ class TestDecoratorProcessorAgentConfig:
             await asyncio.sleep(0.1)
 
             # Verify heartbeat call was made (registration now via heartbeat)
-            processor.registry_client.post.assert_called_once()
+            processor.registry_client.agents_api.send_heartbeat.assert_called_once()
 
-            # Get the actual heartbeat data and verify endpoint
-            call_args = processor.registry_client.post.call_args
-            endpoint = call_args.args[0]  # First positional argument is the endpoint
-            assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
-
-            # Get the actual registration data
-            call_args = processor.registry_client.post.call_args
-            registration_data = call_args.kwargs["json"]
+            # Get the actual heartbeat data
+            call_args = processor.registry_client.agents_api.send_heartbeat.call_args
+            registration_data = extract_heartbeat_payload(call_args)
 
             # Verify default values are used
             assert registration_data["version"] == "1.0.0"
@@ -182,16 +200,12 @@ class TestDecoratorProcessorAgentConfig:
                 await asyncio.sleep(0.1)
 
                 # Verify heartbeat call was made (registration now via heartbeat)
-                processor.registry_client.post.assert_called_once()
+                processor.registry_client.agents_api.send_heartbeat.assert_called_once()
 
-                # Get the actual heartbeat data and verify endpoint
-                call_args = processor.registry_client.post.call_args
-                endpoint = call_args.args[
-                    0
-                ]  # First positional argument is the endpoint
-                assert endpoint == "/heartbeat", f"Expected /heartbeat, got {endpoint}"
-                registration_data = call_args.kwargs["json"]
-
+                # Get the actual heartbeat data
+                call_args = processor.registry_client.agents_api.send_heartbeat.call_args
+                registration_data = extract_heartbeat_payload(call_args)
+                
                 # Verify environment variables take precedence
                 assert registration_data["http_host"] == "env-host.com"
                 assert registration_data["http_port"] == 7777

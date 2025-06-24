@@ -9,10 +9,38 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.engine.generated_registry_client import (
-    GeneratedRegistryClient as RegistryClient,
-)
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
 from mcp_mesh.types import McpMeshAgent
+
+
+def create_mock_registry_client(response_override=None):
+    """Create a mock registry client with proper agents_api setup."""
+    mock_registry = AsyncMock(spec=ApiClient)
+    mock_agents_api = AsyncMock()
+    mock_registry.agents_api = mock_agents_api
+    
+    # Create default response
+    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+    default_response = MeshRegistrationResponse(
+        status="success",
+        timestamp="2023-01-01T00:00:00Z",
+        message="Agent registered via heartbeat",
+        agent_id="test-agent"
+    )
+    
+    mock_agents_api.send_heartbeat = AsyncMock(return_value=response_override or default_response)
+    return mock_registry, mock_agents_api
+
+
+def extract_heartbeat_payload(call_args):
+    """Extract and properly serialize heartbeat payload from mock call args."""
+    heartbeat_registration = call_args[0][0]  # First positional argument is MeshAgentRegistration
+    if hasattr(heartbeat_registration, 'model_dump'):
+        # Use mode='json' to properly serialize datetime fields
+        return heartbeat_registration.model_dump(mode='json')
+    else:
+        return heartbeat_registration
 
 
 @pytest.fixture(autouse=True)
@@ -30,8 +58,8 @@ class TestMcpMeshAgentE2E:
     @pytest.fixture
     def mock_registry_client(self):
         """Create a mock registry client."""
-        client = Mock(spec=RegistryClient)
-        return client
+        mock_registry, mock_agents_api = create_mock_registry_client()
+        return mock_registry
 
     @pytest.fixture
     def sample_registry_response(self):
@@ -119,16 +147,19 @@ class TestMcpMeshAgentE2E:
         assert "weather_greet" in mesh_tools
         assert len(mesh_agents) == 1
 
-        # Mock the registry registration call
-        mock_registry_client.post = AsyncMock()
-
-        async def mock_post_response(endpoint, json=None):
-            response_mock = Mock()
-            response_mock.status = 201
-            response_mock.json = AsyncMock(return_value=sample_registry_response)
-            return response_mock
-
-        mock_registry_client.post.side_effect = mock_post_response
+        # Mock the registry heartbeat call with proper response
+        mock_registry_client, mock_agents_api = create_mock_registry_client()
+        
+        # Create a response with dependencies_resolved
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        response_with_deps = MeshRegistrationResponse(
+            status="success",
+            timestamp="2023-01-01T00:00:00Z",
+            message="Agent registered via heartbeat",
+            agent_id="test-agent",
+            dependencies_resolved=sample_registry_response.get("dependencies_resolved")
+        )
+        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
         # Create processor and process tools
         from mcp_mesh.engine.processor import DecoratorProcessor
@@ -136,6 +167,7 @@ class TestMcpMeshAgentE2E:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
+        processor.mesh_tool_processor.agents_api = mock_agents_api
 
         # Mock HTTP proxy creation to return single-function bound proxies
         async def mock_create_http_proxy(dep_name, dep_info):
@@ -199,14 +231,11 @@ class TestMcpMeshAgentE2E:
         await asyncio.sleep(0.1)
 
         # Verify registry was called (heartbeat, not registration)
-        mock_registry_client.post.assert_called_once()
-        call_args = mock_registry_client.post.call_args
-        assert (
-            call_args[0][0] == "/heartbeat"
-        )  # endpoint (registration now via heartbeat)
+        mock_agents_api.send_heartbeat.assert_called_once()
+        call_args = mock_agents_api.send_heartbeat.call_args
 
         # Verify the heartbeat payload (same format as registration)
-        registration_data = call_args[1]["json"]
+        registration_data = extract_heartbeat_payload(call_args)
         assert registration_data["agent_id"]
         assert len(registration_data["tools"]) == 2
 
@@ -267,31 +296,35 @@ class TestMcpMeshAgentE2E:
             return f"{greeting} {name}, you are {age} years old and today is {current_date}"
 
         # Mock the registry client
-        mock_registry_client.post = AsyncMock()
-
-        async def mock_post_response(endpoint, json=None):
-            response_mock = Mock()
-            response_mock.status = 201
-            response_mock.json = AsyncMock(
-                return_value={
-                    "status": "success",
-                    "agent_id": "test-agent-123",
-                    "dependencies_resolved": {
-                        "flexible_greet": [
-                            {
-                                "agent_id": "date-provider-123",
-                                "function_name": "get_current_date",  # Actual function
-                                "endpoint": "http://date-service:8080",
-                                "capability": "simple_date_service",  # Custom capability name
-                                "status": "available",
-                            }
-                        ]
-                    },
-                }
-            )
-            return response_mock
-
-        mock_registry_client.post.side_effect = mock_post_response
+        mock_registry_client, mock_agents_api = create_mock_registry_client()
+        
+        # Create response with dependencies
+        response_data = {
+            "status": "success",
+            "agent_id": "test-agent-123",
+            "dependencies_resolved": {
+                "flexible_greet": [
+                    {
+                        "agent_id": "date-provider-123",
+                        "function_name": "get_current_date",  # Actual function
+                        "endpoint": "http://date-service:8080",
+                        "capability": "simple_date_service",  # Custom capability name
+                        "status": "available",
+                    }
+                ]
+            },
+        }
+        
+        # Create response with dependencies_resolved
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        response_with_deps = MeshRegistrationResponse(
+            status="success",
+            timestamp="2023-01-01T00:00:00Z",
+            message="Agent registered via heartbeat",
+            agent_id="test-agent-123",
+            dependencies_resolved=response_data.get("dependencies_resolved")
+        )
+        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
         # Create processor
         from mcp_mesh.engine.processor import DecoratorProcessor
@@ -299,6 +332,7 @@ class TestMcpMeshAgentE2E:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
         processor.mesh_tool_processor.registry_client = mock_registry_client
+        processor.mesh_tool_processor.agents_api = mock_agents_api
 
         # Mock proxy creation to return single-function bound proxies
         def mock_create_stdio_proxy(dep_name, dep_info):

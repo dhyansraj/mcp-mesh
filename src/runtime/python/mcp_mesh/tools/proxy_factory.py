@@ -17,11 +17,7 @@ from mcp_mesh import (
     ServiceContractError,
 )
 
-# Use generated OpenAPI client directly
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api.agents_api import (
-    AgentsApi,
-)
-
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from ..shared.service_proxy import MeshServiceProxy
 from ..shared.types import EndpointInfo
 
@@ -176,7 +172,7 @@ class TypeValidator:
 class DynamicProxyGenerator:
     """Generates dynamic proxy classes with full type preservation."""
 
-    def __init__(self, registry_client: AgentsApi):
+    def __init__(self, registry_client: RegistryClient):
         self.registry_client = registry_client
         self._class_cache: dict[str, type] = {}
         self._logger = logging.getLogger(f"{__name__}.DynamicProxyGenerator")
@@ -376,7 +372,7 @@ class DynamicProxyGenerator:
 class EnhancedProxyFactory:
     """Enhanced factory for creating service proxies with full type preservation."""
 
-    def __init__(self, registry_client: AgentsApi | None = None):
+    def __init__(self, registry_client: RegistryClient | None = None):
         """Initialize the enhanced proxy factory.
 
         Args:
@@ -564,32 +560,13 @@ class EnhancedProxyFactory:
         except Exception:
             return False
 
-    def _create_default_registry_client(self) -> AgentsApi:
+    def _create_default_registry_client(self) -> RegistryClient:
         """Create a default registry client."""
         try:
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api_client import (
-                ApiClient,
-            )
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.configuration import (
-                Configuration,
-            )
-
-            config = Configuration(host="http://localhost:8000")
-            api_client = ApiClient(config)
-            return AgentsApi(api_client)
+            return RegistryClient()
         except Exception as e:
             self._logger.warning(f"Failed to create registry client: {str(e)}")
-            # Fallback to localhost:8080
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api_client import (
-                ApiClient,
-            )
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.configuration import (
-                Configuration,
-            )
-
-            config = Configuration(host="http://localhost:8080")
-            api_client = ApiClient(config)
-            return AgentsApi(api_client)
+            return RegistryClient(url="http://localhost:8080")
 
 
 # Global factory instance
@@ -737,7 +714,7 @@ def create_typed_proxy(service_class: type[T], endpoint: str) -> T:
 class ProxyFactory:
     """Legacy proxy factory for backward compatibility."""
 
-    def __init__(self, registry_client: AgentsApi | None = None):
+    def __init__(self, registry_client: RegistryClient | None = None):
         self._enhanced_factory = EnhancedProxyFactory(registry_client)
 
     def create_proxy(

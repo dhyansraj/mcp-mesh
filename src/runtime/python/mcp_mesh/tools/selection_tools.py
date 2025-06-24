@@ -14,7 +14,7 @@ from mcp_mesh import (
     WeightUpdateRequest,
 )
 
-from ..shared.agent_selection import AgentSelector
+from ..shared.agent_selection_impl import AgentSelector
 
 
 class SelectionTools:

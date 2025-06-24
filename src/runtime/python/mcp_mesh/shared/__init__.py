@@ -7,7 +7,7 @@ Common functionality used across server and client components.
 
 # Import only non-circular dependencies at module level
 from .exceptions import MeshAgentError, RegistryConnectionError, RegistryTimeoutError
-from .types import DependencyConfig, HealthStatus
+from .support_types import DependencyConfig, HealthStatus
 
 __all__ = [
     "HealthStatus",
@@ -15,6 +15,7 @@ __all__ = [
     "MeshAgentError",
     "RegistryConnectionError",
     "RegistryTimeoutError",
+    "RegistryClient",
     "ServiceDiscovery",
     "SelectionCriteria",
     "HealthMonitor",
@@ -26,7 +27,13 @@ __all__ = [
 # Lazy imports for circular dependency resolution
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
-    if name in [
+    if name == "RegistryClient":
+        from ..generated_registry_client import (
+            GeneratedRegistryClient as RegistryClient,
+        )
+
+        return RegistryClient
+    elif name in [
         "ServiceDiscovery",
         "SelectionCriteria",
         "HealthMonitor",

@@ -24,11 +24,7 @@ from mcp_mesh import (
     UnifiedDependencyResolver,
 )
 
-# Use generated OpenAPI client directly
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api.agents_api import (
-    AgentsApi,
-)
-
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .exceptions import MeshAgentError
 from .fallback_chain import MeshFallbackChain
 from .service_discovery import ServiceDiscoveryService
@@ -174,7 +170,7 @@ class MeshUnifiedDependencyResolver(UnifiedDependencyResolver):
 
     def __init__(
         self,
-        registry_client: AgentsApi | None = None,
+        registry_client: RegistryClient | None = None,
         service_discovery: ServiceDiscoveryService | None = None,
         fallback_chain: MeshFallbackChain | None = None,
         validator: DependencyValidator | None = None,
@@ -292,13 +288,21 @@ class MeshUnifiedDependencyResolver(UnifiedDependencyResolver):
                 resolution_time_ms=0.0,
             )
 
-        # Try registry-based resolution (not available in basic OpenAPI client)
-        # The generated client only supports agent registration/heartbeat, not dependency lookup
-        # This would need to be implemented via service discovery if needed
+        # Try registry-based resolution
         if self.registry_client:
-            self.logger.debug(
-                f"Registry-based dependency lookup not supported in OpenAPI client for {dependency_name}"
-            )
+            try:
+                instance = await self.registry_client.get_dependency(dependency_name)
+                if instance is not None:
+                    self._legacy_cache[dependency_name] = instance
+                    return DependencyResolutionResult(
+                        specification=specification,
+                        instance=instance,
+                        success=True,
+                        resolution_method="registry_lookup",
+                        resolution_time_ms=0.0,
+                    )
+            except Exception as e:
+                self.logger.debug(f"Registry lookup failed for {dependency_name}: {e}")
 
         # If we have a type hint, try to resolve as type-based dependency
         if specification.type_hint and inspect.isclass(specification.type_hint):

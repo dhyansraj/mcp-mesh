@@ -14,10 +14,11 @@ from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
 
-from .generated_registry_client import GENERATED_CLIENT_AVAILABLE
-from .generated_registry_client import GeneratedRegistryClient as RegistryClient
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 from .logging_config import configure_logging
-from .shared.types import HealthStatus, HealthStatusType
+from ..shared.support_types import HealthStatus, HealthStatusType
 
 logging.getLogger(__name__).info("🎯 Using generated OpenAPI registry client")
 
@@ -45,8 +46,9 @@ class MeshToolProcessor:
     with multiple tools, following the new multi-tool architecture.
     """
 
-    def __init__(self, registry_client: RegistryClient) -> None:
-        self.registry_client: RegistryClient = registry_client
+    def __init__(self, registry_client: ApiClient) -> None:
+        self.registry_client: ApiClient = registry_client
+        self.agents_api = AgentsApi(registry_client)
         self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_tools: dict[str, bool] = {}
         self._health_tasks: dict[str, asyncio.Task[None]] = {}
@@ -81,304 +83,125 @@ class MeshToolProcessor:
             # Generate shared agent ID for all tools, using agent name from @mesh.agent if available
             agent_id = _get_or_create_agent_id(agent_name)
 
-            # Build list of tools using structured models when available
-            if GENERATED_CLIENT_AVAILABLE:
-                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
-                    MeshToolDependencyRegistration,
-                )
-                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
-                    MeshToolRegistration,
-                )
-
-                tool_list = []
-                for func_name, decorated_func in tools.items():
-                    metadata = decorated_func.metadata
-
-                    # Convert dependencies to MeshToolDependencyRegistration objects
-                    dependencies = metadata.get("dependencies", [])
-                    dep_registrations = []
-                    for dep in dependencies:
-                        if isinstance(dep, dict):
-                            dep_reg = MeshToolDependencyRegistration(
-                                capability=dep["capability"],
-                                tags=dep.get("tags"),
-                                version=dep.get("version"),
-                                namespace=dep.get("namespace", "default"),
-                            )
-                            dep_registrations.append(dep_reg)
-                        else:
-                            # Handle string dependencies
-                            dep_reg = MeshToolDependencyRegistration(
-                                capability=dep,
-                                tags=None,
-                                version=None,
-                                namespace="default",
-                            )
-                            dep_registrations.append(dep_reg)
-
-                    # Create structured MeshToolRegistration object
-                    tool_registration = MeshToolRegistration(
-                        function_name=func_name,
-                        capability=metadata.get("capability"),
-                        tags=metadata.get("tags"),
-                        version=metadata.get("version", "1.0.0"),
-                        dependencies=dep_registrations if dep_registrations else [],
-                        description=metadata.get("description"),
-                    )
-
-                    tool_list.append(tool_registration)
-
-                # Check if HTTP wrapper should be enabled
-                enable_http = True  # Default to True for @mesh.tool
-                if agent_config:
-                    enable_http = agent_config.get("enable_http", True)
-
-                # Set up HTTP wrapper FIRST to get the real endpoint
-                http_endpoint = None
-                http_host = (
-                    agent_config.get("http_host", "0.0.0.0")
-                    if agent_config
-                    else "0.0.0.0"
-                )
-                http_port = agent_config.get("http_port", 0) if agent_config else 0
-
-                if enable_http:
-                    self.logger.debug(
-                        f"🌐 Setting up HTTP wrapper for @mesh.tool agent {agent_id}"
-                    )
-                    http_endpoint = await self._setup_http_wrapper_for_tools(
-                        agent_id, tools, agent_config
-                    )
-
-                    if http_endpoint:
-                        # Parse the endpoint to get real values
-                        from urllib.parse import urlparse
-
-                        parsed = urlparse(http_endpoint)
-                        http_host = parsed.hostname or "127.0.0.1"
-                        http_port = parsed.port or 80
-                        self.logger.info(
-                            f"🔧 Updated registration with real HTTP endpoint: {http_endpoint}"
-                        )
-
-                # Create structured registration object using flattened MeshAgentRegistration schema
-                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
-                    MeshAgentRegistration,
-                )
-
-                agent_registration = MeshAgentRegistration(
-                    agent_id=agent_id,
-                    agent_type="mcp_agent",
-                    name=agent_id,
-                    version=(
-                        agent_config.get("version", "1.0.0")
-                        if agent_config
-                        else "1.0.0"
-                    ),
-                    http_host=http_host,
-                    http_port=http_port,
-                    timestamp=datetime.now(UTC),
-                    namespace=(
-                        agent_config.get("namespace", "default")
-                        if agent_config
-                        else "default"
-                    ),
-                    tools=tool_list,
-                )
-
-                # Note: endpoint field not available in generated model
-                # The registry will construct the endpoint from http_host:http_port
-
-                self.logger.debug(
-                    f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
-                )
-                # Skip registration entirely - heartbeat will handle it
-                response = {
-                    "status": "success"
-                }  # Dummy response to continue processing
-
-            else:
-                # Fallback to manual JSON construction
-                tool_list = []
-                for func_name, decorated_func in tools.items():
-                    metadata = decorated_func.metadata
-
-                    # Process dependencies to ensure proper schema compliance
-                    raw_dependencies = metadata.get("dependencies", [])
-                    processed_dependencies = []
-                    for dep in raw_dependencies:
-                        if isinstance(dep, str):
-                            # Handle string dependencies
-                            processed_dependencies.append(
-                                {
-                                    "capability": dep,
-                                    "tags": [],
-                                    "version": "1.0.0",  # Default version for string deps
-                                }
-                            )
-                        elif isinstance(dep, dict):
-                            # Handle dict dependencies, ensure no null values
-                            processed_dep = {
-                                "capability": dep.get("capability"),
-                                "tags": dep.get("tags", []),
-                            }
-                            # Only include version if it's not None
-                            if dep.get("version") is not None:
-                                processed_dep["version"] = str(dep.get("version"))
-                            processed_dependencies.append(processed_dep)
-
-                    tool_data = {
-                        "function_name": func_name,
-                        "capability": metadata.get(
-                            "capability"
-                        ),  # Can be None (nullable)
-                        "tags": metadata.get("tags", []),
-                        "version": metadata.get("version", "1.0.0"),
-                        "dependencies": processed_dependencies,
-                        "description": metadata.get("description")
-                        or "",  # Convert None to empty string
-                    }
-
-                    # Add any custom fields from metadata
-                    for key, value in metadata.items():
-                        if key not in [
-                            "capability",
-                            "tags",
-                            "version",
-                            "dependencies",
-                            "description",
-                        ]:
-                            tool_data[key] = value
-
-                    tool_list.append(tool_data)
-
-                # Build the batched registration payload using flattened MeshAgentRegistration schema
-                registration_data = {
-                    "agent_id": agent_id,
-                    "agent_type": "mcp_agent",
-                    "name": agent_id,
-                    "version": (
-                        agent_config.get("version", "1.0.0")
-                        if agent_config
-                        else "1.0.0"
-                    ),
-                    "http_host": (
-                        agent_config.get("http_host", "0.0.0.0")
-                        if agent_config
-                        else "0.0.0.0"
-                    ),
-                    "http_port": (
-                        agent_config.get("http_port", 0) if agent_config else 0
-                    ),
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "namespace": (
-                        agent_config.get("namespace", "default")
-                        if agent_config
-                        else "default"
-                    ),
-                    "tools": tool_list,
-                }
-
-                # Check if HTTP wrapper should be enabled
-                enable_http = True  # Default to True for @mesh.tool
-                if agent_config:
-                    enable_http = agent_config.get("enable_http", True)
-
-                self.logger.debug(
-                    f"🔍 Checking HTTP for @mesh.tool agent {agent_id}: enable_http={enable_http}"
-                )
-
-                # Set up HTTP wrapper FIRST to get the real endpoint
-                http_endpoint = None
-                if enable_http:
-                    self.logger.debug(
-                        f"🌐 Setting up HTTP wrapper for @mesh.tool agent {agent_id}"
-                    )
-                    http_endpoint = await self._setup_http_wrapper_for_tools(
-                        agent_id, tools, agent_config
-                    )
-
-                    if http_endpoint:
-                        # Parse the endpoint to update registration data with real values
-                        from urllib.parse import urlparse
-
-                        parsed = urlparse(http_endpoint)
-                        registration_data["http_host"] = parsed.hostname or "127.0.0.1"
-                        registration_data["http_port"] = parsed.port or 80
-                        registration_data["endpoint"] = http_endpoint
-                        self.logger.info(
-                            f"🔧 Updated registration with real HTTP endpoint: {http_endpoint}"
-                        )
-                else:
-                    self.logger.debug(
-                        f"📡 HTTP wrapper not enabled for @mesh.tool agent {agent_id}"
-                    )
-
-                # Skip registration entirely - heartbeat will handle it via upsert
-                self.logger.debug(
-                    f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
-                )
-
-            # Always mark tools as processed and start heartbeat - no dependency on registration
-            for func_name in tools:
-                results[func_name] = True
-                self._processed_tools[func_name] = True
-
-            self.logger.info(
-                f"✅ Starting heartbeat monitoring for {len(tools)} tools as single agent: {agent_id}"
+            # Build list of tools using structured models
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
+            MeshToolDependencyRegistration,
+            )
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
+            MeshToolRegistration,
             )
 
-            # ALWAYS start health monitoring - no dependency on registration success
-            # Use configuration from @mesh.agent if available, otherwise defaults
-            health_interval = 30  # Default interval
+            tool_list = []
+            for func_name, decorated_func in tools.items():
+                metadata = decorated_func.metadata
+
+                # Convert dependencies to MeshToolDependencyRegistration objects
+                dependencies = metadata.get("dependencies", [])
+                dep_registrations = []
+                for dep in dependencies:
+                    if isinstance(dep, dict):
+                        dep_reg = MeshToolDependencyRegistration(
+                            capability=dep["capability"],
+                            tags=dep.get("tags") or [],
+                            version=dep.get("version") or "",
+                            namespace=dep.get("namespace", "default"),
+                        )
+                        dep_registrations.append(dep_reg)
+                    else:
+                        # Handle string dependencies
+                        dep_reg = MeshToolDependencyRegistration(
+                            capability=dep,
+                            tags=[],
+                            version="",
+                            namespace="default",
+                        )
+                        dep_registrations.append(dep_reg)
+
+                # Create structured MeshToolRegistration object
+                tool_registration = MeshToolRegistration(
+                    function_name=func_name,
+                    capability=metadata.get("capability"),
+                    tags=metadata.get("tags"),
+                    version=metadata.get("version", "1.0.0"),
+                    dependencies=dep_registrations if dep_registrations else [],
+                    description=metadata.get("description"),
+                )
+
+                tool_list.append(tool_registration)
+
+            # Check if HTTP wrapper should be enabled
+            enable_http = True  # Default to True for @mesh.tool
             if agent_config:
-                health_interval = agent_config.get("health_interval", 30)
+                enable_http = agent_config.get("enable_http", True)
 
-            self.logger.debug(
-                f"💓💓💓 Starting heartbeat monitoring for agent {agent_id} with interval {health_interval}s"
+            # Set up HTTP wrapper FIRST to get the real endpoint
+            http_endpoint = None
+            http_host = (
+                agent_config.get("http_host", "0.0.0.0")
+                if agent_config
+                else "0.0.0.0"
+            )
+            http_port = agent_config.get("http_port", 0) if agent_config else 0
+
+            if enable_http:
+                self.logger.debug(
+                    f"🌐 Setting up HTTP wrapper for @mesh.tool agent {agent_id}"
+                )
+                http_endpoint = await self._setup_http_wrapper_for_tools(
+                    agent_id, tools, agent_config
+                )
+
+                if http_endpoint:
+                    # Parse the endpoint to get real values
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(http_endpoint)
+                    http_host = parsed.hostname or "127.0.0.1"
+                    http_port = parsed.port or 80
+                    self.logger.info(
+                        f"🔧 Updated registration with real HTTP endpoint: {http_endpoint}"
+                    )
+
+            # Create structured registration object using flattened MeshAgentRegistration schema
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                MeshAgentRegistration,
             )
 
-            # Create agent metadata for health monitoring with REAL HTTP endpoint info
-            # Use the same http_host/http_port that was used in registration
-            final_http_host = "0.0.0.0"
-            final_http_port = 0
-
-            # If HTTP was enabled and endpoint was created, extract the real values
-            if enable_http and http_endpoint:
-                from urllib.parse import urlparse
-
-                parsed = urlparse(http_endpoint)
-                final_http_host = parsed.hostname or "127.0.0.1"
-                final_http_port = parsed.port or 80
-                self.logger.debug(
-                    f"💓 Using real HTTP endpoint for heartbeat: {final_http_host}:{final_http_port}"
-                )
-            else:
-                # Fallback to agent config values
-                final_http_host = (
-                    agent_config.get("http_host", "0.0.0.0")
+            agent_registration = MeshAgentRegistration(
+                agent_id=agent_id,
+                agent_type="mcp_agent",
+                name=agent_id,
+                version=(
+                    agent_config.get("version", "1.0.0")
                     if agent_config
-                    else "0.0.0.0"
-                )
-                final_http_port = (
-                    agent_config.get("http_port", 0) if agent_config else 0
-                )
-
-            agent_metadata = {
-                "agent_id": agent_id,
-                "agent_type": "mcp_agent",
-                "name": agent_id,
-                "version": (
-                    agent_config.get("version", "1.0.0") if agent_config else "1.0.0"
+                    else "1.0.0"
                 ),
-                "namespace": (
+                http_host=http_host,
+                http_port=http_port,
+                timestamp=datetime.now(UTC),
+                namespace=(
                     agent_config.get("namespace", "default")
                     if agent_config
                     else "default"
                 ),
-                "http_host": final_http_host,
-                "http_port": final_http_port,
-                "enable_http": enable_http,
+                tools=tool_list,
+            )
+
+            # Note: endpoint field not available in generated model
+            # The registry will construct the endpoint from http_host:http_port
+
+            self.logger.debug(
+                f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
+            )
+            # Skip registration entirely - heartbeat will handle it
+            response = {
+                "status": "success"
+            }  # Dummy response to continue processing
+
+            # Create and start the health monitoring task
+            health_interval = 30.0  # Default health interval
+            agent_metadata = {
+                "agent_id": agent_id,
                 "tools": [func_name for func_name in tools],
                 "capabilities": list(
                     set(
@@ -958,7 +781,7 @@ class MeshToolProcessor:
             )
 
             # Use the direct OpenAPI client method
-            response = self.registry_client.agents_api.send_heartbeat(
+            response = self.agents_api.send_heartbeat(
                 heartbeat_registration
             )
 
@@ -977,9 +800,15 @@ class MeshToolProcessor:
 
                 # Add dependencies_resolved if present (include even if empty for unwiring)
                 if hasattr(response, "dependencies_resolved"):
-                    response_dict["dependencies_resolved"] = (
-                        response.dependencies_resolved
-                    )
+                    # Convert Pydantic objects to dictionaries
+                    deps_resolved = {}
+                    if response.dependencies_resolved:
+                        for func_name, dep_list in response.dependencies_resolved.items():
+                            deps_resolved[func_name] = [
+                                dep.model_dump() if hasattr(dep, 'model_dump') else dep
+                                for dep in dep_list
+                            ]
+                    response_dict["dependencies_resolved"] = deps_resolved
 
                 self.logger.debug(f"💓 Heartbeat successful: {response_dict}")
                 return response_dict
@@ -1160,8 +989,9 @@ class MeshAgentProcessor:
     registrations with the mesh registry service.
     """
 
-    def __init__(self, registry_client: RegistryClient) -> None:
-        self.registry_client: RegistryClient = registry_client
+    def __init__(self, registry_client: ApiClient) -> None:
+        self.registry_client: ApiClient = registry_client
+        self.agents_api = AgentsApi(registry_client)
         self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_agents: dict[str, bool] = {}
         self._health_tasks: dict[str, asyncio.Task[None]] = {}
@@ -2010,7 +1840,10 @@ class DecoratorProcessor:
 
     def __init__(self, registry_url: str | None = None):
         self.registry_url = registry_url or self._get_registry_url_from_env()
-        self.registry_client = RegistryClient(self.registry_url, retry_attempts=1)
+        
+        # Create real generated client
+        config = Configuration(host=self.registry_url)
+        self.registry_client = ApiClient(config)
         self.logger = logging.getLogger(__name__)
 
         # Specialized processors
