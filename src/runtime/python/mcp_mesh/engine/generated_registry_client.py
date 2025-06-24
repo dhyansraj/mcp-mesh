@@ -135,30 +135,36 @@ class GeneratedRegistryClient:
     async def send_heartbeat(self, health_status: HealthStatus) -> bool:
         """Send periodic heartbeat to registry using generated client."""
         try:
-            # Build HeartbeatRequest model
-            heartbeat_request = HeartbeatRequest(
+            # Build MeshAgentRegistration for heartbeat (uses same format as registration)
+            heartbeat_registration = MeshAgentRegistration(
                 agent_id=health_status.agent_name,
-                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                metadata=HeartbeatRequestMetadata(
-                    status=(
-                        health_status.status.value
-                        if hasattr(health_status.status, "value")
-                        else health_status.status
-                    ),
-                    capabilities=health_status.capabilities,
-                    uptime_seconds=health_status.uptime_seconds,
-                    version=health_status.version or "1.0.0",
-                    last_activity=(
-                        health_status.timestamp.isoformat()
-                        if health_status.timestamp
-                        else None
-                    ),
-                    **health_status.metadata,
+                name=health_status.agent_name,
+                agent_type="mcp_agent",
+                http_host="127.0.0.1",
+                http_port=0,
+                namespace="default",
+                status=(
+                    health_status.status.value
+                    if hasattr(health_status.status, "value")
+                    else health_status.status
                 ),
+                version=health_status.version or "1.0.0",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                tools=[],  # Empty for heartbeat - we just need to maintain connection
+                uptime_seconds=health_status.uptime_seconds,
+                last_activity=(
+                    health_status.timestamp.isoformat().replace("+00:00", "Z")
+                    if health_status.timestamp
+                    else datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                ),
+                checks=health_status.checks if hasattr(health_status, 'checks') else {},
+                errors=health_status.errors if hasattr(health_status, 'errors') else [],
+                capabilities=health_status.capabilities,
+                metadata=health_status.metadata if health_status.metadata else {},
             )
 
             # Call generated client
-            response = self.agents_api.send_heartbeat(heartbeat_request)
+            response = self.agents_api.send_heartbeat(heartbeat_registration)
 
             self.logger.debug(
                 f"💚 Heartbeat sent for {health_status.agent_name} via generated client"
@@ -180,31 +186,37 @@ class GeneratedRegistryClient:
         This method is critical for the dependency injection system.
         """
         try:
-            # Build HeartbeatRequest model
-            heartbeat_request = HeartbeatRequest(
+            # Build MeshAgentRegistration for heartbeat (uses same format as registration)
+            heartbeat_registration = MeshAgentRegistration(
                 agent_id=health_status.agent_name,
-                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                metadata=HeartbeatRequestMetadata(
-                    status=(
-                        health_status.status.value
-                        if hasattr(health_status.status, "value")
-                        else health_status.status
-                    ),
-                    capabilities=health_status.capabilities,
-                    uptime_seconds=health_status.uptime_seconds,
-                    version=health_status.version or "1.0.0",
-                    last_activity=(
-                        health_status.timestamp.isoformat()
-                        if health_status.timestamp
-                        else None
-                    ),
-                    **health_status.metadata,
+                name=health_status.agent_name,
+                agent_type="mcp_agent",
+                http_host="127.0.0.1",
+                http_port=0,
+                namespace="default",
+                status=(
+                    health_status.status.value
+                    if hasattr(health_status.status, "value")
+                    else health_status.status
                 ),
+                version=health_status.version or "1.0.0",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                tools=[],  # Empty for heartbeat - we just need to maintain connection
+                uptime_seconds=health_status.uptime_seconds,
+                last_activity=(
+                    health_status.timestamp.isoformat().replace("+00:00", "Z")
+                    if health_status.timestamp
+                    else datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                ),
+                checks=health_status.checks if hasattr(health_status, 'checks') else {},
+                errors=health_status.errors if hasattr(health_status, 'errors') else [],
+                capabilities=health_status.capabilities,
+                metadata=health_status.metadata if health_status.metadata else {},
             )
 
             # Call generated client and get full response
-            response: HeartbeatResponse = self.agents_api.send_heartbeat(
-                heartbeat_request
+            response: MeshRegistrationResponse = self.agents_api.send_heartbeat(
+                heartbeat_registration
             )
 
             # Convert Pydantic response to dict for compatibility
@@ -429,17 +441,29 @@ class GeneratedRegistryClient:
                     )
 
             elif endpoint == "/heartbeat":
-                # Convert dict to proper model and send heartbeat
+                # Convert dict to proper model and send heartbeat (uses MeshAgentRegistration format)
                 if json:
-                    agent_id = json.get("agent_id", "unknown")
-
-                    heartbeat_request = HeartbeatRequest(
-                        agent_id=agent_id,
-                        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        metadata=HeartbeatRequestMetadata(**json.get("metadata", {})),
+                    # Heartbeat uses same format as registration - convert dict to MeshAgentRegistration
+                    heartbeat_registration = MeshAgentRegistration(
+                        agent_id=json.get("agent_id", "unknown"),
+                        name=json.get("name", json.get("agent_id", "unknown")),
+                        agent_type=json.get("agent_type", "mcp_agent"),
+                        http_host=json.get("http_host", "127.0.0.1"),
+                        http_port=json.get("http_port", 0),
+                        namespace=json.get("namespace", "default"),
+                        status=json.get("status", "healthy"),
+                        version=json.get("version", "1.0.0"),
+                        timestamp=json.get("timestamp", datetime.now(UTC).isoformat().replace("+00:00", "Z")),
+                        tools=json.get("tools", []),
+                        uptime_seconds=json.get("uptime_seconds", 0),
+                        last_activity=json.get("last_activity", datetime.now(UTC).isoformat().replace("+00:00", "Z")),
+                        checks=json.get("checks", {}),
+                        errors=json.get("errors", []),
+                        capabilities=json.get("capabilities", []),
+                        metadata=json.get("metadata", {}),
                     )
 
-                    response = self.agents_api.send_heartbeat(heartbeat_request)
+                    response = self.agents_api.send_heartbeat(heartbeat_registration)
 
                     return MockHTTPResponse(
                         {
