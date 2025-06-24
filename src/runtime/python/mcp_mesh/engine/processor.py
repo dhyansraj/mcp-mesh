@@ -13,10 +13,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
-from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
 
+from ..shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared.support_types import HealthStatus, HealthStatusType
 from .logging_config import configure_logging
 
@@ -48,7 +48,7 @@ class MeshToolProcessor:
 
     def __init__(self, registry_client: ApiClient) -> None:
         self.registry_client: ApiClient = registry_client
-        self.agents_api = AgentsApi(registry_client)
+        self.registry_wrapper = RegistryClientWrapper(registry_client)
         self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_tools: dict[str, bool] = {}
         self._health_tasks: dict[str, asyncio.Task[None]] = {}
@@ -100,22 +100,28 @@ class MeshToolProcessor:
                 dep_registrations = []
                 for dep in dependencies:
                     if isinstance(dep, dict):
+                        # Ensure all fields are proper strings or lists, never None
+                        capability = dep.get("capability")
+                        if not capability:
+                            continue  # Skip invalid dependencies
                         dep_reg = MeshToolDependencyRegistration(
-                            capability=dep["capability"],
+                            capability=str(capability),
                             tags=dep.get("tags") or [],
-                            version=dep.get("version") or "",
-                            namespace=dep.get("namespace", "default"),
+                            version=dep.get("version")
+                            or "",  # Use empty string for unspecified versions
+                            namespace=dep.get("namespace") or "default",
                         )
                         dep_registrations.append(dep_reg)
                     else:
                         # Handle string dependencies
-                        dep_reg = MeshToolDependencyRegistration(
-                            capability=dep,
-                            tags=[],
-                            version="",
-                            namespace="default",
-                        )
-                        dep_registrations.append(dep_reg)
+                        if dep:  # Only process non-empty strings
+                            dep_reg = MeshToolDependencyRegistration(
+                                capability=str(dep),
+                                tags=[],
+                                version="",  # Use empty string for unspecified versions
+                                namespace="default",
+                            )
+                            dep_registrations.append(dep_reg)
 
                 # Create structured MeshToolRegistration object
                 tool_registration = MeshToolRegistration(
@@ -627,36 +633,57 @@ class MeshToolProcessor:
             # Get the tools from DecoratorRegistry to ensure we have the latest metadata
             mesh_tools = DecoratorRegistry.get_mesh_tools()
 
-            # Build tools array with full metadata (same as registration)
+            # Build tools array with full metadata using proper OpenAPI models (same as registration)
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
+                MeshToolDependencyRegistration,
+            )
+            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
+                MeshToolRegistration,
+            )
+
             tool_list = []
             for func_name, decorated_func in mesh_tools.items():
                 tool_metadata = decorated_func.metadata
 
-                # Process dependencies to ensure proper schema compliance
-                raw_dependencies = tool_metadata.get("dependencies", [])
-                processed_dependencies = []
-                for dep in raw_dependencies:
-                    if isinstance(dep, str):
-                        processed_dependencies.append(
-                            {"capability": dep, "tags": [], "namespace": "default"}
+                # Convert dependencies to MeshToolDependencyRegistration objects (same as registration)
+                dependencies = tool_metadata.get("dependencies", [])
+                dep_registrations = []
+                for dep in dependencies:
+                    if isinstance(dep, dict):
+                        # Ensure all fields are proper strings or lists, never None
+                        capability = dep.get("capability")
+                        if not capability:
+                            continue  # Skip invalid dependencies
+                        dep_reg = MeshToolDependencyRegistration(
+                            capability=str(capability),
+                            tags=dep.get("tags") or [],
+                            version=dep.get("version")
+                            or "",  # Use empty string for unspecified versions
+                            namespace=dep.get("namespace") or "default",
                         )
-                    elif isinstance(dep, dict):
-                        processed_dep = {
-                            "capability": dep.get("capability"),
-                            "tags": dep.get("tags", []),
-                            "namespace": dep.get("namespace", "default"),
-                        }
-                        processed_dependencies.append(processed_dep)
+                        dep_registrations.append(dep_reg)
+                    else:
+                        # Handle string dependencies
+                        if dep:  # Only process non-empty strings
+                            dep_reg = MeshToolDependencyRegistration(
+                                capability=str(dep),
+                                tags=[],
+                                version="",  # Use empty string for unspecified versions
+                                namespace="default",
+                            )
+                            dep_registrations.append(dep_reg)
 
-                tool_data = {
-                    "function_name": func_name,
-                    "capability": tool_metadata.get("capability"),
-                    "tags": tool_metadata.get("tags", []),
-                    "version": tool_metadata.get("version", "1.0.0"),
-                    "dependencies": processed_dependencies,
-                    "description": tool_metadata.get("description") or "",
-                }
-                tool_list.append(tool_data)
+                # Create structured MeshToolRegistration object (same as registration)
+                tool_registration = MeshToolRegistration(
+                    function_name=func_name,
+                    capability=tool_metadata.get("capability"),
+                    tags=tool_metadata.get("tags"),
+                    version=tool_metadata.get("version", "1.0.0"),
+                    dependencies=dep_registrations if dep_registrations else [],
+                    description=tool_metadata.get("description"),
+                )
+
+                tool_list.append(tool_registration)
 
             # Build the exact same payload format as registration
             heartbeat_data = {
@@ -671,8 +698,8 @@ class MeshToolProcessor:
                 "tools": tool_list,
             }
 
-            # Send to /heartbeat endpoint using the same format as registration
-            response = await self._send_heartbeat_request(heartbeat_data)
+            # Send heartbeat using wrapper
+            response = await self._send_heartbeat_request(agent_id, metadata)
             self.logger.debug(f"🔍 HEARTBEAT_RESPONSE: {response}")
 
             if response and response.get("status") == "success":
@@ -721,92 +748,39 @@ class MeshToolProcessor:
             return False
 
     async def _send_heartbeat_request(
-        self, heartbeat_data: dict[str, Any]
+        self, agent_id: str, metadata: dict[str, Any]
     ) -> dict[str, Any] | None:
         """
-        Send heartbeat data to mesh registry using the proper heartbeat method.
+        Send heartbeat using the registry wrapper.
 
         Args:
-            heartbeat_data: Heartbeat payload in MeshAgentRegistration format
+            agent_id: Agent identifier
+            metadata: Agent metadata
 
         Returns:
             Registry response with dependencies_resolved or None if failed
         """
         try:
-            from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
-                MeshAgentRegistration,
+            # Build health status from metadata
+            health_status = HealthStatus(
+                agent_name=agent_id,
+                status=HealthStatusType.HEALTHY,
+                capabilities=metadata.get("capabilities", []),
+                timestamp=datetime.now(UTC),
+                version=metadata.get("version", "1.0.0"),
+                metadata=metadata,
             )
 
-            self.logger.debug(
-                f"💓 Sending heartbeat to registry with {len(heartbeat_data.get('tools', []))} tools"
+            # Use wrapper for clean, type-safe heartbeat
+            response = (
+                await self.registry_wrapper.send_heartbeat_with_dependency_resolution(
+                    health_status
+                )
             )
-
-            # Create MeshAgentRegistration directly with actual tools data
-            heartbeat_registration = MeshAgentRegistration(
-                agent_id=heartbeat_data.get("agent_id", "unknown"),
-                name=heartbeat_data.get(
-                    "name", heartbeat_data.get("agent_id", "unknown")
-                ),
-                agent_type=heartbeat_data.get("agent_type", "mcp_agent"),
-                http_host=heartbeat_data.get("http_host", "127.0.0.1"),
-                http_port=heartbeat_data.get("http_port", 0),
-                namespace=heartbeat_data.get("namespace", "default"),
-                status="healthy",
-                version=heartbeat_data.get("version", "1.0.0"),
-                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                tools=heartbeat_data.get(
-                    "tools", []
-                ),  # Include actual tools for dependency resolution
-                uptime_seconds=0,
-                last_activity=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                checks={},
-                errors=[],
-                capabilities=[
-                    tool.get("capability")
-                    for tool in heartbeat_data.get("tools", [])
-                    if tool.get("capability")
-                ],
-                metadata={},
-            )
-
-            # Debug log the request payload
-            self.logger.debug(
-                f"🔍 HEARTBEAT_REQUEST: {heartbeat_registration.model_dump()}"
-            )
-
-            # Use the direct OpenAPI client method
-            response = self.agents_api.send_heartbeat(heartbeat_registration)
 
             if response:
-                # Convert Pydantic response to dict
-                response_dict = {
-                    "status": response.status,
-                    "timestamp": (
-                        response.timestamp.isoformat()
-                        if hasattr(response.timestamp, "isoformat")
-                        else str(response.timestamp)
-                    ),
-                    "message": response.message,
-                    "agent_id": response.agent_id,
-                }
-
-                # Add dependencies_resolved if present (include even if empty for unwiring)
-                if hasattr(response, "dependencies_resolved"):
-                    # Convert Pydantic objects to dictionaries
-                    deps_resolved = {}
-                    if response.dependencies_resolved:
-                        for (
-                            func_name,
-                            dep_list,
-                        ) in response.dependencies_resolved.items():
-                            deps_resolved[func_name] = [
-                                dep.model_dump() if hasattr(dep, "model_dump") else dep
-                                for dep in dep_list
-                            ]
-                    response_dict["dependencies_resolved"] = deps_resolved
-
-                self.logger.debug(f"💓 Heartbeat successful: {response_dict}")
-                return response_dict
+                self.logger.debug(f"💓 Heartbeat successful: {response}")
+                return response
             else:
                 self.logger.error("💔 Heartbeat failed - no response")
                 return None
@@ -986,7 +960,7 @@ class MeshAgentProcessor:
 
     def __init__(self, registry_client: ApiClient) -> None:
         self.registry_client: ApiClient = registry_client
-        self.agents_api = AgentsApi(registry_client)
+        self.registry_wrapper = RegistryClientWrapper(registry_client)
         self.logger: logging.Logger = logging.getLogger(__name__)
         self._processed_agents: dict[str, bool] = {}
         self._health_tasks: dict[str, asyncio.Task[None]] = {}

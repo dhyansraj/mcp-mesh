@@ -20,6 +20,7 @@ from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configurat
 from mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response import (
     RegistrationResponse,
 )
+from mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
 from mcp_mesh.types import McpMeshAgent
 
 
@@ -121,39 +122,79 @@ def validate_mesh_agent_metadata(metadata):
 
 
 def create_mock_registry_client(response_override=None):
-    """Create a mock registry client with proper agents_api setup."""
-    mock_registry = AsyncMock(spec=ApiClient)
+    """Create a mock registry client with wrapper for new architecture."""
+    mock_api_client = AsyncMock(spec=ApiClient)
+    mock_wrapper = AsyncMock(spec=RegistryClientWrapper)
+
+    # Create default response in dict format (what wrapper returns)
+    default_response = {
+        "status": "success",
+        "timestamp": "2023-01-01T00:00:00Z",
+        "message": "Agent registered via heartbeat",
+        "agent_id": "test-agent",
+        "dependencies_resolved": {},
+    }
+
+    response = response_override or default_response
+    mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = response
+    mock_wrapper.register_multi_tool_agent.return_value = response
+
+    # For backward compatibility, also create the old mock structure
+    # so existing test code can still access mock_agents_api if needed
     mock_agents_api = AsyncMock()
+    mock_api_client.agents_api = mock_agents_api
+
+    # Create a mock registry that contains both the wrapper and the legacy interface
+    mock_registry = AsyncMock(spec=ApiClient)
     mock_registry.agents_api = mock_agents_api
+    mock_registry._wrapper = mock_wrapper  # Store wrapper for easy access
 
-    # Create default response
-    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
-        MeshRegistrationResponse,
-    )
-
-    default_response = MeshRegistrationResponse(
-        status="success",
-        timestamp="2023-01-01T00:00:00Z",
-        message="Agent registered via heartbeat",
-        agent_id="test-agent",
-    )
-
-    mock_agents_api.send_heartbeat = AsyncMock(
-        return_value=response_override or default_response
-    )
-    return mock_registry, mock_agents_api
+    return mock_registry, mock_wrapper
 
 
 def extract_heartbeat_payload(call_args):
-    """Extract and properly serialize heartbeat payload from mock call args."""
-    heartbeat_registration = call_args[0][
-        0
-    ]  # First positional argument is MeshAgentRegistration
-    if hasattr(heartbeat_registration, "model_dump"):
-        # Use mode='json' to properly serialize datetime fields
-        return heartbeat_registration.model_dump(mode="json")
-    else:
-        return heartbeat_registration
+    """Extract heartbeat call arguments for wrapper-based calls."""
+    # For wrapper calls, the first argument is a HealthStatus object
+    health_status = call_args[0][0]  # First positional argument
+
+    # Since we're mocking the wrapper, we need to simulate what the real wrapper does
+    # The real wrapper gets tools from DecoratorRegistry and includes them in the payload
+    from mcp_mesh import DecoratorRegistry
+
+    mesh_tools = DecoratorRegistry.get_mesh_tools()
+    tools = []
+    for func_name, decorated_func in mesh_tools.items():
+        metadata = decorated_func.metadata
+        tool_data = {
+            "function_name": func_name,
+            "capability": metadata.get("capability"),
+            "tags": metadata.get("tags", []),
+            "version": metadata.get("version", "1.0.0"),
+            "dependencies": metadata.get("dependencies", []),
+        }
+        # Only include description if it's not None
+        if metadata.get("description"):
+            tool_data["description"] = metadata.get("description")
+
+        tools.append(tool_data)
+
+    return {
+        "agent_id": health_status.agent_name,
+        "agent_type": "mcp_agent",
+        "name": health_status.agent_name,
+        "status": "healthy",
+        "version": health_status.version,
+        "capabilities": health_status.capabilities,
+        "timestamp": (
+            health_status.timestamp.isoformat()
+            if hasattr(health_status.timestamp, "isoformat")
+            else str(health_status.timestamp)
+        ),
+        "tools": tools,
+        "namespace": "default",
+        "http_host": "0.0.0.0",
+        "http_port": 0,
+    }
 
 
 class TestBatchedRegistration:
@@ -167,7 +208,7 @@ class TestBatchedRegistration:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create server with multiple functions
         server = FastMCP("test-batch")
@@ -188,7 +229,7 @@ class TestBatchedRegistration:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Mock HTTP wrapper setup to avoid actual server startup
         with patch.object(
@@ -210,10 +251,10 @@ class TestBatchedRegistration:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Should make exactly ONE heartbeat call (registration now happens via heartbeat)
-        assert mock_agents_api.send_heartbeat.call_count == 1
+        assert mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
 
         # Check the payload - should be MeshAgentRegistration object
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         payload = extract_heartbeat_payload(call_args)
 
         # CRITICAL: First validate against OpenAPI schema
@@ -237,7 +278,7 @@ class TestBatchedRegistration:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create function with dependencies
         server = FastMCP("test-payload")
@@ -264,7 +305,7 @@ class TestBatchedRegistration:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Mock HTTP wrapper setup to avoid actual server startup
         with patch.object(
@@ -292,10 +333,10 @@ class TestBatchedRegistration:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Verify heartbeat was called at least once
-        assert mock_agents_api.send_heartbeat.called
+        assert mock_wrapper.send_heartbeat_with_dependency_resolution.called
 
         # Get the latest call (last successful heartbeat)
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         captured_payload = extract_heartbeat_payload(call_args)
 
         # Verify payload structure (flattened schema)
@@ -327,7 +368,7 @@ class TestDependencyInjection:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # First, create the expected response structure using new format and validate it against schema
         from datetime import datetime
@@ -369,7 +410,9 @@ class TestDependencyInjection:
                 "dependencies_resolved"
             ),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            dependencies_resolved_response
+        )
 
         # Mock heartbeat response with same dependencies_resolved structure
         mock_registry.send_heartbeat_with_response = AsyncMock(
@@ -403,7 +446,7 @@ class TestDependencyInjection:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Process all decorators (should trigger registration and DI)
         # Mock HTTP wrapper setup to avoid actual server startup
@@ -427,11 +470,11 @@ class TestDependencyInjection:
 
         # Verify that registry was called correctly (heartbeat, not registration)
         assert (
-            mock_agents_api.send_heartbeat.call_count == 1
+            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
         ), "Should have called heartbeat"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         # Extract MeshAgentRegistration object from call
         payload = extract_heartbeat_payload(call_args)
 
@@ -491,7 +534,7 @@ class TestDependencyInjection:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create response with multiple dependencies resolved using new format
         from datetime import datetime
@@ -549,7 +592,9 @@ class TestDependencyInjection:
                 "dependencies_resolved"
             ),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            multiple_dependencies_response
+        )
 
         # Mock heartbeat response with same dependencies_resolved structure
         mock_registry.send_heartbeat_with_response = AsyncMock(
@@ -596,7 +641,7 @@ class TestDependencyInjection:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Process all decorators (should trigger registration and DI)
         # Mock HTTP wrapper setup to avoid actual server startup
@@ -620,11 +665,11 @@ class TestDependencyInjection:
 
         # Verify that registry was called correctly
         assert (
-            mock_agents_api.send_heartbeat.call_count == 1
+            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
         ), "Should have called heartbeat"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         # Extract MeshAgentRegistration object from call
         payload = extract_heartbeat_payload(call_args)
 
@@ -704,7 +749,7 @@ class TestDependencyInjection:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create response with dependencies for all functions resolved
         from datetime import datetime
@@ -785,7 +830,9 @@ class TestDependencyInjection:
                 "dependencies_resolved"
             ),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            multi_function_dependencies_response
+        )
 
         # Mock heartbeat response with same dependencies_resolved structure
         mock_registry.send_heartbeat_with_response = AsyncMock(
@@ -866,7 +913,7 @@ class TestDependencyInjection:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Process all decorators (should trigger registration and DI)
         # Mock HTTP wrapper setup to avoid actual server startup
@@ -890,11 +937,11 @@ class TestDependencyInjection:
 
         # Verify that registry was called correctly
         assert (
-            mock_agents_api.send_heartbeat.call_count == 1
+            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
         ), "Should have called heartbeat once for batched tools"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         # Extract MeshAgentRegistration object from call
         payload = extract_heartbeat_payload(call_args)
 
@@ -1007,7 +1054,7 @@ class TestDependencyInjection:
 
         DecoratorRegistry.clear_all()
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create response for agent registration
         from datetime import datetime
@@ -1038,7 +1085,9 @@ class TestDependencyInjection:
             agent_id="test-agent",
             dependencies_resolved=agent_class_response.get("dependencies_resolved"),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            agent_class_response
+        )
 
         # Mock heartbeat response
         mock_registry.send_heartbeat_with_response = AsyncMock(
@@ -1106,11 +1155,11 @@ class TestDependencyInjection:
 
         # Verify that registry was called correctly
         assert (
-            mock_agents_api.send_heartbeat.call_count == 1
+            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
         ), "Should have called heartbeat once for agent class"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         # Extract MeshAgentRegistration object from call
         payload = extract_heartbeat_payload(call_args)
 
@@ -1200,7 +1249,7 @@ class TestDependencyInjection:
     @pytest.mark.asyncio
     async def test_dependency_injection_remote_call_attempts(self):
         """Test that injected dependencies actually attempt remote calls to registry-provided URLs."""
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Create response with HTTP endpoints for testing remote calls
         from datetime import datetime
@@ -1245,7 +1294,9 @@ class TestDependencyInjection:
             agent_id="test-agent",
             dependencies_resolved=remote_call_response.get("dependencies_resolved"),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            remote_call_response
+        )
 
         server = FastMCP("remote-call-test")
 
@@ -1285,7 +1336,7 @@ class TestDependencyInjection:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Process all decorators
         # Mock HTTP wrapper setup to avoid actual server startup
@@ -1309,11 +1360,11 @@ class TestDependencyInjection:
 
         # Verify registration occurred
         assert (
-            mock_agents_api.send_heartbeat.call_count == 1
+            mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
         ), "Should have called heartbeat once"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
-        call_args = mock_agents_api.send_heartbeat.call_args
+        call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         # Extract MeshAgentRegistration object from call
         heartbeat_registration = call_args[0][0]  # First positional argument
         # Heartbeat is now sent via agents_api.send_heartbeat()# Get the registered functions to test their injected dependencies
@@ -1368,7 +1419,7 @@ class TestDependencyResolution:
     @pytest.mark.asyncio
     async def test_dependency_resolution_per_tool(self):
         """Test that each tool gets its own dependency resolution."""
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Mock registration response with per-tool resolution
         # Use default response without specific dependencies
@@ -1408,7 +1459,7 @@ class TestHeartbeatBatching:
         # MeshAgentRegistration schema for both request and response as registration
 
         # Mock registry client to verify the unified format
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
 
         # Mock successful registration that returns the new unified format
         registration_response = {
@@ -1419,7 +1470,7 @@ class TestHeartbeatBatching:
             "dependencies_resolved": {},
         }
 
-        mock_registry, mock_agents_api = create_mock_registry_client()
+        mock_registry, mock_wrapper = create_mock_registry_client()
         # Create response with dependencies_resolved
         from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
@@ -1432,7 +1483,9 @@ class TestHeartbeatBatching:
             agent_id="test-agent",
             dependencies_resolved=registration_response.get("dependencies_resolved"),
         )
-        mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
+        mock_wrapper.send_heartbeat_with_dependency_resolution.return_value = (
+            registration_response
+        )
 
         # Mock heartbeat to use the SAME response format
         mock_registry.send_heartbeat_with_response = AsyncMock(
@@ -1453,7 +1506,7 @@ class TestHeartbeatBatching:
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
         processor.mesh_tool_processor.registry_client = mock_registry
-        processor.mesh_tool_processor.agents_api = mock_agents_api
+        processor.mesh_tool_processor.registry_wrapper = mock_wrapper
 
         # Register the tools first
         # Mock HTTP wrapper setup to avoid actual server startup
@@ -1476,10 +1529,10 @@ class TestHeartbeatBatching:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Verify registration happened with unified format
-        assert mock_agents_api.send_heartbeat.call_count == 1
+        assert mock_wrapper.send_heartbeat_with_dependency_resolution.call_count == 1
 
         # Get the heartbeat payload and verify endpoint
-        reg_call_args = mock_agents_api.send_heartbeat.call_args
+        reg_call_args = mock_wrapper.send_heartbeat_with_dependency_resolution.call_args
         endpoint = reg_call_args[0][0]  # First positional argument is the endpoint
         registration_payload = reg_call_args[1]["json"]
 

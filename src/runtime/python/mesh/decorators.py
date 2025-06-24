@@ -248,7 +248,6 @@ def tool(
                         {
                             "capability": dep,
                             "tags": [],
-                            "version": None,
                         }
                     )
                 elif isinstance(dep, dict):
@@ -270,13 +269,13 @@ def tool(
                     if dep_version is not None and not isinstance(dep_version, str):
                         raise ValueError("dependency version must be a string")
 
-                    validated_dependencies.append(
-                        {
-                            "capability": dep["capability"],
-                            "tags": dep_tags,
-                            "version": dep_version,
-                        }
-                    )
+                    dependency_dict = {
+                        "capability": dep["capability"],
+                        "tags": dep_tags,
+                    }
+                    if dep_version is not None:
+                        dependency_dict["version"] = dep_version
+                    validated_dependencies.append(dependency_dict)
                 else:
                     raise ValueError("dependencies must be strings or dictionaries")
         else:

@@ -215,8 +215,8 @@ class TestMeshToolDecorator:
             pass
 
         expected = [
-            {"capability": "dep1", "tags": [], "version": None},
-            {"capability": "dep2", "tags": [], "version": None},
+            {"capability": "dep1", "tags": []},
+            {"capability": "dep2", "tags": []},
         ]
         assert string_dependencies._mesh_tool_metadata["dependencies"] == expected
 
@@ -245,7 +245,7 @@ class TestMeshToolDecorator:
             pass
 
         expected = [
-            {"capability": "simple_dep", "tags": [], "version": None},
+            {"capability": "simple_dep", "tags": []},
             {"capability": "complex_dep", "tags": ["test"], "version": "2.0.0"},
         ]
         assert mixed_dependencies._mesh_tool_metadata["dependencies"] == expected
@@ -382,7 +382,6 @@ class TestMeshToolDecorator:
         assert metadata["dependencies"][0] == {
             "capability": "dep1",
             "tags": [],
-            "version": None,
         }
         assert metadata["dependencies"][1] == {
             "capability": "dep2",
