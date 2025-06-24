@@ -8,7 +8,7 @@ and can be called via HTTP requests.
 import pytest
 from fastapi.testclient import TestClient
 
-from mcp_mesh.runtime.http_wrapper import HttpConfig, HttpMcpWrapper
+from mcp_mesh.engine.http_wrapper import HttpConfig, HttpMcpWrapper
 
 
 class TestFastAPIIntegration:

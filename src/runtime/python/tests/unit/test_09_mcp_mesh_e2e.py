@@ -13,13 +13,13 @@ from mcp_mesh.types import McpMeshAgent
 
 # Try to use generated client first, fallback to manual client
 try:
-    from mcp_mesh.runtime.generated_registry_client import (
+    from mcp_mesh.engine.generated_registry_client import (
         GeneratedRegistryClient as RegistryClient,
     )
 
     USING_GENERATED_CLIENT = True
 except ImportError:
-    from mcp_mesh.runtime.registry_client import RegistryClient
+    from mcp_mesh.engine.registry_client import RegistryClient
 
     USING_GENERATED_CLIENT = False
 
@@ -140,7 +140,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor and process tools
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
@@ -303,7 +303,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client.post.side_effect = mock_post_response
 
         # Create processor
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
@@ -359,7 +359,7 @@ class TestMcpMeshAgentE2E:
 
     def test_mcp_mesh_agent_type_validation(self):
         """Test that McpMeshAgent type validation works correctly."""
-        from mcp_mesh.runtime.signature_analyzer import validate_mesh_dependencies
+        from mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
 
         def valid_func(
             name: str, date_svc: McpMeshAgent, weather_svc: McpMeshAgent

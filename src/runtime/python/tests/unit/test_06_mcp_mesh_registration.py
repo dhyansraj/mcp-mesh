@@ -19,13 +19,13 @@ from mcp_mesh.types import McpMeshAgent
 
 # Try to use generated client first, fallback to manual client
 try:
-    from mcp_mesh.runtime.generated_registry_client import (
+    from mcp_mesh.engine.generated_registry_client import (
         GeneratedRegistryClient as RegistryClient,
     )
 
     USING_GENERATED_CLIENT = True
 except ImportError:
-    from mcp_mesh.runtime.registry_client import RegistryClient
+    from mcp_mesh.engine.registry_client import RegistryClient
 
     USING_GENERATED_CLIENT = False
 
@@ -159,7 +159,7 @@ class TestBatchedRegistration:
             return f"Goodbye {name}"
 
         # Process all agents
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -237,7 +237,7 @@ class TestBatchedRegistration:
             return f"Hello {name}"
 
         # Process
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -349,7 +349,7 @@ class TestDependencyInjection:
             )
 
         # Process registration and DI
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -382,7 +382,7 @@ class TestDependencyInjection:
         # The dependency injector should have been called to register the date_service proxy
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.runtime.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -528,7 +528,7 @@ class TestDependencyInjection:
             return " ".join(parts)
 
         # Process registration and DI
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -579,7 +579,7 @@ class TestDependencyInjection:
         # Verify DI was processed for all dependencies
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.runtime.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -787,7 +787,7 @@ class TestDependencyInjection:
             return " ".join(parts)
 
         # Process registration and DI
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -863,7 +863,7 @@ class TestDependencyInjection:
         # Verify DI was processed for all functions and their dependencies
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.runtime.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -992,7 +992,7 @@ class TestDependencyInjection:
                 return f"Formula {formula_name} from {self.math_service}"
 
         # Process registration and DI
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -1072,7 +1072,7 @@ class TestDependencyInjection:
         # Verify DI was processed for the agent class
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.runtime.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -1178,7 +1178,7 @@ class TestDependencyInjection:
             return f"Hello {name}, {x} + {y} = ? (math service injected: {type(math_service).__name__})"
 
         # Process registration and DI
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -1350,7 +1350,7 @@ class TestHeartbeatBatching:
             return "test"
 
         # Process registration
-        from mcp_mesh.runtime.processor import DecoratorProcessor
+        from mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry

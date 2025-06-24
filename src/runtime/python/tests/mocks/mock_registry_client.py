@@ -29,7 +29,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from mcp_mesh.runtime.shared.types import HealthStatus, MockHTTPResponse
+from mcp_mesh.engine.shared.types import HealthStatus, MockHTTPResponse
 
 
 class MockRegistryConfig:

@@ -8,20 +8,20 @@ import pytest
 
 import mesh
 from mcp_mesh import DecoratorRegistry
-from mcp_mesh.runtime.processor import DecoratorProcessor
+from mcp_mesh.engine.processor import DecoratorProcessor
 
 # Try to use generated client first, fallback to manual client
 try:
-    from mcp_mesh.runtime.generated_registry_client import (
+    from mcp_mesh.engine.generated_registry_client import (
         GeneratedRegistryClient as RegistryClient,
     )
 
     USING_GENERATED_CLIENT = True
 except ImportError:
-    from mcp_mesh.runtime.registry_client import RegistryClient
+    from mcp_mesh.engine.registry_client import RegistryClient
 
     USING_GENERATED_CLIENT = False
-from mcp_mesh.runtime.shared.types import MockHTTPResponse
+from mcp_mesh.engine.shared.types import MockHTTPResponse
 
 
 class TestDecoratorProcessorAgentConfig:
@@ -44,7 +44,7 @@ class TestDecoratorProcessorAgentConfig:
     def processor(self, mock_registry_client):
         """Create DecoratorProcessor with mock client."""
         with patch(
-            "mcp_mesh.runtime.processor.RegistryClient",
+            "mcp_mesh.engine.processor.RegistryClient",
             return_value=mock_registry_client,
         ):
             return DecoratorProcessor("http://mock-registry:8000")

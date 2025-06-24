@@ -13,16 +13,16 @@ import pytest
 # Import the classes we'll be testing/implementing
 # Try to use generated client first, fallback to manual client
 try:
-    from mcp_mesh.runtime.generated_registry_client import (
+    from mcp_mesh.engine.generated_registry_client import (
         GeneratedRegistryClient as RegistryClient,
     )
 
     USING_GENERATED_CLIENT = True
 except ImportError:
-    from mcp_mesh.runtime.registry_client import RegistryClient
+    from mcp_mesh.engine.registry_client import RegistryClient
 
     USING_GENERATED_CLIENT = False
-from mcp_mesh.runtime.shared.types import HealthStatus
+from mcp_mesh.engine.shared.types import HealthStatus
 
 
 class TestMultiToolRegistrationFormat:
@@ -477,7 +477,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_registration_failure_handling(self, registry_client):
         """Test handling of registration failures."""
-        from mcp_mesh.runtime.exceptions import RegistryConnectionError
+        from mcp_mesh.engine.exceptions import RegistryConnectionError
 
         # Mock _make_request to raise an exception (simulating registry error)
         with patch.object(

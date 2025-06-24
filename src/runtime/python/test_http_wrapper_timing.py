@@ -15,7 +15,7 @@ import asyncio
 from mcp.server.fastmcp import FastMCP
 
 import mesh
-from mcp_mesh.runtime.http_wrapper import HttpConfig, HttpMcpWrapper
+from mcp_mesh.engine.http_wrapper import HttpConfig, HttpMcpWrapper
 from mcp_mesh.types import McpMeshAgent
 
 
