@@ -834,6 +834,7 @@ class MeshToolProcessor:
 
             # Send to /heartbeat endpoint using the same format as registration
             response = await self._send_heartbeat_request(heartbeat_data)
+            self.logger.debug(f"🔍 HEARTBEAT_RESPONSE: {response}")
 
             if response and response.get("status") == "success":
                 self.logger.info(
@@ -884,32 +885,43 @@ class MeshToolProcessor:
         self, heartbeat_data: dict[str, Any]
     ) -> dict[str, Any] | None:
         """
-        Send heartbeat data to mesh registry using the same format as registration.
+        Send heartbeat data to mesh registry using the proper heartbeat method.
 
         Args:
             heartbeat_data: Heartbeat payload in MeshAgentRegistration format
 
         Returns:
-            Registry response or None if failed
+            Registry response with dependencies_resolved or None if failed
         """
         try:
+            from .shared.types import HealthStatus, HealthStatusType
+
             self.logger.debug(
                 f"💓 Sending heartbeat to registry with {len(heartbeat_data.get('tools', []))} tools"
             )
 
-            response = await self.registry_client.post(
-                "/heartbeat", json=heartbeat_data
+            # Extract capabilities from tools
+            capabilities = [tool.get("capability") for tool in heartbeat_data.get("tools", []) if tool.get("capability")]
+
+            # Create HealthStatus object for proper heartbeat method
+            health_status = HealthStatus(
+                agent_name=heartbeat_data.get("agent_id", "unknown"),
+                status=HealthStatusType.HEALTHY,
+                capabilities=capabilities,
+                timestamp=datetime.now(UTC),
+                uptime_seconds=0,
+                version=heartbeat_data.get("version", "1.0.0"),
+                metadata=heartbeat_data,
             )
 
-            if response.status in [200, 201]:
-                response_data = await response.json()
-                self.logger.debug(f"💓 Heartbeat successful: {response_data}")
-                return response_data
+            # Use the proper heartbeat method that handles MeshRegistrationResponse
+            response = await self.registry_client.send_heartbeat_with_response(health_status)
+            
+            if response:
+                self.logger.debug(f"💓 Heartbeat successful: {response}")
+                return response
             else:
-                response_text = await response.text()
-                self.logger.error(
-                    f"💔 Heartbeat failed with status {response.status}: {response_text}"
-                )
+                self.logger.error("💔 Heartbeat failed - no response")
                 return None
 
         except Exception as e:

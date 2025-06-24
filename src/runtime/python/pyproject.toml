@@ -89,12 +89,12 @@ mesh = "mcp_mesh.cli:main"
 # Version is now static above, no need for dynamic extraction
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_mesh", "src/mesh"]
+packages = ["mcp_mesh", "mesh"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/src/mcp_mesh",
-    "/src/mesh",
+    "/mcp_mesh",
+    "/mesh",
     "/README.md",
     "/LICENSE"
 ]
