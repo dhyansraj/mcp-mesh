@@ -125,26 +125,33 @@ def create_mock_registry_client(response_override=None):
     mock_registry = AsyncMock(spec=ApiClient)
     mock_agents_api = AsyncMock()
     mock_registry.agents_api = mock_agents_api
-    
+
     # Create default response
-    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        MeshRegistrationResponse,
+    )
+
     default_response = MeshRegistrationResponse(
         status="success",
         timestamp="2023-01-01T00:00:00Z",
         message="Agent registered via heartbeat",
-        agent_id="test-agent"
+        agent_id="test-agent",
     )
-    
-    mock_agents_api.send_heartbeat = AsyncMock(return_value=response_override or default_response)
+
+    mock_agents_api.send_heartbeat = AsyncMock(
+        return_value=response_override or default_response
+    )
     return mock_registry, mock_agents_api
 
 
 def extract_heartbeat_payload(call_args):
     """Extract and properly serialize heartbeat payload from mock call args."""
-    heartbeat_registration = call_args[0][0]  # First positional argument is MeshAgentRegistration
-    if hasattr(heartbeat_registration, 'model_dump'):
+    heartbeat_registration = call_args[0][
+        0
+    ]  # First positional argument is MeshAgentRegistration
+    if hasattr(heartbeat_registration, "model_dump"):
         # Use mode='json' to properly serialize datetime fields
-        return heartbeat_registration.model_dump(mode='json')
+        return heartbeat_registration.model_dump(mode="json")
     else:
         return heartbeat_registration
 
@@ -286,7 +293,7 @@ class TestBatchedRegistration:
 
         # Verify heartbeat was called at least once
         assert mock_agents_api.send_heartbeat.called
-        
+
         # Get the latest call (last successful heartbeat)
         call_args = mock_agents_api.send_heartbeat.call_args
         captured_payload = extract_heartbeat_payload(call_args)
@@ -349,13 +356,18 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=dependencies_resolved_response.get("dependencies_resolved")
+            dependencies_resolved=dependencies_resolved_response.get(
+                "dependencies_resolved"
+            ),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
@@ -414,7 +426,9 @@ class TestDependencyInjection:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Verify that registry was called correctly (heartbeat, not registration)
-        assert mock_agents_api.send_heartbeat.call_count == 1, "Should have called heartbeat"
+        assert (
+            mock_agents_api.send_heartbeat.call_count == 1
+        ), "Should have called heartbeat"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_agents_api.send_heartbeat.call_args
@@ -522,13 +536,18 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=multiple_dependencies_response.get("dependencies_resolved")
+            dependencies_resolved=multiple_dependencies_response.get(
+                "dependencies_resolved"
+            ),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
@@ -600,7 +619,9 @@ class TestDependencyInjection:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Verify that registry was called correctly
-        assert mock_agents_api.send_heartbeat.call_count == 1, "Should have called heartbeat"
+        assert (
+            mock_agents_api.send_heartbeat.call_count == 1
+        ), "Should have called heartbeat"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_agents_api.send_heartbeat.call_args
@@ -751,13 +772,18 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=multi_function_dependencies_response.get("dependencies_resolved")
+            dependencies_resolved=multi_function_dependencies_response.get(
+                "dependencies_resolved"
+            ),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
@@ -1001,13 +1027,16 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=agent_class_response.get("dependencies_resolved")
+            dependencies_resolved=agent_class_response.get("dependencies_resolved"),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
@@ -1205,13 +1234,16 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=remote_call_response.get("dependencies_resolved")
+            dependencies_resolved=remote_call_response.get("dependencies_resolved"),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
@@ -1276,7 +1308,9 @@ class TestDependencyInjection:
         await asyncio.sleep(1.0)  # Conservative delay for slow GitHub CI runners
 
         # Verify registration occurred
-        assert mock_agents_api.send_heartbeat.call_count == 1, "Should have called heartbeat once"
+        assert (
+            mock_agents_api.send_heartbeat.call_count == 1
+        ), "Should have called heartbeat once"
 
         # Verify the heartbeat payload was correct and sent to right endpoint
         call_args = mock_agents_api.send_heartbeat.call_args
@@ -1387,13 +1421,16 @@ class TestHeartbeatBatching:
 
         mock_registry, mock_agents_api = create_mock_registry_client()
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+            MeshRegistrationResponse,
+        )
+
         response_with_deps = MeshRegistrationResponse(
             status="success",
             timestamp="2023-01-01T00:00:00Z",
             message="Agent registered via heartbeat",
             agent_id="test-agent",
-            dependencies_resolved=registration_response.get("dependencies_resolved")
+            dependencies_resolved=registration_response.get("dependencies_resolved"),
         )
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 

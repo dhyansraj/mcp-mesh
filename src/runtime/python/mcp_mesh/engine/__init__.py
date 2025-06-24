@@ -19,7 +19,7 @@ def __getattr__(name):
 
         return DecoratorProcessor
     elif name == "RegistryClient":
-        from .generated_registry_client import GeneratedRegistryClient
+        from ..generated.mcp_mesh_registry_client.api_client import ApiClient
 
-        return GeneratedRegistryClient
+        return ApiClient
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -4,7 +4,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from ..shared.versioning import AgentVersionManager
+from ..shared.versioning_impl import AgentVersionManager
 
 
 class VersioningTools:

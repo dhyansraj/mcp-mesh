@@ -16,9 +16,9 @@ from mcp_mesh import (
     ValidationResult,
 )
 
-from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+from ..generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
 from ..shared.exceptions import MeshAgentError
-from ..shared.service_discovery import ServiceDiscoveryService
+from ..shared.service_discovery_impl import ServiceDiscoveryService
 from ..shared.unified_dependency_resolver import MeshUnifiedDependencyResolver
 
 logger = logging.getLogger(__name__)

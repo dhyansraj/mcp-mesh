@@ -13,12 +13,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
-
+from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
-from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
-from .logging_config import configure_logging
+
 from ..shared.support_types import HealthStatus, HealthStatusType
+from .logging_config import configure_logging
 
 logging.getLogger(__name__).info("🎯 Using generated OpenAPI registry client")
 
@@ -85,10 +85,10 @@ class MeshToolProcessor:
 
             # Build list of tools using structured models
             from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
-            MeshToolDependencyRegistration,
+                MeshToolDependencyRegistration,
             )
             from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
-            MeshToolRegistration,
+                MeshToolRegistration,
             )
 
             tool_list = []
@@ -137,9 +137,7 @@ class MeshToolProcessor:
             # Set up HTTP wrapper FIRST to get the real endpoint
             http_endpoint = None
             http_host = (
-                agent_config.get("http_host", "0.0.0.0")
-                if agent_config
-                else "0.0.0.0"
+                agent_config.get("http_host", "0.0.0.0") if agent_config else "0.0.0.0"
             )
             http_port = agent_config.get("http_port", 0) if agent_config else 0
 
@@ -172,9 +170,7 @@ class MeshToolProcessor:
                 agent_type="mcp_agent",
                 name=agent_id,
                 version=(
-                    agent_config.get("version", "1.0.0")
-                    if agent_config
-                    else "1.0.0"
+                    agent_config.get("version", "1.0.0") if agent_config else "1.0.0"
                 ),
                 http_host=http_host,
                 http_port=http_port,
@@ -194,9 +190,7 @@ class MeshToolProcessor:
                 f"📝 Skipping registration for {len(tools)} @mesh.tool functions - heartbeat will handle registration via upsert"
             )
             # Skip registration entirely - heartbeat will handle it
-            response = {
-                "status": "success"
-            }  # Dummy response to continue processing
+            response = {"status": "success"}  # Dummy response to continue processing
 
             # Create and start the health monitoring task
             health_interval = 30.0  # Default health interval
@@ -781,9 +775,7 @@ class MeshToolProcessor:
             )
 
             # Use the direct OpenAPI client method
-            response = self.agents_api.send_heartbeat(
-                heartbeat_registration
-            )
+            response = self.agents_api.send_heartbeat(heartbeat_registration)
 
             if response:
                 # Convert Pydantic response to dict
@@ -803,9 +795,12 @@ class MeshToolProcessor:
                     # Convert Pydantic objects to dictionaries
                     deps_resolved = {}
                     if response.dependencies_resolved:
-                        for func_name, dep_list in response.dependencies_resolved.items():
+                        for (
+                            func_name,
+                            dep_list,
+                        ) in response.dependencies_resolved.items():
                             deps_resolved[func_name] = [
-                                dep.model_dump() if hasattr(dep, 'model_dump') else dep
+                                dep.model_dump() if hasattr(dep, "model_dump") else dep
                                 for dep in dep_list
                             ]
                     response_dict["dependencies_resolved"] = deps_resolved
@@ -1840,7 +1835,7 @@ class DecoratorProcessor:
 
     def __init__(self, registry_url: str | None = None):
         self.registry_url = registry_url or self._get_registry_url_from_env()
-        
+
         # Create real generated client
         config = Configuration(host=self.registry_url)
         self.registry_client = ApiClient(config)

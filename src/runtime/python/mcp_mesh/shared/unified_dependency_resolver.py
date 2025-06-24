@@ -24,10 +24,10 @@ from mcp_mesh import (
     UnifiedDependencyResolver,
 )
 
-from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+from ..generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
 from .exceptions import MeshAgentError
 from .fallback_chain import MeshFallbackChain
-from .service_discovery import ServiceDiscoveryService
+from .service_discovery_impl import ServiceDiscoveryService
 
 
 class BasicDependencyValidator(DependencyValidator):

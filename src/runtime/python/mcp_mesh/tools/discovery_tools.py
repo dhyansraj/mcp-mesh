@@ -11,7 +11,7 @@ from mcp.server import Server
 
 from mcp_mesh import CapabilityQuery, QueryOperator, Requirements
 
-from ..shared.service_discovery import ServiceDiscoveryService
+from ..shared.service_discovery_impl import ServiceDiscoveryService
 
 
 class DiscoveryTools:

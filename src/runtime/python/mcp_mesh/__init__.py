@@ -46,10 +46,6 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-
-# Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
-# Import mesh.tool and mesh.agent instead
-from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .fallback import (
     DependencyResolver,
     FallbackChainInterface,
@@ -103,6 +99,10 @@ from .service_proxy import (
     ServiceContractError,
     ServiceProxyProtocol,
 )
+
+# Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
+# Import mesh.tool and mesh.agent instead
+from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .types import McpMeshAgent
 from .unified_dependencies import (
     DependencyAnalyzer,

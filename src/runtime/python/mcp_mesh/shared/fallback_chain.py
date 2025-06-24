@@ -25,9 +25,9 @@ from mcp_mesh import (
     RemoteProxyResolver,
 )
 
-from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-from .service_discovery import ServiceDiscoveryService
-from .service_proxy import MeshServiceProxy
+from ..generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
+from .service_discovery_impl import ServiceDiscoveryService
+from .service_proxy_impl import MeshServiceProxy
 
 T = TypeVar("T")
 

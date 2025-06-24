@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 from weakref import WeakValueDictionary
 
-from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
+from ..generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
 
 logger = logging.getLogger(__name__)
 

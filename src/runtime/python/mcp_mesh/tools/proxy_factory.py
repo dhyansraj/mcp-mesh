@@ -17,9 +17,9 @@ from mcp_mesh import (
     ServiceContractError,
 )
 
-from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-from ..shared.service_proxy import MeshServiceProxy
-from ..shared.types import EndpointInfo
+from ..generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
+from ..shared.service_proxy_impl import MeshServiceProxy
+from ..shared.support_types import EndpointInfo
 
 T = TypeVar("T")
 

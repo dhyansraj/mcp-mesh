@@ -12,6 +12,7 @@ import pytest
 
 # Import the classes we'll be testing/implementing
 from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient as RegistryClient
 from mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 
@@ -20,21 +21,24 @@ def create_mock_registry_client(response_override=None):
     mock_registry = AsyncMock(spec=ApiClient)
     mock_agents_api = AsyncMock()
     mock_registry.agents_api = mock_agents_api
-    
+
     # Create default response
-    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import MeshRegistrationResponse
+    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        MeshRegistrationResponse,
+    )
+
     default_response = MeshRegistrationResponse(
         status="success",
         timestamp="2023-01-01T00:00:00Z",
         message="Registration successful",
         agent_id="test-agent-id",
-        dependencies_resolved={}
+        dependencies_resolved={},
     )
-    
+
     response = response_override if response_override else default_response
     mock_agents_api.register_agent.return_value = response
     mock_agents_api.send_heartbeat.return_value = response
-    
+
     return mock_registry, mock_agents_api
 
 
@@ -410,7 +414,12 @@ class TestBackwardCompatibility:
 
     @pytest.fixture
     def registry_client(self):
-        return RegistryClient(url="http://localhost:8080")
+        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+        from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
+        config = Configuration(host="http://localhost:8080")
+        api_client = RegistryClient(configuration=config)
+        api_client.agents_api = AgentsApi(api_client)
+        return api_client
 
     @pytest.mark.asyncio
     async def test_legacy_registration_still_works(self, registry_client):
@@ -427,7 +436,7 @@ class TestBackwardCompatibility:
             return_value=mock_openapi_response,
         ) as mock_register:
             # Should still work with old format
-            result = await registry_client.register_agent(
+            result = await registry_client.agents_api.register_agent(
                 agent_name="legacy-agent",
                 capabilities=["old_capability"],
                 dependencies=["old_dependency"],
@@ -464,7 +473,12 @@ class TestErrorHandling:
 
     @pytest.fixture
     def registry_client(self):
-        return RegistryClient(url="http://localhost:8080")
+        from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+        from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
+        config = Configuration(host="http://localhost:8080")
+        api_client = RegistryClient(configuration=config)
+        api_client.agents_api = AgentsApi(api_client)
+        return api_client
 
     @pytest.mark.asyncio
     async def test_registration_failure_handling(self, registry_client):

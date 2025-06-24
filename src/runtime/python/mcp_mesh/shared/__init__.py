@@ -28,8 +28,8 @@ __all__ = [
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
     if name == "RegistryClient":
-        from ..generated_registry_client import (
-            GeneratedRegistryClient as RegistryClient,
+        from ..generated.mcp_mesh_registry_client.api_client import (
+            ApiClient as RegistryClient,
         )
 
         return RegistryClient
@@ -39,7 +39,7 @@ def __getattr__(name):
         "HealthMonitor",
         "EnhancedServiceDiscovery",
     ]:
-        from .service_discovery import (  # noqa: F401
+        from .service_discovery_impl import (  # noqa: F401
             EnhancedServiceDiscovery,
             HealthMonitor,
             SelectionCriteria,
@@ -48,7 +48,7 @@ def __getattr__(name):
 
         return locals()[name]
     elif name == "MeshServiceProxy":
-        from .service_proxy import MeshServiceProxy
+        from .service_proxy_impl import MeshServiceProxy
 
         return MeshServiceProxy
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
