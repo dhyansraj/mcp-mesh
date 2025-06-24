@@ -226,8 +226,10 @@ class MeshToolProcessor:
             try:
                 await self._send_heartbeat(agent_id, agent_metadata)
             except Exception as e:
-                self.logger.warning(f"Initial heartbeat failed for {agent_id}: {e}. Health monitor will retry.")
-            
+                self.logger.warning(
+                    f"Initial heartbeat failed for {agent_id}: {e}. Health monitor will retry."
+                )
+
             # Create and start the health monitoring task
             task = asyncio.create_task(
                 self._health_monitor(agent_id, agent_metadata, health_interval)
