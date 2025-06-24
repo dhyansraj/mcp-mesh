@@ -13,7 +13,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mcp_mesh.engine.registry_client import RegistryClient
+from mcp_mesh.engine.generated_registry_client import (
+    GeneratedRegistryClient as RegistryClient,
+)
 from mcp_mesh.engine.shared.types import HealthStatus
 
 # Import SDK components for testing

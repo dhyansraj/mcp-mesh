@@ -23,16 +23,10 @@ from .shared.types import HealthStatus, MockHTTPResponse
 
 # Import generated client components
 try:
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.agents_api import (
-        AgentsApi,
-    )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import (
-        ApiClient,
-    )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.configuration import (
-        Configuration,
-    )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models import (
+    from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
+    from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+    from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+    from mcp_mesh.generated.mcp_mesh_registry_client.models import (
         AgentRegistration,
         AgentsListResponse,
         HeartbeatRequest,
@@ -41,9 +35,7 @@ try:
         MeshAgentRegistration,
         MeshRegistrationResponse,
     )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.rest import (
-        RESTResponseType,
-    )
+    from mcp_mesh.generated.mcp_mesh_registry_client.rest import RESTResponseType
 
     GENERATED_CLIENT_AVAILABLE = True
 except ImportError as e:
@@ -126,7 +118,7 @@ class GeneratedRegistryClient:
                     "timeout_threshold": 60,
                     "eviction_threshold": 120,
                 },
-                timestamp=datetime.now(UTC).isoformat() + "Z",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
 
             # Call generated client
@@ -146,7 +138,7 @@ class GeneratedRegistryClient:
             # Build HeartbeatRequest model
             heartbeat_request = HeartbeatRequest(
                 agent_id=health_status.agent_name,
-                timestamp=datetime.now(UTC).isoformat() + "Z",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 metadata=HeartbeatRequestMetadata(
                     status=(
                         health_status.status.value
@@ -191,7 +183,7 @@ class GeneratedRegistryClient:
             # Build HeartbeatRequest model
             heartbeat_request = HeartbeatRequest(
                 agent_id=health_status.agent_name,
-                timestamp=datetime.now(UTC).isoformat() + "Z",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 metadata=HeartbeatRequestMetadata(
                     status=(
                         health_status.status.value
@@ -276,7 +268,7 @@ class GeneratedRegistryClient:
                     "timeout_threshold": 60,
                     "eviction_threshold": 120,
                 },
-                timestamp=datetime.now(UTC).isoformat() + "Z",
+                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
 
             # Call generated client
@@ -419,7 +411,8 @@ class GeneratedRegistryClient:
                         agent_id=agent_id,
                         metadata=metadata,
                         timestamp=json.get(
-                            "timestamp", datetime.now(UTC).isoformat() + "Z"
+                            "timestamp",
+                            datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                         ),
                     )
 
@@ -442,7 +435,7 @@ class GeneratedRegistryClient:
 
                     heartbeat_request = HeartbeatRequest(
                         agent_id=agent_id,
-                        timestamp=datetime.now(UTC).isoformat() + "Z",
+                        timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                         metadata=HeartbeatRequestMetadata(**json.get("metadata", {})),
                     )
 

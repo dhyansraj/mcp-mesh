@@ -33,8 +33,10 @@ async def main():
 
     # Import the processor directly and test
     from mcp_mesh import DecoratorRegistry
+    from mcp_mesh.engine.generated_registry_client import (
+        GeneratedRegistryClient as RegistryClient,
+    )
     from mcp_mesh.engine.processor import MeshDecoratorProcessor
-    from mcp_mesh.engine.registry_client import RegistryClient
 
     # Create registry client
     registry_client = RegistryClient("http://localhost:8000")

@@ -25,12 +25,7 @@ from mcp_mesh import (
     RemoteProxyResolver,
 )
 
-# Try to use generated client first, fallback to manual client
-try:
-    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-except ImportError:
-    from ..registry_client import RegistryClient
-
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .service_discovery import ServiceDiscoveryService
 from .service_proxy import MeshServiceProxy
 

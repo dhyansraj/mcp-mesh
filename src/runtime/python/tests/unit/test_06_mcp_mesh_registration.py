@@ -15,19 +15,13 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 import mesh
+from mcp_mesh.engine.generated_registry_client import (
+    GeneratedRegistryClient as RegistryClient,
+)
+from mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response import (
+    RegistrationResponse,
+)
 from mcp_mesh.types import McpMeshAgent
-
-# Try to use generated client first, fallback to manual client
-try:
-    from mcp_mesh.engine.generated_registry_client import (
-        GeneratedRegistryClient as RegistryClient,
-    )
-
-    USING_GENERATED_CLIENT = True
-except ImportError:
-    from mcp_mesh.engine.registry_client import RegistryClient
-
-    USING_GENERATED_CLIENT = False
 
 
 @pytest.fixture(autouse=True)
@@ -303,17 +297,8 @@ class TestDependencyInjection:
         }
 
         # Validate our mock response against the RegistrationResponse schema
-        try:
-            from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.registration_response import (
-                RegistrationResponse,
-            )
-
-            validated_response = RegistrationResponse(**dependencies_resolved_response)
-            print("✅ Mock response validates against RegistrationResponse schema")
-        except ImportError:
-            print("⚠️ Generated client not available - skipping schema validation")
-        except Exception as e:
-            pytest.fail(f"Mock response fails schema validation: {e}")
+        validated_response = RegistrationResponse(**dependencies_resolved_response)
+        print("✅ Mock response validates against RegistrationResponse schema")
 
         # Mock registration response
         mock_registry.post = AsyncMock(
@@ -467,19 +452,10 @@ class TestDependencyInjection:
         }
 
         # Validate our mock response against the RegistrationResponse schema
-        try:
-            from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.registration_response import (
-                RegistrationResponse,
-            )
-
-            validated_response = RegistrationResponse(**multiple_dependencies_response)
-            print(
-                "✅ Multi-dependency mock response validates against RegistrationResponse schema"
-            )
-        except ImportError:
-            print("⚠️ Generated client not available - skipping schema validation")
-        except Exception as e:
-            pytest.fail(f"Multi-dependency mock response fails schema validation: {e}")
+        validated_response = RegistrationResponse(**multiple_dependencies_response)
+        print(
+            "✅ Multi-dependency mock response validates against RegistrationResponse schema"
+        )
 
         # Mock registration response
         mock_registry.post = AsyncMock(
@@ -687,23 +663,12 @@ class TestDependencyInjection:
         }
 
         # Validate our mock response against the RegistrationResponse schema
-        try:
-            from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.registration_response import (
-                RegistrationResponse,
-            )
-
-            validated_response = RegistrationResponse(
-                **multi_function_dependencies_response
-            )
-            print(
-                "✅ Multi-function dependency mock response validates against RegistrationResponse schema"
-            )
-        except ImportError:
-            print("⚠️ Generated client not available - skipping schema validation")
-        except Exception as e:
-            pytest.fail(
-                f"Multi-function dependency mock response fails schema validation: {e}"
-            )
+        validated_response = RegistrationResponse(
+            **multi_function_dependencies_response
+        )
+        print(
+            "✅ Multi-function dependency mock response validates against RegistrationResponse schema"
+        )
 
         # Mock registration response
         mock_registry.post = AsyncMock(
@@ -935,19 +900,10 @@ class TestDependencyInjection:
         }
 
         # Validate our mock response against the RegistrationResponse schema
-        try:
-            from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.registration_response import (
-                RegistrationResponse,
-            )
-
-            validated_response = RegistrationResponse(**agent_class_response)
-            print(
-                "✅ @mesh.agent class mock response validates against RegistrationResponse schema"
-            )
-        except ImportError:
-            print("⚠️ Generated client not available - skipping schema validation")
-        except Exception as e:
-            pytest.fail(f"@mesh.agent class mock response fails schema validation: {e}")
+        validated_response = RegistrationResponse(**agent_class_response)
+        print(
+            "✅ @mesh.agent class mock response validates against RegistrationResponse schema"
+        )
 
         # Mock registration response
         mock_registry.post = AsyncMock(

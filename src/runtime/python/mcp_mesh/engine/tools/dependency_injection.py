@@ -16,14 +16,8 @@ from mcp_mesh import (
     ValidationResult,
 )
 
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from ..shared.exceptions import MeshAgentError
-
-# Try to use generated client first, fallback to manual client
-try:
-    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-except ImportError:
-    from ..registry_client import RegistryClient
-
 from ..shared.service_discovery import ServiceDiscoveryService
 from ..shared.unified_dependency_resolver import MeshUnifiedDependencyResolver
 

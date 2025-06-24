@@ -23,9 +23,7 @@ from mcp_mesh import (
 )
 
 # Use generated OpenAPI client directly
-from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api.agents_api import (
-    AgentsApi,
-)
+from mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 
 from .capability_matching import CapabilityMatcher
 from .types import EndpointInfo, HealthStatusType
@@ -58,10 +56,8 @@ class ServiceDiscovery:
         self.logger = logging.getLogger("service_discovery")
         # If no client provided, create a default one
         if registry_client is None:
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.api_client import (
-                ApiClient,
-            )
-            from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.configuration import (
+            from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+            from mcp_mesh.generated.mcp_mesh_registry_client.configuration import (
                 Configuration,
             )
 
@@ -247,7 +243,7 @@ class ServiceDiscovery:
             # Register with registry using basic registration
             try:
                 # Convert metadata to MeshAgentRegistration format
-                from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
                     MeshAgentRegistration,
                 )
 
@@ -297,7 +293,7 @@ class ServiceDiscovery:
         try:
             # Update health data via heartbeat (no separate update method in OpenAPI)
             try:
-                from mcp_mesh.generated.registry_client.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
                     MeshAgentRegistration,
                 )
 

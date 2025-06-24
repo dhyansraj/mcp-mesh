@@ -28,13 +28,9 @@ __all__ = [
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
     if name == "RegistryClient":
-        # Try to use generated client first, fallback to manual client
-        try:
-            from ..generated_registry_client import (
-                GeneratedRegistryClient as RegistryClient,
-            )
-        except ImportError:
-            from ..registry_client import RegistryClient
+        from ..generated_registry_client import (
+            GeneratedRegistryClient as RegistryClient,
+        )
 
         return RegistryClient
     elif name in [

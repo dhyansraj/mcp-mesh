@@ -24,15 +24,9 @@ from mcp_mesh import (
     UnifiedDependencyResolver,
 )
 
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .exceptions import MeshAgentError
 from .fallback_chain import MeshFallbackChain
-
-# Try to use generated client first, fallback to manual client
-try:
-    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-except ImportError:
-    from ..registry_client import RegistryClient
-
 from .service_discovery import ServiceDiscoveryService
 
 

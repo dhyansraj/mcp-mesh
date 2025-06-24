@@ -10,11 +10,7 @@ import logging
 from typing import Optional
 from weakref import WeakValueDictionary
 
-# Try to use generated client first, fallback to manual client
-try:
-    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-except ImportError:
-    from ..registry_client import RegistryClient
+from ..engine.generated_registry_client import GeneratedRegistryClient as RegistryClient
 
 logger = logging.getLogger(__name__)
 

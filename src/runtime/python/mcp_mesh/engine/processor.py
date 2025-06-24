@@ -14,37 +14,12 @@ from typing import Any
 
 from mcp_mesh import DecoratedFunction, DecoratorRegistry
 
+from .generated_registry_client import GENERATED_CLIENT_AVAILABLE
+from .generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .logging_config import configure_logging
 from .shared.types import HealthStatus, HealthStatusType
 
-# Try to use generated client first, fallback to manual client
-try:
-    from .generated_registry_client import GeneratedRegistryClient as RegistryClient
-
-    USING_GENERATED_CLIENT = True
-    logging.getLogger(__name__).info("🎯 Using generated OpenAPI registry client")
-except ImportError:
-    from .registry_client import RegistryClient
-
-    USING_GENERATED_CLIENT = False
-    logging.getLogger(__name__).warning("⚠️ Falling back to manual registry client")
-
-# Import generated client models for structured API calls (legacy - now handled in adapter)
-try:
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api.agents_api import (
-        AgentsApi,
-    )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.api_client import (
-        ApiClient,
-    )
-    from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.configuration import (
-        Configuration,
-    )
-
-    GENERATED_CLIENT_AVAILABLE = True
-except ImportError as e:
-    logging.getLogger(__name__).warning(f"Generated client models not available: {e}")
-    GENERATED_CLIENT_AVAILABLE = False
+logging.getLogger(__name__).info("🎯 Using generated OpenAPI registry client")
 
 # Ensure logging is configured
 configure_logging()
@@ -108,10 +83,10 @@ class MeshToolProcessor:
 
             # Build list of tools using structured models when available
             if GENERATED_CLIENT_AVAILABLE:
-                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
+                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_registration import (
                     MeshToolDependencyRegistration,
                 )
-                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
+                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
                     MeshToolRegistration,
                 )
 
@@ -187,7 +162,7 @@ class MeshToolProcessor:
                         )
 
                 # Create structured registration object using flattened MeshAgentRegistration schema
-                from mcp_mesh.registry_client_generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
+                from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_agent_registration import (
                     MeshAgentRegistration,
                 )
 

@@ -22,14 +22,8 @@ from mcp_mesh import (
     ServiceDiscoveryProtocol,
 )
 
+from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
 from .capability_matching import CapabilityMatcher
-
-# Try to use generated client first, fallback to manual client
-try:
-    from ..generated_registry_client import GeneratedRegistryClient as RegistryClient
-except ImportError:
-    from ..registry_client import RegistryClient
-
 from .types import EndpointInfo, HealthStatusType
 
 
