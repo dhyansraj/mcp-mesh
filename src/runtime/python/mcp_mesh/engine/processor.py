@@ -506,11 +506,7 @@ class MeshToolProcessor:
             def __repr__(self):
                 return f"<HttpServiceProxy {self.function_name} -> {self.endpoint}>"
 
-        return HttpServiceProxy(
-            dep_info.endpoint if hasattr(dep_info, "endpoint") else "",
-            dep_info.agent_id if hasattr(dep_info, "agent_id") else "",
-            dep_info.function_name if hasattr(dep_info, "function_name") else "",
-        )
+        return HttpServiceProxy(endpoint, agent_id, function_name)
 
     async def _register_with_generated_client(
         self, agent_registration: Any
