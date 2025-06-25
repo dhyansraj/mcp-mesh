@@ -215,8 +215,8 @@ class TestMeshToolDecorator:
             pass
 
         expected = [
-            {"capability": "dep1", "tags": [], "version": None},
-            {"capability": "dep2", "tags": [], "version": None},
+            {"capability": "dep1", "tags": []},
+            {"capability": "dep2", "tags": []},
         ]
         assert string_dependencies._mesh_tool_metadata["dependencies"] == expected
 
@@ -245,7 +245,7 @@ class TestMeshToolDecorator:
             pass
 
         expected = [
-            {"capability": "simple_dep", "tags": [], "version": None},
+            {"capability": "simple_dep", "tags": []},
             {"capability": "complex_dep", "tags": ["test"], "version": "2.0.0"},
         ]
         assert mixed_dependencies._mesh_tool_metadata["dependencies"] == expected
@@ -382,7 +382,6 @@ class TestMeshToolDecorator:
         assert metadata["dependencies"][0] == {
             "capability": "dep1",
             "tags": [],
-            "version": None,
         }
         assert metadata["dependencies"][1] == {
             "capability": "dep2",
@@ -1388,20 +1387,8 @@ class TestDualDecoratorIntegration:
         assert "discover_me_too" in capabilities
 
 
-class TestLegacyDeprecation:
-    """Test that old mesh_agent is properly deprecated."""
-
-    def test_old_mesh_agent_raises_error_when_called(self):
-        """Test that calling old mesh_agent raises helpful error."""
-
-        from mcp_mesh.decorators import mesh_agent
-
-        # Should raise helpful error message when called
-        with pytest.raises(ImportError, match="mesh_agent has been deprecated"):
-
-            @mesh_agent(capability="test")
-            def test_func():
-                pass
+class TestDecoratorRegistryCompatibility:
+    """Test that DecoratorRegistry works with new decorators."""
 
     def test_decorator_registry_compatibility(self):
         """Test that DecoratorRegistry works with new decorators."""
