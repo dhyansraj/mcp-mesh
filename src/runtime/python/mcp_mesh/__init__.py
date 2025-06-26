@@ -142,25 +142,31 @@ def initialize_runtime():
         return  # Already initialized
 
     try:
-        from .engine.fastmcp_integration import patch_fastmcp
-        from .engine.processor import DecoratorProcessor
+        # TODO: SIMPLIFICATION - Comment out complex features for testing
+        # from .engine.fastmcp_integration import patch_fastmcp
+        # from .engine.processor import DecoratorProcessor
 
-        # Patch FastMCP FIRST before any decorators are used
-        patch_fastmcp()
+        # # Patch FastMCP FIRST before any decorators are used
+        # patch_fastmcp()
 
-        # Create and start the processor
-        _runtime_processor = DecoratorProcessor()
-        _runtime_processor.start()
+        # # Create and start the processor
+        # _runtime_processor = DecoratorProcessor()
+        # _runtime_processor.start()
 
-        # Enhance the new mesh decorators
-        try:
-            import mesh.decorators
+        # # Enhance the new mesh decorators
+        # try:
+        #     import mesh.decorators
 
-            if hasattr(mesh.decorators, "_enhance_mesh_decorators"):
-                mesh.decorators._enhance_mesh_decorators(_runtime_processor)
-        except ImportError:
-            # mesh module not available - skip enhancement
-            pass
+        #     if hasattr(mesh.decorators, "_enhance_mesh_decorators"):
+        #         mesh.decorators._enhance_mesh_decorators(_runtime_processor)
+        # except ImportError:
+        #     # mesh module not available - skip enhancement
+        #     pass
+
+        # Use pipeline-based runtime
+        from .pipeline.orchestrator import start_runtime
+
+        start_runtime()
 
         sys.stderr.write("MCP Mesh runtime initialized\n")
     except Exception as e:

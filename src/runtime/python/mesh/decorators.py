@@ -28,6 +28,29 @@ _SHARED_AGENT_ID: str | None = None
 _auto_run_config: dict[str, Any] | None = None
 
 
+def _trigger_debounced_processing():
+    """
+    Trigger debounced processing when a decorator is applied.
+
+    This connects to the pipeline's debounce coordinator to ensure
+    all decorators are captured before processing begins.
+    """
+    try:
+        from mcp_mesh.pipeline.orchestrator import get_debounce_coordinator
+
+        coordinator = get_debounce_coordinator()
+        coordinator.trigger_processing()
+        logger.debug("⚡ Triggered debounced processing")
+    except ImportError:
+        # Pipeline orchestrator not available - graceful degradation
+        logger.debug(
+            "⚠️ Pipeline orchestrator not available, skipping debounced processing"
+        )
+    except Exception as e:
+        # Don't fail decorator application due to processing errors
+        logger.debug(f"⚠️ Failed to trigger debounced processing: {e}")
+
+
 def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     """
     Get or create a shared agent ID for all functions in this process.
@@ -296,6 +319,9 @@ def tool(
 
         # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
+
+        # Trigger debounced processing
+        _trigger_debounced_processing()
 
         # Create dependency injection wrapper if needed
         if validated_dependencies:
@@ -610,6 +636,9 @@ def agent(
         # Register with DecoratorRegistry for processor discovery
         DecoratorRegistry.register_mesh_agent(target, metadata)
 
+        # Trigger debounced processing
+        _trigger_debounced_processing()
+
         # If runtime processor is available, register with it
         if _runtime_processor is not None:
             try:
@@ -740,5 +769,6 @@ def _auto_run_exit_handler():
     start_auto_run_service()
 
 
-# Register the atexit handler for automatic auto-run
-atexit.register(_auto_run_exit_handler)
+# TODO: SIMPLIFICATION - Comment out atexit handler during testing
+# This prevents interference with simplified pipeline testing
+# atexit.register(_auto_run_exit_handler)
