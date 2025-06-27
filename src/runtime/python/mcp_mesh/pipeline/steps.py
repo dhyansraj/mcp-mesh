@@ -16,10 +16,10 @@ from ..decorator_registry import DecoratorRegistry
 from ..engine.logging_config import configure_logging
 from ..shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared.support_types import HealthStatus, HealthStatusType
+from .pipeline import PipelineResult, PipelineStatus
 
 # Ensure logging is configured
 configure_logging()
-from .pipeline import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -157,11 +157,14 @@ class ConfigurationStep(PipelineStep):
             # Generate agent ID
             agent_id = self._generate_agent_id(final_config.get("name"))
             result.add_context("agent_id", agent_id)
-            
+
             # Set agent ID as environment variable for self-dependency detection
             import os
+
             os.environ["MCP_MESH_AGENT_ID"] = agent_id
-            self.logger.debug(f"🔧 Set MCP_MESH_AGENT_ID environment variable: {agent_id}")
+            self.logger.debug(
+                f"🔧 Set MCP_MESH_AGENT_ID environment variable: {agent_id}"
+            )
 
             result.message = f"Configuration resolved for agent '{agent_id}'"
             self.logger.info(
@@ -1575,15 +1578,19 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             )
             raise
 
-    async def _process_heartbeat_for_rewiring(self, heartbeat_response: dict[str, Any]) -> None:
+    async def _process_heartbeat_for_rewiring(
+        self, heartbeat_response: dict[str, Any]
+    ) -> None:
         """Process heartbeat response for dynamic dependency rewiring."""
         try:
             # Import the DependencyResolutionStep to reuse its rewiring logic
             from .registry_steps import DependencyResolutionStep
-            
+
             # Create a temporary step instance to use its rewiring method
             dep_resolution_step = DependencyResolutionStep()
-            await dep_resolution_step.process_heartbeat_response_for_rewiring(heartbeat_response)
+            await dep_resolution_step.process_heartbeat_response_for_rewiring(
+                heartbeat_response
+            )
         except Exception as e:
             self.logger.error(f"❌ Error processing heartbeat for rewiring: {e}")
             # Don't raise - this should not break the heartbeat loop

@@ -8,7 +8,7 @@ heartbeat sending and dependency resolution.
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from ..generated.mcp_mesh_registry_client.api_client import ApiClient
 from ..generated.mcp_mesh_registry_client.configuration import Configuration
@@ -161,6 +161,7 @@ class HeartbeatSendStep(PipelineStep):
 # Global state for dependency hash tracking across heartbeat cycles
 _last_dependency_hash = None
 
+
 class DependencyResolutionStep(PipelineStep):
     """
     Processes dependency resolution from registry response.
@@ -276,12 +277,15 @@ class DependencyResolutionStep(PipelineStep):
             from ..engine.self_dependency_proxy import SelfDependencyProxy
 
             injector = get_global_injector()
-            
+
             # Get current agent ID for self-dependency detection
             import os
+
             current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
             if not current_agent_id:
-                self.logger.warning("⚠️ MCP_MESH_AGENT_ID not set, self-dependency detection may fail")
+                self.logger.warning(
+                    "⚠️ MCP_MESH_AGENT_ID not set, self-dependency detection may fail"
+                )
 
             for capability, dep_data in processed_deps.items():
                 if dep_data.get("status") == "available":
@@ -294,14 +298,14 @@ class DependencyResolutionStep(PipelineStep):
                             f"⚠️ Cannot register dependency '{capability}': missing function_name"
                         )
                         continue
-                    
+
                     # Determine if this is a self-dependency by comparing agent IDs
                     is_self_dependency = (
-                        current_agent_id and 
-                        target_agent_id and 
-                        current_agent_id == target_agent_id
+                        current_agent_id
+                        and target_agent_id
+                        and current_agent_id == target_agent_id
                     )
-                    
+
                     if is_self_dependency:
                         # Create self-dependency proxy with cached function reference
                         original_func = injector.find_original_function(function_name)
@@ -328,7 +332,7 @@ class DependencyResolutionStep(PipelineStep):
                                 f"⚠️ Cannot register cross-service dependency '{capability}': missing endpoint"
                             )
                             continue
-                            
+
                         proxy = MCPClientProxy(endpoint, function_name)
                         self.logger.info(
                             f"🔌 Created MCPClientProxy for '{capability}' -> {endpoint}/{function_name}"
@@ -336,12 +340,10 @@ class DependencyResolutionStep(PipelineStep):
 
                     # Register with injector (same interface for both proxy types)
                     await injector.register_dependency(capability, proxy)
-                    
+
                     # Log the final registration
                     proxy_type = "SelfDependency" if is_self_dependency else "MCP"
-                    self.logger.info(
-                        f"✅ Registered {proxy_type} proxy '{capability}'"
-                    )
+                    self.logger.info(f"✅ Registered {proxy_type} proxy '{capability}'")
                 else:
                     self.logger.warning(
                         f"⚠️ Skipping dependency '{capability}': status = {dep_data.get('status')}"
@@ -351,116 +353,142 @@ class DependencyResolutionStep(PipelineStep):
             self.logger.error(f"❌ Failed to register dependencies with injector: {e}")
             # Don't raise - this is not critical for pipeline to continue
 
-    def _extract_dependency_state(self, heartbeat_response: dict[str, Any]) -> dict[str, dict[str, dict[str, str]]]:
+    def _extract_dependency_state(
+        self, heartbeat_response: dict[str, Any]
+    ) -> dict[str, dict[str, dict[str, str]]]:
         """Extract dependency state structure from heartbeat response.
-        
+
         Returns:
             {function_name: {capability: {endpoint, function_name, status}}}
         """
         state = {}
         dependencies_resolved = heartbeat_response.get("dependencies_resolved", {})
-        
+
         for function_name, dependency_list in dependencies_resolved.items():
             if not isinstance(dependency_list, list):
                 continue
-                
+
             state[function_name] = {}
             for dep_resolution in dependency_list:
-                if not isinstance(dep_resolution, dict) or "capability" not in dep_resolution:
+                if (
+                    not isinstance(dep_resolution, dict)
+                    or "capability" not in dep_resolution
+                ):
                     continue
-                    
+
                 capability = dep_resolution["capability"]
                 state[function_name][capability] = {
                     "endpoint": dep_resolution.get("endpoint", ""),
                     "function_name": dep_resolution.get("function_name", ""),
                     "status": dep_resolution.get("status", ""),
                 }
-        
+
         return state
 
     def _hash_dependency_state(self, state: dict) -> str:
         """Create hash of dependency state structure."""
         import hashlib
-        import json
-        
+
         # Convert to sorted JSON string for consistent hashing
         state_json = json.dumps(state, sort_keys=True)
-        return hashlib.sha256(state_json.encode()).hexdigest()[:16]  # First 16 chars for readability
+        return hashlib.sha256(state_json.encode()).hexdigest()[
+            :16
+        ]  # First 16 chars for readability
 
     async def process_heartbeat_response_for_rewiring(
         self, heartbeat_response: dict[str, Any]
     ) -> None:
         """Process heartbeat response to update existing dependency injection.
-        
+
         Uses hash-based comparison to efficiently detect when ANY dependency changes
         and then updates ALL affected functions in one operation.
-        
+
         Resilience logic:
         - No response (connection error, 5xx) → Skip entirely (keep existing wiring)
-        - 2xx response with empty dependencies → Unwire all dependencies 
+        - 2xx response with empty dependencies → Unwire all dependencies
         - 2xx response with partial dependencies → Update to match registry exactly
         """
         try:
             if not heartbeat_response:
-                # No response from registry (connection error, timeout, 5xx) 
+                # No response from registry (connection error, timeout, 5xx)
                 # → Skip entirely for resilience (keep existing dependencies)
-                self.logger.debug("No heartbeat response - skipping rewiring for resilience")
+                self.logger.debug(
+                    "No heartbeat response - skipping rewiring for resilience"
+                )
                 return
 
             # Extract current dependency state structure
             current_state = self._extract_dependency_state(heartbeat_response)
-            
+
             # IMPORTANT: Empty state from successful response means "unwire everything"
             # This is different from "no response" which means "keep existing for resilience"
 
             # Hash the current state (including empty state)
             current_hash = self._hash_dependency_state(current_state)
-            
+
             # Compare with previous state (use global variable)
             global _last_dependency_hash
             if current_hash == _last_dependency_hash:
-                self.logger.debug(f"🔄 Dependency state unchanged (hash: {current_hash}), skipping rewiring")
+                self.logger.debug(
+                    f"🔄 Dependency state unchanged (hash: {current_hash}), skipping rewiring"
+                )
                 return
 
             # State changed - determine what changed
             function_count = len(current_state)
             total_deps = sum(len(deps) for deps in current_state.values())
-            
+
             if _last_dependency_hash is None:
                 if function_count > 0:
-                    self.logger.info(f"🔄 Initial dependency state detected: {function_count} functions, {total_deps} dependencies")
+                    self.logger.info(
+                        f"🔄 Initial dependency state detected: {function_count} functions, {total_deps} dependencies"
+                    )
                 else:
-                    self.logger.info(f"🔄 Initial dependency state detected: no dependencies")
+                    self.logger.info(
+                        "🔄 Initial dependency state detected: no dependencies"
+                    )
             else:
-                self.logger.info(f"🔄 Dependency state changed (hash: {_last_dependency_hash} → {current_hash})")
+                self.logger.info(
+                    f"🔄 Dependency state changed (hash: {_last_dependency_hash} → {current_hash})"
+                )
                 if function_count > 0:
-                    self.logger.info(f"🔄 Updating dependencies for {function_count} functions ({total_deps} total dependencies)")
+                    self.logger.info(
+                        f"🔄 Updating dependencies for {function_count} functions ({total_deps} total dependencies)"
+                    )
                 else:
-                    self.logger.info(f"🔄 Registry reports no dependencies - unwiring all existing dependencies")
+                    self.logger.info(
+                        "🔄 Registry reports no dependencies - unwiring all existing dependencies"
+                    )
 
             # Import here to avoid circular imports
             from ..engine.dependency_injector import get_global_injector
             from ..engine.mcp_client_proxy import MCPClientProxy
 
             injector = get_global_injector()
-            
+
             # Step 1: Collect all capabilities that should exist according to registry
             target_capabilities = set()
             for function_name, dependencies in current_state.items():
                 for capability in dependencies.keys():
                     target_capabilities.add(capability)
-            
+
             # Step 2: Find existing capabilities that need to be removed (unwired)
             # This handles the case where registry stops reporting some dependencies
-            existing_capabilities = set(injector._dependencies.keys()) if hasattr(injector, '_dependencies') else set()
+            existing_capabilities = (
+                set(injector._dependencies.keys())
+                if hasattr(injector, "_dependencies")
+                else set()
+            )
             capabilities_to_remove = existing_capabilities - target_capabilities
-            
+
             unwired_count = 0
             for capability in capabilities_to_remove:
                 await injector.unregister_dependency(capability)
                 unwired_count += 1
-                self.logger.info(f"🗑️ Unwired dependency '{capability}' (no longer reported by registry)")
-            
+                self.logger.info(
+                    f"🗑️ Unwired dependency '{capability}' (no longer reported by registry)"
+                )
+
             # Step 3: Apply all dependency updates for capabilities that should exist
             updated_count = 0
             for function_name, dependencies in current_state.items():
@@ -471,32 +499,39 @@ class DependencyResolutionStep(PipelineStep):
 
                     if status == "available" and endpoint and dep_function_name:
                         # Import here to avoid circular imports
-                        from ..engine.mcp_client_proxy import MCPClientProxy
-                        from ..engine.self_dependency_proxy import SelfDependencyProxy
-                        
                         # Get current agent ID for self-dependency detection
                         import os
+
+                        from ..engine.mcp_client_proxy import MCPClientProxy
+                        from ..engine.self_dependency_proxy import SelfDependencyProxy
+
                         current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
                         target_agent_id = dep_info.get("agent_id")
-                        
+
                         # Determine if this is a self-dependency
                         is_self_dependency = (
-                            current_agent_id and 
-                            target_agent_id and 
-                            current_agent_id == target_agent_id
+                            current_agent_id
+                            and target_agent_id
+                            and current_agent_id == target_agent_id
                         )
-                        
+
                         if is_self_dependency:
                             # Create self-dependency proxy with cached function reference
-                            original_func = injector.find_original_function(dep_function_name)
+                            original_func = injector.find_original_function(
+                                dep_function_name
+                            )
                             if original_func:
-                                new_proxy = SelfDependencyProxy(original_func, dep_function_name)
+                                new_proxy = SelfDependencyProxy(
+                                    original_func, dep_function_name
+                                )
                                 self.logger.warning(
                                     f"⚠️ SELF-DEPENDENCY: Using direct function call for '{capability}' "
                                     f"instead of HTTP to avoid deadlock. Consider refactoring to "
                                     f"eliminate self-dependencies if possible."
                                 )
-                                self.logger.info(f"🔄 Updated to SelfDependencyProxy: '{capability}'")
+                                self.logger.info(
+                                    f"🔄 Updated to SelfDependencyProxy: '{capability}'"
+                                )
                             else:
                                 self.logger.error(
                                     f"❌ Cannot create SelfDependencyProxy for '{capability}': "
@@ -506,14 +541,18 @@ class DependencyResolutionStep(PipelineStep):
                         else:
                             # Create cross-service MCP client proxy
                             new_proxy = MCPClientProxy(endpoint, dep_function_name)
-                            self.logger.debug(f"🔄 Updated to MCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}")
-                        
+                            self.logger.debug(
+                                f"🔄 Updated to MCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}"
+                            )
+
                         # Update in injector (this will update ALL functions that depend on this capability)
                         await injector.register_dependency(capability, new_proxy)
                         updated_count += 1
                     else:
                         if status != "available":
-                            self.logger.debug(f"⚠️ Dependency '{capability}' not available: {status}")
+                            self.logger.debug(
+                                f"⚠️ Dependency '{capability}' not available: {status}"
+                            )
                         else:
                             self.logger.warning(
                                 f"⚠️ Cannot update dependency '{capability}': missing endpoint or function_name"
@@ -521,16 +560,26 @@ class DependencyResolutionStep(PipelineStep):
 
             # Store new hash for next comparison (use global variable)
             _last_dependency_hash = current_hash
-            
+
             if unwired_count > 0 and updated_count > 0:
-                self.logger.info(f"✅ Successfully unwired {unwired_count} and updated {updated_count} dependencies (state hash: {current_hash})")
+                self.logger.info(
+                    f"✅ Successfully unwired {unwired_count} and updated {updated_count} dependencies (state hash: {current_hash})"
+                )
             elif unwired_count > 0:
-                self.logger.info(f"✅ Successfully unwired {unwired_count} dependencies (state hash: {current_hash})")
+                self.logger.info(
+                    f"✅ Successfully unwired {unwired_count} dependencies (state hash: {current_hash})"
+                )
             elif updated_count > 0:
-                self.logger.info(f"✅ Successfully updated {updated_count} dependencies (state hash: {current_hash})")
+                self.logger.info(
+                    f"✅ Successfully updated {updated_count} dependencies (state hash: {current_hash})"
+                )
             else:
-                self.logger.info(f"✅ Dependency state synchronized (state hash: {current_hash})")
+                self.logger.info(
+                    f"✅ Dependency state synchronized (state hash: {current_hash})"
+                )
 
         except Exception as e:
-            self.logger.error(f"❌ Failed to process heartbeat response for rewiring: {e}")
+            self.logger.error(
+                f"❌ Failed to process heartbeat response for rewiring: {e}"
+            )
             # Don't raise - this should not break the heartbeat loop
