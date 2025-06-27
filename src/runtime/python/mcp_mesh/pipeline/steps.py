@@ -157,6 +157,11 @@ class ConfigurationStep(PipelineStep):
             # Generate agent ID
             agent_id = self._generate_agent_id(final_config.get("name"))
             result.add_context("agent_id", agent_id)
+            
+            # Set agent ID as environment variable for self-dependency detection
+            import os
+            os.environ["MCP_MESH_AGENT_ID"] = agent_id
+            self.logger.debug(f"🔧 Set MCP_MESH_AGENT_ID environment variable: {agent_id}")
 
             result.message = f"Configuration resolved for agent '{agent_id}'"
             self.logger.info(
@@ -1533,6 +1538,10 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             f"🔍 Heartbeat response #{heartbeat_count}: None (no response)"
                         )
 
+                    # Process heartbeat response for dynamic dependency rewiring
+                    if response:
+                        await self._process_heartbeat_for_rewiring(response)
+
                     # Log success
                     if response:
                         self.logger.info(
@@ -1565,10 +1574,19 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                 f"🛑 Heartbeat lifespan task cancelled for agent '{agent_id}'"
             )
             raise
+
+    async def _process_heartbeat_for_rewiring(self, heartbeat_response: dict[str, Any]) -> None:
+        """Process heartbeat response for dynamic dependency rewiring."""
+        try:
+            # Import the DependencyResolutionStep to reuse its rewiring logic
+            from .registry_steps import DependencyResolutionStep
+            
+            # Create a temporary step instance to use its rewiring method
+            dep_resolution_step = DependencyResolutionStep()
+            await dep_resolution_step.process_heartbeat_response_for_rewiring(heartbeat_response)
         except Exception as e:
-            self.logger.error(
-                f"💥 Heartbeat lifespan task failed for agent '{agent_id}': {e}"
-            )
+            self.logger.error(f"❌ Error processing heartbeat for rewiring: {e}")
+            # Don't raise - this should not break the heartbeat loop
 
     def _build_health_status_from_context(self, context: dict[str, Any]) -> Any:
         """Build health status object from pipeline context."""

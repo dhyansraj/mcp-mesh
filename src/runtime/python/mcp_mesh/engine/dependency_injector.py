@@ -168,6 +168,73 @@ class DependencyInjector:
     def get_dependency(self, name: str) -> Any | None:
         """Get current instance of a dependency."""
         return self._dependencies.get(name)
+    
+    def find_original_function(self, function_name: str) -> Any | None:
+        """Find the original function by name from wrapper registry or decorator registry.
+        
+        This is used for self-dependency proxy creation to get the cached
+        original function reference for direct calls.
+        
+        Args:
+            function_name: Name of the function to find
+            
+        Returns:
+            Original function if found, None otherwise
+        """
+        logger.debug(f"🔍 Searching for original function: '{function_name}'")
+        
+        # First, search through wrapper registry (functions with dependencies)
+        for func_id, wrapper_func in self._function_registry.items():
+            if hasattr(wrapper_func, '_mesh_original_func'):
+                original = wrapper_func._mesh_original_func
+                
+                # Match by function name
+                if hasattr(original, '__name__') and original.__name__ == function_name:
+                    logger.debug(
+                        f"✅ Found original function '{function_name}' in wrapper registry: {func_id}"
+                    )
+                    return original
+        
+        # If not found in wrapper registry, search in decorator registry (all functions)
+        try:
+            from ..decorator_registry import DecoratorRegistry
+            
+            # Search through mesh tools (functions decorated with @mesh.tool)
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            for tool_name, decorated_func in mesh_tools.items():
+                original_func = decorated_func.function  # Get the original function
+                if hasattr(original_func, '__name__') and original_func.__name__ == function_name:
+                    logger.debug(
+                        f"✅ Found original function '{function_name}' in decorator registry: {tool_name}"
+                    )
+                    return original_func
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Error searching decorator registry: {e}")
+        
+        # List available functions for debugging
+        available_functions = []
+        for wrapper_func in self._function_registry.values():
+            if hasattr(wrapper_func, '_mesh_original_func'):
+                original = wrapper_func._mesh_original_func
+                if hasattr(original, '__name__'):
+                    available_functions.append(original.__name__)
+        
+        # Also list functions from decorator registry
+        try:
+            from ..decorator_registry import DecoratorRegistry
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            for tool_name, decorated_func in mesh_tools.items():
+                if hasattr(decorated_func.function, '__name__'):
+                    available_functions.append(decorated_func.function.__name__)
+        except:
+            pass
+        
+        logger.warning(
+            f"❌ Original function '{function_name}' not found. "
+            f"Available functions: {list(set(available_functions))}"
+        )
+        return None
 
     def create_injection_wrapper(
         self, func: Callable, dependencies: list[str]
