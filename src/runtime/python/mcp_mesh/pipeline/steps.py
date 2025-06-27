@@ -5,6 +5,7 @@ Provides concrete implementations of common processing steps like
 decorator collection, configuration resolution, and heartbeat preparation.
 """
 
+import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -12,8 +13,12 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from ..decorator_registry import DecoratorRegistry
+from ..engine.logging_config import configure_logging
 from ..shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared.support_types import HealthStatus, HealthStatusType
+
+# Ensure logging is configured
+configure_logging()
 from .pipeline import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
@@ -275,12 +280,12 @@ class HeartbeatPreparationStep(PipelineStep):
 
             # Build agent registration payload
             registration_data = self._build_registration_payload(
-                agent_id, agent_config, tools_list
+                agent_id, agent_config, tools_list, context
             )
 
             # Build health status for heartbeat
             health_status = self._build_health_status(
-                agent_id, agent_config, tools_list
+                agent_id, agent_config, tools_list, context
             )
 
             # Store in context
@@ -426,15 +431,39 @@ class HeartbeatPreparationStep(PipelineStep):
         agent_id: str,
         agent_config: dict[str, Any],
         tools_list: list[dict[str, Any]],
+        context: dict[str, Any] = None,
     ) -> dict[str, Any]:
         """Build agent registration payload."""
+        # Get external endpoint information from FastAPI advertisement config
+        advertisement_config = {}
+        if context:
+            advertisement_config = context.get("fastapi_advertisement_config", {})
+        
+        # Use external host/port for registry advertisement (not binding address)
+        external_host = advertisement_config.get("external_host") or agent_config.get("http_host", "localhost")
+        external_endpoint = advertisement_config.get("external_endpoint")
+        
+        # Parse external endpoint if provided, otherwise use external_host + port
+        if external_endpoint:
+            from urllib.parse import urlparse
+            parsed = urlparse(external_endpoint)
+            http_host = parsed.hostname or external_host
+            http_port = parsed.port or agent_config.get("http_port", 8080)
+        else:
+            http_host = external_host
+            http_port = agent_config.get("http_port", 8080)
+        
+        # Don't send 0.0.0.0 as it's a binding address, not an external address
+        if http_host == "0.0.0.0":
+            http_host = "localhost"
+        
         return {
             "agent_id": agent_id,
             "agent_type": "mcp_agent",
             "name": agent_id,
             "version": agent_config.get("version", "1.0.0"),
-            "http_host": agent_config.get("http_host", "0.0.0.0"),
-            "http_port": agent_config.get("http_port", 0),
+            "http_host": http_host,
+            "http_port": http_port,
             "timestamp": datetime.now(UTC),
             "namespace": agent_config.get("namespace", "default"),
             "tools": tools_list,
@@ -445,6 +474,7 @@ class HeartbeatPreparationStep(PipelineStep):
         agent_id: str,
         agent_config: dict[str, Any],
         tools_list: list[dict[str, Any]],
+        context: dict[str, Any] = None,
     ) -> HealthStatus:
         """Build health status for heartbeat."""
         # Extract capabilities from tools list
@@ -459,13 +489,34 @@ class HeartbeatPreparationStep(PipelineStep):
         if not capabilities:
             capabilities = ["default"]
 
+        # Build metadata with external endpoint information
+        metadata = dict(agent_config)  # Copy agent config
+        
+        # Add external endpoint information from FastAPI advertisement config
+        if context:
+            advertisement_config = context.get("fastapi_advertisement_config", {})
+            external_host = advertisement_config.get("external_host")
+            external_endpoint = advertisement_config.get("external_endpoint")
+            
+            if external_host:
+                metadata["external_host"] = external_host
+            if external_endpoint:
+                metadata["external_endpoint"] = external_endpoint
+                # Parse endpoint for individual components
+                from urllib.parse import urlparse
+                parsed = urlparse(external_endpoint)
+                if parsed.hostname:
+                    metadata["external_host"] = parsed.hostname
+                if parsed.port:
+                    metadata["external_port"] = parsed.port
+
         return HealthStatus(
             agent_name=agent_id,
             status=HealthStatusType.HEALTHY,
             capabilities=capabilities,
             timestamp=datetime.now(UTC),
             version=agent_config.get("version", "1.0.0"),
-            metadata=agent_config,
+            metadata=metadata,
         )
 
 
@@ -627,9 +678,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                 return found
 
             module_globals = vars(module)
-            self.logger.debug(
-                f"Searching module {module_name} with {len(module_globals)} variables"
-            )
+            # Only log if we find FastMCP instances to reduce noise
 
             for var_name, var_value in module_globals.items():
                 if self._is_fastmcp_instance(var_value):
@@ -977,7 +1026,7 @@ class FastAPIServerSetupStep(PipelineStep):
         super().__init__(
             name="fastapi-server-setup",
             required=False,  # Optional - may not have FastMCP instances to mount
-            description="Setup FastAPI server with K8s endpoints and mount FastMCP servers",
+            description="Prepare FastAPI app with K8s endpoints and mount FastMCP servers",
         )
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
@@ -1002,51 +1051,62 @@ class FastAPIServerSetupStep(PipelineStep):
             binding_config = self._resolve_binding_config(agent_config)
             advertisement_config = self._resolve_advertisement_config(agent_config)
 
+            # Get heartbeat config for lifespan integration
+            heartbeat_config = context.get("heartbeat_config")
+            
             # Create FastAPI application with proper FastMCP lifespan integration
-            fastapi_app = self._create_fastapi_app(agent_config, fastmcp_servers)
+            fastapi_app = self._create_fastapi_app(agent_config, fastmcp_servers, heartbeat_config)
 
             # Add K8s health endpoints
-            self._add_k8s_endpoints(fastapi_app, agent_config, fastmcp_servers)
+            self._add_k8s_endpoints(fastapi_app, agent_config, {})
 
-            # Mount FastMCP servers
-            mounted_servers = {}
+            # Create HTTP wrappers for FastMCP servers (instead of direct mounting)
+            mcp_wrappers = {}
             if fastmcp_servers:
                 for server_key, server_instance in fastmcp_servers.items():
                     try:
-                        mount_path = self._mount_fastmcp_server(
-                            fastapi_app, server_key, server_instance
+                        # Create HttpMcpWrapper for proper MCP protocol handling
+                        from ..engine.http_wrapper import HttpConfig, HttpMcpWrapper
+                        
+                        # Use wrapper config - it will create its own FastAPI app
+                        http_config = HttpConfig(
+                            host=binding_config["bind_host"],
+                            port=binding_config["bind_port"],
                         )
-                        mounted_servers[server_key] = {
-                            "mount_path": mount_path,
+                        
+                        mcp_wrapper = HttpMcpWrapper(server_instance, http_config)
+                        await mcp_wrapper.setup()
+                        
+                        # Add MCP endpoints to our main FastAPI app
+                        self._integrate_mcp_wrapper(fastapi_app, mcp_wrapper, server_key)
+                        
+                        mcp_wrappers[server_key] = {
+                            "wrapper": mcp_wrapper,
                             "server_instance": server_instance,
                         }
                         self.logger.info(
-                            f"📎 Mounted FastMCP server '{server_key}' at {mount_path}"
+                            f"🔌 Integrated MCP wrapper for FastMCP server '{server_key}'"
                         )
                     except Exception as e:
                         self.logger.error(
-                            f"❌ Failed to mount FastMCP server '{server_key}': {e}"
+                            f"❌ Failed to create MCP wrapper for server '{server_key}': {e}"
                         )
-                        result.add_error(f"Failed to mount server '{server_key}': {e}")
+                        result.add_error(f"Failed to wrap server '{server_key}': {e}")
 
-            # Start FastAPI server
-            server_info = await self._start_fastapi_server(
-                fastapi_app, binding_config, advertisement_config
-            )
-
-            # Store results in context
+            # Store results in context (app prepared, but server not started yet)
             result.add_context("fastapi_app", fastapi_app)
-            result.add_context("fastapi_server_info", server_info)
-            result.add_context("mounted_fastmcp_servers", mounted_servers)
+            result.add_context("mcp_wrappers", mcp_wrappers)
             result.add_context("fastapi_binding_config", binding_config)
             result.add_context("fastapi_advertisement_config", advertisement_config)
 
-            bind_address = server_info["bind_address"]
-            external_endpoint = server_info["external_endpoint"]
+            bind_host = binding_config["bind_host"]
+            bind_port = binding_config["bind_port"]
+            external_host = advertisement_config["external_host"]
+            external_endpoint = advertisement_config.get("external_endpoint") or f"http://{external_host}:{bind_port}"
 
-            result.message = f"FastAPI server running on {bind_address} (external: {external_endpoint})"
+            result.message = f"FastAPI app prepared for {bind_host}:{bind_port} (external: {external_endpoint})"
             self.logger.info(
-                f"🚀 FastAPI server started on {bind_address} with {len(mounted_servers)} mounted FastMCP servers"
+                f"📦 FastAPI app prepared with {len(mcp_wrappers)} MCP wrappers (ready for uvicorn.run)"
             )
 
         except Exception as e:
@@ -1125,7 +1185,7 @@ class FastAPIServerSetupStep(PipelineStep):
             return "localhost"
 
     def _create_fastapi_app(
-        self, agent_config: dict[str, Any], fastmcp_servers: dict[str, Any]
+        self, agent_config: dict[str, Any], fastmcp_servers: dict[str, Any], heartbeat_config: dict[str, Any] = None
     ) -> Any:
         """Create FastAPI application with FastMCP lifespan integration."""
         try:
@@ -1155,7 +1215,7 @@ class FastAPIServerSetupStep(PipelineStep):
             # Create combined lifespan manager
             @asynccontextmanager
             async def combined_lifespan(app):
-                """Combined lifespan manager for FastAPI + FastMCP."""
+                """Combined lifespan manager for FastAPI + FastMCP + Heartbeat."""
                 # Start all FastMCP lifespans
                 lifespan_contexts = []
                 for lifespan in fastmcp_lifespans:
@@ -1163,9 +1223,28 @@ class FastAPIServerSetupStep(PipelineStep):
                     await ctx.__aenter__()
                     lifespan_contexts.append(ctx)
 
+                # Start heartbeat task if configured
+                heartbeat_task = None
+                if heartbeat_config:
+                    import asyncio
+                    heartbeat_task = asyncio.create_task(
+                        self._heartbeat_lifespan_task(heartbeat_config)
+                    )
+                    self.logger.info(
+                        f"💓 Started heartbeat task in FastAPI lifespan with {heartbeat_config['interval']}s interval"
+                    )
+
                 try:
                     yield
                 finally:
+                    # Clean up heartbeat task
+                    if heartbeat_task:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            self.logger.info("🛑 Heartbeat task cancelled during shutdown")
+                    
                     # Clean up all lifespans in reverse order
                     for ctx in reversed(lifespan_contexts):
                         try:
@@ -1179,7 +1258,7 @@ class FastAPIServerSetupStep(PipelineStep):
                 version=agent_config.get("version", "1.0.0"),
                 docs_url="/docs",  # Enable OpenAPI docs
                 redoc_url="/redoc",
-                lifespan=combined_lifespan if fastmcp_lifespans else None,
+                lifespan=combined_lifespan if (fastmcp_lifespans or heartbeat_config) else None,
             )
 
             self.logger.debug(
@@ -1191,7 +1270,7 @@ class FastAPIServerSetupStep(PipelineStep):
             raise Exception(f"FastAPI not available: {e}")
 
     def _add_k8s_endpoints(
-        self, app: Any, agent_config: dict[str, Any], fastmcp_servers: dict[str, Any]
+        self, app: Any, agent_config: dict[str, Any], mcp_wrappers: dict[str, Any]
     ) -> None:
         """Add Kubernetes health and metrics endpoints."""
         agent_name = agent_config.get("name", "mcp-mesh-agent")
@@ -1208,32 +1287,12 @@ class FastAPIServerSetupStep(PipelineStep):
         @app.get("/ready")
         async def ready():
             """Readiness check for Kubernetes."""
-            # Check if we have FastMCP servers with tools
-            total_tools = 0
-            server_status = {}
-
-            for server_key, server_instance in fastmcp_servers.items():
-                tools_count = 0
-                if hasattr(server_instance, "_tool_manager") and hasattr(
-                    server_instance._tool_manager, "_tools"
-                ):
-                    tools_count = len(server_instance._tool_manager._tools)
-
-                server_status[server_key] = {
-                    "tools_count": tools_count,
-                    "has_tools": tools_count > 0,
-                }
-                total_tools += tools_count
-
-            is_ready = (
-                total_tools > 0 or not fastmcp_servers
-            )  # Ready if has tools or no servers expected
-
+            # Simple readiness check - always ready for now
+            # TODO: Update this to check MCP wrapper status
             return {
-                "ready": is_ready,
+                "ready": True,
                 "agent": agent_name,
-                "total_tools": total_tools,
-                "servers": server_status,
+                "mcp_wrappers": len(mcp_wrappers),
                 "timestamp": self._get_timestamp(),
             }
 
@@ -1250,19 +1309,11 @@ class FastAPIServerSetupStep(PipelineStep):
         async def metrics():
             """Basic metrics endpoint for Prometheus."""
             # Simple text format metrics
-            total_tools = sum(
-                len(getattr(server._tool_manager, "_tools", {}))
-                for server in fastmcp_servers.values()
-                if hasattr(server, "_tool_manager")
-            )
-
-            metrics_text = f"""# HELP mcp_mesh_tools_total Total number of MCP tools
-# TYPE mcp_mesh_tools_total gauge
-mcp_mesh_tools_total{{agent="{agent_name}"}} {total_tools}
-
-# HELP mcp_mesh_servers_total Total number of FastMCP servers
-# TYPE mcp_mesh_servers_total gauge
-mcp_mesh_servers_total{{agent="{agent_name}"}} {len(fastmcp_servers)}
+            # TODO: Update to get tools count from MCP wrappers
+            
+            metrics_text = f"""# HELP mcp_mesh_wrappers_total Total number of MCP wrappers
+# TYPE mcp_mesh_wrappers_total gauge
+mcp_mesh_wrappers_total{{agent="{agent_name}"}} {len(mcp_wrappers)}
 
 # HELP mcp_mesh_up Agent uptime indicator
 # TYPE mcp_mesh_up gauge
@@ -1276,6 +1327,31 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             "Added K8s health endpoints: /health, /ready, /livez, /metrics"
         )
 
+    def _integrate_mcp_wrapper(
+        self, app: Any, mcp_wrapper: Any, server_key: str
+    ) -> None:
+        """Integrate HttpMcpWrapper MCP endpoints into the main FastAPI app."""
+        try:
+            # The HttpMcpWrapper creates its own FastAPI app with MCP endpoints
+            # We need to extract the MCP endpoint handlers and add them to our main app
+            
+            # Get the MCP route handlers from the wrapper's app
+            wrapper_app = mcp_wrapper.app
+            
+            # Find the /mcp route and copy it to our main app
+            for route in wrapper_app.routes:
+                if hasattr(route, 'path') and route.path == '/mcp':
+                    # Add the MCP endpoint to our main app
+                    app.add_route('/mcp', route.endpoint, methods=['POST'])
+                    self.logger.debug(f"Added /mcp endpoint from wrapper '{server_key}'")
+                    break
+            else:
+                self.logger.warning(f"No /mcp route found in wrapper '{server_key}'")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to integrate MCP wrapper '{server_key}': {e}")
+            raise
+
     def _mount_fastmcp_server(
         self, app: Any, server_key: str, server_instance: Any
     ) -> str:
@@ -1286,13 +1362,13 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                 server_instance.http_app
             ):
                 fastmcp_app = server_instance.http_app()
-                # Mount at root since FastMCP's http_app already includes /mcp path
-                mount_path = ""
+                # Mount at /mcp path for MCP protocol access
+                mount_path = "/mcp"
                 app.mount(mount_path, fastmcp_app)
                 self.logger.debug(
-                    f"Mounted FastMCP server '{server_key}' at root (FastMCP handles /mcp internally)"
+                    f"Mounted FastMCP server '{server_key}' at {mount_path}"
                 )
-                return "/mcp"  # Return the actual endpoint users will access
+                return mount_path  # Return the actual endpoint users will access
             else:
                 raise Exception(
                     f"FastMCP server '{server_key}' does not have http_app() method"
@@ -1365,8 +1441,417 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self.logger.error(f"Failed to start FastAPI server: {e}")
             raise
 
+    async def _heartbeat_lifespan_task(self, heartbeat_config: dict[str, Any]) -> None:
+        """Heartbeat task that runs in FastAPI lifespan."""
+        registry_wrapper = heartbeat_config["registry_wrapper"]
+        agent_id = heartbeat_config["agent_id"]
+        interval = heartbeat_config["interval"]
+        context = heartbeat_config["context"]
+        
+        self.logger.info(f"💓 Starting heartbeat lifespan task for agent '{agent_id}'")
+        
+        heartbeat_count = 0
+        try:
+            while True:
+                heartbeat_count += 1
+                
+                try:
+                    # Build health status from context (reuse existing logic)
+                    health_status = self._build_health_status_from_context(context)
+                    
+                    # Debug: Log heartbeat request details
+                    import json
+                    # Convert health status to dict for logging
+                    if hasattr(health_status, "__dict__"):
+                        health_dict = {
+                            "agent_name": getattr(health_status, "agent_name", agent_id),
+                            "status": (
+                                getattr(health_status, "status", "healthy").value
+                                if hasattr(getattr(health_status, "status", "healthy"), "value")
+                                else str(getattr(health_status, "status", "healthy"))
+                            ),
+                            "capabilities": getattr(health_status, "capabilities", []),
+                            "timestamp": (
+                                getattr(health_status, "timestamp", "").isoformat()
+                                if hasattr(getattr(health_status, "timestamp", ""), "isoformat")
+                                else str(getattr(health_status, "timestamp", ""))
+                            ),
+                            "version": getattr(health_status, "version", "1.0.0"),
+                            "metadata": getattr(health_status, "metadata", {}),
+                        }
+                    else:
+                        health_dict = health_status
+                    
+                    request_json = json.dumps(health_dict, indent=2, default=str)
+                    self.logger.debug(f"🔍 Heartbeat request #{heartbeat_count}:\n{request_json}")
+                    
+                    # Send heartbeat first
+                    response = await registry_wrapper.send_heartbeat_with_dependency_resolution(health_status)
+                    
+                    # Debug: Log heartbeat response details
+                    if response:
+                        response_json = json.dumps(response, indent=2, default=str)
+                        self.logger.debug(f"🔍 Heartbeat response #{heartbeat_count}:\n{response_json}")
+                    else:
+                        self.logger.debug(f"🔍 Heartbeat response #{heartbeat_count}: None (no response)")
+                    
+                    # Log success
+                    if response:
+                        self.logger.info(f"💚 Heartbeat #{heartbeat_count} sent successfully for agent '{agent_id}'")
+                    else:
+                        self.logger.warning(f"💔 Heartbeat #{heartbeat_count} failed for agent '{agent_id}' - no response")
+                    
+                    # Log every 10th heartbeat for visibility
+                    if heartbeat_count % 10 == 0:
+                        elapsed_time = heartbeat_count * interval
+                        self.logger.info(
+                            f"💓 Heartbeat #{heartbeat_count} for agent '{agent_id}' - "
+                            f"running for {elapsed_time} seconds"
+                        )
+                        
+                except Exception as e:
+                    self.logger.error(
+                        f"❌ Heartbeat #{heartbeat_count} error for agent '{agent_id}': {e}"
+                    )
+                    # Continue to next cycle
+                
+                # Wait for next heartbeat interval
+                await asyncio.sleep(interval)
+                    
+        except asyncio.CancelledError:
+            self.logger.info(f"🛑 Heartbeat lifespan task cancelled for agent '{agent_id}'")
+            raise
+        except Exception as e:
+            self.logger.error(
+                f"💥 Heartbeat lifespan task failed for agent '{agent_id}': {e}"
+            )
+
+    def _build_health_status_from_context(self, context: dict[str, Any]) -> Any:
+        """Build health status object from pipeline context."""
+        # Get existing health status from context or build from current state
+        existing_health_status = context.get("health_status")
+        
+        if existing_health_status:
+            # Update timestamp to current time for fresh heartbeat
+            if hasattr(existing_health_status, "timestamp"):
+                from datetime import UTC, datetime
+                existing_health_status.timestamp = datetime.now(UTC)
+            return existing_health_status
+        
+        # Build minimal health status from context if none exists
+        agent_id = context.get("agent_id", "unknown-agent")
+        agent_config = context.get("agent_config", {})
+        
+        # Import here to avoid circular imports
+        from datetime import UTC, datetime
+        from ..shared.support_types import HealthStatus, HealthStatusType
+        
+        return HealthStatus(
+            agent_name=agent_id,
+            status=HealthStatusType.HEALTHY,
+            capabilities=agent_config.get("capabilities", []),
+            timestamp=datetime.now(UTC),
+            version=agent_config.get("version", "1.0.0"),
+            metadata=agent_config,
+        )
+
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""
         from datetime import UTC, datetime
 
         return datetime.now(UTC).isoformat()
+
+
+class HeartbeatLoopStep(PipelineStep):
+    """
+    Starts background heartbeat loop for continuous registry communication.
+    
+    This step starts an asyncio background task that sends periodic heartbeats
+    to the mesh registry using the existing registry client wrapper. The task
+    runs independently and doesn't block pipeline progression.
+    """
+
+    def __init__(self):
+        super().__init__(
+            name="heartbeat-loop",
+            required=False,  # Optional - agent can run standalone without registry
+            description="Start background heartbeat loop for registry communication",
+        )
+
+    async def execute(self, context: dict[str, Any]) -> PipelineResult:
+        """Start background heartbeat task."""
+        self.logger.debug("Starting background heartbeat loop...")
+
+        result = PipelineResult(message="Heartbeat loop started")
+
+        try:
+            # Get configuration
+            agent_config = context.get("agent_config", {})
+            registry_wrapper = context.get("registry_wrapper")
+            
+            # Check if registry is available
+            if not registry_wrapper:
+                result.status = PipelineStatus.SKIPPED
+                result.message = "No registry connection - agent running in standalone mode"
+                self.logger.info("⚠️ No registry connection, skipping heartbeat loop")
+                return result
+
+            # Get agent ID and heartbeat interval configuration
+            agent_id = context.get("agent_id", "unknown-agent")
+            heartbeat_interval = self._get_heartbeat_interval(agent_config)
+            
+            # Store heartbeat config for FastAPI lifespan (don't start task in this event loop)
+            result.add_context("heartbeat_config", {
+                "registry_wrapper": registry_wrapper,
+                "agent_id": agent_id,
+                "interval": heartbeat_interval,
+                "context": context,  # Pass full context for health status building
+            })
+            
+            result.message = f"Heartbeat config prepared (interval: {heartbeat_interval}s)"
+            self.logger.info(
+                f"💓 Heartbeat config prepared for FastAPI lifespan with {heartbeat_interval}s interval"
+            )
+
+        except Exception as e:
+            result.status = PipelineStatus.FAILED
+            result.message = f"Failed to start heartbeat loop: {e}"
+            result.add_error(str(e))
+            self.logger.error(f"❌ Failed to start heartbeat loop: {e}")
+
+        return result
+
+    def _get_heartbeat_interval(self, agent_config: dict[str, Any]) -> int:
+        """Get heartbeat interval from configuration sources."""
+        import os
+        
+        # Priority order: ENV > agent_config > default
+        env_interval = os.getenv("MCP_MESH_HEARTBEAT_INTERVAL")
+        if env_interval:
+            try:
+                return int(env_interval)
+            except ValueError:
+                self.logger.warning(f"Invalid MCP_MESH_HEARTBEAT_INTERVAL: {env_interval}")
+        
+        # Check agent config
+        health_interval = agent_config.get("health_interval")
+        if health_interval:
+            return int(health_interval)
+            
+        # Default to 30 seconds
+        return 30
+
+
+
+class AtexitLoopStep(PipelineStep):
+    """
+    Starts a keep-alive service to prevent script exit.
+    
+    This step ensures the agent process stays alive by starting
+    a non-daemon thread with a keep-alive loop and signal handling.
+    """
+
+    def __init__(self):
+        super().__init__(
+            name="keep-alive-service",
+            required=False,
+            description="Start keep-alive service to prevent script exit",
+        )
+
+    async def execute(self, context: dict[str, Any]) -> PipelineResult:
+        """Start keep-alive service to prevent script exit."""
+        self.logger.debug("Starting keep-alive service to prevent script exit...")
+
+        result = PipelineResult(message="Keep-alive service started")
+
+        try:
+            # Check if auto-run is enabled
+            auto_run_enabled = self._check_auto_run_enabled(context)
+            if not auto_run_enabled:
+                result.status = PipelineStatus.SUCCESS
+                result.message = "Auto-run disabled, keep-alive service not needed"
+                self.logger.info("ℹ️ Auto-run disabled, keep-alive service not needed")
+                return result
+
+            # Get agent configuration
+            agent_config = context.get("agent_config", {})
+            agent_id = context.get("agent_id", "unknown-agent")
+            
+            # Register atexit handler
+            import atexit
+            import signal
+            import time
+            import threading
+            
+            self.logger.info(f"🚀 Starting keep-alive service for agent '{agent_id}'")
+            
+            # Configure keep-alive settings from environment or agent config
+            keep_alive_interval = self._get_keep_alive_interval(agent_config)
+            
+            # Create keep-alive state
+            keep_alive_state = {
+                "running": True,
+                "agent_id": agent_id,
+                "interval": keep_alive_interval,
+                "heartbeat_count": 0
+            }
+            
+            def keep_alive_loop():
+                """Keep-alive loop that runs to prevent script exit."""
+                self.logger.info(
+                    f"💓 Starting keep-alive service for agent '{agent_id}' "
+                    f"with {keep_alive_interval}s interval"
+                )
+                self.logger.info("🛑 Press Ctrl+C to stop the service")
+                
+                # Set up signal handlers for graceful shutdown
+                def signal_handler(signum, frame):
+                    self.logger.info(f"🔴 Received shutdown signal {signum} for agent '{agent_id}'")
+                    keep_alive_state["running"] = False
+                
+                try:
+                    signal.signal(signal.SIGINT, signal_handler)
+                    signal.signal(signal.SIGTERM, signal_handler)
+                except ValueError:
+                    # Not in main thread - can't register signal handlers
+                    self.logger.debug("Cannot register signal handlers from background thread")
+                
+                try:
+                    while keep_alive_state["running"]:
+                        time.sleep(keep_alive_interval)
+                        keep_alive_state["heartbeat_count"] += 1
+                        
+                        # Log periodic status
+                        if keep_alive_state["heartbeat_count"] % 10 == 0:  # Every 10 intervals
+                            elapsed_time = keep_alive_state["heartbeat_count"] * keep_alive_interval
+                            self.logger.info(
+                                f"💓 Keep-alive heartbeat #{keep_alive_state['heartbeat_count']} "
+                                f"for agent '{agent_id}' - running for {elapsed_time} seconds"
+                            )
+                        
+                except KeyboardInterrupt:
+                    self.logger.info(f"🔴 Received KeyboardInterrupt for agent '{agent_id}'")
+                except Exception as e:
+                    self.logger.error(f"💥 Keep-alive loop error for agent '{agent_id}': {e}")
+                finally:
+                    self.logger.info(f"🛑 Keep-alive service for agent '{agent_id}' shutting down")
+                    keep_alive_state["running"] = False
+            
+            # Schedule the keep-alive loop as an asyncio task in the current event loop
+            # This prevents the main event loop from ending
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+                
+                async def async_keep_alive_loop():
+                    """Async version of keep-alive loop that runs in main event loop."""
+                    self.logger.info(
+                        f"💓 Starting async keep-alive service for agent '{agent_id}' "
+                        f"with {keep_alive_interval}s interval"
+                    )
+                    self.logger.info("🛑 Press Ctrl+C to stop the service")
+                    
+                    try:
+                        while keep_alive_state["running"]:
+                            await asyncio.sleep(keep_alive_interval)
+                            keep_alive_state["heartbeat_count"] += 1
+                            
+                            # Log periodic status
+                            if keep_alive_state["heartbeat_count"] % 10 == 0:  # Every 10 intervals
+                                elapsed_time = keep_alive_state["heartbeat_count"] * keep_alive_interval
+                                self.logger.info(
+                                    f"💓 Keep-alive heartbeat #{keep_alive_state['heartbeat_count']} "
+                                    f"for agent '{agent_id}' - running for {elapsed_time} seconds"
+                                )
+                    except asyncio.CancelledError:
+                        self.logger.info(f"🔴 Keep-alive service cancelled for agent '{agent_id}'")
+                        raise
+                    except Exception as e:
+                        self.logger.error(f"💥 Keep-alive loop error for agent '{agent_id}': {e}")
+                    finally:
+                        self.logger.info(f"🛑 Keep-alive service for agent '{agent_id}' shutting down")
+                        keep_alive_state["running"] = False
+                
+                # Create the keep-alive task
+                keep_alive_task = loop.create_task(async_keep_alive_loop())
+                
+                # Store keep-alive state in context for monitoring
+                result.add_context("keep_alive_registered", True)
+                result.add_context("keep_alive_interval", keep_alive_interval)
+                result.add_context("keep_alive_state", keep_alive_state)
+                result.add_context("keep_alive_task", keep_alive_task)
+                
+                self.logger.info(
+                    f"✅ Async keep-alive service started for agent '{agent_id}' "
+                    f"with {keep_alive_interval}s interval"
+                )
+                
+            except RuntimeError:
+                # No event loop running - fall back to thread approach
+                self.logger.debug("No event loop running, falling back to thread approach")
+                keep_alive_thread = threading.Thread(target=keep_alive_loop, daemon=False)
+                keep_alive_thread.start()
+                
+                result.add_context("keep_alive_registered", True)
+                result.add_context("keep_alive_interval", keep_alive_interval)
+                result.add_context("keep_alive_state", keep_alive_state)
+                result.add_context("keep_alive_thread", keep_alive_thread)
+                
+                self.logger.info(
+                    f"✅ Thread-based keep-alive service started for agent '{agent_id}' "
+                    f"with {keep_alive_interval}s interval"
+                )
+
+        except Exception as e:
+            result.status = PipelineStatus.FAILED
+            result.message = f"Keep-alive service startup failed: {e}"
+            result.add_error(str(e))
+            self.logger.error(f"❌ Keep-alive service startup failed: {e}")
+
+        return result
+
+    def _check_auto_run_enabled(self, context: dict[str, Any]) -> bool:
+        """Check if auto-run is enabled from context or environment."""
+        # Check environment variable first (takes precedence)
+        env_auto_run = os.environ.get("MCP_MESH_AUTO_RUN", "").lower()
+        if env_auto_run in ("true", "1", "yes"):
+            self.logger.debug("🌐 Auto-run enabled via MCP_MESH_AUTO_RUN environment variable")
+            return True
+        elif env_auto_run in ("false", "0", "no"):
+            self.logger.debug("🌐 Auto-run disabled via MCP_MESH_AUTO_RUN environment variable")
+            return False
+
+        # Check agent configuration from context
+        agent_config = context.get("agent_config", {})
+        if agent_config.get("auto_run", False):
+            self.logger.debug("🎯 Auto-run enabled via agent configuration")
+            return True
+
+        # Check mesh agents metadata
+        mesh_agents = context.get("mesh_agents", {})
+        for func_name, decorated_func in mesh_agents.items():
+            metadata = getattr(decorated_func, "metadata", {})
+            if metadata.get("auto_run", False):
+                self.logger.debug(f"🎯 Auto-run enabled via @mesh.agent(auto_run=True) on {func_name}")
+                return True
+
+        return False
+
+    def _get_keep_alive_interval(self, agent_config: dict[str, Any]) -> int:
+        """Get keep-alive interval from environment or agent config."""
+        # Check environment variable first
+        env_interval = os.environ.get("MCP_MESH_AUTO_RUN_INTERVAL")
+        if env_interval:
+            try:
+                interval = int(env_interval)
+                self.logger.debug(f"🌐 Keep-alive interval from environment: {interval}s")
+                return interval
+            except ValueError:
+                self.logger.warning(
+                    f"Invalid MCP_MESH_AUTO_RUN_INTERVAL: {env_interval}, using default"
+                )
+
+        # Check agent configuration
+        interval = agent_config.get("auto_run_interval", 10)  # Default 10 seconds
+        self.logger.debug(f"🎯 Keep-alive interval from config: {interval}s")
+        return interval

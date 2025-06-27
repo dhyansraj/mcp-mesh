@@ -154,8 +154,7 @@ async def health_status(status_type: str, time_service: McpMeshAgent = None) -> 
     name="fastmcp-service",
     version="1.0.0",
     description="FastMCP service with mesh integration",
-    http_host="0.0.0.0",
-    http_port=8080,
+    http_port=9092,
     enable_http=True,
     auto_run=True,
 )

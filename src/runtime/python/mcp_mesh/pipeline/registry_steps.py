@@ -100,74 +100,59 @@ class HeartbeatSendStep(PipelineStep):
             if not health_status:
                 raise ValueError("Health status not available in context")
 
-            # Check if we're in debug mode
-            debug_mode = os.getenv("MCP_MESH_DEBUG_MODE", "true").lower() == "true"
+            # Build the complete heartbeat payload for debug logging
+            heartbeat_payload = self._build_heartbeat_payload(
+                agent_id, health_status, registration_data, context
+            )
 
-            if debug_mode:
-                # Debug mode: print JSON and mark as successful
-                self.logger.debug(
-                    "Debug mode: printing heartbeat JSON instead of sending HTTP"
-                )
+            # Debug: Log heartbeat payload that would be sent
+            import json
+            json_output = json.dumps(heartbeat_payload, indent=2, default=str)
+            self.logger.debug(f"🔍 Heartbeat message to send:\n{json_output}")
 
-                # Build the complete heartbeat payload
-                heartbeat_payload = self._build_heartbeat_payload(
-                    agent_id, health_status, registration_data, context
-                )
+            # Send actual HTTP request to registry
+            registry_wrapper = context.get("registry_wrapper")
 
-                # Print the JSON message
-                json_output = json.dumps(heartbeat_payload, indent=2, default=str)
-                print(f"DEBUG: heartbeat message to send {json_output}")
-
-                # Store mock response data
-                result.add_context(
-                    "heartbeat_response", {"status": "debug_mode", "printed": True}
-                )
+            if not registry_wrapper:
+                # If no registry wrapper, just log the payload and mark as successful
+                self.logger.info(f"⚠️ No registry connection - would send heartbeat for agent '{agent_id}'")
+                result.add_context("heartbeat_response", {"status": "no_registry", "logged": True})
                 result.add_context("dependencies_resolved", {})
+                result.message = f"Heartbeat logged for agent '{agent_id}' (no registry)"
+                return result
 
-                result.message = f"Debug: heartbeat JSON printed for agent '{agent_id}'"
-                self.logger.info(
-                    f"🎯 Debug mode: heartbeat JSON printed for agent '{agent_id}'"
+            self.logger.info(f"💓 Sending heartbeat for agent '{agent_id}'...")
+
+            response = (
+                await registry_wrapper.send_heartbeat_with_dependency_resolution(
+                    health_status
                 )
+            )
+
+            if response:
+                # Store response data
+                result.add_context("heartbeat_response", response)
+                result.add_context(
+                    "dependencies_resolved",
+                    response.get("dependencies_resolved", {}),
+                )
+
+                result.message = (
+                    f"Heartbeat sent successfully for agent '{agent_id}'"
+                )
+                self.logger.info(f"💚 Heartbeat successful for agent '{agent_id}'")
+
+                # Log dependency resolution info
+                deps_resolved = response.get("dependencies_resolved", {})
+                if deps_resolved:
+                    self.logger.info(
+                        f"🔗 Dependencies resolved: {len(deps_resolved)} items"
+                    )
 
             else:
-                # Production mode: send actual HTTP request
-                registry_wrapper = context.get("registry_wrapper")
-
-                if not registry_wrapper:
-                    raise ValueError("Registry wrapper not available in context")
-
-                self.logger.info(f"💓 Sending heartbeat for agent '{agent_id}'...")
-
-                response = (
-                    await registry_wrapper.send_heartbeat_with_dependency_resolution(
-                        health_status
-                    )
-                )
-
-                if response:
-                    # Store response data
-                    result.add_context("heartbeat_response", response)
-                    result.add_context(
-                        "dependencies_resolved",
-                        response.get("dependencies_resolved", {}),
-                    )
-
-                    result.message = (
-                        f"Heartbeat sent successfully for agent '{agent_id}'"
-                    )
-                    self.logger.info(f"💚 Heartbeat successful for agent '{agent_id}'")
-
-                    # Log dependency resolution info
-                    deps_resolved = response.get("dependencies_resolved", {})
-                    if deps_resolved:
-                        self.logger.info(
-                            f"🔗 Dependencies resolved: {len(deps_resolved)} items"
-                        )
-
-                else:
-                    result.status = PipelineStatus.FAILED
-                    result.message = "Heartbeat failed - no response from registry"
-                    self.logger.error("💔 Heartbeat failed - no response")
+                result.status = PipelineStatus.FAILED
+                result.message = "Heartbeat failed - no response from registry"
+                self.logger.error("💔 Heartbeat failed - no response")
 
         except Exception as e:
             result.status = PipelineStatus.FAILED
@@ -249,23 +234,44 @@ class DependencyResolutionStep(PipelineStep):
         result = PipelineResult(message="Dependency resolution processed")
 
         try:
-            dependencies_resolved = context.get("dependencies_resolved", {})
-            mesh_tools = context.get("mesh_tools", {})
+            # Get heartbeat response and registry wrapper
+            heartbeat_response = context.get("heartbeat_response", {})
+            registry_wrapper = context.get("registry_wrapper")
 
-            if not dependencies_resolved:
-                result.status = PipelineStatus.SKIPPED
-                result.message = "No dependencies to resolve"
-                self.logger.debug("ℹ️ No dependencies to resolve")
+            if not heartbeat_response or not registry_wrapper:
+                result.status = PipelineStatus.SUCCESS
+                result.message = "No heartbeat response or registry wrapper - completed successfully"
+                self.logger.info("ℹ️ No heartbeat response to process - this is normal")
                 return result
 
-            # Process each resolved dependency
+            # Use existing parse_tool_dependencies method from registry wrapper
+            dependencies_resolved = registry_wrapper.parse_tool_dependencies(heartbeat_response)
+
+            if not dependencies_resolved:
+                result.status = PipelineStatus.SUCCESS
+                result.message = "No dependencies to resolve - completed successfully"
+                self.logger.info("ℹ️ No dependencies to resolve - this is normal")
+                return result
+
+            # Process each resolved dependency using existing method
             processed_deps = {}
-            for dep_name, dep_info in dependencies_resolved.items():
-                processed_deps[dep_name] = self._process_dependency(dep_name, dep_info)
+            for function_name, dependency_list in dependencies_resolved.items():
+                if isinstance(dependency_list, list):
+                    for dep_resolution in dependency_list:
+                        if isinstance(dep_resolution, dict) and "capability" in dep_resolution:
+                            capability = dep_resolution["capability"]
+                            processed_deps[capability] = self._process_dependency(capability, dep_resolution)
+                            self.logger.debug(
+                                f"Processed dependency '{capability}' for function '{function_name}': "
+                                f"{dep_resolution.get('endpoint', 'no-endpoint')}"
+                            )
 
             # Store processed dependencies
             result.add_context("processed_dependencies", processed_deps)
             result.add_context("dependency_count", len(processed_deps))
+
+            # Register dependencies with the global injector
+            await self._register_dependencies_with_injector(processed_deps)
 
             result.message = f"Processed {len(processed_deps)} dependencies"
             self.logger.info(
@@ -300,3 +306,61 @@ class DependencyResolutionStep(PipelineStep):
             "function_name": dep_info.get("function_name"),
             "processed_at": "simplified_mode",  # TODO: Remove after simplification
         }
+
+    async def _register_dependencies_with_injector(self, processed_deps: dict[str, Any]) -> None:
+        """Register processed dependencies with the global dependency injector."""
+        try:
+            # Import here to avoid circular imports
+            from ..engine.dependency_injector import get_global_injector
+            from ..engine.sync_http_client import SyncHttpClient
+            
+            injector = get_global_injector()
+            
+            for capability, dep_data in processed_deps.items():
+                if dep_data.get("status") == "available":
+                    endpoint = dep_data.get("endpoint")
+                    function_name = dep_data.get("function_name")
+                    agent_id = dep_data.get("agent_id")
+                    
+                    if endpoint and function_name:
+                        # Create HTTP client for the dependency  
+                        http_client = SyncHttpClient(
+                            base_url=endpoint
+                        )
+                        
+                        # Create callable wrapper that knows which function to call
+                        def create_callable_proxy(client, func_name):
+                            def proxy_call():
+                                try:
+                                    result = client.call_tool(func_name, {})
+                                    # Extract text from MCP result format
+                                    if isinstance(result, dict) and "content" in result:
+                                        content = result["content"]
+                                        if content and isinstance(content[0], dict) and "text" in content[0]:
+                                            return content[0]["text"]
+                                    return str(result)
+                                except Exception as e:
+                                    self.logger.error(f"Failed to call {func_name}: {e}")
+                                    raise
+                            return proxy_call
+                        
+                        proxy = create_callable_proxy(http_client, function_name)
+                        
+                        # Register with injector
+                        await injector.register_dependency(capability, proxy)
+                        
+                        self.logger.info(
+                            f"🔌 Registered dependency '{capability}' -> {endpoint}/{function_name}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ Cannot register dependency '{capability}': missing endpoint or function_name"
+                        )
+                else:
+                    self.logger.warning(
+                        f"⚠️ Skipping dependency '{capability}': status = {dep_data.get('status')}"
+                    )
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Failed to register dependencies with injector: {e}")
+            # Don't raise - this is not critical for pipeline to continue
