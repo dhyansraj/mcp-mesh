@@ -101,23 +101,25 @@ class DebounceCoordinator:
 
             # Check if auto-run is enabled (defaults to true for persistent service behavior)
             auto_run_enabled = self._check_auto_run_enabled()
-            
+
             self.logger.debug(f"🔍 Auto-run enabled: {auto_run_enabled}")
-            
+
             if auto_run_enabled:
                 self.logger.info("🔄 Auto-run enabled - using FastAPI natural blocking")
                 # Phase 1: Run async pipeline setup
                 result = asyncio.run(self._orchestrator.process_once())
-                
+
                 # Phase 2: Extract FastAPI app and start synchronous server
                 pipeline_context = result.get("context", {}).get("pipeline_context", {})
                 fastapi_app = pipeline_context.get("fastapi_app")
                 binding_config = pipeline_context.get("fastapi_binding_config", {})
-                
+
                 if fastapi_app and binding_config:
                     self._start_blocking_fastapi_server(fastapi_app, binding_config)
                 else:
-                    self.logger.warning("⚠️ Auto-run enabled but no FastAPI app prepared - exiting")
+                    self.logger.warning(
+                        "⚠️ Auto-run enabled but no FastAPI app prepared - exiting"
+                    )
             else:
                 # Single execution mode (for testing/debugging)
                 self.logger.info("🏁 Auto-run disabled - single execution mode")
@@ -127,17 +129,19 @@ class DebounceCoordinator:
         except Exception as e:
             self.logger.error(f"❌ Error in debounced processing: {e}")
 
-    def _start_blocking_fastapi_server(self, app: Any, binding_config: dict[str, Any]) -> None:
+    def _start_blocking_fastapi_server(
+        self, app: Any, binding_config: dict[str, Any]
+    ) -> None:
         """Start FastAPI server with uvicorn.run() - blocks main thread naturally."""
         try:
             import uvicorn
-            
+
             bind_host = binding_config.get("bind_host", "0.0.0.0")
             bind_port = binding_config.get("bind_port", 8080)
-            
+
             self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
             self.logger.info("🛑 Press Ctrl+C to stop the service")
-            
+
             # This blocks the main thread until interrupted - exactly what we want!
             uvicorn.run(
                 app,
@@ -146,9 +150,11 @@ class DebounceCoordinator:
                 log_level="info",
                 access_log=False,  # Reduce noise
             )
-            
+
         except KeyboardInterrupt:
-            self.logger.info("🔴 Received KeyboardInterrupt, shutting down FastAPI server")
+            self.logger.info(
+                "🔴 Received KeyboardInterrupt, shutting down FastAPI server"
+            )
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
@@ -158,9 +164,11 @@ class DebounceCoordinator:
         # Check environment variable - defaults to "true" for persistent service behavior
         env_auto_run = os.getenv("MCP_MESH_AUTO_RUN", "true").lower()
         self.logger.debug(f"🔍 MCP_MESH_AUTO_RUN='{env_auto_run}' (default: 'true')")
-        
+
         if env_auto_run in ("false", "0", "no"):
-            self.logger.debug("🔍 Auto-run explicitly disabled via environment variable")
+            self.logger.debug(
+                "🔍 Auto-run explicitly disabled via environment variable"
+            )
             return False
         else:
             # Default to True - agents should run persistently by default

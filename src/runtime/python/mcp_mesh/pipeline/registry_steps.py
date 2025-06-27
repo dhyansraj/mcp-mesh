@@ -107,6 +107,7 @@ class HeartbeatSendStep(PipelineStep):
 
             # Debug: Log heartbeat payload that would be sent
             import json
+
             json_output = json.dumps(heartbeat_payload, indent=2, default=str)
             self.logger.debug(f"🔍 Heartbeat message to send:\n{json_output}")
 
@@ -115,18 +116,22 @@ class HeartbeatSendStep(PipelineStep):
 
             if not registry_wrapper:
                 # If no registry wrapper, just log the payload and mark as successful
-                self.logger.info(f"⚠️ No registry connection - would send heartbeat for agent '{agent_id}'")
-                result.add_context("heartbeat_response", {"status": "no_registry", "logged": True})
+                self.logger.info(
+                    f"⚠️ No registry connection - would send heartbeat for agent '{agent_id}'"
+                )
+                result.add_context(
+                    "heartbeat_response", {"status": "no_registry", "logged": True}
+                )
                 result.add_context("dependencies_resolved", {})
-                result.message = f"Heartbeat logged for agent '{agent_id}' (no registry)"
+                result.message = (
+                    f"Heartbeat logged for agent '{agent_id}' (no registry)"
+                )
                 return result
 
             self.logger.info(f"💓 Sending heartbeat for agent '{agent_id}'...")
 
-            response = (
-                await registry_wrapper.send_heartbeat_with_dependency_resolution(
-                    health_status
-                )
+            response = await registry_wrapper.send_heartbeat_with_dependency_resolution(
+                health_status
             )
 
             if response:
@@ -137,9 +142,7 @@ class HeartbeatSendStep(PipelineStep):
                     response.get("dependencies_resolved", {}),
                 )
 
-                result.message = (
-                    f"Heartbeat sent successfully for agent '{agent_id}'"
-                )
+                result.message = f"Heartbeat sent successfully for agent '{agent_id}'"
                 self.logger.info(f"💚 Heartbeat successful for agent '{agent_id}'")
 
                 # Log dependency resolution info
@@ -240,12 +243,16 @@ class DependencyResolutionStep(PipelineStep):
 
             if not heartbeat_response or not registry_wrapper:
                 result.status = PipelineStatus.SUCCESS
-                result.message = "No heartbeat response or registry wrapper - completed successfully"
+                result.message = (
+                    "No heartbeat response or registry wrapper - completed successfully"
+                )
                 self.logger.info("ℹ️ No heartbeat response to process - this is normal")
                 return result
 
             # Use existing parse_tool_dependencies method from registry wrapper
-            dependencies_resolved = registry_wrapper.parse_tool_dependencies(heartbeat_response)
+            dependencies_resolved = registry_wrapper.parse_tool_dependencies(
+                heartbeat_response
+            )
 
             if not dependencies_resolved:
                 result.status = PipelineStatus.SUCCESS
@@ -258,9 +265,14 @@ class DependencyResolutionStep(PipelineStep):
             for function_name, dependency_list in dependencies_resolved.items():
                 if isinstance(dependency_list, list):
                     for dep_resolution in dependency_list:
-                        if isinstance(dep_resolution, dict) and "capability" in dep_resolution:
+                        if (
+                            isinstance(dep_resolution, dict)
+                            and "capability" in dep_resolution
+                        ):
                             capability = dep_resolution["capability"]
-                            processed_deps[capability] = self._process_dependency(capability, dep_resolution)
+                            processed_deps[capability] = self._process_dependency(
+                                capability, dep_resolution
+                            )
                             self.logger.debug(
                                 f"Processed dependency '{capability}' for function '{function_name}': "
                                 f"{dep_resolution.get('endpoint', 'no-endpoint')}"
@@ -307,27 +319,27 @@ class DependencyResolutionStep(PipelineStep):
             "processed_at": "simplified_mode",  # TODO: Remove after simplification
         }
 
-    async def _register_dependencies_with_injector(self, processed_deps: dict[str, Any]) -> None:
+    async def _register_dependencies_with_injector(
+        self, processed_deps: dict[str, Any]
+    ) -> None:
         """Register processed dependencies with the global dependency injector."""
         try:
             # Import here to avoid circular imports
             from ..engine.dependency_injector import get_global_injector
             from ..engine.sync_http_client import SyncHttpClient
-            
+
             injector = get_global_injector()
-            
+
             for capability, dep_data in processed_deps.items():
                 if dep_data.get("status") == "available":
                     endpoint = dep_data.get("endpoint")
                     function_name = dep_data.get("function_name")
                     agent_id = dep_data.get("agent_id")
-                    
+
                     if endpoint and function_name:
-                        # Create HTTP client for the dependency  
-                        http_client = SyncHttpClient(
-                            base_url=endpoint
-                        )
-                        
+                        # Create HTTP client for the dependency
+                        http_client = SyncHttpClient(base_url=endpoint)
+
                         # Create callable wrapper that knows which function to call
                         def create_callable_proxy(client, func_name):
                             def proxy_call():
@@ -336,19 +348,26 @@ class DependencyResolutionStep(PipelineStep):
                                     # Extract text from MCP result format
                                     if isinstance(result, dict) and "content" in result:
                                         content = result["content"]
-                                        if content and isinstance(content[0], dict) and "text" in content[0]:
+                                        if (
+                                            content
+                                            and isinstance(content[0], dict)
+                                            and "text" in content[0]
+                                        ):
                                             return content[0]["text"]
                                     return str(result)
                                 except Exception as e:
-                                    self.logger.error(f"Failed to call {func_name}: {e}")
+                                    self.logger.error(
+                                        f"Failed to call {func_name}: {e}"
+                                    )
                                     raise
+
                             return proxy_call
-                        
+
                         proxy = create_callable_proxy(http_client, function_name)
-                        
+
                         # Register with injector
                         await injector.register_dependency(capability, proxy)
-                        
+
                         self.logger.info(
                             f"🔌 Registered dependency '{capability}' -> {endpoint}/{function_name}"
                         )
@@ -360,7 +379,7 @@ class DependencyResolutionStep(PipelineStep):
                     self.logger.warning(
                         f"⚠️ Skipping dependency '{capability}': status = {dep_data.get('status')}"
                     )
-                    
+
         except Exception as e:
             self.logger.error(f"❌ Failed to register dependencies with injector: {e}")
             # Don't raise - this is not critical for pipeline to continue

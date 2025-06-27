@@ -81,14 +81,23 @@ class RegistryClientWrapper:
 
             # Debug: Log full registration payload
             import json
+
             # Convert agent_registration to dict for logging
             if hasattr(agent_registration, "model_dump"):
-                registration_dict = agent_registration.model_dump(mode="json", exclude_none=True)
+                registration_dict = agent_registration.model_dump(
+                    mode="json", exclude_none=True
+                )
             else:
-                registration_dict = agent_registration.__dict__ if hasattr(agent_registration, "__dict__") else str(agent_registration)
-            
+                registration_dict = (
+                    agent_registration.__dict__
+                    if hasattr(agent_registration, "__dict__")
+                    else str(agent_registration)
+                )
+
             registration_json = json.dumps(registration_dict, indent=2, default=str)
-            self.logger.debug(f"🔍 Full heartbeat registration payload:\n{registration_json}")
+            self.logger.debug(
+                f"🔍 Full heartbeat registration payload:\n{registration_json}"
+            )
 
             # Call generated client
             response = self.agents_api.send_heartbeat(agent_registration)
@@ -228,17 +237,20 @@ class RegistryClientWrapper:
         external_host = agent_metadata.get("external_host")
         external_port = agent_metadata.get("external_port")
         external_endpoint = agent_metadata.get("external_endpoint")
-        
+
         # Parse external endpoint if provided
         if external_endpoint:
             from urllib.parse import urlparse
+
             parsed = urlparse(external_endpoint)
             http_host = parsed.hostname or external_host or "localhost"
-            http_port = parsed.port or external_port or agent_metadata.get("http_port", 8080)
+            http_port = (
+                parsed.port or external_port or agent_metadata.get("http_port", 8080)
+            )
         else:
             http_host = external_host or agent_metadata.get("http_host", "localhost")
             http_port = external_port or agent_metadata.get("http_port", 8080)
-        
+
         # Fallback to localhost if we somehow get 0.0.0.0 (binding address)
         if http_host == "0.0.0.0":
             http_host = "localhost"
