@@ -320,10 +320,10 @@ def tool(
         # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
 
-        # Trigger debounced processing
-        _trigger_debounced_processing()
-
         # Create dependency injection wrapper if needed
+        logger.debug(
+            f"🔍 Function '{target.__name__}' has {len(validated_dependencies)} validated dependencies: {validated_dependencies}"
+        )
         if validated_dependencies:
             try:
                 # Import here to avoid circular imports
@@ -404,6 +404,8 @@ def tool(
                     logger.debug(
                         f"🔸 Returning ORIGINAL function: {target} at {hex(id(target))}"
                     )
+                    # Trigger debounced processing before returning
+                    _trigger_debounced_processing()
                     return target
                 else:
                     # No FastMCP processing yet - return wrapper for clean chaining
@@ -413,6 +415,8 @@ def tool(
                     )
 
                     # Return the wrapped function - FastMCP will cache this wrapper when it runs
+                    # Trigger debounced processing before returning
+                    _trigger_debounced_processing()
                     return wrapped
             except Exception as e:
                 # Log but don't fail - graceful degradation
@@ -427,6 +431,8 @@ def tool(
             except Exception as e:
                 logger.error(f"Runtime registration failed for {target.__name__}: {e}")
 
+        # Trigger debounced processing before returning
+        _trigger_debounced_processing()
         return target
 
     return decorator

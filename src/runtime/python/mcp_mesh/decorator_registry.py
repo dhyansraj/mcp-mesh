@@ -87,7 +87,13 @@ class DecoratorRegistry:
     def update_mesh_tool_function(cls, func_name: str, new_func: Callable) -> None:
         """Update the function reference for a registered mesh tool."""
         if func_name in cls._mesh_tools:
+            old_func = cls._mesh_tools[func_name].function
             cls._mesh_tools[func_name].function = new_func
+            print(
+                f"🔄 DecoratorRegistry: Updated '{func_name}' from {hex(id(old_func))} to {hex(id(new_func))}"
+            )
+        else:
+            print(f"⚠️ DecoratorRegistry: Function '{func_name}' not found for update")
 
     @classmethod
     def register_mesh_resource(cls, func: Callable, metadata: dict[str, Any]) -> None:

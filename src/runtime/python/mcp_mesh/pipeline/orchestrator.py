@@ -17,7 +17,13 @@ from .registry_steps import (
     HeartbeatSendStep,
     RegistryConnectionStep,
 )
-from .steps import ConfigurationStep, DecoratorCollectionStep, HeartbeatPreparationStep
+from .steps import (
+    ConfigurationStep,
+    DecoratorCollectionStep,
+    FastAPIServerSetupStep,
+    FastMCPServerDiscoveryStep,
+    HeartbeatPreparationStep,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +146,8 @@ class MeshOrchestrator:
             DecoratorCollectionStep(),
             ConfigurationStep(),
             HeartbeatPreparationStep(),
+            FastMCPServerDiscoveryStep(),  # New: Discover user's FastMCP instances
+            FastAPIServerSetupStep(),  # New: Setup FastAPI server with mounted FastMCP + K8s endpoints
             RegistryConnectionStep(),
             HeartbeatSendStep(required=False),  # Optional for now
             DependencyResolutionStep(),
