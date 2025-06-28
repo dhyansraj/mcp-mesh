@@ -19,19 +19,6 @@ from .decorator_registry import (
 # Import mesh.tool and mesh.agent instead
 from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .types import McpMeshAgent
-from .unified_dependencies import (
-    DependencyAnalyzer,
-    DependencyContext,
-    DependencyList,
-    DependencyMap,
-    DependencyPattern,
-    DependencyResolutionResult,
-    DependencySpecification,
-    DependencyValidationError,
-    DependencyValidator,
-    UnifiedDependencyResolver,
-    ValidationResult,
-)
 from .versioning import (
     AgentVersionInfo,
     DeploymentInfo,
@@ -95,16 +82,4 @@ __all__ = [
     "RollbackInfo",
     "VersioningProtocol",
     "VersionComparisonProtocol",
-    # Unified dependencies (CRITICAL FEATURE)
-    "DependencyPattern",
-    "DependencySpecification",
-    "DependencyResolutionResult",
-    "UnifiedDependencyResolver",
-    "DependencyValidator",
-    "DependencyValidationError",
-    "ValidationResult",
-    "DependencyAnalyzer",
-    "DependencyList",
-    "DependencyMap",
-    "DependencyContext",
 ]
