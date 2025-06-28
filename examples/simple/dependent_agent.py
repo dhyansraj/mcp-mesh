@@ -11,7 +11,6 @@ This demonstrates an agent that depends on capabilities from other agents:
 
 import mesh
 from fastmcp import FastMCP
-from mcp_mesh.types import McpMeshAgent
 
 # Single FastMCP server instance
 app = FastMCP("Dependent Service")
@@ -20,7 +19,7 @@ app = FastMCP("Dependent Service")
 @app.tool()
 @mesh.tool(capability="report_service", dependencies=["time_service"])
 def generate_report(
-    title: str, content: str = "Sample content", time_service: McpMeshAgent = None
+    title: str, content: str = "Sample content", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Generate a timestamped report using the time service."""
     # Get timestamp from the injected time service
@@ -40,7 +39,7 @@ def generate_report(
 @app.tool()
 @mesh.tool(capability="analysis_service", dependencies=["time_service"])
 def analyze_data(
-    data: list, analysis_type: str = "basic", time_service: McpMeshAgent = None
+    data: list, analysis_type: str = "basic", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Analyze data with timestamp from time service."""
     # Get timestamp from the injected time service

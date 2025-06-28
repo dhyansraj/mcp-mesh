@@ -13,7 +13,6 @@ from datetime import datetime
 
 import mesh
 from fastmcp import FastMCP
-from mcp_mesh.types import McpMeshAgent
 
 # Single FastMCP server instance
 app = FastMCP("FastMCP Service")
@@ -23,7 +22,7 @@ app = FastMCP("FastMCP Service")
 @app.prompt()
 @mesh.tool(capability="prompt_service", dependencies=["time_service"])
 def analysis_prompt(
-    topic: str, depth: str = "basic", time_service: McpMeshAgent = None
+    topic: str, depth: str = "basic", time_service: mesh.McpMeshAgent = None
 ) -> str:
     """Generate analysis prompt with current time."""
     timestamp = time_service() if time_service else "unknown"
@@ -54,7 +53,7 @@ def get_current_time() -> str:
 @app.tool()
 @mesh.tool(capability="math_service", dependencies=["time_service"])
 def calculate_with_timestamp(
-    a: float, b: float, operation: str = "add", time_service: McpMeshAgent = None
+    a: float, b: float, operation: str = "add", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Perform math operation with timestamp from time service."""
     if operation == "add":
@@ -90,7 +89,7 @@ def process_data(data: str, format_type: str = "json") -> dict:
 
 @app.prompt()
 @mesh.tool(capability="template_service")
-def report_template(title: str, sections: list = None) -> str:
+def report_template(title: str, sections: list | None = None) -> str:
     """Generate report template."""
     sections = sections or ["Introduction", "Analysis", "Conclusion"]
 
@@ -131,7 +130,9 @@ async def service_config() -> str:
 
 @app.resource("status://health/{status_type}")
 @mesh.tool(capability="status_service", dependencies=["time_service"])
-async def health_status(status_type: str, time_service: McpMeshAgent = None) -> str:
+async def health_status(
+    status_type: str, time_service: mesh.McpMeshAgent = None
+) -> str:
     """Health status information."""
     timestamp = time_service() if time_service else "unknown"
 
