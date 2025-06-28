@@ -4,7 +4,6 @@ Mesh decorators implementation - dual decorator architecture.
 Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns.
 """
 
-import atexit
 import logging
 import os
 import uuid
@@ -23,9 +22,6 @@ _runtime_processor: Any | None = None
 
 # Shared agent ID for all functions in the same process
 _SHARED_AGENT_ID: str | None = None
-
-# Auto-run configuration storage
-_auto_run_config: dict[str, Any] | None = None
 
 
 def _trigger_debounced_processing():
@@ -92,115 +88,6 @@ def _clear_shared_agent_id():
     """Clear the shared agent ID (useful for testing)."""
     global _SHARED_AGENT_ID
     _SHARED_AGENT_ID = None
-
-
-def _detect_fastmcp_already_processed(func) -> bool:
-    """
-    Detect if FastMCP has already processed this function.
-
-    This indicates wrong decorator order: @server.tool() came before @mesh.tool().
-    """
-    # Simple and reliable check: if FastMCP processed this function first,
-    # it will have this marker set by our fastmcp_integration patch
-    return hasattr(func, "_fastmcp_processed_first")
-
-
-def _attempt_fastmcp_replacement(target, wrapped) -> bool:
-    """
-    Attempt to replace the FastMCP cached function with our wrapper.
-
-    This is a compatibility workaround for wrong decorator order.
-    Returns True if successful, False otherwise.
-    """
-    try:
-        func_name = target.__name__
-        replaced = False
-
-        logger.debug(f"🔧 Attempting FastMCP replacement for '{func_name}'")
-        logger.debug(f"🔸 Target original: {target} at {hex(id(target))}")
-        logger.debug(f"🔹 Replacement wrapper: {wrapped} at {hex(id(wrapped))}")
-
-        # Try immediate replacement
-        if hasattr(target, "_mcp_server"):
-            server = target._mcp_server
-            logger.debug(f"🎯 Found _mcp_server on target: {server}")
-
-            if (
-                hasattr(server, "_tool_manager")
-                and hasattr(server._tool_manager, "_tools")
-                and func_name in server._tool_manager._tools
-            ):
-
-                # Log what FastMCP currently has cached
-                current_cached = server._tool_manager._tools[func_name].fn
-                logger.debug(
-                    f"📦 FastMCP currently has cached: {current_cached} at {hex(id(current_cached))}"
-                )
-
-                server._tool_manager._tools[func_name].fn = wrapped
-
-                # Verify the replacement
-                new_cached = server._tool_manager._tools[func_name].fn
-                logger.debug(
-                    f"✅ FastMCP now has cached: {new_cached} at {hex(id(new_cached))}"
-                )
-
-                logger.debug(
-                    f"Replaced FastMCP cached function {func_name} with injection wrapper"
-                )
-                replaced = True
-
-        # Also check global function-to-server mapping
-        try:
-            from mcp_mesh.engine.fastmcp_integration import _function_to_server
-
-            if target.__name__ in _function_to_server:
-                server = _function_to_server[target.__name__]
-                logger.debug(f"🌍 Found server via global mapping: {server}")
-
-                if (
-                    hasattr(server, "_tool_manager")
-                    and hasattr(server._tool_manager, "_tools")
-                    and func_name in server._tool_manager._tools
-                ):
-
-                    # Log what FastMCP currently has cached
-                    current_cached = server._tool_manager._tools[func_name].fn
-                    logger.debug(
-                        f"📦 FastMCP (global) currently has cached: {current_cached} at {hex(id(current_cached))}"
-                    )
-
-                    server._tool_manager._tools[func_name].fn = wrapped
-
-                    # Verify the replacement
-                    new_cached = server._tool_manager._tools[func_name].fn
-                    logger.debug(
-                        f"✅ FastMCP (global) now has cached: {new_cached} at {hex(id(new_cached))}"
-                    )
-
-                    logger.debug(
-                        f"Replaced FastMCP cached function {func_name} via global mapping"
-                    )
-                    replaced = True
-        except ImportError:
-            logger.debug(
-                "❌ Could not import _function_to_server from fastmcp_integration"
-            )
-
-        # If immediate replacement failed, set up delayed replacement
-        if not replaced:
-            target._mesh_delayed_replacement = lambda: _attempt_fastmcp_replacement(
-                target, wrapped
-            )
-            logger.debug(f"⏰ Set up delayed FastMCP replacement for {func_name}")
-        else:
-            logger.debug(f"✅ FastMCP replacement successful for {func_name}")
-
-        return replaced
-
-    except Exception as e:
-        logger.warning(f"❌ FastMCP replacement failed for {target.__name__}: {e}")
-        return False
 
 
 def tool(
@@ -366,58 +253,13 @@ def tool(
                             f"Runtime registration failed for {target.__name__}: {e}"
                         )
 
-                # Check if FastMCP has already processed this function (wrong order)
-                fastmcp_already_processed = _detect_fastmcp_already_processed(target)
+                # Return the wrapped function - FastMCP will cache this wrapper when it runs
+                logger.debug(f"✅ Returning injection wrapper for '{target.__name__}'")
+                logger.debug(f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}")
 
-                # For now, always apply the compatibility workaround since both orders
-                # end up with FastMCP processing the function before @mesh.tool runs
-                # The "correct" syntactic order will be handled cleanly in future versions
-
-                if fastmcp_already_processed:
-                    # FastMCP has already cached the function - use replacement workaround
-                    logger.debug(
-                        f"❌ FastMCP processed first for '{target.__name__}' - applying workaround"
-                    )
-                    logger.debug(
-                        f"🔸 FastMCP cached ORIGINAL: {target} at {hex(id(target))}"
-                    )
-                    logger.debug(
-                        f"🔹 Trying to replace with WRAPPER: {wrapped} at {hex(id(wrapped))}"
-                    )
-
-                    # Try the FastMCP internal replacement as fallback
-                    success = _attempt_fastmcp_replacement(target, wrapped)
-                    if success:
-                        logger.debug(
-                            f"✅ Successfully replaced FastMCP cache with wrapper for '{target.__name__}'"
-                        )
-                    else:
-                        # Set up delayed replacement
-                        target._mesh_delayed_replacement = (
-                            lambda: _attempt_fastmcp_replacement(target, wrapped)
-                        )
-                        logger.debug(
-                            f"⏰ Set up delayed replacement for '{target.__name__}'"
-                        )
-
-                    # Return original to maintain compatibility
-                    logger.debug(
-                        f"🔸 Returning ORIGINAL function: {target} at {hex(id(target))}"
-                    )
-                    # Trigger debounced processing before returning
-                    _trigger_debounced_processing()
-                    return target
-                else:
-                    # No FastMCP processing yet - return wrapper for clean chaining
-                    logger.debug(f"✅ Clean decorator chaining for '{target.__name__}'")
-                    logger.debug(
-                        f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}"
-                    )
-
-                    # Return the wrapped function - FastMCP will cache this wrapper when it runs
-                    # Trigger debounced processing before returning
-                    _trigger_debounced_processing()
-                    return wrapped
+                # Trigger debounced processing before returning
+                _trigger_debounced_processing()
+                return wrapped
             except Exception as e:
                 # Log but don't fail - graceful degradation
                 logger.error(
@@ -652,129 +494,12 @@ def agent(
             except Exception as e:
                 logger.error(f"Runtime registration failed for agent {name}: {e}")
 
-        # Handle auto-run functionality
+        # Auto-run functionality is now handled by the pipeline architecture
         if final_auto_run:
             logger.info(
-                f"🚀 Auto-run enabled for agent '{name}' - will start service automatically"
+                f"🚀 Auto-run enabled for agent '{name}' - pipeline will start service automatically"
             )
-
-            # Store auto-run configuration globally for later execution
-            global _auto_run_config
-            _auto_run_config = {
-                "name": name,
-                "interval": final_auto_run_interval,
-                "enabled": True,
-            }
 
         return target
 
     return decorator
-
-
-def start_auto_run_service() -> None:
-    """
-    Start the auto-run service if enabled by @mesh.agent(auto_run=True).
-
-    This function should be called at the end of your script to start the
-    keep-alive loop. It only runs if auto_run=True was set on a @mesh.agent.
-
-    Example:
-        import mesh
-
-        @mesh.agent(name="my-service", auto_run=True)
-        class MyAgent:
-            pass
-
-        @mesh.tool(capability="greeting")
-        def hello():
-            return "Hello!"
-
-        # This will start the service and keep it alive
-        mesh.start_auto_run_service()
-    """
-    global _auto_run_config
-
-    if _auto_run_config is None or not _auto_run_config.get("enabled", False):
-        logger.debug("Auto-run not enabled - service will not start automatically")
-        return
-
-    import signal
-    import sys
-    import threading
-    import time
-
-    name = _auto_run_config["name"]
-    interval = _auto_run_config["interval"]
-
-    logger.info(f"🎯 Starting auto-run service '{name}'")
-    logger.info(f"💓 Keep-alive heartbeat every {interval} seconds")
-    logger.info("🛑 Press Ctrl+C to stop the service")
-
-    # Set up signal handlers for graceful shutdown
-    shutdown_event = threading.Event()
-
-    def signal_handler(signum, frame):
-        logger.info(
-            f"🔴 Received shutdown signal {signum} for auto-run service '{name}'"
-        )
-        shutdown_event.set()
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Give time for all decorators and runtime to initialize
-    logger.info("⏳ Initializing service components...")
-    time.sleep(3)
-
-    # Keep-alive loop
-    heartbeat_count = 0
-    try:
-        logger.info(f"✅ Service '{name}' is now running")
-        while not shutdown_event.is_set():
-            time.sleep(interval)
-            heartbeat_count += 1
-
-            if heartbeat_count % 6 == 0:  # Every minute with 10s interval
-                logger.info(
-                    f"💓 Service '{name}' heartbeat #{heartbeat_count} - running for {heartbeat_count * interval} seconds"
-                )
-            else:
-                logger.debug(
-                    f"💓 Auto-run heartbeat #{heartbeat_count} for service '{name}'"
-                )
-
-    except Exception as e:
-        logger.error(f"Auto-run service error: {e}")
-    finally:
-        logger.info(f"🛑 Auto-run service '{name}' shutting down gracefully")
-        sys.exit(0)
-
-
-def _auto_run_exit_handler():
-    """
-    atexit handler that automatically starts auto-run service if enabled.
-
-    This provides the ultimate magic experience - scripts with @mesh.agent(auto_run=True)
-    will automatically stay alive without requiring any manual calls.
-    """
-    global _auto_run_config
-
-    # Only auto-start if config exists and auto_run is enabled
-    if _auto_run_config is None or not _auto_run_config.get("enabled", False):
-        return
-
-    # Give background processor time to complete registration
-    import time
-
-    time.sleep(4)
-
-    # Start the auto-run service automatically
-    logger.info(
-        "🪄 Script ending - auto-starting keep-alive service for ultimate magic experience"
-    )
-    start_auto_run_service()
-
-
-# TODO: SIMPLIFICATION - Comment out atexit handler during testing
-# This prevents interference with simplified pipeline testing
-# atexit.register(_auto_run_exit_handler)

@@ -97,8 +97,6 @@ def __getattr__(name):
         return McpMeshAgent
     elif name == "create_server":
         return create_server
-    elif name == "start_auto_run_service":
-        return decorators.start_auto_run_service
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
