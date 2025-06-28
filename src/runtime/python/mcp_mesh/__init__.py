@@ -17,7 +17,6 @@ from .decorator_registry import (
 
 # Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
 # Import mesh.tool and mesh.agent instead
-from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .types import McpMeshAgent
 
 __version__ = "0.1.1"
@@ -37,7 +36,7 @@ def initialize_runtime():
         # Legacy processor system has been replaced by pipeline architecture
 
         # Use pipeline-based runtime
-        from .pipeline.startup_orchestrator import start_runtime
+        from .pipeline.startup import start_runtime
 
         start_runtime()
 
@@ -61,6 +60,4 @@ __all__ = [
     "clear_decorator_registry",
     "get_all_mesh_agents",
     "get_decorator_stats",
-    "SecurityValidationError",
-    "PermissionDeniedError",
 ]

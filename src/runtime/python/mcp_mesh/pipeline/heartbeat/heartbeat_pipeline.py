@@ -7,10 +7,10 @@ dependency resolution.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from ..shared import PipelineResult, PipelineStatus, RegistryConnectionStep
-from ..startup_pipeline import MeshPipeline
+from ..shared.mesh_pipeline import MeshPipeline
 from .dependency_resolution import DependencyResolutionStep
 from .heartbeat_send import HeartbeatSendStep
 

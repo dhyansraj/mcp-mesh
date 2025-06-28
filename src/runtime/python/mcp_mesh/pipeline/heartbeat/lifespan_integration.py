@@ -20,11 +20,17 @@ async def heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
         heartbeat_config: Configuration containing registry_wrapper, agent_id,
                          interval, and context for heartbeat execution
     """
-    registry_wrapper = heartbeat_config["registry_wrapper"]
+    registry_wrapper = heartbeat_config["registry_wrapper"]  # May be None in standalone mode
     agent_id = heartbeat_config["agent_id"]
     interval = heartbeat_config["interval"]
     context = heartbeat_config["context"]
+    standalone_mode = heartbeat_config.get("standalone_mode", False)
 
+    # Check if running in standalone mode
+    if standalone_mode:
+        logger.info(f"💓 Starting heartbeat pipeline in standalone mode for agent '{agent_id}' (no registry communication)")
+        return  # For now, skip heartbeat in standalone mode
+    
     # Create heartbeat orchestrator for pipeline execution
     from .heartbeat_orchestrator import HeartbeatOrchestrator
 

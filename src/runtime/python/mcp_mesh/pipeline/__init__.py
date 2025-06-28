@@ -12,8 +12,8 @@ Key Components:
 - Built-in steps for common operations (collection, config, heartbeat, etc.)
 """
 
-from .heartbeat import DependencyResolutionStep, HeartbeatSendStep
-from .shared import PipelineResult, PipelineStatus, PipelineStep, RegistryConnectionStep
+from .heartbeat import DependencyResolutionStep, HeartbeatSendStep, RegistryConnectionStep
+from .shared import MeshPipeline, PipelineResult, PipelineStatus, PipelineStep
 from .startup import (
                      ConfigurationStep,
                      DecoratorCollectionStep,
@@ -22,8 +22,8 @@ from .startup import (
                      FastMCPServerStartupStep,
                      HeartbeatLoopStep,
                      HeartbeatPreparationStep,
+                     StartupPipeline,
 )
-from .startup_pipeline import MeshPipeline
 
 __all__ = [
     "MeshPipeline",
@@ -40,4 +40,5 @@ __all__ = [
     "RegistryConnectionStep",
     "HeartbeatSendStep",
     "DependencyResolutionStep",
+    "StartupPipeline",
 ]

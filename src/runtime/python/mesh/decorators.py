@@ -36,7 +36,7 @@ def _trigger_debounced_processing():
     all decorators are captured before processing begins.
     """
     try:
-        from mcp_mesh.pipeline.startup_orchestrator import get_debounce_coordinator
+        from mcp_mesh.pipeline.startup import get_debounce_coordinator
 
         coordinator = get_debounce_coordinator()
         coordinator.trigger_processing()
@@ -327,7 +327,7 @@ def tool(
         if validated_dependencies:
             try:
                 # Import here to avoid circular imports
-                from mcp_mesh.engine.dependency_injector import get_global_injector
+                from mcp_mesh.shared.dependency_injector import get_global_injector
 
                 # Extract dependency names for injector
                 dependency_names = [dep["capability"] for dep in validated_dependencies]

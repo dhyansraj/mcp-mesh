@@ -11,16 +11,7 @@ import os
 import sys
 from typing import Any, Optional
 
-from .shared import RegistryConnectionStep
-from .startup import (
-    ConfigurationStep,
-    DecoratorCollectionStep,
-    FastAPIServerSetupStep,
-    FastMCPServerDiscoveryStep,
-    HeartbeatLoopStep,
-    HeartbeatPreparationStep,
-)
-from .startup_pipeline import MeshPipeline
+from .startup_pipeline import StartupPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -198,28 +189,9 @@ class MeshOrchestrator:
 
     def __init__(self, name: str = "mcp-mesh"):
         self.name = name
-        self.pipeline = MeshPipeline(name=name)
+        self.pipeline = StartupPipeline(name=name)
         self.logger = logging.getLogger(f"{__name__}.{name}")
-        self._setup_basic_pipeline()
 
-    def _setup_basic_pipeline(self) -> None:
-        """Set up the processing pipeline."""
-        # Essential startup steps - optimized to skip redundant heartbeat during startup
-        steps = [
-            DecoratorCollectionStep(),
-            ConfigurationStep(),
-            HeartbeatPreparationStep(),  # Prepare heartbeat payload structure
-            FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances
-            RegistryConnectionStep(),  # Connect to registry
-            # REMOVED: HeartbeatSendStep() - redundant, background loop handles this
-            # REMOVED: DependencyResolutionStep() - redundant, background loop handles this
-            HeartbeatLoopStep(),  # Setup background heartbeat config
-            FastAPIServerSetupStep(),  # Setup FastAPI app with background heartbeat
-            # Note: FastAPI server will be started with uvicorn.run() after pipeline
-        ]
-
-        self.pipeline.add_steps(steps)
-        self.logger.debug(f"Pipeline configured with {len(steps)} steps")
 
     async def process_once(self) -> dict:
         """

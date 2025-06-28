@@ -1,7 +1,8 @@
 """
-Startup pipeline step implementations for MCP Mesh processing.
+Startup pipeline components for MCP Mesh.
 
-This module contains all startup step implementations that run once during initialization.
+Handles decorator collection, configuration, FastMCP server discovery,
+and FastAPI server setup during mesh agent initialization.
 """
 
 from .configuration import ConfigurationStep
@@ -11,13 +12,20 @@ from .fastmcpserver_discovery import FastMCPServerDiscoveryStep
 from .fastmcpserver_startup import FastMCPServerStartupStep
 from .heartbeat_loop import HeartbeatLoopStep
 from .heartbeat_preparation import HeartbeatPreparationStep
+from .startup_orchestrator import MeshOrchestrator, get_global_orchestrator, get_debounce_coordinator, start_runtime
+from .startup_pipeline import StartupPipeline
 
 __all__ = [
     "ConfigurationStep",
     "DecoratorCollectionStep",
-    "FastAPIServerSetupStep",
+    "FastAPIServerSetupStep", 
     "FastMCPServerDiscoveryStep",
     "FastMCPServerStartupStep",
     "HeartbeatLoopStep",
     "HeartbeatPreparationStep",
+    "MeshOrchestrator",
+    "StartupPipeline",
+    "get_global_orchestrator",
+    "get_debounce_coordinator",
+    "start_runtime",
 ]

@@ -8,17 +8,20 @@ error handling and detailed logging.
 import logging
 from typing import Any, Optional
 
-from .shared import PipelineResult, PipelineStatus, PipelineStep
+from .base_step import PipelineStep
+from .pipeline_types import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
 
 class MeshPipeline:
     """
-    Main orchestrator for MCP Mesh processing.
+    Generic base class for MCP Mesh processing pipelines.
 
     Executes a sequence of pipeline steps with explicit control flow,
-    detailed logging, and error handling.
+    detailed logging, and error handling. This is a pure orchestration
+    class with no business logic - specific pipeline types should extend
+    this class and add their domain-specific step configuration.
     """
 
     def __init__(self, name: str = "mesh-pipeline"):

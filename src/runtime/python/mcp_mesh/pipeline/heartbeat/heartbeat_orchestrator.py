@@ -210,7 +210,6 @@ class HeartbeatOrchestrator:
             health_dict = health_status
 
         request_json = json.dumps(health_dict, indent=2, default=str)
-        self.logger.debug(f"🔍 Heartbeat request #{heartbeat_count}:\n{request_json}")
 
     def _process_heartbeat_result(
         self, result: Any, agent_id: str, heartbeat_count: int

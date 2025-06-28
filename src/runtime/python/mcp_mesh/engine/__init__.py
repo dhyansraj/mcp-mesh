@@ -1,25 +1,24 @@
-"""Runtime components for MCP Mesh."""
+"""Engine components for MCP Mesh.
+
+Contains server infrastructure and HTTP transport capabilities.
+Most utility classes have been moved to mcp_mesh.shared.
+"""
 
 # Avoid circular imports by using lazy loading
 __all__ = [
-    "DecoratorProcessor",
-    "RegistryClient",
-    "LifecycleManager",
+    "HttpMcpWrapper",
+    "HttpConfig",
 ]
 
 
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
-    if name == "LifecycleManager":
-        from .health_monitor import LifecycleManager
+    if name == "HttpMcpWrapper":
+        from .http_wrapper import HttpMcpWrapper
 
-        return LifecycleManager
-    elif name == "DecoratorProcessor":
-        from .processor import DecoratorProcessor
+        return HttpMcpWrapper
+    elif name == "HttpConfig":
+        from .http_wrapper import HttpConfig
 
-        return DecoratorProcessor
-    elif name == "RegistryClient":
-        from ..generated.mcp_mesh_registry_client.api_client import ApiClient
-
-        return ApiClient
+        return HttpConfig
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

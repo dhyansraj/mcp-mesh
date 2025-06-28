@@ -25,7 +25,7 @@ from prometheus_client import (
     generate_latest,
 )
 
-from .logging_config import configure_logging
+from ..shared.logging_config import configure_logging
 
 # Ensure logging is configured
 configure_logging()
@@ -327,7 +327,7 @@ class HttpMcpWrapper:
 
                                     # Build proper MCP content using same logic as ContentExtractor
                                     content = self._build_mcp_content(result)
-                                    
+
                                     response = {
                                         "jsonrpc": "2.0",
                                         "id": request_id,
@@ -354,19 +354,19 @@ class HttpMcpWrapper:
                                         media_type="application/json",
                                     )
                             else:
-                                    # Tool not found
-                                    error_response = {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "error": {
-                                            "code": -32601,
-                                            "message": f"Tool not found: {tool_name}",
-                                        },
-                                    }
-                                    return Response(
-                                        content=json.dumps(error_response),
-                                        media_type="application/json",
-                                    )
+                                # Tool not found
+                                error_response = {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32601,
+                                        "message": f"Tool not found: {tool_name}",
+                                    },
+                                }
+                                return Response(
+                                    content=json.dumps(error_response),
+                                    media_type="application/json",
+                                )
 
                         except Exception as e:
                             logger.error(f"Tool call error: {e}")
@@ -841,15 +841,15 @@ class HttpMcpWrapper:
 
     def _build_mcp_content(self, result: Any) -> list[dict]:
         """Build proper MCP content format from function result.
-        
+
         Uses the same sophisticated logic as ContentExtractor but in reverse -
         creates MCP content instead of extracting it.
         """
         import json
-        
+
         if result is None:
             return [{"type": "text", "text": ""}]
-        
+
         # Handle string results - try to parse as JSON for structured data
         if isinstance(result, str):
             try:
@@ -859,15 +859,15 @@ class HttpMcpWrapper:
             except (json.JSONDecodeError, TypeError):
                 # Not JSON, treat as plain text
                 return [{"type": "text", "text": result}]
-        
+
         # Handle structured data (dict, list) - use object type
         elif isinstance(result, (dict, list)):
             return [{"type": "object", "object": result}]
-        
+
         # Handle numeric types - convert to object for proper handling
         elif isinstance(result, (int, float, bool)):
             return [{"type": "object", "object": result}]
-        
+
         # Everything else - convert to text
         else:
             return [{"type": "text", "text": str(result)}]

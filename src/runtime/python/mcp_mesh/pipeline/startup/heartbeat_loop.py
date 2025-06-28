@@ -35,15 +35,6 @@ class HeartbeatLoopStep(PipelineStep):
             agent_config = context.get("agent_config", {})
             registry_wrapper = context.get("registry_wrapper")
 
-            # Check if registry is available
-            if not registry_wrapper:
-                result.status = PipelineStatus.SKIPPED
-                result.message = (
-                    "No registry connection - agent running in standalone mode"
-                )
-                self.logger.info("⚠️ No registry connection, skipping heartbeat loop")
-                return result
-
             # Get agent ID and heartbeat interval configuration
             agent_id = context.get("agent_id", "unknown-agent")
             heartbeat_interval = self._get_heartbeat_interval(agent_config)
@@ -51,24 +42,33 @@ class HeartbeatLoopStep(PipelineStep):
             # Import heartbeat task function
             from ..heartbeat import heartbeat_lifespan_task
 
-            # Store heartbeat config for FastAPI lifespan (don't start task in this event loop)
-            result.add_context(
-                "heartbeat_config",
-                {
-                    "registry_wrapper": registry_wrapper,
-                    "agent_id": agent_id,
-                    "interval": heartbeat_interval,
-                    "context": context,  # Pass full context for health status building
-                    "heartbeat_task_fn": heartbeat_lifespan_task,  # Pass function to avoid cross-imports
-                },
-            )
+            # Create heartbeat config for standalone mode (registry_wrapper may be None)
+            heartbeat_config = {
+                "registry_wrapper": registry_wrapper,  # May be None in standalone mode
+                "agent_id": agent_id,
+                "interval": heartbeat_interval,
+                "context": context,  # Pass full context for health status building
+                "heartbeat_task_fn": heartbeat_lifespan_task,  # Pass function to avoid cross-imports
+                "standalone_mode": registry_wrapper is None,
+            }
 
-            result.message = (
-                f"Heartbeat config prepared (interval: {heartbeat_interval}s)"
-            )
-            self.logger.info(
-                f"💓 Heartbeat config prepared for FastAPI lifespan with {heartbeat_interval}s interval"
-            )
+            # Store heartbeat config for FastAPI lifespan
+            result.add_context("heartbeat_config", heartbeat_config)
+
+            if registry_wrapper:
+                result.message = (
+                    f"Heartbeat config prepared (interval: {heartbeat_interval}s)"
+                )
+                self.logger.info(
+                    f"💓 Heartbeat config prepared for FastAPI lifespan with {heartbeat_interval}s interval"
+                )
+            else:
+                result.message = (
+                    f"Heartbeat config prepared for standalone mode (interval: {heartbeat_interval}s, no registry)"
+                )
+                self.logger.info(
+                    f"💓 Heartbeat config prepared for standalone mode - {heartbeat_interval}s interval (no registry communication)"
+                )
 
         except Exception as e:
             result.status = PipelineStatus.FAILED

@@ -6,21 +6,18 @@ Common functionality used across server and client components.
 """
 
 # Import only non-circular dependencies at module level
-from .exceptions import MeshAgentError, RegistryConnectionError, RegistryTimeoutError
 from .support_types import DependencyConfig, HealthStatus
 
 __all__ = [
     "HealthStatus",
     "DependencyConfig",
-    "MeshAgentError",
-    "RegistryConnectionError",
-    "RegistryTimeoutError",
     "RegistryClient",
-    "ServiceDiscovery",
-    "SelectionCriteria",
-    "HealthMonitor",
-    "EnhancedServiceDiscovery",
-    "MeshServiceProxy",
+    "ContentExtractor",
+    "configure_logging",
+    "MCPClientProxy",
+    "SelfDependencyProxy",
+    "DependencyInjector",
+    "get_global_injector",
 ]
 
 
@@ -33,22 +30,28 @@ def __getattr__(name):
         )
 
         return RegistryClient
-    elif name in [
-        "ServiceDiscovery",
-        "SelectionCriteria",
-        "HealthMonitor",
-        "EnhancedServiceDiscovery",
-    ]:
-        from .service_discovery_impl import (  # noqa: F401
-            EnhancedServiceDiscovery,
-            HealthMonitor,
-            SelectionCriteria,
-            ServiceDiscovery,
-        )
+    elif name == "ContentExtractor":
+        from .content_extractor import ContentExtractor
 
-        return locals()[name]
-    elif name == "MeshServiceProxy":
-        from .service_proxy_impl import MeshServiceProxy
+        return ContentExtractor
+    elif name == "configure_logging":
+        from .logging_config import configure_logging
 
-        return MeshServiceProxy
+        return configure_logging
+    elif name == "MCPClientProxy":
+        from .mcp_client_proxy import MCPClientProxy
+
+        return MCPClientProxy
+    elif name == "SelfDependencyProxy":
+        from .self_dependency_proxy import SelfDependencyProxy
+
+        return SelfDependencyProxy
+    elif name == "DependencyInjector":
+        from .dependency_injector import DependencyInjector
+
+        return DependencyInjector
+    elif name == "get_global_injector":
+        from .dependency_injector import get_global_injector
+
+        return get_global_injector
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
