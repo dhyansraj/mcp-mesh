@@ -14,18 +14,6 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-from .fallback import (
-    DependencyResolver,
-    FallbackChainInterface,
-    FallbackConfiguration,
-    FallbackMetrics,
-    FallbackMode,
-    FallbackMonitor,
-    FallbackReason,
-    FallbackResult,
-    LocalInstanceResolver,
-    RemoteProxyResolver,
-)
 from .lifecycle import (
     AgentInfo,
     DeregistrationResult,
@@ -159,16 +147,6 @@ __all__ = [
     "SecurityValidationError",
     "PermissionDeniedError",
     # Fallback chain (CRITICAL FEATURE)
-    "FallbackChainInterface",
-    "FallbackConfiguration",
-    "FallbackMetrics",
-    "FallbackMode",
-    "FallbackMonitor",
-    "FallbackReason",
-    "FallbackResult",
-    "DependencyResolver",
-    "RemoteProxyResolver",
-    "LocalInstanceResolver",
     "CapabilityMetadata",
     "CapabilityQuery",
     "AgentInfo",
