@@ -325,21 +325,9 @@ class HttpMcpWrapper:
 
                                     logger.debug(f"🎯 Tool call result: {result}")
 
-                                    # Convert result to proper MCP content format
-                                    if isinstance(result, str):
-                                        # String results -> text content
-                                        content = [{"type": "text", "text": result}]
-                                    elif isinstance(result, (dict, list)):
-                                        # Structured data -> object content
-                                        content = [
-                                            {"type": "object", "object": result}
-                                        ]
-                                    else:
-                                        # Other types -> convert to text
-                                        content = [
-                                            {"type": "text", "text": str(result)}
-                                        ]
-
+                                    # Build proper MCP content using same logic as ContentExtractor
+                                    content = self._build_mcp_content(result)
+                                    
                                     response = {
                                         "jsonrpc": "2.0",
                                         "id": request_id,
@@ -850,3 +838,36 @@ class HttpMcpWrapper:
     def get_endpoint(self) -> str:
         """Get the full HTTP endpoint URL."""
         return f"http://{self._get_host_ip()}:{self.actual_port}"
+
+    def _build_mcp_content(self, result: Any) -> list[dict]:
+        """Build proper MCP content format from function result.
+        
+        Uses the same sophisticated logic as ContentExtractor but in reverse -
+        creates MCP content instead of extracting it.
+        """
+        import json
+        
+        if result is None:
+            return [{"type": "text", "text": ""}]
+        
+        # Handle string results - try to parse as JSON for structured data
+        if isinstance(result, str):
+            try:
+                # Try to parse as JSON - if successful, treat as object
+                parsed = json.loads(result)
+                return [{"type": "object", "object": parsed}]
+            except (json.JSONDecodeError, TypeError):
+                # Not JSON, treat as plain text
+                return [{"type": "text", "text": result}]
+        
+        # Handle structured data (dict, list) - use object type
+        elif isinstance(result, (dict, list)):
+            return [{"type": "object", "object": result}]
+        
+        # Handle numeric types - convert to object for proper handling
+        elif isinstance(result, (int, float, bool)):
+            return [{"type": "object", "object": result}]
+        
+        # Everything else - convert to text
+        else:
+            return [{"type": "text", "text": str(result)}]
