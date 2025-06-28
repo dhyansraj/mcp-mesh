@@ -14,26 +14,6 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-from .service_discovery import (
-    AgentMatch,
-    CapabilityHierarchy,
-    CapabilityMatchingProtocol,
-    CapabilityMetadata,
-    CapabilityQuery,
-    CompatibilityScore,
-    MatchingStrategy,
-    MeshAgentMetadata,
-    QueryOperator,
-    Requirements,
-    ServiceDiscoveryProtocol,
-)
-from .service_proxy import (
-    MeshServiceProxyInterface,
-    ProxyGenerationError,
-    RemoteInvocationError,
-    ServiceContractError,
-    ServiceProxyProtocol,
-)
 
 # Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
 # Import mesh.tool and mesh.agent instead
@@ -126,18 +106,6 @@ __all__ = [
     "SecurityValidationError",
     "PermissionDeniedError",
     # Fallback chain (CRITICAL FEATURE)
-    "CapabilityMetadata",
-    "CapabilityQuery",
-    "AgentInfo",
-    "AgentMatch",
-    "CompatibilityScore",
-    "Requirements",
-    "ServiceDiscoveryProtocol",
-    "CapabilityMatchingProtocol",
-    "MeshAgentMetadata",
-    "CapabilityHierarchy",
-    "QueryOperator",
-    "MatchingStrategy",
     "DeploymentStatus",
     "SemanticVersion",
     "AgentVersionInfo",
@@ -146,11 +114,6 @@ __all__ = [
     "RollbackInfo",
     "VersioningProtocol",
     "VersionComparisonProtocol",
-    "MeshServiceProxyInterface",
-    "ServiceProxyProtocol",
-    "ProxyGenerationError",
-    "RemoteInvocationError",
-    "ServiceContractError",
     # Unified dependencies (CRITICAL FEATURE)
     "DependencyPattern",
     "DependencySpecification",
