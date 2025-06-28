@@ -8,10 +8,15 @@ The DecoratorRegistry stores metadata from decorators like @mesh_agent without
 making any network calls or requiring any runtime infrastructure.
 """
 
+import logging
+import os
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -270,6 +275,115 @@ class DecoratorRegistry:
 
         stats["total"] = sum(stats.values())
         return stats
+    
+    @classmethod
+    def _get_env_overrides(cls) -> dict[str, Any]:
+        """Get configuration overrides from environment variables."""
+        overrides = {}
+        
+        if "MCP_MESH_HTTP_HOST" in os.environ:
+            overrides["http_host"] = os.environ["MCP_MESH_HTTP_HOST"]
+            
+        if "MCP_MESH_HTTP_PORT" in os.environ:
+            try:
+                overrides["http_port"] = int(os.environ["MCP_MESH_HTTP_PORT"])
+            except ValueError:
+                logger.warning("Invalid MCP_MESH_HTTP_PORT value, ignoring")
+                
+        if "MCP_MESH_ENABLE_HTTP" in os.environ:
+            overrides["enable_http"] = os.environ["MCP_MESH_ENABLE_HTTP"].lower() in (
+                "true", "1", "yes", "on"
+            )
+            
+        if "MCP_MESH_NAMESPACE" in os.environ:
+            overrides["namespace"] = os.environ["MCP_MESH_NAMESPACE"]
+            
+        if "MCP_MESH_AUTO_RUN" in os.environ:
+            overrides["auto_run"] = os.environ["MCP_MESH_AUTO_RUN"].lower() in (
+                "true", "1", "yes", "on"
+            )
+            
+        if "MCP_MESH_VERSION" in os.environ:
+            overrides["version"] = os.environ["MCP_MESH_VERSION"]
+            
+        if "MCP_MESH_DESCRIPTION" in os.environ:
+            overrides["description"] = os.environ["MCP_MESH_DESCRIPTION"]
+            
+        if "MCP_MESH_HEALTH_INTERVAL" in os.environ:
+            try:
+                overrides["health_interval"] = int(os.environ["MCP_MESH_HEALTH_INTERVAL"])
+            except ValueError:
+                logger.warning("Invalid MCP_MESH_HEALTH_INTERVAL value, ignoring")
+                
+        if "MCP_MESH_AUTO_RUN_INTERVAL" in os.environ:
+            try:
+                overrides["auto_run_interval"] = int(os.environ["MCP_MESH_AUTO_RUN_INTERVAL"])
+            except ValueError:
+                logger.warning("Invalid MCP_MESH_AUTO_RUN_INTERVAL value, ignoring")
+        
+        return overrides
+    
+    @classmethod
+    def _generate_agent_id(cls, agent_name: Optional[str]) -> str:
+        """Generate agent ID with proper precedence."""
+        # Precedence: env var > agent_name > default "agent"
+        if "MCP_MESH_AGENT_NAME" in os.environ:
+            prefix = os.environ["MCP_MESH_AGENT_NAME"]
+        elif agent_name is not None:
+            prefix = agent_name
+        else:
+            prefix = "agent"
+            
+        uuid_suffix = str(uuid.uuid4())[:8]
+        return f"{prefix}-{uuid_suffix}"
+    
+    @classmethod
+    def get_resolved_agent_config(cls) -> dict[str, Any]:
+        """
+        Get resolved agent configuration with proper precedence.
+        
+        Precedence order:
+        1. Environment variables (highest)
+        2. @mesh.agent decorator parameters  
+        3. Decorator defaults (lowest)
+        
+        Returns:
+            dict: Resolved configuration with agent_id included
+        """
+        # Start with @mesh.agent decorator defaults
+        defaults = {
+            "name": None,  # Will be used for agent ID generation
+            "version": "1.0.0",
+            "description": None,
+            "http_host": "0.0.0.0",
+            "http_port": 0,  # Auto-assign
+            "enable_http": True,
+            "namespace": "default", 
+            "health_interval": 30,
+            "auto_run": True,
+            "auto_run_interval": 10,
+        }
+        
+        # Apply environment variable overrides
+        env_overrides = cls._get_env_overrides()
+        config_data = {**defaults, **env_overrides}
+        
+        # Apply explicit @mesh.agent configuration if available
+        if cls._mesh_agents:
+            for agent_name, decorated_func in cls._mesh_agents.items():
+                agent_config = decorated_func.metadata
+                config_data.update(agent_config)
+                logger.debug(f"Applied @mesh.agent configuration from {agent_name}")
+                break  # Use first agent found
+        
+        # Generate agent ID and set environment variable for self-dependency detection
+        agent_id = cls._generate_agent_id(config_data.get("name"))
+        config_data["agent_id"] = agent_id
+        os.environ["MCP_MESH_AGENT_ID"] = agent_id
+        
+        logger.debug(f"🔧 Resolved agent configuration: agent_id='{agent_id}'")
+        
+        return config_data
 
     @classmethod
     def get_all_agents(cls) -> list[tuple[Any, dict[str, Any]]]:

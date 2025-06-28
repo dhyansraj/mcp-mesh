@@ -14,7 +14,7 @@ from ..generated.mcp_mesh_registry_client.api_client import ApiClient
 from ..generated.mcp_mesh_registry_client.configuration import Configuration
 from ..shared.registry_client_wrapper import RegistryClientWrapper
 from .pipeline import PipelineResult, PipelineStatus
-from .steps import PipelineStep
+from .steps.base_step import PipelineStep
 
 logger = logging.getLogger(__name__)
 

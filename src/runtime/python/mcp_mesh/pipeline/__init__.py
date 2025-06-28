@@ -19,10 +19,14 @@ from .registry_steps import (
                              RegistryConnectionStep,
 )
 from .steps import (
-                             ConfigurationStep,
-                             DecoratorCollectionStep,
-                             HeartbeatPreparationStep,
-                             PipelineStep,
+    PipelineStep,
+    ConfigurationStep,
+    DecoratorCollectionStep,
+    FastAPIServerSetupStep,
+    FastMCPServerDiscoveryStep,
+    FastMCPServerStartupStep,
+    HeartbeatLoopStep,
+    HeartbeatPreparationStep,
 )
 
 __all__ = [
@@ -32,6 +36,10 @@ __all__ = [
     "PipelineStep",
     "DecoratorCollectionStep",
     "ConfigurationStep",
+    "FastAPIServerSetupStep",
+    "FastMCPServerDiscoveryStep",
+    "FastMCPServerStartupStep",
+    "HeartbeatLoopStep",
     "HeartbeatPreparationStep",
     "RegistryConnectionStep",
     "HeartbeatSendStep",
