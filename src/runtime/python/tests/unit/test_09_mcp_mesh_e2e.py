@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 import mesh
-from mcp_mesh import DecoratorRegistry
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+from _mcp_mesh import DecoratorRegistry
+from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
 from mesh.types import McpMeshAgent
 
 
@@ -21,7 +21,7 @@ def create_mock_registry_client(response_override=None):
     mock_registry.agents_api = mock_agents_api
 
     # Create default response
-    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+    from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
         MeshRegistrationResponse,
     )
 
@@ -158,7 +158,7 @@ class TestMcpMeshAgentE2E:
         mock_registry_client, mock_agents_api = create_mock_registry_client()
 
         # Create a response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -172,7 +172,7 @@ class TestMcpMeshAgentE2E:
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
         # Create processor and process tools
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         # Create processor and process tools
         processor = DecoratorProcessor("http://localhost:8080")
@@ -349,7 +349,7 @@ class TestMcpMeshAgentE2E:
         }
 
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -363,7 +363,7 @@ class TestMcpMeshAgentE2E:
         mock_agents_api.send_heartbeat = AsyncMock(return_value=response_with_deps)
 
         # Create processor
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry_client
@@ -442,7 +442,7 @@ class TestMcpMeshAgentE2E:
 
     def test_mcp_mesh_agent_type_validation(self):
         """Test that McpMeshAgent type validation works correctly."""
-        from mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
+        from _mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
 
         def valid_func(
             name: str, date_svc: McpMeshAgent, weather_svc: McpMeshAgent

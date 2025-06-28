@@ -1393,7 +1393,7 @@ class TestDecoratorRegistryCompatibility:
     def test_decorator_registry_compatibility(self):
         """Test that DecoratorRegistry works with new decorators."""
         import mesh
-        from mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
         # Clear registry
         DecoratorRegistry.clear_all()
@@ -1448,7 +1448,7 @@ class TestImportStructure:
 
     def test_mcp_mesh_compatibility(self):
         """Test that mcp_mesh still exports necessary components."""
-        from mcp_mesh import DecoratedFunction, DecoratorRegistry
+        from _mcp_mesh import DecoratedFunction, DecoratorRegistry
 
         # Should still be available for processor
         assert DecoratorRegistry is not None

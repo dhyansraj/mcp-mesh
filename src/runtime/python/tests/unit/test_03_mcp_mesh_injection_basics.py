@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from mcp_mesh.engine.dependency_injector import DependencyInjector
-from mcp_mesh.engine.signature_analyzer import (
+from _mcp_mesh.engine.dependency_injector import DependencyInjector
+from _mcp_mesh.engine.signature_analyzer import (
     get_mesh_agent_parameter_names,
     get_mesh_agent_positions,
     validate_mesh_dependencies,

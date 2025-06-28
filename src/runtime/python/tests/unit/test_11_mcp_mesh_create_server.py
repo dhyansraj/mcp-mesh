@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import mesh
-from mcp_mesh import DecoratorRegistry
+from _mcp_mesh import DecoratorRegistry
 
 
 @pytest.fixture(autouse=True)

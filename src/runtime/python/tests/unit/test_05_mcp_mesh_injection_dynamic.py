@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from mcp_mesh.engine.dependency_injector import DependencyInjector
+from _mcp_mesh.engine.dependency_injector import DependencyInjector
 from mesh.types import McpMeshAgent
 
 

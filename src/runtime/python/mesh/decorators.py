@@ -9,9 +9,9 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-# Import from mcp_mesh for registry and runtime integration
-from mcp_mesh.engine.decorator_registry import DecoratorRegistry
-from mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
+# Import from _mcp_mesh for registry and runtime integration
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from _mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def _trigger_debounced_processing():
     all decorators are captured before processing begins.
     """
     try:
-        from mcp_mesh.pipeline.startup import get_debounce_coordinator
+        from _mcp_mesh.pipeline.startup import get_debounce_coordinator
 
         coordinator = get_debounce_coordinator()
         coordinator.trigger_processing()
@@ -66,7 +66,10 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     if _SHARED_AGENT_ID is None:
         # Precedence: env var > agent_name > default "agent"
         prefix = get_config_value(
-            "MCP_MESH_AGENT_NAME", override=agent_name, default="agent", rule=ValidationRule.STRING_RULE
+            "MCP_MESH_AGENT_NAME",
+            override=agent_name,
+            default="agent",
+            rule=ValidationRule.STRING_RULE,
         )
 
         uuid_suffix = str(uuid.uuid4())[:8]
@@ -211,7 +214,7 @@ def tool(
         if validated_dependencies:
             try:
                 # Import here to avoid circular imports
-                from mcp_mesh.engine.dependency_injector import get_global_injector
+                from _mcp_mesh.engine.dependency_injector import get_global_injector
 
                 # Extract dependency names for injector
                 dependency_names = [dep["capability"] for dep in validated_dependencies]
@@ -389,31 +392,52 @@ def agent(
         # Get final values with environment variable precedence using config resolver
         # MCP_MESH_HTTP_HOST = Advertised hostname (for registry registration, not server binding)
         final_http_host = get_config_value(
-            "MCP_MESH_HTTP_HOST", override=http_host, default="localhost", rule=ValidationRule.STRING_RULE
+            "MCP_MESH_HTTP_HOST",
+            override=http_host,
+            default="localhost",
+            rule=ValidationRule.STRING_RULE,
         )
-        
+
         final_http_port = get_config_value(
-            "MCP_MESH_HTTP_PORT", override=http_port, default=0, rule=ValidationRule.PORT_RULE
+            "MCP_MESH_HTTP_PORT",
+            override=http_port,
+            default=0,
+            rule=ValidationRule.PORT_RULE,
         )
-        
+
         final_enable_http = get_config_value(
-            "MCP_MESH_HTTP_ENABLED", override=enable_http, default=True, rule=ValidationRule.TRUTHY_RULE
+            "MCP_MESH_HTTP_ENABLED",
+            override=enable_http,
+            default=True,
+            rule=ValidationRule.TRUTHY_RULE,
         )
-        
+
         final_namespace = get_config_value(
-            "MCP_MESH_NAMESPACE", override=namespace, default="default", rule=ValidationRule.STRING_RULE
+            "MCP_MESH_NAMESPACE",
+            override=namespace,
+            default="default",
+            rule=ValidationRule.STRING_RULE,
         )
-        
+
         final_health_interval = get_config_value(
-            "MCP_MESH_HEALTH_INTERVAL", override=health_interval, default=30, rule=ValidationRule.NONZERO_RULE
+            "MCP_MESH_HEALTH_INTERVAL",
+            override=health_interval,
+            default=30,
+            rule=ValidationRule.NONZERO_RULE,
         )
-        
+
         final_auto_run = get_config_value(
-            "MCP_MESH_AUTO_RUN", override=auto_run, default=True, rule=ValidationRule.TRUTHY_RULE
+            "MCP_MESH_AUTO_RUN",
+            override=auto_run,
+            default=True,
+            rule=ValidationRule.TRUTHY_RULE,
         )
-        
+
         final_auto_run_interval = get_config_value(
-            "MCP_MESH_AUTO_RUN_INTERVAL", override=auto_run_interval, default=10, rule=ValidationRule.NONZERO_RULE
+            "MCP_MESH_AUTO_RUN_INTERVAL",
+            override=auto_run_interval,
+            default=10,
+            rule=ValidationRule.NONZERO_RULE,
         )
 
         # Build agent metadata

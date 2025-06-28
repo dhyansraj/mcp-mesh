@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 # Import the classes we'll be testing/implementing
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import (
+from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import (
     ApiClient as RegistryClient,
 )
-from mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
-from mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
+from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
+from _mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 
 def create_mock_registry_wrapper(response_override=None):

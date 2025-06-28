@@ -15,12 +15,12 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 import mesh
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
-from mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response import (
+from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response import (
     RegistrationResponse,
 )
-from mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
+from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
 from mesh.types import McpMeshAgent
 
 
@@ -172,7 +172,7 @@ def extract_heartbeat_payload(call_args):
 
     # Since we're mocking the wrapper, we need to simulate what the real wrapper does
     # The real wrapper gets tools from DecoratorRegistry and includes them in the payload
-    from mcp_mesh import DecoratorRegistry
+    from _mcp_mesh import DecoratorRegistry
 
     mesh_tools = DecoratorRegistry.get_mesh_tools()
     tools = []
@@ -217,7 +217,7 @@ class TestBatchedRegistration:
     async def test_single_registration_for_multiple_functions(self):
         """Test that multiple functions result in ONE registration call."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -238,7 +238,7 @@ class TestBatchedRegistration:
             return f"Goodbye {name}"
 
         # Process all agents with REAL processor - no mocking
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         # No mock assignments - use real registry client
@@ -268,7 +268,7 @@ class TestBatchedRegistration:
     async def test_heartbeat_payload_structure(self):
         """Test the structure of the batched registration payload."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -294,7 +294,7 @@ class TestBatchedRegistration:
             return f"Hello {name}"
 
         # Process
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -358,7 +358,7 @@ class TestDependencyInjection:
     async def test_function_parameters_injected_after_registration(self):
         """Test that function parameters get injected dependencies after registration/heartbeat."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -391,7 +391,7 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -435,11 +435,11 @@ class TestDependencyInjection:
             )
 
         # Process registration and DI
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
         with patch(
-            "mcp_mesh.engine.processor.RegistryClientWrapper"
+            "_mcp_mesh.engine.processor.RegistryClientWrapper"
         ) as mock_wrapper_class:
             mock_wrapper_class.return_value = mock_wrapper
             processor = DecoratorProcessor("http://localhost:8080")
@@ -485,8 +485,8 @@ class TestDependencyInjection:
         # Verify DI was processed - check for dependency injection setup
         # The dependency injector should have been called to register the date_service proxy
         try:
-            from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.engine.dependency_injector import get_global_injector
+            from _mcp_mesh import DecoratorRegistry
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -529,7 +529,7 @@ class TestDependencyInjection:
     async def test_multiple_dependency_parameters_injected(self):
         """Test that functions with multiple dependency parameters get all dependencies injected."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -578,7 +578,7 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -635,7 +635,7 @@ class TestDependencyInjection:
             return " ".join(parts)
 
         # Process registration and DI
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -698,8 +698,8 @@ class TestDependencyInjection:
 
         # Verify DI was processed for all dependencies
         try:
-            from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.engine.dependency_injector import get_global_injector
+            from _mcp_mesh import DecoratorRegistry
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -744,7 +744,7 @@ class TestDependencyInjection:
     async def test_multiple_functions_with_different_dependencies_injected(self):
         """Test that multiple @mesh.tool functions each get their specific dependencies injected."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -816,7 +816,7 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -907,7 +907,7 @@ class TestDependencyInjection:
             return " ".join(parts)
 
         # Process registration and DI
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -993,8 +993,8 @@ class TestDependencyInjection:
 
         # Verify DI was processed for all functions and their dependencies
         try:
-            from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.engine.dependency_injector import get_global_injector
+            from _mcp_mesh import DecoratorRegistry
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -1049,7 +1049,7 @@ class TestDependencyInjection:
     async def test_mesh_agent_class_decorator_with_custom_name(self):
         """Test that @mesh.agent at class level uses agent name from decoration, not default."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -1073,7 +1073,7 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -1126,9 +1126,9 @@ class TestDependencyInjection:
         # Process registration and DI
         # CRITICAL: Mock RegistryClientWrapper class globally and replace the constructor
         # Import first, then patch all locations where RegistryClientWrapper is used
-        from mcp_mesh.engine import processor as processor_module
-        from mcp_mesh.engine.processor import DecoratorProcessor
-        from mcp_mesh.shared import registry_client_wrapper as wrapper_module
+        from _mcp_mesh.engine import processor as processor_module
+        from _mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.shared import registry_client_wrapper as wrapper_module
 
         # Store original classes
         original_wrapper_class = processor_module.RegistryClientWrapper
@@ -1195,8 +1195,8 @@ class TestDependencyInjection:
 
             # Verify DI was processed for the agent class
             try:
-                from mcp_mesh import DecoratorRegistry
-                from mcp_mesh.engine.dependency_injector import get_global_injector
+                from _mcp_mesh import DecoratorRegistry
+                from _mcp_mesh.engine.dependency_injector import get_global_injector
 
                 injector = get_global_injector()
 
@@ -1268,7 +1268,7 @@ class TestDependencyInjection:
 
         # Mock registration response
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -1316,7 +1316,7 @@ class TestDependencyInjection:
             return f"Hello {name}, {x} + {y} = ? (math service injected: {type(math_service).__name__})"
 
         # Process registration and DI
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         processor = DecoratorProcessor("http://localhost:8080")
         processor.registry_client = mock_registry
@@ -1353,7 +1353,7 @@ class TestDependencyInjection:
         # Extract MeshAgentRegistration object from call
         heartbeat_registration = call_args[0][0]  # First positional argument
         # Heartbeat is now sent via agents_api.send_heartbeat()# Get the registered functions to test their injected dependencies
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         mesh_tools = DecoratorRegistry.get_mesh_tools()
 
@@ -1436,7 +1436,7 @@ class TestHeartbeatBatching:
     async def test_unified_heartbeat_format(self):
         """Test that heartbeat uses the same request/response format as registration."""
         # Clear any existing decorators first
-        from mcp_mesh import DecoratorRegistry
+        from _mcp_mesh import DecoratorRegistry
 
         DecoratorRegistry.clear_all()
 
@@ -1457,7 +1457,7 @@ class TestHeartbeatBatching:
 
         mock_registry, mock_wrapper = create_mock_registry_client()
         # Create response with dependencies_resolved
-        from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+        from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
             MeshRegistrationResponse,
         )
 
@@ -1486,11 +1486,11 @@ class TestHeartbeatBatching:
             return "test"
 
         # Process registration
-        from mcp_mesh.engine.processor import DecoratorProcessor
+        from _mcp_mesh.engine.processor import DecoratorProcessor
 
         # CRITICAL: Mock the RegistryClientWrapper to prevent real HTTP calls
         with patch(
-            "mcp_mesh.engine.processor.RegistryClientWrapper"
+            "_mcp_mesh.engine.processor.RegistryClientWrapper"
         ) as mock_wrapper_class:
             mock_wrapper_class.return_value = mock_wrapper
             processor = DecoratorProcessor("http://localhost:8080")

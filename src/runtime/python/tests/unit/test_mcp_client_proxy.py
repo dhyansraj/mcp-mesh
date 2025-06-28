@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mcp_mesh.engine.mcp_client_proxy import AsyncMCPClient, MCPClientProxy
-from mcp_mesh.shared.content_extractor import ContentExtractor
+from _mcp_mesh.engine.mcp_client_proxy import AsyncMCPClient, MCPClientProxy
+from _mcp_mesh.shared.content_extractor import ContentExtractor
 
 
 class TestContentExtractor:

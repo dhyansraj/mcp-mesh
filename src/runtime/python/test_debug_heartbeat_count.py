@@ -29,7 +29,7 @@ def test_debug_heartbeat_count():
     """Debug test: Count exactly how many heartbeat calls are made for 2 @mesh.tool functions."""
 
     # Clear any existing decorators
-    # from mcp_mesh import DecoratorRegistry
+    # from _mcp_mesh import DecoratorRegistry
     # DecoratorRegistry.clear_all()
 
     print("🧪 TEST START: Creating 2 @mesh.tool functions...")
@@ -51,7 +51,7 @@ def test_debug_heartbeat_count():
     # print(f"📊 DecoratorRegistry has {len(mesh_tools)} tools: {list(mesh_tools.keys())}")
 
     # Create processor - NO MOCKING
-    # from mcp_mesh.engine.processor import DecoratorProcessor
+    # from _mcp_mesh.engine.processor import DecoratorProcessor
     print("🏭 Creating DecoratorProcessor...")
 
     # processor = DecoratorProcessor("http://localhost:8080")

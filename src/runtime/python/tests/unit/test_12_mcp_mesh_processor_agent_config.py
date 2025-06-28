@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 import mesh
-from mcp_mesh import DecoratorRegistry
-from mcp_mesh.engine.processor import DecoratorProcessor
-from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from mcp_mesh.shared.support_types import MockHTTPResponse
+from _mcp_mesh import DecoratorRegistry
+from _mcp_mesh.engine.processor import DecoratorProcessor
+from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
+from _mcp_mesh.shared.support_types import MockHTTPResponse
 
 
 def create_mock_registry_client(response_override=None):
@@ -20,7 +20,7 @@ def create_mock_registry_client(response_override=None):
     mock_registry.agents_api = mock_agents_api
 
     # Create default response
-    from mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
+    from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_registration_response import (
         MeshRegistrationResponse,
     )
 
