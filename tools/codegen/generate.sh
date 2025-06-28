@@ -168,7 +168,7 @@ EOF
 
 # Generate Python registry client code
 generate_python_registry_client() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated"
+    local output_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated"
 
     log_info "Generating Python registry client code..."
 
@@ -227,7 +227,7 @@ DO NOT modify files in this package directly - they will be overwritten.
 SCOPE: Registry API - for agents to communicate with registry service
 
 TO USE THIS CLIENT:
-1. Import: from mcp_mesh.registry_client_generated.mcp_mesh_registry_client import AgentsApi
+1. Import: from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi
 2. Configure: api_client = ApiClient(Configuration(host="http://registry:8000"))
 3. Use: agents_api = AgentsApi(api_client)
 
@@ -247,15 +247,15 @@ EOF
     # Only match paths that are NOT already corrected
     declare -a patterns=(
         # Only replace if it's NOT already prefixed with our target path
-        's|from mcp_mesh_registry_client\.|from mcp_mesh.generated.mcp_mesh_registry_client.|g'
-        's|import mcp_mesh_registry_client\.|import mcp_mesh.generated.mcp_mesh_registry_client.|g'
+        's|from mcp_mesh_registry_client\.|from _mcp_mesh.generated.mcp_mesh_registry_client.|g'
+        's|import mcp_mesh_registry_client\.|import _mcp_mesh.generated.mcp_mesh_registry_client.|g'
         # Handle getattr() and direct references separately - be very specific
-        's|getattr(mcp_mesh_registry_client\.models,|getattr(mcp_mesh.generated.mcp_mesh_registry_client.models,|g'
-        's|import mcp_mesh_registry_client\.models|import mcp_mesh.generated.mcp_mesh_registry_client.models|g'
-        's|import mcp_mesh_registry_client\.api|import mcp_mesh.generated.mcp_mesh_registry_client.api|g'
-        's|from mcp_mesh_registry_client import|from mcp_mesh.generated.mcp_mesh_registry_client import|g'
+        's|getattr(mcp_mesh_registry_client\.models,|getattr(_mcp_mesh.generated.mcp_mesh_registry_client.models,|g'
+        's|import mcp_mesh_registry_client\.models|import _mcp_mesh.generated.mcp_mesh_registry_client.models|g'
+        's|import mcp_mesh_registry_client\.api|import _mcp_mesh.generated.mcp_mesh_registry_client.api|g'
+        's|from mcp_mesh_registry_client import|from _mcp_mesh.generated.mcp_mesh_registry_client import|g'
         # Most general pattern last - for standalone imports only at line boundaries
-        's|^import mcp_mesh_registry_client$|import mcp_mesh.generated.mcp_mesh_registry_client|g'
+        's|^import mcp_mesh_registry_client$|import _mcp_mesh.generated.mcp_mesh_registry_client|g'
     )
 
     # Apply all patterns in a single sed command to avoid double-replacement
@@ -272,7 +272,7 @@ EOF
 
 # Generate Python agent server code
 generate_python_agent_server() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated"
+    local output_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated"
 
     log_info "Generating Python agent server code..."
 
@@ -345,7 +345,7 @@ validate_generated_code() {
     fi
 
     # Validate Python registry client imports
-    local python_registry_client_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated/mcp_mesh_registry_client"
+    local python_registry_client_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client"
     if [[ -d "$python_registry_client_dir" ]]; then
         log_info "Checking Python registry client imports..."
         cd "$PROJECT_ROOT/src/runtime/python"
@@ -353,7 +353,7 @@ validate_generated_code() {
 import sys
 sys.path.insert(0, '.')
 try:
-    from mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
+    from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
     print('✅ Python registry client imports successfully')
 except ImportError as e:
     print(f'❌ Python registry client import failed: {e}')
@@ -367,7 +367,7 @@ except ImportError as e:
     fi
 
     # Check Python agent server generation
-    local python_agent_server_dir="$PROJECT_ROOT/src/runtime/python/mcp_mesh/generated/mcp_mesh_agent_server"
+    local python_agent_server_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated/mcp_mesh_agent_server"
     if [[ -d "$python_agent_server_dir" ]]; then
         log_success "Python agent server code structure created"
     fi
@@ -453,8 +453,8 @@ main() {
     log_info ""
     log_info "📋 Generated files:"
     log_info "  Go registry server: src/core/registry/generated/server.go"
-    log_info "  Python registry client: src/runtime/python/src/mcp_mesh/registry_client_generated/"
-    log_info "  Python agent server: src/runtime/python/src/mcp_mesh/agent_server_generated/"
+    log_info "  Python registry client: src/runtime/python/_mcp_mesh/generated/"
+    log_info "  Python agent server: src/runtime/python/_mcp_mesh/generated/"
     log_info ""
     log_info "🔧 Next steps:"
     log_info "  1. Implement registry business logic in src/core/registry/handlers_impl.go"
