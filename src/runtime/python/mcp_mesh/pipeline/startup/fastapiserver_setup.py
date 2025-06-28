@@ -566,7 +566,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         """Process heartbeat response for dynamic dependency rewiring."""
         try:
             # Import the DependencyResolutionStep to reuse its rewiring logic
-            from ...heartbeat.dependency_resolution import DependencyResolutionStep
+            from ..heartbeat.dependency_resolution import DependencyResolutionStep
 
             # Create a temporary step instance to use its rewiring method
             dep_resolution_step = DependencyResolutionStep()
