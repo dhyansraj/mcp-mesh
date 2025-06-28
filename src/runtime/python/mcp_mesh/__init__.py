@@ -14,13 +14,6 @@ from .decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-from .method_metadata import (
-    MethodMetadata,
-    MethodType,
-    ParameterKind,
-    ParameterMetadata,
-    ServiceContract,
-)
 from .service_discovery import (
     AgentMatch,
     CapabilityHierarchy,
@@ -153,11 +146,6 @@ __all__ = [
     "RollbackInfo",
     "VersioningProtocol",
     "VersionComparisonProtocol",
-    "MethodMetadata",
-    "MethodType",
-    "ParameterKind",
-    "ParameterMetadata",
-    "ServiceContract",
     "MeshServiceProxyInterface",
     "ServiceProxyProtocol",
     "ProxyGenerationError",
