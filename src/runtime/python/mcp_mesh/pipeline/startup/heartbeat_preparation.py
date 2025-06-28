@@ -3,12 +3,12 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ...decorator_registry import DecoratorRegistry
 from ...shared.support_types import HealthStatus, HealthStatusType
-from ..shared import PipelineResult, PipelineStatus
-from ..shared import PipelineStep
+from ...signature_analyzer import validate_mesh_dependencies
+from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
 class HeartbeatPreparationStep(PipelineStep):
@@ -71,12 +71,26 @@ class HeartbeatPreparationStep(PipelineStep):
         return result
 
     def _build_tools_list(self, mesh_tools: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build tools list from mesh_tools."""
+        """Build tools list from mesh_tools, validating function signatures."""
         tools_list = []
+        skipped_tools = []
 
         for func_name, decorated_func in mesh_tools.items():
             metadata = decorated_func.metadata
             current_function = decorated_func.function
+            dependencies = metadata.get("dependencies", [])
+
+            # Validate function signature if it has dependencies
+            if dependencies:
+                is_valid, error_message = validate_mesh_dependencies(
+                    current_function, dependencies
+                )
+                if not is_valid:
+                    self.logger.warning(
+                        f"⚠️ Skipping tool '{func_name}' from heartbeat: {error_message}"
+                    )
+                    skipped_tools.append(func_name)
+                    continue
 
             # Build tool registration data
             tool_data = {
@@ -85,9 +99,7 @@ class HeartbeatPreparationStep(PipelineStep):
                 "tags": metadata.get("tags", []),
                 "version": metadata.get("version", "1.0.0"),
                 "description": metadata.get("description"),
-                "dependencies": self._process_dependencies(
-                    metadata.get("dependencies", [])
-                ),
+                "dependencies": self._process_dependencies(dependencies),
             }
 
             # Add debug pointer information only if debug flag is enabled
@@ -98,6 +110,16 @@ class HeartbeatPreparationStep(PipelineStep):
                 tool_data["debug_pointers"] = debug_pointers
 
             tools_list.append(tool_data)
+
+        # Log summary of validation results
+        if skipped_tools:
+            self.logger.warning(
+                f"🚫 Excluded {len(skipped_tools)} invalid tools from heartbeat: {skipped_tools}"
+            )
+
+        self.logger.info(
+            f"✅ Validated {len(tools_list)} tools for heartbeat (excluded {len(skipped_tools)})"
+        )
 
         return tools_list
 

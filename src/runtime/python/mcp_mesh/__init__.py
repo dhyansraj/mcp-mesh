@@ -57,26 +57,7 @@ def initialize_runtime():
         return  # Already initialized
 
     try:
-        # TODO: SIMPLIFICATION - Comment out complex features for testing
-        # from .engine.fastmcp_integration import patch_fastmcp
-        # from .engine.processor import DecoratorProcessor
-
-        # # Patch FastMCP FIRST before any decorators are used
-        # patch_fastmcp()
-
-        # # Create and start the processor
-        # _runtime_processor = DecoratorProcessor()
-        # _runtime_processor.start()
-
-        # # Enhance the new mesh decorators
-        # try:
-        #     import mesh.decorators
-
-        #     if hasattr(mesh.decorators, "_enhance_mesh_decorators"):
-        #         mesh.decorators._enhance_mesh_decorators(_runtime_processor)
-        # except ImportError:
-        #     # mesh module not available - skip enhancement
-        #     pass
+        # Legacy processor system has been replaced by pipeline architecture
 
         # Use pipeline-based runtime
         from .pipeline.startup_orchestrator import start_runtime
