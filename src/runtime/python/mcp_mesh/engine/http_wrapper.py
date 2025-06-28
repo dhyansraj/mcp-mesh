@@ -16,7 +16,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -193,20 +193,10 @@ class HttpMcpWrapper:
             f"🔍 DEBUG: FastMCP server module: {type(self.mcp_server).__module__}"
         )
 
-        # Determine which FastMCP version this server instance is from
-        # Check OLD FastMCP first (more specific path)
-        if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
-            logger.info(
-                "🔄 HTTP Wrapper: Server instance is from OLD FastMCP library (mcp.server.fastmcp)"
-            )
-        elif type(self.mcp_server).__module__.startswith("fastmcp"):
-            logger.info(
-                "🆕 HTTP Wrapper: Server instance is from NEW FastMCP library (fastmcp)"
-            )
-        else:
-            logger.warning(
-                f"❓ HTTP Wrapper: Unknown FastMCP server type: {type(self.mcp_server).__module__}"
-            )
+        # Using NEW FastMCP library (fastmcp>=2.8.0)
+        logger.info(
+            "🆕 HTTP Wrapper: Server instance is from NEW FastMCP library (fastmcp)"
+        )
 
         logger.debug(
             f"🔍 DEBUG: FastMCP server dir: {[attr for attr in dir(self.mcp_server) if 'app' in attr.lower()]}"
@@ -270,13 +260,8 @@ class HttpMcpWrapper:
                     request_id = rpc_request.get("id")
 
                     if method == "tools/list":
-                        # Get tools using version-appropriate method
-                        if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
-                            # OLD FastMCP - use list_tools()
-                            tools = await self.mcp_server.list_tools()
-                        else:
-                            # NEW FastMCP - use get_tools()
-                            tools = await self.mcp_server.get_tools()
+                        # NEW FastMCP - use get_tools()
+                        tools = await self.mcp_server.get_tools()
                         logger.debug(f"🔍 Raw tools from FastMCP: {tools}")
                         logger.debug(f"🔍 Tools type: {type(tools)}")
 
@@ -332,105 +317,73 @@ class HttpMcpWrapper:
                         )
 
                         try:
-                            # Get the tool object using version-appropriate method
-                            if "mcp.server.fastmcp" in type(self.mcp_server).__module__:
-                                # OLD FastMCP - use call_tool directly
-                                logger.debug("🔄 Using OLD FastMCP call_tool method")
-                                result = await self.mcp_server.call_tool(
-                                    tool_name, arguments
-                                )
-                                logger.debug(f"🎯 OLD FastMCP result: {result}")
+                            # NEW FastMCP - use get_tools()
+                            tools = await self.mcp_server.get_tools()
+                            if tool_name in tools:
+                                tool_obj = tools[tool_name]
+                                logger.debug(f"🔍 Tool object: {tool_obj}")
+                                logger.debug(f"🔍 Tool type: {type(tool_obj)}")
 
-                                # OLD FastMCP returns List[TextContent] directly
-                                content = []
-                                for item in result:
-                                    if hasattr(item, "text"):
-                                        content.append(
-                                            {"type": "text", "text": item.text}
-                                        )
+                                # Check if tool has a callable function
+                                if hasattr(tool_obj, "fn"):
+                                    logger.debug(
+                                        f"🎯 Found tool function: {tool_obj.fn}"
+                                    )
+                                    logger.debug(
+                                        f"🎯 Function pointer: {tool_obj.fn} at {hex(id(tool_obj.fn))}"
+                                    )
+
+                                    # Call the function directly
+                                    import inspect
+
+                                    if inspect.iscoroutinefunction(tool_obj.fn):
+                                        result = await tool_obj.fn(**arguments)
                                     else:
-                                        content.append(
-                                            {"type": "text", "text": str(item)}
-                                        )
+                                        result = tool_obj.fn(**arguments)
 
-                                response = {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "result": {"content": content},
-                                }
-                                return Response(
-                                    content=json.dumps(response),
-                                    media_type="application/json",
-                                )
+                                    logger.debug(f"🎯 Tool call result: {result}")
 
-                            else:
-                                # NEW FastMCP - use get_tools()
-                                tools = await self.mcp_server.get_tools()
-                                if tool_name in tools:
-                                    tool_obj = tools[tool_name]
-                                    logger.debug(f"🔍 Tool object: {tool_obj}")
-                                    logger.debug(f"🔍 Tool type: {type(tool_obj)}")
-
-                                    # Check if tool has a callable function
-                                    if hasattr(tool_obj, "fn"):
-                                        logger.debug(
-                                            f"🎯 Found tool function: {tool_obj.fn}"
-                                        )
-                                        logger.debug(
-                                            f"🎯 Function pointer: {tool_obj.fn} at {hex(id(tool_obj.fn))}"
-                                        )
-
-                                        # Call the function directly - this should trigger fastmcp_integration!
-                                        import inspect
-
-                                        if inspect.iscoroutinefunction(tool_obj.fn):
-                                            result = await tool_obj.fn(**arguments)
-                                        else:
-                                            result = tool_obj.fn(**arguments)
-
-                                        logger.debug(f"🎯 Tool call result: {result}")
-
-                                        # Convert result to proper MCP content format
-                                        if isinstance(result, str):
-                                            # String results -> text content
-                                            content = [{"type": "text", "text": result}]
-                                        elif isinstance(result, (dict, list)):
-                                            # Structured data -> object content
-                                            content = [
-                                                {"type": "object", "object": result}
-                                            ]
-                                        else:
-                                            # Other types -> convert to text
-                                            content = [
-                                                {"type": "text", "text": str(result)}
-                                            ]
-
-                                        response = {
-                                            "jsonrpc": "2.0",
-                                            "id": request_id,
-                                            "result": {"content": content},
-                                        }
-                                        return Response(
-                                            content=json.dumps(response),
-                                            media_type="application/json",
-                                        )
+                                    # Convert result to proper MCP content format
+                                    if isinstance(result, str):
+                                        # String results -> text content
+                                        content = [{"type": "text", "text": result}]
+                                    elif isinstance(result, (dict, list)):
+                                        # Structured data -> object content
+                                        content = [
+                                            {"type": "object", "object": result}
+                                        ]
                                     else:
-                                        logger.error(
-                                            f"Tool {tool_name} has no callable function"
-                                        )
-                                        error_response = {
-                                            "jsonrpc": "2.0",
-                                            "id": request_id,
-                                            "error": {
-                                                "code": -32603,
-                                                "message": f"Tool {tool_name} not callable",
-                                            },
-                                        }
-                                        return Response(
-                                            content=json.dumps(error_response),
-                                            media_type="application/json",
-                                        )
+                                        # Other types -> convert to text
+                                        content = [
+                                            {"type": "text", "text": str(result)}
+                                        ]
+
+                                    response = {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "result": {"content": content},
+                                    }
+                                    return Response(
+                                        content=json.dumps(response),
+                                        media_type="application/json",
+                                    )
                                 else:
+                                    logger.error(
+                                        f"Tool {tool_name} has no callable function"
+                                    )
+                                    error_response = {
+                                        "jsonrpc": "2.0",
+                                        "id": request_id,
+                                        "error": {
+                                            "code": -32603,
+                                            "message": f"Tool {tool_name} not callable",
+                                        },
+                                    }
+                                    return Response(
+                                        content=json.dumps(error_response),
+                                        media_type="application/json",
+                                    )
+                            else:
                                     # Tool not found
                                     error_response = {
                                         "jsonrpc": "2.0",
