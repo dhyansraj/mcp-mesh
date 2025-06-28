@@ -9,8 +9,8 @@ import json
 import logging
 from typing import Any
 
-from ...pipeline import PipelineResult, PipelineStatus
 from ..startup.base_step import PipelineStep
+from ..startup_pipeline import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class DependencyResolutionStep(PipelineStep):
         )
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
-        """Process dependency resolution."""
+        """Process dependency resolution with hash-based change detection."""
         self.logger.debug("Processing dependency resolution...")
 
         result = PipelineResult(message="Dependency resolution processed")
@@ -52,51 +52,26 @@ class DependencyResolutionStep(PipelineStep):
                 self.logger.info("ℹ️ No heartbeat response to process - this is normal")
                 return result
 
-            # Use existing parse_tool_dependencies method from registry wrapper
+            # Use the existing hash-based change detection and rewiring logic
+            await self.process_heartbeat_response_for_rewiring(heartbeat_response)
+
+            # For context consistency, also extract dependency count
             dependencies_resolved = registry_wrapper.parse_tool_dependencies(
                 heartbeat_response
             )
-
-            if not dependencies_resolved:
-                result.status = PipelineStatus.SUCCESS
-                result.message = "No dependencies to resolve - completed successfully"
-                self.logger.info("ℹ️ No dependencies to resolve - this is normal")
-                return result
-
-            # Process each resolved dependency using existing method
-            processed_deps = {}
-            for function_name, dependency_list in dependencies_resolved.items():
-                if isinstance(dependency_list, list):
-                    for dep_resolution in dependency_list:
-                        if (
-                            isinstance(dep_resolution, dict)
-                            and "capability" in dep_resolution
-                        ):
-                            capability = dep_resolution["capability"]
-                            processed_deps[capability] = self._process_dependency(
-                                capability, dep_resolution
-                            )
-                            self.logger.debug(
-                                f"Processed dependency '{capability}' for function '{function_name}': "
-                                f"{dep_resolution.get('endpoint', 'no-endpoint')}"
-                            )
-
-            # Store processed dependencies
-            result.add_context("processed_dependencies", processed_deps)
-            result.add_context("dependency_count", len(processed_deps))
-
-            # Register dependencies with the global injector
-            await self._register_dependencies_with_injector(processed_deps)
-
-            result.message = f"Processed {len(processed_deps)} dependencies"
-            self.logger.info(
-                f"🔗 Dependency resolution completed: {len(processed_deps)} dependencies"
+            dependency_count = sum(
+                len(deps) if isinstance(deps, list) else 0
+                for deps in dependencies_resolved.values()
             )
 
-            # Log dependency details
-            for dep_name, dep_data in processed_deps.items():
-                status = dep_data.get("status", "unknown")
-                self.logger.debug(f"  - {dep_name}: {status}")
+            # Store processed dependencies info for context
+            result.add_context("dependency_count", dependency_count)
+            result.add_context("dependencies_resolved", dependencies_resolved)
+
+            result.message = "Dependency resolution completed (efficient hash-based)"
+            self.logger.debug(
+                "🔗 Dependency resolution step completed using hash-based change detection"
+            )
 
         except Exception as e:
             result.status = PipelineStatus.FAILED
@@ -105,109 +80,6 @@ class DependencyResolutionStep(PipelineStep):
             self.logger.error(f"❌ Dependency resolution failed: {e}")
 
         return result
-
-    def _process_dependency(
-        self, dep_name: str, dep_info: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Process a single dependency."""
-        # Simplified processing - just collect info for now
-        # TODO: SIMPLIFICATION - Real proxy creation would happen here
-
-        return {
-            "name": dep_name,
-            "status": dep_info.get("status", "unknown"),
-            "agent_id": dep_info.get("agent_id"),
-            "endpoint": dep_info.get("endpoint"),
-            "function_name": dep_info.get("function_name"),
-            "processed_at": "simplified_mode",  # TODO: Remove after simplification
-        }
-
-    async def _register_dependencies_with_injector(
-        self, processed_deps: dict[str, Any]
-    ) -> None:
-        """Register processed dependencies with the global dependency injector."""
-        try:
-            # Import here to avoid circular imports
-            from ...engine.dependency_injector import get_global_injector
-            from ...engine.mcp_client_proxy import MCPClientProxy
-            from ...engine.self_dependency_proxy import SelfDependencyProxy
-
-            injector = get_global_injector()
-
-            # Get current agent ID for self-dependency detection
-            import os
-
-            current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
-            if not current_agent_id:
-                self.logger.warning(
-                    "⚠️ MCP_MESH_AGENT_ID not set, self-dependency detection may fail"
-                )
-
-            for capability, dep_data in processed_deps.items():
-                if dep_data.get("status") == "available":
-                    endpoint = dep_data.get("endpoint")
-                    function_name = dep_data.get("function_name")
-                    target_agent_id = dep_data.get("agent_id")
-
-                    if not function_name:
-                        self.logger.warning(
-                            f"⚠️ Cannot register dependency '{capability}': missing function_name"
-                        )
-                        continue
-
-                    # Determine if this is a self-dependency by comparing agent IDs
-                    is_self_dependency = (
-                        current_agent_id
-                        and target_agent_id
-                        and current_agent_id == target_agent_id
-                    )
-
-                    if is_self_dependency:
-                        # Create self-dependency proxy with cached function reference
-                        original_func = injector.find_original_function(function_name)
-                        if original_func:
-                            proxy = SelfDependencyProxy(original_func, function_name)
-                            self.logger.warning(
-                                f"⚠️ SELF-DEPENDENCY: '{capability}' calls function within same agent. "
-                                f"Using direct function call instead of HTTP to avoid deadlock. "
-                                f"Consider refactoring to eliminate self-dependencies if possible."
-                            )
-                            self.logger.info(
-                                f"🔄 Created SelfDependencyProxy for '{capability}' (agent: {target_agent_id})"
-                            )
-                        else:
-                            self.logger.error(
-                                f"❌ Cannot create SelfDependencyProxy for '{capability}': "
-                                f"original function '{function_name}' not found"
-                            )
-                            continue
-                    else:
-                        # Create cross-service MCP client proxy
-                        if not endpoint:
-                            self.logger.warning(
-                                f"⚠️ Cannot register cross-service dependency '{capability}': missing endpoint"
-                            )
-                            continue
-
-                        proxy = MCPClientProxy(endpoint, function_name)
-                        self.logger.info(
-                            f"🔌 Created MCPClientProxy for '{capability}' -> {endpoint}/{function_name}"
-                        )
-
-                    # Register with injector (same interface for both proxy types)
-                    await injector.register_dependency(capability, proxy)
-
-                    # Log the final registration
-                    proxy_type = "SelfDependency" if is_self_dependency else "MCP"
-                    self.logger.info(f"✅ Registered {proxy_type} proxy '{capability}'")
-                else:
-                    self.logger.warning(
-                        f"⚠️ Skipping dependency '{capability}': status = {dep_data.get('status')}"
-                    )
-
-        except Exception as e:
-            self.logger.error(f"❌ Failed to register dependencies with injector: {e}")
-            # Don't raise - this is not critical for pipeline to continue
 
     def _extract_dependency_state(
         self, heartbeat_response: dict[str, Any]

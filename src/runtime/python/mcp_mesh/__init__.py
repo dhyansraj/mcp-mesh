@@ -164,7 +164,7 @@ def initialize_runtime():
         #     pass
 
         # Use pipeline-based runtime
-        from .pipeline.orchestrator import start_runtime
+        from .pipeline.startup_orchestrator import start_runtime
 
         start_runtime()
 

@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from ...decorator_registry import DecoratorRegistry
-from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.support_types import HealthStatus, HealthStatusType
+from ..startup_pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

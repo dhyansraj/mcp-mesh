@@ -3,8 +3,8 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.registry_client_wrapper import RegistryClientWrapper
+from ..startup_pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

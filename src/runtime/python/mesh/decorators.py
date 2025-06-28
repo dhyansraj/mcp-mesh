@@ -36,7 +36,7 @@ def _trigger_debounced_processing():
     all decorators are captured before processing begins.
     """
     try:
-        from mcp_mesh.pipeline.orchestrator import get_debounce_coordinator
+        from mcp_mesh.pipeline.startup_orchestrator import get_debounce_coordinator
 
         coordinator = get_debounce_coordinator()
         coordinator.trigger_processing()

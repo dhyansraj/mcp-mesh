@@ -12,7 +12,6 @@ import sys
 from typing import Any, Optional
 
 from .heartbeat import RegistryConnectionStep
-from .pipeline import MeshPipeline
 from .startup import (
     ConfigurationStep,
     DecoratorCollectionStep,
@@ -21,6 +20,7 @@ from .startup import (
     HeartbeatLoopStep,
     HeartbeatPreparationStep,
 )
+from .startup_pipeline import MeshPipeline
 
 logger = logging.getLogger(__name__)
 

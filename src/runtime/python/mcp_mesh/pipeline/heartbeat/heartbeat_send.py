@@ -7,8 +7,8 @@ Handles sending heartbeat to the mesh registry service.
 import logging
 from typing import Any
 
-from ...pipeline import PipelineResult, PipelineStatus
 from ..startup.base_step import PipelineStep
+from ..startup_pipeline import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
 

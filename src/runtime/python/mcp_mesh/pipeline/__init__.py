@@ -12,22 +12,22 @@ Key Components:
 - Built-in steps for common operations (collection, config, heartbeat, etc.)
 """
 
-from .pipeline import MeshPipeline, PipelineResult, PipelineStatus
-from .registry_steps import (
-                             DependencyResolutionStep,
-                             HeartbeatSendStep,
-                             RegistryConnectionStep,
+from .heartbeat import (
+                        DependencyResolutionStep,
+                        HeartbeatSendStep,
+                        RegistryConnectionStep,
 )
 from .startup import (
-    PipelineStep,
-    ConfigurationStep,
-    DecoratorCollectionStep,
-    FastAPIServerSetupStep,
-    FastMCPServerDiscoveryStep,
-    FastMCPServerStartupStep,
-    HeartbeatLoopStep,
-    HeartbeatPreparationStep,
+                        ConfigurationStep,
+                        DecoratorCollectionStep,
+                        FastAPIServerSetupStep,
+                        FastMCPServerDiscoveryStep,
+                        FastMCPServerStartupStep,
+                        HeartbeatLoopStep,
+                        HeartbeatPreparationStep,
+                        PipelineStep,
 )
+from .startup_pipeline import MeshPipeline, PipelineResult, PipelineStatus
 
 __all__ = [
     "MeshPipeline",

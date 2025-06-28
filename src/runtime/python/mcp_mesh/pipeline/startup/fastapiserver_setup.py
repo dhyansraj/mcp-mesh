@@ -5,8 +5,7 @@ import socket
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
-from ...pipeline import PipelineResult, PipelineStatus
-from ...shared.support_types import HealthStatus, HealthStatusType
+from ..startup_pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -455,158 +454,48 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             raise
 
     async def _heartbeat_lifespan_task(self, heartbeat_config: dict[str, Any]) -> None:
-        """Heartbeat task that runs in FastAPI lifespan."""
+        """Heartbeat task that runs in FastAPI lifespan using pipeline architecture."""
         registry_wrapper = heartbeat_config["registry_wrapper"]
         agent_id = heartbeat_config["agent_id"]
         interval = heartbeat_config["interval"]
         context = heartbeat_config["context"]
 
-        self.logger.info(f"💓 Starting heartbeat lifespan task for agent '{agent_id}'")
+        # Create heartbeat orchestrator for pipeline execution
+        from ..heartbeat import HeartbeatOrchestrator
 
-        heartbeat_count = 0
+        heartbeat_orchestrator = HeartbeatOrchestrator()
+
+        self.logger.info(f"💓 Starting heartbeat pipeline task for agent '{agent_id}'")
+
         try:
             while True:
-                heartbeat_count += 1
-
                 try:
-                    # Build health status from context (reuse existing logic)
-                    health_status = self._build_health_status_from_context(context)
-
-                    # Debug: Log heartbeat request details
-                    import json
-
-                    # Convert health status to dict for logging
-                    if hasattr(health_status, "__dict__"):
-                        health_dict = {
-                            "agent_name": getattr(
-                                health_status, "agent_name", agent_id
-                            ),
-                            "status": (
-                                getattr(health_status, "status", "healthy").value
-                                if hasattr(
-                                    getattr(health_status, "status", "healthy"), "value"
-                                )
-                                else str(getattr(health_status, "status", "healthy"))
-                            ),
-                            "capabilities": getattr(health_status, "capabilities", []),
-                            "timestamp": (
-                                getattr(health_status, "timestamp", "").isoformat()
-                                if hasattr(
-                                    getattr(health_status, "timestamp", ""), "isoformat"
-                                )
-                                else str(getattr(health_status, "timestamp", ""))
-                            ),
-                            "version": getattr(health_status, "version", "1.0.0"),
-                            "metadata": getattr(health_status, "metadata", {}),
-                        }
-                    else:
-                        health_dict = health_status
-
-                    request_json = json.dumps(health_dict, indent=2, default=str)
-                    self.logger.debug(
-                        f"🔍 Heartbeat request #{heartbeat_count}:\n{request_json}"
+                    # Execute heartbeat pipeline
+                    success = await heartbeat_orchestrator.execute_heartbeat(
+                        registry_wrapper, agent_id, context
                     )
 
-                    # Send heartbeat first
-                    response = await registry_wrapper.send_heartbeat_with_dependency_resolution(
-                        health_status
-                    )
-
-                    # Debug: Log heartbeat response details
-                    if response:
-                        response_json = json.dumps(response, indent=2, default=str)
+                    if not success:
+                        # Log failure but continue to next cycle (pipeline handles detailed logging)
                         self.logger.debug(
-                            f"🔍 Heartbeat response #{heartbeat_count}:\n{response_json}"
-                        )
-                    else:
-                        self.logger.debug(
-                            f"🔍 Heartbeat response #{heartbeat_count}: None (no response)"
-                        )
-
-                    # Process heartbeat response for dynamic dependency rewiring
-                    if response:
-                        await self._process_heartbeat_for_rewiring(response)
-
-                    # Log success
-                    if response:
-                        self.logger.info(
-                            f"💚 Heartbeat #{heartbeat_count} sent successfully for agent '{agent_id}'"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"💔 Heartbeat #{heartbeat_count} failed for agent '{agent_id}' - no response"
-                        )
-
-                    # Log every 10th heartbeat for visibility
-                    if heartbeat_count % 10 == 0:
-                        elapsed_time = heartbeat_count * interval
-                        self.logger.info(
-                            f"💓 Heartbeat #{heartbeat_count} for agent '{agent_id}' - "
-                            f"running for {elapsed_time} seconds"
+                            f"💔 Heartbeat pipeline failed for agent '{agent_id}' - continuing to next cycle"
                         )
 
                 except Exception as e:
+                    # Log pipeline execution error but continue to next cycle for resilience
                     self.logger.error(
-                        f"❌ Heartbeat #{heartbeat_count} error for agent '{agent_id}': {e}"
+                        f"❌ Heartbeat pipeline execution error for agent '{agent_id}': {e}"
                     )
-                    # Continue to next cycle
+                    # Continue to next cycle - heartbeat should be resilient
 
                 # Wait for next heartbeat interval
                 await asyncio.sleep(interval)
 
         except asyncio.CancelledError:
             self.logger.info(
-                f"🛑 Heartbeat lifespan task cancelled for agent '{agent_id}'"
+                f"🛑 Heartbeat pipeline task cancelled for agent '{agent_id}'"
             )
             raise
-
-    async def _process_heartbeat_for_rewiring(
-        self, heartbeat_response: dict[str, Any]
-    ) -> None:
-        """Process heartbeat response for dynamic dependency rewiring."""
-        try:
-            # Import the DependencyResolutionStep to reuse its rewiring logic
-            from ..heartbeat.dependency_resolution import DependencyResolutionStep
-
-            # Create a temporary step instance to use its rewiring method
-            dep_resolution_step = DependencyResolutionStep()
-            await dep_resolution_step.process_heartbeat_response_for_rewiring(
-                heartbeat_response
-            )
-        except Exception as e:
-            self.logger.error(f"❌ Error processing heartbeat for rewiring: {e}")
-            # Don't raise - this should not break the heartbeat loop
-
-    def _build_health_status_from_context(self, context: dict[str, Any]) -> Any:
-        """Build health status object from pipeline context."""
-        # Get existing health status from context or build from current state
-        existing_health_status = context.get("health_status")
-
-        if existing_health_status:
-            # Update timestamp to current time for fresh heartbeat
-            if hasattr(existing_health_status, "timestamp"):
-                from datetime import UTC, datetime
-
-                existing_health_status.timestamp = datetime.now(UTC)
-            return existing_health_status
-
-        # Build minimal health status from context if none exists
-        agent_id = context.get("agent_id", "unknown-agent")
-        agent_config = context.get("agent_config", {})
-
-        # Import here to avoid circular imports
-        from datetime import UTC, datetime
-
-        from ..shared.support_types import HealthStatus, HealthStatusType
-
-        return HealthStatus(
-            agent_name=agent_id,
-            status=HealthStatusType.HEALTHY,
-            capabilities=agent_config.get("capabilities", []),
-            timestamp=datetime.now(UTC),
-            version=agent_config.get("version", "1.0.0"),
-            metadata=agent_config,
-        )
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""

@@ -1,11 +1,14 @@
 """
-Heartbeat pipeline step implementations for MCP Mesh processing.
+Heartbeat pipeline infrastructure for MCP Mesh processing.
 
-This module contains all heartbeat step implementations that run periodically
-during background execution for registry communication and dependency resolution.
+This module contains heartbeat step implementations and pipeline orchestration
+that run periodically during background execution for registry communication
+and dependency resolution.
 """
 
 from .dependency_resolution import DependencyResolutionStep
+from .heartbeat_orchestrator import HeartbeatOrchestrator
+from .heartbeat_pipeline import HeartbeatPipeline
 from .heartbeat_send import HeartbeatSendStep
 from .registry_connection import RegistryConnectionStep
 
@@ -13,4 +16,6 @@ __all__ = [
     "RegistryConnectionStep",
     "HeartbeatSendStep",
     "DependencyResolutionStep",
+    "HeartbeatPipeline",
+    "HeartbeatOrchestrator",
 ]

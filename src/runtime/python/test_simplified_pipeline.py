@@ -15,7 +15,7 @@ os.environ["MCP_MESH_ENABLED"] = "true"
 
 # Import the decorators to test
 import mesh
-from mcp_mesh.pipeline.orchestrator import process_decorators_once
+from mcp_mesh.pipeline.startup_orchestrator import process_decorators_once
 
 
 # Test decorators

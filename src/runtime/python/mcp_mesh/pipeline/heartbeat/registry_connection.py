@@ -10,9 +10,9 @@ from typing import Any
 
 from ...generated.mcp_mesh_registry_client.api_client import ApiClient
 from ...generated.mcp_mesh_registry_client.configuration import Configuration
-from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.registry_client_wrapper import RegistryClientWrapper
 from ..startup.base_step import PipelineStep
+from ..startup_pipeline import PipelineResult, PipelineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +33,23 @@ class RegistryConnectionStep(PipelineStep):
         )
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
-        """Establish registry connection."""
-        self.logger.debug("Establishing registry connection...")
+        """Establish registry connection or reuse existing one."""
+        self.logger.debug("Checking registry connection...")
 
-        result = PipelineResult(message="Registry connection established")
+        result = PipelineResult(message="Registry connection ready")
 
         try:
-            # Get registry URL
+            # Check if registry wrapper already exists in context (for heartbeat pipeline)
+            existing_wrapper = context.get("registry_wrapper")
+
+            if existing_wrapper:
+                # Reuse existing connection for efficiency
+                result.add_context("registry_wrapper", existing_wrapper)
+                result.message = "Reusing existing registry connection"
+                self.logger.debug("🔄 Reusing existing registry connection")
+                return result
+
+            # Create new connection if none exists
             registry_url = self._get_registry_url()
 
             # Create registry client configuration
