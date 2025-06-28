@@ -230,7 +230,7 @@ class FastAPIServerSetupStep(PipelineStep):
                 heartbeat_task = None
                 if heartbeat_config:
                     import asyncio
-                    
+
                     # Get heartbeat task function from config to avoid cross-imports
                     heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
                     if heartbeat_task_fn:
@@ -238,7 +238,9 @@ class FastAPIServerSetupStep(PipelineStep):
                             heartbeat_task_fn(heartbeat_config)
                         )
                     else:
-                        self.logger.warning("⚠️ Heartbeat config provided but no heartbeat_task_fn found")
+                        self.logger.warning(
+                            "⚠️ Heartbeat config provided but no heartbeat_task_fn found"
+                        )
                     self.logger.info(
                         f"💓 Started heartbeat task in FastAPI lifespan with {heartbeat_config['interval']}s interval"
                     )
@@ -457,7 +459,6 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         except Exception as e:
             self.logger.error(f"Failed to start FastAPI server: {e}")
             raise
-
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""

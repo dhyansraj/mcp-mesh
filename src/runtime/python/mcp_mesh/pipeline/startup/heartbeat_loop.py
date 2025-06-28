@@ -48,9 +48,9 @@ class HeartbeatLoopStep(PipelineStep):
             agent_id = context.get("agent_id", "unknown-agent")
             heartbeat_interval = self._get_heartbeat_interval(agent_config)
 
-            # Import heartbeat task function 
+            # Import heartbeat task function
             from ..heartbeat import heartbeat_lifespan_task
-            
+
             # Store heartbeat config for FastAPI lifespan (don't start task in this event loop)
             result.add_context(
                 "heartbeat_config",

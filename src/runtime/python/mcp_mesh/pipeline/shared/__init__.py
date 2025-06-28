@@ -10,7 +10,7 @@ from .registry_connection import RegistryConnectionStep
 
 __all__ = [
     "PipelineStep",
-    "PipelineResult", 
+    "PipelineResult",
     "PipelineStatus",
     "RegistryConnectionStep",
 ]

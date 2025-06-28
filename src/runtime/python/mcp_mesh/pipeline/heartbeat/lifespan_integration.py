@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 async def heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
     """
     Heartbeat task that runs in FastAPI lifespan using pipeline architecture.
-    
+
     Args:
-        heartbeat_config: Configuration containing registry_wrapper, agent_id, 
+        heartbeat_config: Configuration containing registry_wrapper, agent_id,
                          interval, and context for heartbeat execution
     """
     registry_wrapper = heartbeat_config["registry_wrapper"]
@@ -57,7 +57,5 @@ async def heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
             await asyncio.sleep(interval)
 
     except asyncio.CancelledError:
-        logger.info(
-            f"🛑 Heartbeat pipeline task cancelled for agent '{agent_id}'"
-        )
+        logger.info(f"🛑 Heartbeat pipeline task cancelled for agent '{agent_id}'")
         raise

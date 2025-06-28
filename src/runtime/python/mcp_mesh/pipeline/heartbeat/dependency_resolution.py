@@ -9,8 +9,7 @@ import json
 import logging
 from typing import Any
 
-from ..shared import PipelineStep
-from ..shared import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 logger = logging.getLogger(__name__)
 
