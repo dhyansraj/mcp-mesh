@@ -18,7 +18,7 @@ from .registry_steps import (
                              HeartbeatSendStep,
                              RegistryConnectionStep,
 )
-from .steps import (
+from .startup import (
     PipelineStep,
     ConfigurationStep,
     DecoratorCollectionStep,
