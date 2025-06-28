@@ -19,16 +19,6 @@ from .decorator_registry import (
 # Import mesh.tool and mesh.agent instead
 from .shared.exceptions import PermissionDeniedError, SecurityValidationError
 from .types import McpMeshAgent
-from .versioning import (
-    AgentVersionInfo,
-    DeploymentInfo,
-    DeploymentResult,
-    DeploymentStatus,
-    RollbackInfo,
-    SemanticVersion,
-    VersionComparisonProtocol,
-    VersioningProtocol,
-)
 
 __version__ = "0.1.1"
 
@@ -73,13 +63,4 @@ __all__ = [
     "get_decorator_stats",
     "SecurityValidationError",
     "PermissionDeniedError",
-    # Fallback chain (CRITICAL FEATURE)
-    "DeploymentStatus",
-    "SemanticVersion",
-    "AgentVersionInfo",
-    "DeploymentInfo",
-    "DeploymentResult",
-    "RollbackInfo",
-    "VersioningProtocol",
-    "VersionComparisonProtocol",
 ]
