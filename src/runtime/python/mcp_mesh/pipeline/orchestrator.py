@@ -11,13 +11,9 @@ import os
 import sys
 from typing import Any, Optional
 
+from .heartbeat import RegistryConnectionStep
 from .pipeline import MeshPipeline
-from .registry_steps import (
-    DependencyResolutionStep,
-    HeartbeatSendStep,
-    RegistryConnectionStep,
-)
-from .steps import (
+from .startup import (
     ConfigurationStep,
     DecoratorCollectionStep,
     FastAPIServerSetupStep,
@@ -208,17 +204,17 @@ class MeshOrchestrator:
 
     def _setup_basic_pipeline(self) -> None:
         """Set up the processing pipeline."""
-        # Essential steps - reordered for FastAPI natural blocking
+        # Essential startup steps - optimized to skip redundant heartbeat during startup
         steps = [
             DecoratorCollectionStep(),
             ConfigurationStep(),
-            HeartbeatPreparationStep(),
+            HeartbeatPreparationStep(),  # Prepare heartbeat payload structure
             FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances
-            RegistryConnectionStep(),
-            HeartbeatSendStep(required=False),  # Optional for now
-            DependencyResolutionStep(),
-            HeartbeatLoopStep(),  # Start background heartbeat loop before FastAPI
-            FastAPIServerSetupStep(),  # Final: Setup FastAPI app (preparation only)
+            RegistryConnectionStep(),  # Connect to registry
+            # REMOVED: HeartbeatSendStep() - redundant, background loop handles this
+            # REMOVED: DependencyResolutionStep() - redundant, background loop handles this
+            HeartbeatLoopStep(),  # Setup background heartbeat config
+            FastAPIServerSetupStep(),  # Setup FastAPI app with background heartbeat
             # Note: FastAPI server will be started with uvicorn.run() after pipeline
         ]
 

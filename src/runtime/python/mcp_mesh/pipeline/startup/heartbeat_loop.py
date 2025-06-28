@@ -3,8 +3,8 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
+from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.registry_client_wrapper import RegistryClientWrapper
-from ..pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -76,7 +76,6 @@ class HeartbeatLoopStep(PipelineStep):
 
     def _get_heartbeat_interval(self, agent_config: dict[str, Any]) -> int:
         """Get heartbeat interval from configuration sources."""
-        import os
 
         # Priority order: ENV > agent_config > default
         env_interval = os.getenv("MCP_MESH_HEARTBEAT_INTERVAL")

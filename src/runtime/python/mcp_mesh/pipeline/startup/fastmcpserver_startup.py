@@ -4,7 +4,7 @@ import os
 import socket
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..pipeline import PipelineResult, PipelineStatus
+from ...pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -107,7 +107,6 @@ class FastMCPServerStartupStep(PipelineStep):
 
     def _is_http_enabled(self) -> bool:
         """Check if HTTP transport is enabled."""
-        import os
 
         return os.getenv("MCP_MESH_HTTP_ENABLED", "true").lower() in (
             "true",
@@ -118,7 +117,6 @@ class FastMCPServerStartupStep(PipelineStep):
 
     def _resolve_binding_config(self, agent_config: dict[str, Any]) -> dict[str, Any]:
         """Resolve local server binding configuration."""
-        import os
 
         # Local binding - always use 0.0.0.0 to bind to all interfaces
         bind_host = "0.0.0.0"
@@ -137,7 +135,6 @@ class FastMCPServerStartupStep(PipelineStep):
         self, agent_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Resolve external advertisement configuration for registry."""
-        import os
 
         # External hostname - for registry advertisement
         external_host = (

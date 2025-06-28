@@ -5,8 +5,8 @@ import socket
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
+from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.support_types import HealthStatus, HealthStatusType
-from ..pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -123,7 +123,6 @@ class FastAPIServerSetupStep(PipelineStep):
 
     def _is_http_enabled(self) -> bool:
         """Check if HTTP transport is enabled."""
-        import os
 
         return os.getenv("MCP_MESH_HTTP_ENABLED", "true").lower() in (
             "true",
@@ -134,7 +133,6 @@ class FastAPIServerSetupStep(PipelineStep):
 
     def _resolve_binding_config(self, agent_config: dict[str, Any]) -> dict[str, Any]:
         """Resolve local server binding configuration."""
-        import os
 
         # Local binding - always use 0.0.0.0 to bind to all interfaces
         bind_host = "0.0.0.0"
@@ -153,7 +151,6 @@ class FastAPIServerSetupStep(PipelineStep):
         self, agent_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Resolve external advertisement configuration for registry."""
-        import os
 
         # External hostname - for registry advertisement
         external_host = (
@@ -569,7 +566,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         """Process heartbeat response for dynamic dependency rewiring."""
         try:
             # Import the DependencyResolutionStep to reuse its rewiring logic
-            from ..registry_steps import DependencyResolutionStep
+            from ...heartbeat.dependency_resolution import DependencyResolutionStep
 
             # Create a temporary step instance to use its rewiring method
             dep_resolution_step = DependencyResolutionStep()
@@ -613,6 +610,5 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""
-        from datetime import UTC, datetime
 
         return datetime.now(UTC).isoformat()

@@ -1,7 +1,7 @@
 """
-Pipeline step implementations for MCP Mesh processing.
+Startup pipeline step implementations for MCP Mesh processing.
 
-This module contains all concrete step implementations organized by functionality.
+This module contains all startup step implementations that run once during initialization.
 """
 
 from .base_step import PipelineStep
@@ -16,7 +16,7 @@ from .heartbeat_preparation import HeartbeatPreparationStep
 __all__ = [
     "PipelineStep",
     "ConfigurationStep",
-    "DecoratorCollectionStep", 
+    "DecoratorCollectionStep",
     "FastAPIServerSetupStep",
     "FastMCPServerDiscoveryStep",
     "FastMCPServerStartupStep",

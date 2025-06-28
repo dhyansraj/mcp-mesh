@@ -6,9 +6,8 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from ...decorator_registry import DecoratorRegistry
+from ...pipeline import PipelineResult, PipelineStatus
 from ...shared.support_types import HealthStatus, HealthStatusType
-
-from ..pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -190,12 +189,19 @@ class HeartbeatPreparationStep(PipelineStep):
             debug_info["pointers_match"] = None
 
         return debug_info
-    
+
     def _is_debug_enabled(self) -> bool:
         """Check if debug mode is enabled via environment variable."""
-        return os.environ.get("MCP_MESH_DEBUG", "").lower() in ("true", "1", "yes", "on")
+        return os.environ.get("MCP_MESH_DEBUG", "").lower() in (
+            "true",
+            "1",
+            "yes",
+            "on",
+        )
 
-    def _resolve_external_endpoint(self, agent_config: dict[str, Any], context: dict[str, Any] = None) -> tuple[str, int]:
+    def _resolve_external_endpoint(
+        self, agent_config: dict[str, Any], context: dict[str, Any] = None
+    ) -> tuple[str, int]:
         """Resolve external host and port for registry advertisement."""
         # Get external endpoint information from FastAPI advertisement config
         advertisement_config = {}
@@ -222,9 +228,9 @@ class HeartbeatPreparationStep(PipelineStep):
         # Don't send 0.0.0.0 as it's a binding address, not an external address
         if http_host == "0.0.0.0":
             http_host = "localhost"
-            
+
         return http_host, http_port
-    
+
     def _build_registration_payload(
         self,
         agent_id: str,
@@ -254,13 +260,13 @@ class HeartbeatPreparationStep(PipelineStep):
             capability = tool.get("capability")
             if capability:
                 capabilities.append(capability)
-        
+
         # Ensure we have at least one capability for validation
         if not capabilities:
             capabilities = ["default"]
-            
+
         return capabilities
-    
+
     def _build_health_status(
         self,
         agent_id: str,
@@ -274,7 +280,7 @@ class HeartbeatPreparationStep(PipelineStep):
 
         # Build metadata with external endpoint information
         metadata = dict(agent_config)  # Copy agent config
-        
+
         # Add external endpoint information using consolidated logic
         if context:
             advertisement_config = context.get("fastapi_advertisement_config", {})

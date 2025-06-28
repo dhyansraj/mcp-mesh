@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from ...decorator_registry import DecoratorRegistry
-from ..pipeline import PipelineResult, PipelineStatus
+from ...pipeline import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -30,7 +30,7 @@ class ConfigurationStep(PipelineStep):
         try:
             # Get resolved configuration directly from DecoratorRegistry
             config = DecoratorRegistry.get_resolved_agent_config()
-            
+
             # Check if we have explicit @mesh.agent decorators
             mesh_agents = DecoratorRegistry.get_mesh_agents()
             has_explicit_agent = bool(mesh_agents)
@@ -52,4 +52,3 @@ class ConfigurationStep(PipelineStep):
             self.logger.error(f"❌ Configuration resolution failed: {e}")
 
         return result
-
