@@ -228,26 +228,8 @@ class HttpMcpWrapper:
                     "🔄 Proxying MCP request to FastMCP with session management"
                 )
 
-                # Forward to FastMCP endpoint - try with base session or create new
-                import aiohttp
-
-                async with aiohttp.ClientSession() as session:
-                    # Try the created session ID first
-                    try:
-                        session_id = "70f3698fa9784868b1da8215fc69fdc1"  # From logs
-                        url = f"http://127.0.0.1:{self.actual_port}/mcp-server/mcp/{session_id}"
-                        async with session.post(
-                            url, data=body, headers=headers
-                        ) as resp:
-                            if resp.status != 400:  # If not "Missing session ID"
-                                result = await resp.text()
-                                return Response(
-                                    content=result, media_type="application/json"
-                                )
-                    except Exception as e:
-                        logger.debug(f"Session proxy attempt failed: {e}")
-
-                # If session approach fails, try direct FastMCP tool calling
+                # Use direct FastMCP tool calling (no hardcoded session ID)
+                # Previous hardcoded session proxy approach removed as debugging leftover
                 logger.debug("🔄 Falling back to direct FastMCP tool calling")
 
                 # Parse the JSON-RPC request
