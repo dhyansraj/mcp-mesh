@@ -11,7 +11,7 @@ import mesh
 from mcp_mesh import DecoratorRegistry
 from mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 def create_mock_registry_client(response_override=None):

@@ -6,6 +6,10 @@ import sys
 # Type alias for mesh agent proxy injections - use Any for Pydantic compatibility
 from typing import Any
 
+# Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
+# Import mesh.tool and mesh.agent instead
+from mesh.types import McpMeshAgent
+
 # Import all the existing exports
 from .engine.decorator_registry import (
     DecoratedFunction,
@@ -14,10 +18,6 @@ from .engine.decorator_registry import (
     get_all_mesh_agents,
     get_decorator_stats,
 )
-
-# Old mesh_agent decorator has been replaced by mesh.tool and mesh.agent
-# Import mesh.tool and mesh.agent instead
-from .types import McpMeshAgent
 
 __version__ = "0.1.1"
 

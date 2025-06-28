@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from mcp_mesh.engine.dependency_injector import DependencyInjector
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 class TestDependencyInjection:

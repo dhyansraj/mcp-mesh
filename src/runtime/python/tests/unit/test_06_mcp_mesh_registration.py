@@ -21,7 +21,7 @@ from mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response im
     RegistrationResponse,
 )
 from mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 @pytest.fixture(autouse=True)

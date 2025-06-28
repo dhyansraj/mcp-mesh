@@ -18,9 +18,8 @@ Note: Direct imports like 'from mesh import tool' are discouraged.
 Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
-from mcp_mesh.types import McpMeshAgent
-
 from . import decorators
+from .types import McpMeshAgent
 
 __version__ = "1.0.0"
 

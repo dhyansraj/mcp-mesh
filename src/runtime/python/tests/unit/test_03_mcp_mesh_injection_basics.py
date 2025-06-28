@@ -12,7 +12,7 @@ from mcp_mesh.engine.signature_analyzer import (
     get_mesh_agent_positions,
     validate_mesh_dependencies,
 )
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 class TestMcpMeshAgentInjection:

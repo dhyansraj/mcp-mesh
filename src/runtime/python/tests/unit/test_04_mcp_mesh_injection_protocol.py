@@ -12,7 +12,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.server.fastmcp import FastMCP
 
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 # Mock SystemAgent that will be injected
@@ -173,7 +173,7 @@ class TestDependencyInjectionMCP:
 import asyncio
 from mcp.server.fastmcp import FastMCP
 import mesh
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 # Mock SystemAgent for dependency injection
 class MockSystemAgent:

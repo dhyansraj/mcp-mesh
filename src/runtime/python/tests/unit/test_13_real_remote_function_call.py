@@ -172,7 +172,7 @@ class TestRealRemoteFunctionCall:
 import os
 import asyncio
 import mesh
-from mcp_mesh.types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 print("🔧 Agent script starting...")
 print(f"🌐 Registry URL from environment: {{os.environ.get('MCP_MESH_REGISTRY_URL', 'NOT SET')}}")

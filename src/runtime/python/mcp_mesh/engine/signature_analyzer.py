@@ -5,7 +5,7 @@ Function signature analysis for MCP Mesh dependency injection.
 import inspect
 from typing import Any, get_type_hints
 
-from ..types import McpMeshAgent
+from mesh.types import McpMeshAgent
 
 
 def get_mesh_agent_positions(func: Any) -> list[int]:
