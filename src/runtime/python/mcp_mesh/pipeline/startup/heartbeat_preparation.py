@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from ...decorator_registry import DecoratorRegistry
 from ...shared.support_types import HealthStatus, HealthStatusType
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class HeartbeatPreparationStep(PipelineStep):
@@ -51,7 +51,7 @@ class HeartbeatPreparationStep(PipelineStep):
                 agent_id, agent_config, tools_list, context
             )
 
-            # Store in context for backward compatibility
+            # Store in context
             result.add_context("registration_data", registration_data)
             result.add_context("health_status", health_status)
             result.add_context("tools_list", tools_list)

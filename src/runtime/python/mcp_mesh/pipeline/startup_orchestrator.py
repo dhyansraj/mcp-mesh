@@ -231,7 +231,7 @@ class MeshOrchestrator:
 
         result = await self.pipeline.execute()
 
-        # Convert result to dict for compatibility
+        # Convert result to dict for return type
         return {
             "status": result.status.value,
             "message": result.message,
@@ -301,7 +301,7 @@ class MeshOrchestrator:
             self.logger.error(f"💥 Auto-service '{service_name}' failed: {e}")
 
 
-# Global orchestrator instance for compatibility
+# Global orchestrator instance
 _global_orchestrator: Optional[MeshOrchestrator] = None
 
 
@@ -336,12 +336,6 @@ def start_runtime() -> None:
     """
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
-    # TODO: SIMPLIFICATION - Comment out complex features
-    # - FastMCP patching
-    # - HTTP wrapper setup
-    # - Background async processing
-    # - Complex dependency injection
-
     # Create orchestrator and set up debouncing
     orchestrator = get_global_orchestrator()
     debounce_coordinator = get_debounce_coordinator()
@@ -357,11 +351,3 @@ def start_runtime() -> None:
     # through the debounce coordinator
 
 
-# TODO: SIMPLIFICATION - Replace complex auto-initialization
-# This will be enabled after the basic pipeline is tested
-def enable_auto_initialization() -> None:
-    """Enable auto-initialization (disabled during simplification)."""
-    import os
-
-    if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
-        start_simplified_runtime()

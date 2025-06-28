@@ -5,7 +5,7 @@ import socket
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class FastMCPServerStartupStep(PipelineStep):

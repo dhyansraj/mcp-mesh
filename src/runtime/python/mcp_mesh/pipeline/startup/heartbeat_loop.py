@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from ...shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class HeartbeatLoopStep(PipelineStep):

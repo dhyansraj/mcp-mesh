@@ -3,7 +3,7 @@ from typing import Any
 
 from ...decorator_registry import DecoratorRegistry
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class ConfigurationStep(PipelineStep):
@@ -35,7 +35,7 @@ class ConfigurationStep(PipelineStep):
             mesh_agents = DecoratorRegistry.get_mesh_agents()
             has_explicit_agent = bool(mesh_agents)
 
-            # Store in pipeline context for backward compatibility
+            # Store in pipeline context
             result.add_context("agent_config", config)
             result.add_context("agent_id", config["agent_id"])
             result.add_context("has_explicit_agent", has_explicit_agent)

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class FastAPIServerSetupStep(PipelineStep):

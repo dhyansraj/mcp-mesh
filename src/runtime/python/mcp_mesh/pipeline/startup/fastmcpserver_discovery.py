@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class FastMCPServerDiscoveryStep(PipelineStep):

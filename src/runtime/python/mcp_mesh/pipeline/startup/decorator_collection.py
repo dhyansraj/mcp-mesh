@@ -3,7 +3,7 @@ from typing import Any
 
 from ...decorator_registry import DecoratorRegistry
 from ..shared import PipelineResult, PipelineStatus
-from .base_step import PipelineStep
+from ..shared import PipelineStep
 
 
 class DecoratorCollectionStep(PipelineStep):
