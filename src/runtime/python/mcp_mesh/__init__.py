@@ -7,20 +7,6 @@ import sys
 from typing import Any
 
 # Import all the existing exports
-from .agent_selection import (
-    AgentHealthInfo,
-    AgentSelectionProtocol,
-    AgentSelectionResult,
-    HealthMonitoringProtocol,
-    HealthStatus,
-    SelectionAlgorithm,
-    SelectionAlgorithmProtocol,
-    SelectionCriteria,
-    SelectionState,
-    SelectionWeights,
-    WeightUpdateRequest,
-    WeightUpdateResult,
-)
 from .configuration import (
     ConfigurationError,
     ConfigurationProvider,
@@ -232,18 +218,6 @@ __all__ = [
     "LifecycleEventProtocol",
     "HealthTransitionTrigger",
     "LifecycleConfiguration",
-    "SelectionAlgorithm",
-    "HealthStatus",
-    "SelectionCriteria",
-    "SelectionWeights",
-    "AgentSelectionResult",
-    "AgentHealthInfo",
-    "WeightUpdateRequest",
-    "WeightUpdateResult",
-    "SelectionState",
-    "AgentSelectionProtocol",
-    "SelectionAlgorithmProtocol",
-    "HealthMonitoringProtocol",
     "LogLevel",
     "DatabaseType",
     "SecurityMode",
