@@ -3,6 +3,8 @@ MCP Mesh Shared Components
 
 Shared utilities and types built on the official MCP SDK.
 Common functionality used across server and client components.
+
+Core mesh processing infrastructure has been moved to mcp_mesh.engine.
 """
 
 # Import only non-circular dependencies at module level
@@ -14,10 +16,6 @@ __all__ = [
     "RegistryClient",
     "ContentExtractor",
     "configure_logging",
-    "MCPClientProxy",
-    "SelfDependencyProxy",
-    "DependencyInjector",
-    "get_global_injector",
 ]
 
 
@@ -38,20 +36,5 @@ def __getattr__(name):
         from .logging_config import configure_logging
 
         return configure_logging
-    elif name == "MCPClientProxy":
-        from .mcp_client_proxy import MCPClientProxy
 
-        return MCPClientProxy
-    elif name == "SelfDependencyProxy":
-        from .self_dependency_proxy import SelfDependencyProxy
-
-        return SelfDependencyProxy
-    elif name == "DependencyInjector":
-        from .dependency_injector import DependencyInjector
-
-        return DependencyInjector
-    elif name == "get_global_injector":
-        from .dependency_injector import get_global_injector
-
-        return get_global_injector
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 # Import from mcp_mesh for registry and runtime integration
-from mcp_mesh.decorator_registry import DecoratorRegistry
+from mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -327,7 +327,7 @@ def tool(
         if validated_dependencies:
             try:
                 # Import here to avoid circular imports
-                from mcp_mesh.shared.dependency_injector import get_global_injector
+                from mcp_mesh.engine.dependency_injector import get_global_injector
 
                 # Extract dependency names for injector
                 dependency_names = [dep["capability"] for dep in validated_dependencies]

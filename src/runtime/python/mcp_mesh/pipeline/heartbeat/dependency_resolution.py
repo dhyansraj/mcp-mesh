@@ -189,8 +189,8 @@ class DependencyResolutionStep(PipelineStep):
                     )
 
             # Import here to avoid circular imports
-            from ...shared.dependency_injector import get_global_injector
-            from ...shared.mcp_client_proxy import MCPClientProxy
+            from ...engine.dependency_injector import get_global_injector
+            from ...engine.mcp_client_proxy import MCPClientProxy
 
             injector = get_global_injector()
 
@@ -230,8 +230,8 @@ class DependencyResolutionStep(PipelineStep):
                         # Get current agent ID for self-dependency detection
                         import os
 
-                        from ...shared.mcp_client_proxy import MCPClientProxy
-                        from ...shared.self_dependency_proxy import SelfDependencyProxy
+                        from ...engine.mcp_client_proxy import MCPClientProxy
+                        from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                         current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
                         target_agent_id = dep_info.get("agent_id")

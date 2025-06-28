@@ -132,7 +132,7 @@ class TestDependencyInjectionMCP:
         import mesh
 
         # Register dependency first
-        from mcp_mesh.shared.dependency_injector import get_global_injector
+        from mcp_mesh.engine.dependency_injector import get_global_injector
 
         injector = get_global_injector()
         await injector.register_dependency("SystemAgent", MockSystemAgent())
@@ -188,7 +188,7 @@ server = FastMCP(name="test-di-server")
 # Set up dependency injection
 async def setup_dependencies():
     """Set up mock dependencies for testing."""
-    from mcp_mesh.shared.dependency_injector import get_global_injector
+    from mcp_mesh.engine.dependency_injector import get_global_injector
 
     injector = get_global_injector()
     mock_agent = MockSystemAgent()

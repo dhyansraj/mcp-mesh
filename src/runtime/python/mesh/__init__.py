@@ -69,7 +69,7 @@ def create_server(name: str | None = None) -> "FastMCP":
 
     # Try to get agent name from existing @mesh.agent decorators
     if name is None:
-        from mcp_mesh.decorator_registry import DecoratorRegistry
+        from mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
         agents = DecoratorRegistry.get_mesh_agents()
 

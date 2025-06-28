@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mcp_mesh.engine.mcp_client_proxy import AsyncMCPClient, MCPClientProxy
 from mcp_mesh.shared.content_extractor import ContentExtractor
-from mcp_mesh.shared.mcp_client_proxy import AsyncMCPClient, MCPClientProxy
 
 
 class TestContentExtractor:
@@ -113,7 +113,7 @@ class TestMCPClientProxy:
         proxy = MCPClientProxy("http://example.com:8080/", "test_function")
         assert proxy.endpoint == "http://example.com:8080"
 
-    @patch("mcp_mesh.shared.mcp_client_proxy.AsyncMCPClient")
+    @patch("mcp_mesh.engine.mcp_client_proxy.AsyncMCPClient")
     @patch("asyncio.run")
     def test_proxy_call_interface(self, mock_asyncio_run, mock_async_client):
         """Test that proxy maintains callable interface."""
@@ -132,7 +132,7 @@ class TestMCPClientProxy:
         mock_asyncio_run.assert_called_once()
         assert result == "test result"
 
-    @patch("mcp_mesh.shared.mcp_client_proxy.AsyncMCPClient")
+    @patch("mcp_mesh.engine.mcp_client_proxy.AsyncMCPClient")
     @patch("asyncio.run")
     def test_proxy_error_handling(self, mock_asyncio_run, mock_async_client):
         """Test proxy error handling and cleanup."""
@@ -161,8 +161,8 @@ class TestAsyncMCPClient:
         assert client._transport_cleanup is None
 
     @pytest.mark.asyncio
-    @patch("mcp_mesh.shared.mcp_client_proxy.streamablehttp_client")
-    @patch("mcp_mesh.shared.mcp_client_proxy.ClientSession")
+    @patch("mcp_mesh.engine.mcp_client_proxy.streamablehttp_client")
+    @patch("mcp_mesh.engine.mcp_client_proxy.ClientSession")
     async def test_client_connect(self, mock_session_class, mock_transport):
         """Test client connection setup."""
         # Setup mocks
@@ -185,8 +185,8 @@ class TestAsyncMCPClient:
         mock_session.initialize.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("mcp_mesh.shared.mcp_client_proxy.streamablehttp_client")
-    @patch("mcp_mesh.shared.mcp_client_proxy.ClientSession")
+    @patch("mcp_mesh.engine.mcp_client_proxy.streamablehttp_client")
+    @patch("mcp_mesh.engine.mcp_client_proxy.ClientSession")
     async def test_client_call_tool(self, mock_session_class, mock_transport):
         """Test tool calling functionality."""
         # Setup mocks

@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 # Import all the existing exports
-from .decorator_registry import (
+from .engine.decorator_registry import (
     DecoratedFunction,
     DecoratorRegistry,
     clear_decorator_registry,

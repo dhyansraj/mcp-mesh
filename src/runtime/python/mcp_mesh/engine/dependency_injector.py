@@ -12,7 +12,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from ..signature_analyzer import get_mesh_agent_positions
+from .signature_analyzer import get_mesh_agent_positions
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ class DependencyInjector:
 
         # If not found in wrapper registry, search in decorator registry (all functions)
         try:
-            from ..decorator_registry import DecoratorRegistry
+            from .decorator_registry import DecoratorRegistry
 
             # Search through mesh tools (functions decorated with @mesh.tool)
             mesh_tools = DecoratorRegistry.get_mesh_tools()
@@ -225,7 +225,7 @@ class DependencyInjector:
 
         # Also list functions from decorator registry
         try:
-            from ..decorator_registry import DecoratorRegistry
+            from .decorator_registry import DecoratorRegistry
 
             mesh_tools = DecoratorRegistry.get_mesh_tools()
             for tool_name, decorated_func in mesh_tools.items():

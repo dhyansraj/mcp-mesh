@@ -1,9 +1,8 @@
 import logging
 from typing import Any
 
-from ...decorator_registry import DecoratorRegistry
-from ..shared import PipelineResult, PipelineStatus
-from ..shared import PipelineStep
+from ...engine.decorator_registry import DecoratorRegistry
+from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
 class ConfigurationStep(PipelineStep):

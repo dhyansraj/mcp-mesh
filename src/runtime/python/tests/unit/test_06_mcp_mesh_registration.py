@@ -486,7 +486,7 @@ class TestDependencyInjection:
         # The dependency injector should have been called to register the date_service proxy
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.shared.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -699,7 +699,7 @@ class TestDependencyInjection:
         # Verify DI was processed for all dependencies
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.shared.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -994,7 +994,7 @@ class TestDependencyInjection:
         # Verify DI was processed for all functions and their dependencies
         try:
             from mcp_mesh import DecoratorRegistry
-            from mcp_mesh.shared.dependency_injector import get_global_injector
+            from mcp_mesh.engine.dependency_injector import get_global_injector
 
             injector = get_global_injector()
 
@@ -1196,7 +1196,7 @@ class TestDependencyInjection:
             # Verify DI was processed for the agent class
             try:
                 from mcp_mesh import DecoratorRegistry
-                from mcp_mesh.shared.dependency_injector import get_global_injector
+                from mcp_mesh.engine.dependency_injector import get_global_injector
 
                 injector = get_global_injector()
 

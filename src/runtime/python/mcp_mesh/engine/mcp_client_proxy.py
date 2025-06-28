@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
-from .content_extractor import ContentExtractor
+from ..shared.content_extractor import ContentExtractor
 
 logger = logging.getLogger(__name__)
 

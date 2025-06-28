@@ -5,9 +5,9 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Optional
 
-from ...decorator_registry import DecoratorRegistry
+from ...engine.decorator_registry import DecoratorRegistry
+from ...engine.signature_analyzer import validate_mesh_dependencies
 from ...shared.support_types import HealthStatus, HealthStatusType
-from ...signature_analyzer import validate_mesh_dependencies
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
