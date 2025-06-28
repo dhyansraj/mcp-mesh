@@ -4,7 +4,7 @@ import os
 import socket
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

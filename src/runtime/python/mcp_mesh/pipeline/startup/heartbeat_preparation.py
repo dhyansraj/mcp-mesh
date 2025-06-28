@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from ...decorator_registry import DecoratorRegistry
 from ...shared.support_types import HealthStatus, HealthStatusType
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

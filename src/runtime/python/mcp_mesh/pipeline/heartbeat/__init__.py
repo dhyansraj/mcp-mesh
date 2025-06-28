@@ -10,7 +10,8 @@ from .dependency_resolution import DependencyResolutionStep
 from .heartbeat_orchestrator import HeartbeatOrchestrator
 from .heartbeat_pipeline import HeartbeatPipeline
 from .heartbeat_send import HeartbeatSendStep
-from .registry_connection import RegistryConnectionStep
+from .lifespan_integration import heartbeat_lifespan_task
+from ..shared import RegistryConnectionStep
 
 __all__ = [
     "RegistryConnectionStep",
@@ -18,4 +19,5 @@ __all__ = [
     "DependencyResolutionStep",
     "HeartbeatPipeline",
     "HeartbeatOrchestrator",
+    "heartbeat_lifespan_task",
 ]

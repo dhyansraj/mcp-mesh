@@ -5,7 +5,7 @@ import socket
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -230,10 +230,15 @@ class FastAPIServerSetupStep(PipelineStep):
                 heartbeat_task = None
                 if heartbeat_config:
                     import asyncio
-
-                    heartbeat_task = asyncio.create_task(
-                        self._heartbeat_lifespan_task(heartbeat_config)
-                    )
+                    
+                    # Get heartbeat task function from config to avoid cross-imports
+                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
+                    if heartbeat_task_fn:
+                        heartbeat_task = asyncio.create_task(
+                            heartbeat_task_fn(heartbeat_config)
+                        )
+                    else:
+                        self.logger.warning("⚠️ Heartbeat config provided but no heartbeat_task_fn found")
                     self.logger.info(
                         f"💓 Started heartbeat task in FastAPI lifespan with {heartbeat_config['interval']}s interval"
                     )
@@ -453,49 +458,6 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self.logger.error(f"Failed to start FastAPI server: {e}")
             raise
 
-    async def _heartbeat_lifespan_task(self, heartbeat_config: dict[str, Any]) -> None:
-        """Heartbeat task that runs in FastAPI lifespan using pipeline architecture."""
-        registry_wrapper = heartbeat_config["registry_wrapper"]
-        agent_id = heartbeat_config["agent_id"]
-        interval = heartbeat_config["interval"]
-        context = heartbeat_config["context"]
-
-        # Create heartbeat orchestrator for pipeline execution
-        from ..heartbeat import HeartbeatOrchestrator
-
-        heartbeat_orchestrator = HeartbeatOrchestrator()
-
-        self.logger.info(f"💓 Starting heartbeat pipeline task for agent '{agent_id}'")
-
-        try:
-            while True:
-                try:
-                    # Execute heartbeat pipeline
-                    success = await heartbeat_orchestrator.execute_heartbeat(
-                        registry_wrapper, agent_id, context
-                    )
-
-                    if not success:
-                        # Log failure but continue to next cycle (pipeline handles detailed logging)
-                        self.logger.debug(
-                            f"💔 Heartbeat pipeline failed for agent '{agent_id}' - continuing to next cycle"
-                        )
-
-                except Exception as e:
-                    # Log pipeline execution error but continue to next cycle for resilience
-                    self.logger.error(
-                        f"❌ Heartbeat pipeline execution error for agent '{agent_id}': {e}"
-                    )
-                    # Continue to next cycle - heartbeat should be resilient
-
-                # Wait for next heartbeat interval
-                await asyncio.sleep(interval)
-
-        except asyncio.CancelledError:
-            self.logger.info(
-                f"🛑 Heartbeat pipeline task cancelled for agent '{agent_id}'"
-            )
-            raise
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""

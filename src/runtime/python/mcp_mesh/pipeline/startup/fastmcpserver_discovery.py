@@ -3,7 +3,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

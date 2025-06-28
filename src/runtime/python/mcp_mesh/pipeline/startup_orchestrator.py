@@ -11,7 +11,7 @@ import os
 import sys
 from typing import Any, Optional
 
-from .heartbeat import RegistryConnectionStep
+from .shared import RegistryConnectionStep
 from .startup import (
     ConfigurationStep,
     DecoratorCollectionStep,

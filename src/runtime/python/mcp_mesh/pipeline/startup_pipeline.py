@@ -6,54 +6,11 @@ error handling and detailed logging.
 """
 
 import logging
-from datetime import UTC, datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
+
+from .shared import PipelineResult, PipelineStatus, PipelineStep
 
 logger = logging.getLogger(__name__)
-
-
-class PipelineStatus(Enum):
-    """Status of pipeline execution."""
-
-    SUCCESS = "success"
-    FAILED = "failed"
-    PARTIAL = "partial"
-    SKIPPED = "skipped"
-
-
-class PipelineResult:
-    """Result container for pipeline execution."""
-
-    def __init__(
-        self,
-        status: PipelineStatus = PipelineStatus.SUCCESS,
-        message: str = "",
-        context: Optional[dict[str, Any]] = None,
-        errors: Optional[list[str]] = None,
-    ):
-        self.status = status
-        self.message = message
-        self.context = context or {}
-        self.errors = errors or []
-        self.timestamp = datetime.now(UTC)
-
-    def add_error(self, error: str) -> None:
-        """Add an error to the result."""
-        self.errors.append(error)
-        if self.status == PipelineStatus.SUCCESS:
-            self.status = PipelineStatus.FAILED
-
-    def add_context(self, key: str, value: Any) -> None:
-        """Add context data to the result."""
-        self.context[key] = value
-
-    def is_success(self) -> bool:
-        """Check if the result represents success."""
-        return self.status == PipelineStatus.SUCCESS
-
-    def __str__(self) -> str:
-        return f"PipelineResult(status={self.status.value}, message='{self.message}', errors={len(self.errors)})"
 
 
 class MeshPipeline:
@@ -70,12 +27,12 @@ class MeshPipeline:
         self.logger = logging.getLogger(f"{__name__}.{name}")
         self.context: dict[str, Any] = {}
 
-    def add_step(self, step: "PipelineStep") -> None:
+    def add_step(self, step: PipelineStep) -> None:
         """Add a step to the pipeline."""
         self.steps.append(step)
         self.logger.debug(f"Added step: {step.name}")
 
-    def add_steps(self, steps: list["PipelineStep"]) -> None:
+    def add_steps(self, steps: list[PipelineStep]) -> None:
         """Add multiple steps to the pipeline."""
         for step in steps:
             self.add_step(step)
@@ -187,7 +144,7 @@ class MeshPipeline:
 
         return overall_result
 
-    def get_step(self, name: str) -> Optional["PipelineStep"]:
+    def get_step(self, name: str) -> Optional[PipelineStep]:
         """Get a step by name."""
         for step in self.steps:
             if step.name == name:

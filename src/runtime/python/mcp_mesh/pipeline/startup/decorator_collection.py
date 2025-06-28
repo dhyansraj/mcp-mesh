@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from ...decorator_registry import DecoratorRegistry
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 

@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, Optional
 
 from ...shared.registry_client_wrapper import RegistryClientWrapper
-from ..startup_pipeline import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus
 from .base_step import PipelineStep
 
 
@@ -48,6 +48,9 @@ class HeartbeatLoopStep(PipelineStep):
             agent_id = context.get("agent_id", "unknown-agent")
             heartbeat_interval = self._get_heartbeat_interval(agent_config)
 
+            # Import heartbeat task function 
+            from ..heartbeat import heartbeat_lifespan_task
+            
             # Store heartbeat config for FastAPI lifespan (don't start task in this event loop)
             result.add_context(
                 "heartbeat_config",
@@ -56,6 +59,7 @@ class HeartbeatLoopStep(PipelineStep):
                     "agent_id": agent_id,
                     "interval": heartbeat_interval,
                     "context": context,  # Pass full context for health status building
+                    "heartbeat_task_fn": heartbeat_lifespan_task,  # Pass function to avoid cross-imports
                 },
             )
 
