@@ -290,8 +290,8 @@ class DecoratorRegistry:
             except ValueError:
                 logger.warning("Invalid MCP_MESH_HTTP_PORT value, ignoring")
 
-        if "MCP_MESH_ENABLE_HTTP" in os.environ:
-            overrides["enable_http"] = os.environ["MCP_MESH_ENABLE_HTTP"].lower() in (
+        if "MCP_MESH_HTTP_ENABLED" in os.environ:
+            overrides["enable_http"] = os.environ["MCP_MESH_HTTP_ENABLED"].lower() in (
                 "true",
                 "1",
                 "yes",
@@ -365,7 +365,7 @@ class DecoratorRegistry:
             "name": None,  # Will be used for agent ID generation
             "version": "1.0.0",
             "description": None,
-            "http_host": "0.0.0.0",
+            "http_host": "localhost",
             "http_port": 0,  # Auto-assign
             "enable_http": True,
             "namespace": "default",
@@ -431,14 +431,14 @@ class DecoratorRegistry:
                     "name": metadata.get("agent_name"),
                     "tools": metadata.get("tools", []),
                     "enable_http": metadata.get("enable_http"),
-                    "http_host": metadata.get("http_host", "0.0.0.0"),
+                    "http_host": metadata.get("http_host", "localhost"),
                     "http_port": metadata.get("http_port", 0),
                 }
 
                 # Build endpoint from HTTP config if enabled
                 if metadata.get("enable_http"):
                     registry_metadata["endpoint"] = (
-                        f"http://{metadata.get('http_host', '0.0.0.0')}:{metadata.get('http_port', 8080)}"
+                        f"http://{metadata.get('http_host', 'localhost')}:{metadata.get('http_port', 8080)}"
                     )
 
                 return registry_metadata

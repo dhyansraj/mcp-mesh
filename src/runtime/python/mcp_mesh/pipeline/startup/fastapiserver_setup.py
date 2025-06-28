@@ -132,9 +132,10 @@ class FastAPIServerSetupStep(PipelineStep):
 
     def _resolve_binding_config(self, agent_config: dict[str, Any]) -> dict[str, Any]:
         """Resolve local server binding configuration."""
+        from mcp_mesh.shared.config_resolver import get_config_value, ValidationRule
 
-        # Local binding - always use 0.0.0.0 to bind to all interfaces
-        bind_host = "0.0.0.0"
+        # Local binding - HOST env var controls server binding (default: 0.0.0.0 for all interfaces)
+        bind_host = get_config_value("HOST", override=None, default="0.0.0.0", rule=ValidationRule.STRING_RULE)
 
         # Port from agent config or environment
         bind_port = int(os.getenv("MCP_MESH_HTTP_PORT", 0)) or agent_config.get(
@@ -151,7 +152,9 @@ class FastAPIServerSetupStep(PipelineStep):
     ) -> dict[str, Any]:
         """Resolve external advertisement configuration for registry."""
 
-        # External hostname - for registry advertisement
+        # External hostname - for registry advertisement (MCP_MESH_HTTP_HOST)
+        # This is what other agents will use to connect to this agent
+        # Examples: localhost (dev), mcp-mesh-hello-world (K8s service name)
         external_host = (
             os.getenv("MCP_MESH_HTTP_HOST")
             or os.getenv("POD_IP")

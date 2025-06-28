@@ -5,13 +5,13 @@ Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns
 """
 
 import logging
-import os
 import uuid
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 # Import from mcp_mesh for registry and runtime integration
 from mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +65,9 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
 
     if _SHARED_AGENT_ID is None:
         # Precedence: env var > agent_name > default "agent"
-        if "MCP_MESH_AGENT_NAME" in os.environ:
-            prefix = os.environ["MCP_MESH_AGENT_NAME"]
-        elif agent_name is not None:
-            prefix = agent_name
-        else:
-            prefix = "agent"
+        prefix = get_config_value(
+            "MCP_MESH_AGENT_NAME", override=agent_name, default="agent", rule=ValidationRule.STRING_RULE
+        )
 
         uuid_suffix = str(uuid.uuid4())[:8]
         _SHARED_AGENT_ID = f"{prefix}-{uuid_suffix}"
@@ -285,7 +282,7 @@ def agent(
     *,
     version: str = "1.0.0",
     description: str | None = None,
-    http_host: str = "0.0.0.0",
+    http_host: str | None = None,
     http_port: int = 0,
     enable_http: bool = True,
     namespace: str = "default",
@@ -309,7 +306,7 @@ def agent(
         http_port: HTTP server port (default: 0, means auto-assign)
             Environment variable: MCP_MESH_HTTP_PORT (takes precedence)
         enable_http: Enable HTTP endpoints (default: True)
-            Environment variable: MCP_MESH_ENABLE_HTTP (takes precedence)
+            Environment variable: MCP_MESH_HTTP_ENABLED (takes precedence)
         namespace: Agent namespace (default: "default")
             Environment variable: MCP_MESH_NAMESPACE (takes precedence)
         health_interval: Health check interval in seconds (default: 30)
@@ -323,7 +320,7 @@ def agent(
     Environment Variables:
         MCP_MESH_HTTP_HOST: Override http_host parameter (string)
         MCP_MESH_HTTP_PORT: Override http_port parameter (integer, 0-65535)
-        MCP_MESH_ENABLE_HTTP: Override enable_http parameter (boolean: true/false)
+        MCP_MESH_HTTP_ENABLED: Override enable_http parameter (boolean: true/false)
         MCP_MESH_NAMESPACE: Override namespace parameter (string)
         MCP_MESH_HEALTH_INTERVAL: Override health_interval parameter (integer, ≥1)
         MCP_MESH_AUTO_RUN: Override auto_run parameter (boolean: true/false)
@@ -362,8 +359,8 @@ def agent(
         if description is not None and not isinstance(description, str):
             raise ValueError("description must be a string")
 
-        if not isinstance(http_host, str):
-            raise ValueError("http_host must be a string")
+        if http_host is not None and not isinstance(http_host, str):
+            raise ValueError("http_host must be a string or None")
 
         if not isinstance(http_port, int):
             raise ValueError("http_port must be an integer")
@@ -389,79 +386,35 @@ def agent(
         if auto_run_interval < 1:
             raise ValueError("auto_run_interval must be at least 1 second")
 
-        # Get final values with environment variable precedence
-        final_http_host = os.environ.get("MCP_MESH_HTTP_HOST", http_host)
-
-        # Handle environment variable conversion and validation
-        env_http_port = os.environ.get("MCP_MESH_HTTP_PORT")
-        if env_http_port is not None:
-            try:
-                final_http_port = int(env_http_port)
-            except ValueError as e:
-                raise ValueError(
-                    "MCP_MESH_HTTP_PORT environment variable must be a valid integer"
-                ) from e
-
-            if not (0 <= final_http_port <= 65535):
-                raise ValueError("http_port must be between 0 and 65535")
-        else:
-            final_http_port = http_port
-
-        env_enable_http = os.environ.get("MCP_MESH_ENABLE_HTTP")
-        if env_enable_http is not None:
-            if env_enable_http.lower() in ("true", "1", "yes", "on"):
-                final_enable_http = True
-            elif env_enable_http.lower() in ("false", "0", "no", "off"):
-                final_enable_http = False
-            else:
-                raise ValueError(
-                    "MCP_MESH_ENABLE_HTTP environment variable must be a boolean value (true/false, 1/0, yes/no, on/off)"
-                )
-        else:
-            final_enable_http = enable_http
-
-        final_namespace = os.environ.get("MCP_MESH_NAMESPACE", namespace)
-
-        env_health_interval = os.environ.get("MCP_MESH_HEALTH_INTERVAL")
-        if env_health_interval is not None:
-            try:
-                final_health_interval = int(env_health_interval)
-            except ValueError as e:
-                raise ValueError(
-                    "MCP_MESH_HEALTH_INTERVAL environment variable must be a valid integer"
-                ) from e
-
-            if final_health_interval < 1:
-                raise ValueError("health_interval must be at least 1 second")
-        else:
-            final_health_interval = health_interval
-
-        env_auto_run = os.environ.get("MCP_MESH_AUTO_RUN")
-        if env_auto_run is not None:
-            if env_auto_run.lower() in ("true", "1", "yes", "on"):
-                final_auto_run = True
-            elif env_auto_run.lower() in ("false", "0", "no", "off"):
-                final_auto_run = False
-            else:
-                raise ValueError(
-                    "MCP_MESH_AUTO_RUN environment variable must be a boolean value (true/false, 1/0, yes/no, on/off)"
-                )
-        else:
-            final_auto_run = auto_run
-
-        env_auto_run_interval = os.environ.get("MCP_MESH_AUTO_RUN_INTERVAL")
-        if env_auto_run_interval is not None:
-            try:
-                final_auto_run_interval = int(env_auto_run_interval)
-            except ValueError as e:
-                raise ValueError(
-                    "MCP_MESH_AUTO_RUN_INTERVAL environment variable must be a valid integer"
-                ) from e
-
-            if final_auto_run_interval < 1:
-                raise ValueError("auto_run_interval must be at least 1 second")
-        else:
-            final_auto_run_interval = auto_run_interval
+        # Get final values with environment variable precedence using config resolver
+        # MCP_MESH_HTTP_HOST = Advertised hostname (for registry registration, not server binding)
+        final_http_host = get_config_value(
+            "MCP_MESH_HTTP_HOST", override=http_host, default="localhost", rule=ValidationRule.STRING_RULE
+        )
+        
+        final_http_port = get_config_value(
+            "MCP_MESH_HTTP_PORT", override=http_port, default=0, rule=ValidationRule.PORT_RULE
+        )
+        
+        final_enable_http = get_config_value(
+            "MCP_MESH_HTTP_ENABLED", override=enable_http, default=True, rule=ValidationRule.TRUTHY_RULE
+        )
+        
+        final_namespace = get_config_value(
+            "MCP_MESH_NAMESPACE", override=namespace, default="default", rule=ValidationRule.STRING_RULE
+        )
+        
+        final_health_interval = get_config_value(
+            "MCP_MESH_HEALTH_INTERVAL", override=health_interval, default=30, rule=ValidationRule.NONZERO_RULE
+        )
+        
+        final_auto_run = get_config_value(
+            "MCP_MESH_AUTO_RUN", override=auto_run, default=True, rule=ValidationRule.TRUTHY_RULE
+        )
+        
+        final_auto_run_interval = get_config_value(
+            "MCP_MESH_AUTO_RUN_INTERVAL", override=auto_run_interval, default=10, rule=ValidationRule.NONZERO_RULE
+        )
 
         # Build agent metadata
         metadata = {

@@ -462,7 +462,7 @@ class TestMeshAgentDecorator:
         assert metadata["name"] == "test-agent"
         assert metadata["version"] == "1.0.0"  # default
         assert metadata["description"] is None  # default
-        assert metadata["http_host"] == "0.0.0.0"  # default
+        assert metadata["http_host"] == "localhost"  # default
         assert metadata["http_port"] == 0  # default
         assert metadata["enable_http"] == True  # default
         assert metadata["namespace"] == "default"  # default
@@ -541,7 +541,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             metadata = PodIpAgent._mesh_agent_metadata
             # Check that the host is still what we configured
-            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_host"] == "localhost"
             assert metadata["http_port"] == 8080
 
     def test_mcp_mesh_http_host_service_name(self):
@@ -585,7 +585,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             metadata = DockerIpAgent._mesh_agent_metadata
             # Server should bind to 0.0.0.0 but POD_IP should be available for endpoint resolution
-            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_host"] == "localhost"
             assert metadata["http_port"] == 8080
 
     def test_kubernetes_service_host_detection(self):
@@ -609,7 +609,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             metadata = K8sAgent._mesh_agent_metadata
             # Should still bind to configured host
-            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_host"] == "localhost"
             assert metadata["http_port"] == 8080
 
     def test_combined_docker_environment_variables(self):
@@ -635,7 +635,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             metadata = DockerAgent._mesh_agent_metadata
             # Verify all configurations are applied correctly
-            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_host"] == "localhost"
             assert metadata["http_port"] == 8080
             assert metadata["namespace"] == "default"
 
@@ -662,7 +662,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             # This test verifies that the decorator properly configures the agent
             metadata = EndpointTestAgent._mesh_agent_metadata
-            assert metadata["http_host"] == "0.0.0.0"
+            assert metadata["http_host"] == "localhost"
             assert metadata["http_port"] == 8080
             assert metadata["enable_http"] == True
 
@@ -689,7 +689,7 @@ class TestMeshAgentHttpEndpointBehavior:
 
             metadata = StaticIpAgent._mesh_agent_metadata
             # Decorator should still use the configured values
-            assert metadata["http_host"] == "0.0.0.0"  # Server binding
+            assert metadata["http_host"] == "localhost"  # Advertisement default
             assert metadata["http_port"] == 8080
             # POD_IP should be available for endpoint resolution (tested in http_wrapper)
 
@@ -921,7 +921,7 @@ class TestMeshAgentEnvironmentVariables:
                 pass
 
             metadata = TestAgent._mesh_agent_metadata
-            assert metadata["http_host"] == "0.0.0.0"  # default value
+            assert metadata["http_host"] == "localhost"  # default value
 
     def test_http_port_environment_variable_precedence(self):
         """Test that MCP_MESH_HTTP_PORT environment variable takes precedence."""
@@ -1024,7 +1024,7 @@ class TestMeshAgentEnvironmentVariables:
             {
                 "MCP_MESH_HTTP_HOST": "example.com",
                 "MCP_MESH_HTTP_PORT": "8888",
-                "MCP_MESH_ENABLE_HTTP": "false",
+                "MCP_MESH_HTTP_ENABLED": "false",
                 "MCP_MESH_NAMESPACE": "prod-env",
                 "MCP_MESH_HEALTH_INTERVAL": "90",
             },
@@ -1151,14 +1151,14 @@ class TestMeshAgentEnvironmentVariables:
             assert TestAgentMin._mesh_agent_metadata["health_interval"] == 1
 
     def test_enable_http_environment_variable_precedence(self):
-        """Test that MCP_MESH_ENABLE_HTTP environment variable takes precedence."""
+        """Test that MCP_MESH_HTTP_ENABLED environment variable takes precedence."""
         from unittest.mock import patch
 
         import mesh
 
         # Test true values
         for true_value in ["true", "1", "yes", "on", "TRUE", "True"]:
-            with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": true_value}):
+            with patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": true_value}):
 
                 @mesh.agent(
                     name=f"test-agent-{true_value}", enable_http=False, auto_run=False
@@ -1171,7 +1171,7 @@ class TestMeshAgentEnvironmentVariables:
 
         # Test false values
         for false_value in ["false", "0", "no", "off", "FALSE", "False"]:
-            with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": false_value}):
+            with patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": false_value}):
 
                 @mesh.agent(
                     name=f"test-agent-{false_value}", enable_http=True, auto_run=False
@@ -1222,10 +1222,10 @@ class TestMeshAgentEnvironmentVariables:
 
         import mesh
 
-        with patch.dict("os.environ", {"MCP_MESH_ENABLE_HTTP": "invalid_value"}):
+        with patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": "invalid_value"}):
             with pytest.raises(
                 ValueError,
-                match="MCP_MESH_ENABLE_HTTP environment variable must be a boolean value",
+                match="MCP_MESH_HTTP_ENABLED environment variable must be a boolean value",
             ):
 
                 @mesh.agent(name="test-agent", auto_run=False)

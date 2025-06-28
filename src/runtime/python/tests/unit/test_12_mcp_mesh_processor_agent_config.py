@@ -154,7 +154,7 @@ class TestDecoratorProcessorAgentConfig:
 
             # Verify default values are used
             assert registration_data["version"] == "1.0.0"
-            assert registration_data["http_host"] == "0.0.0.0"
+            assert registration_data["http_host"] == "localhost"
             assert registration_data["http_port"] == 0
             assert registration_data["namespace"] == "default"
 
@@ -178,7 +178,7 @@ class TestDecoratorProcessorAgentConfig:
                 {
                     "MCP_MESH_HTTP_HOST": "env-host.com",
                     "MCP_MESH_HTTP_PORT": "7777",
-                    "MCP_MESH_ENABLE_HTTP": "false",
+                    "MCP_MESH_HTTP_ENABLED": "false",
                     "MCP_MESH_NAMESPACE": "env-namespace",
                 },
             ):

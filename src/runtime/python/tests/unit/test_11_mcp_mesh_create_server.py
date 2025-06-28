@@ -15,7 +15,7 @@ from mcp_mesh import DecoratorRegistry
 def disable_background_services():
     """Disable background services for all tests in this module."""
     with patch.dict(
-        os.environ, {"MCP_MESH_AUTO_RUN": "false", "MCP_MESH_ENABLE_HTTP": "false"}
+        os.environ, {"MCP_MESH_AUTO_RUN": "false", "MCP_MESH_HTTP_ENABLED": "false"}
     ):
         yield
 

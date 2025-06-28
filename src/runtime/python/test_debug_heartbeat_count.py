@@ -11,7 +11,7 @@ import mesh
 
 # Disable background services for this test
 # os.environ["MCP_MESH_AUTO_RUN"] = "false"
-# os.environ["MCP_MESH_ENABLE_HTTP"] = "false"
+# os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
 
 
 # from mcp.server.fastmcp import FastMCP

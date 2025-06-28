@@ -83,7 +83,7 @@ class TestDependencyInjectionMCP:
             os.environ,
             {
                 "MCP_MESH_AUTO_RUN": "false",
-                "MCP_MESH_ENABLE_HTTP": "false",
+                "MCP_MESH_HTTP_ENABLED": "false",
                 "MCP_MESH_HEALTH_INTERVAL": "0",
             },
         ):
