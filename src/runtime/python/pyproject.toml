@@ -119,6 +119,8 @@ extend-exclude = '''
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -145,7 +147,7 @@ ignore = [
     "F821",  # undefined name
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "**/agent_server_generated/**" = ["ALL"]  # Ignore all linting for generated files
 "**/registry_client_generated/**" = ["ALL"]  # Ignore all linting for generated files
