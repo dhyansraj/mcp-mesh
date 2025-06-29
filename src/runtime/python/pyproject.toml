@@ -82,18 +82,17 @@ Repository = "https://github.com/dhyansraj/mcp-mesh"
 Issues = "https://github.com/dhyansraj/mcp-mesh/issues"
 Discussions = "https://github.com/dhyansraj/mcp-mesh/discussions"
 
-[project.scripts]
-mcp-mesh = "mcp_mesh.cli:main"
-mesh = "mcp_mesh.cli:main"
+# No CLI scripts - this is a library package
+# Use the Go-based meshctl tool for CLI operations
 
 # Version is now static above, no need for dynamic extraction
 
 [tool.hatch.build.targets.wheel]
-packages = ["mcp_mesh", "mesh"]
+packages = ["_mcp_mesh", "mesh"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/mcp_mesh",
+    "/_mcp_mesh",
     "/mesh",
     "/README.md",
     "/LICENSE"
