@@ -278,14 +278,14 @@ clean-all-force:
 	@echo "🔪 Terminating any running mcp-mesh processes..."
 	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill -TERM 2>/dev/null || true
 	-pkill -f "mcp-mesh-registry" 2>/dev/null || true
-	-pkill -f "mcp-mesh-dev" 2>/dev/null || true
+	-pkill -f "meshctl" 2>/dev/null || true
 	@echo "⏳ Waiting for processes to terminate..."
 	@sleep 3
 	# Force kill if still running
 	@echo "🔨 Force killing any remaining processes..."
 	-ps aux | grep -E '[./]*bin/mcp-mesh-(registry|dev)' | grep -v grep | awk '{print $$2}' | xargs -r kill -KILL 2>/dev/null || true
 	-pkill -9 -f "mcp-mesh-registry" 2>/dev/null || true
-	-pkill -9 -f "mcp-mesh-dev" 2>/dev/null || true
+	-pkill -9 -f "meshctl" 2>/dev/null || true
 	@sleep 1
 	# Go build artifacts - with better error handling
 	@echo "🗑️  Removing build artifacts..."

@@ -5,24 +5,25 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
 )
 
 // Server represents the registry HTTP server
 type Server struct {
 	engine    *gin.Engine
-	service   *Service
+	service   *EntService
 	startTime time.Time
-	handlers  *BusinessLogicHandlers
+	handlers  *EntBusinessLogicHandlers
 }
 
-// NewServer creates a new registry server using generated OpenAPI handlers
-func NewServer(db *database.Database, config *RegistryConfig) *Server {
-	// Create service
-	service := NewService(db, config)
+// NewServer creates a new registry server using Ent database
+func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) *Server {
+	// Create Ent-based service
+	entService := NewEntService(entDB, config, logger)
 
-	// Create business logic handlers that implement the generated interface
-	handlers := NewBusinessLogicHandlers(service)
+	// Create Ent-based business logic handlers
+	handlers := NewEntBusinessLogicHandlers(entService)
 
 	// Create Gin engine
 	engine := gin.New()
@@ -32,21 +33,13 @@ func NewServer(db *database.Database, config *RegistryConfig) *Server {
 	// Create server
 	server := &Server{
 		engine:    engine,
-		service:   service,
+		service:   entService,
 		startTime: time.Now(),
 		handlers:  handlers,
 	}
 
 	// Setup routes using generated interface
 	server.SetupGeneratedRoutes()
-
-	// Setup additional decorator-based routes (until OpenAPI generation supports them)
-	server.SetupDecoratorRoutes()
-
-	// Create and start health monitor (temporarily disabled due to field conflicts)
-	// healthMonitor := NewHealthMonitor(service, 10*time.Second)
-	// service.healthMonitor = healthMonitor
-	// go healthMonitor.Start()
 
 	return server
 }
@@ -85,11 +78,4 @@ func (s *Server) SetupGeneratedRoutes() {
 
 	// Register all routes from OpenAPI spec
 	generated.RegisterHandlers(s.engine, &wrapper)
-}
-
-// SetupDecoratorRoutes configures decorator-based endpoints
-// These will be integrated into OpenAPI spec once the generator supports complex schemas
-func (s *Server) SetupDecoratorRoutes() {
-	// Decorator endpoints removed - using standard OpenAPI endpoints only
-	// All registration now goes through /agents/register and /heartbeat
 }

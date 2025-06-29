@@ -38,7 +38,8 @@ type Config struct {
 	AllowedHeaders []string `env:"ALLOWED_HEADERS" envDefault:"*"`
 
 	// Logging configuration
-	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
+	LogLevel  string `env:"MCP_MESH_LOG_LEVEL" envDefault:"INFO"`
+	DebugMode bool   `env:"MCP_MESH_DEBUG_MODE" envDefault:"false"`
 	AccessLog bool   `env:"ACCESS_LOG" envDefault:"true"`
 
 	// Feature flags
@@ -63,7 +64,8 @@ func LoadFromEnv() *Config {
 		AllowedOrigins:           getEnvStringSlice("ALLOWED_ORIGINS", []string{"*"}),
 		AllowedMethods:           getEnvStringSlice("ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),
 		AllowedHeaders:           getEnvStringSlice("ALLOWED_HEADERS", []string{"*"}),
-		LogLevel:                 getEnvString("LOG_LEVEL", "info"),
+		LogLevel:                 getEnvString("MCP_MESH_LOG_LEVEL", "INFO"),
+		DebugMode:                getEnvBool("MCP_MESH_DEBUG_MODE", false),
 		AccessLog:                getEnvBool("ACCESS_LOG", true),
 		EnableMetrics:            getEnvBool("ENABLE_METRICS", true),
 		EnablePrometheus:         getEnvBool("ENABLE_PROMETHEUS", true),
@@ -102,15 +104,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("cache TTL must be non-negative: %d", c.CacheTTL)
 	}
 
-	// Validate log level
+	// Validate log level (case insensitive)
 	validLogLevels := map[string]bool{
-		"debug": true,
-		"info":  true,
-		"warn":  true,
-		"error": true,
+		"DEBUG":    true,
+		"INFO":     true,
+		"WARNING":  true,
+		"ERROR":    true,
+		"CRITICAL": true,
 	}
-	if !validLogLevels[strings.ToLower(c.LogLevel)] {
-		return fmt.Errorf("invalid log level: %s", c.LogLevel)
+	upperLogLevel := strings.ToUpper(c.LogLevel)
+	if !validLogLevels[upperLogLevel] {
+		return fmt.Errorf("invalid log level: %s (valid: DEBUG, INFO, WARNING, ERROR, CRITICAL)", c.LogLevel)
+	}
+
+	// If debug mode is enabled, force log level to DEBUG
+	if c.DebugMode {
+		c.LogLevel = "DEBUG"
 	}
 
 	return nil
@@ -130,6 +139,37 @@ func (c *Config) IsProduction() bool {
 // IsDevelopment determines if running in development mode
 func (c *Config) IsDevelopment() bool {
 	return !c.IsProduction()
+}
+
+// IsDebugMode determines if debug mode is enabled
+func (c *Config) IsDebugMode() bool {
+	return c.DebugMode || strings.ToUpper(c.LogLevel) == "DEBUG"
+}
+
+// ShouldLogAtLevel checks if messages at the given level should be logged
+func (c *Config) ShouldLogAtLevel(level string) bool {
+	levelPriority := map[string]int{
+		"DEBUG":    0,
+		"INFO":     1,
+		"WARNING":  2,
+		"ERROR":    3,
+		"CRITICAL": 4,
+	}
+
+	currentLevel := strings.ToUpper(c.LogLevel)
+	checkLevel := strings.ToUpper(level)
+
+	currentPriority, exists := levelPriority[currentLevel]
+	if !exists {
+		currentPriority = 1 // Default to INFO
+	}
+
+	checkPriority, exists := levelPriority[checkLevel]
+	if !exists {
+		return false
+	}
+
+	return checkPriority >= currentPriority
 }
 
 // Helper functions for environment variable parsing
