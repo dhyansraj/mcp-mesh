@@ -34,16 +34,16 @@ jobs:
           pip install -e .[dev]
 
       - name: Run ruff linting
-        run: ruff check src/mcp_mesh tests
+        run: ruff check _mcp_mesh tests
 
       - name: Run ruff formatting check
-        run: ruff format --check src/mcp_mesh tests
+        run: ruff format --check _mcp_mesh tests
 
       - name: Run black formatting check
-        run: black --check src/mcp_mesh tests
+        run: black --check _mcp_mesh tests
 
       - name: Run isort import sorting check
-        run: isort --check-only src/mcp_mesh tests
+        run: isort --check-only _mcp_mesh tests
 
   type-check:
     name: Type Checking
@@ -67,7 +67,7 @@ jobs:
           pip install -e .[dev]
 
       - name: Run mypy type checking
-        run: mypy src/mcp_mesh
+        run: mypy _mcp_mesh
 
   test:
     name: Test Suite
@@ -99,7 +99,7 @@ jobs:
         if: matrix.test-group == 'unit'
         run: |
           pytest tests/unit/ -v \
-            --cov=src/mcp_mesh \
+            --cov=_mcp_mesh \
             --cov-report=xml \
             --cov-report=term-missing \
             --junit-xml=test-results-unit-${{ matrix.python-version }}.xml
@@ -142,8 +142,8 @@ jobs:
 
       - name: Run bandit security scan
         run: |
-          bandit -r src/mcp_mesh/ -f json -o bandit-report.json || true
-          bandit -r src/mcp_mesh/ -f txt
+          bandit -r _mcp_mesh/ -f json -o bandit-report.json || true
+          bandit -r _mcp_mesh/ -f txt
 
       - name: Upload security scan results
         uses: actions/upload-artifact@v4
@@ -179,7 +179,8 @@ jobs:
         run: |
           cp ../../src/runtime/python/README.md .
           cp ../../LICENSE .
-          cp -r ../../src/runtime/python/src .
+          cp -r ../../src/runtime/python/_mcp_mesh .
+          cp -r ../../src/runtime/python/mesh .
 
       - name: Build package
         run: python -m build

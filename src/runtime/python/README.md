@@ -12,7 +12,9 @@ pip install mcp-mesh
 
 ```python
 import mesh
-from mcp_mesh import McpMeshAgent
+
+# Import types from public API
+from mesh.types import McpMeshAgent
 
 # Define your agent
 @mesh.agent(name="hello-world", http_port=9090)
@@ -56,6 +58,15 @@ The runtime can be configured via environment variables:
 - `MCP_MESH_ENABLED`: Enable/disable runtime (default: "true")
 - `MCP_MESH_REGISTRY_URL`: Registry URL (default: "http://localhost:8080")
 - `MCP_MESH_AGENT_NAME`: Custom agent name (auto-generated if not set)
+
+## API Architecture
+
+MCP Mesh uses a clear separation between public and private APIs:
+
+- **`mesh`** - Public user API for decorators and types
+- **`_mcp_mesh`** - Private internal implementation (do not import directly)
+
+The underscore prefix on `_mcp_mesh` follows Python conventions to indicate internal/private packages. Users should only import from the `mesh` package to ensure compatibility across versions.
 
 ## Documentation
 

@@ -197,9 +197,9 @@ coverage.xml
 node_modules/
 
 
-# Stray command files
-pip
-python
+# Stray command files (in project root only)
+/pip
+/python
 
 # Test installation artifacts
 test-install/

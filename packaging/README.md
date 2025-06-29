@@ -156,6 +156,7 @@ gh workflow run release.yml -f version=v1.0.1 -f environment=test
 ```
 
 **Benefits:**
+
 - Preserves original release timestamp and history
 - No need to delete and recreate GitHub releases
 - Allows iterative fixes without losing release context

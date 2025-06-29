@@ -1,0 +1,15 @@
+# Skip packaging files - we use this as part of our main package
+pyproject.toml
+setup.py
+setup.cfg
+requirements.txt
+test-requirements.txt
+README.md
+tox.ini
+.travis.yml
+.gitlab-ci.yml
+.github/
+git_push.sh
+.gitignore
+test/
+docs/

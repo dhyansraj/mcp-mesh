@@ -15,8 +15,8 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
-// mockHandler simulates the register agent handler for testing JSON parsing
-func mockRegisterAgentHandler(c *gin.Context) {
+// mockHandler simulates the heartbeat handler for testing JSON parsing
+func mockHeartbeatHandler(c *gin.Context) {
 	// This handler tests the JSON parsing layer only
 	var req generated.MeshAgentRegistration
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -34,11 +34,11 @@ func mockRegisterAgentHandler(c *gin.Context) {
 	response := generated.MeshRegistrationResponse{
 		Status:    generated.Success,
 		Timestamp: time.Now(),
-		Message:   "Agent registration parsed successfully",
+		Message:   "Agent heartbeat parsed successfully",
 		AgentId:   req.AgentId,
 	}
 
-	c.JSON(http.StatusCreated, response)
+	c.JSON(http.StatusOK, response)
 }
 
 // mockHealthHandler simulates the health handler
@@ -59,7 +59,7 @@ func setupMinimalServer() *gin.Engine {
 	router := gin.New()
 
 	// Register minimal handlers that focus on JSON parsing
-	router.POST("/agents/register", mockRegisterAgentHandler)
+	router.POST("/heartbeat", mockHeartbeatHandler)
 	router.GET("/health", mockHealthHandler)
 
 	return router
@@ -76,7 +76,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 		require.NoError(t, err, "Failed to load test JSON file")
 
 		// Create HTTP request
-		req, err := http.NewRequest("POST", "/agents/register", bytes.NewBuffer(jsonData))
+		req, err := http.NewRequest("POST", "/heartbeat", bytes.NewBuffer(jsonData))
 		require.NoError(t, err, "Failed to create HTTP request")
 		req.Header.Set("Content-Type", "application/json")
 
@@ -87,7 +87,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		// Validate response
-		assert.Equal(t, http.StatusCreated, w.Code, "Should return 201 Created")
+		assert.Equal(t, http.StatusOK, w.Code, "Should return 200 OK")
 		assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
 
 		// Parse response body
@@ -100,7 +100,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 		assert.Equal(t, generated.Success, response.Status)
 		assert.Contains(t, response.Message, "parsed successfully")
 
-		t.Logf("✅ SUCCESS: HTTP POST /agents/register with JSON file")
+		t.Logf("✅ SUCCESS: HTTP POST /heartbeat with JSON file")
 		t.Logf("📄 Loaded JSON file: multiple_functions_request.json")
 		t.Logf("📨 HTTP Status: %d", w.Code)
 		t.Logf("🎯 Response AgentId: %s", response.AgentId)
@@ -128,7 +128,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 				require.NoError(t, err, "Failed to load %s", testCase.filename)
 
 				// Create HTTP request
-				req, err := http.NewRequest("POST", "/agents/register", bytes.NewBuffer(jsonData))
+				req, err := http.NewRequest("POST", "/heartbeat", bytes.NewBuffer(jsonData))
 				require.NoError(t, err, "Failed to create HTTP request")
 				req.Header.Set("Content-Type", "application/json")
 
@@ -139,7 +139,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 				router.ServeHTTP(w, req)
 
 				// Validate response
-				assert.Equal(t, http.StatusCreated, w.Code, "Should return 201 Created")
+				assert.Equal(t, http.StatusOK, w.Code, "Should return 200 OK")
 
 				// Parse response body
 				var response generated.MeshRegistrationResponse
@@ -161,7 +161,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 		// Create malformed JSON
 		invalidJSON := `{"agent_id": "test", "tools": [`
 
-		req, err := http.NewRequest("POST", "/agents/register", bytes.NewBufferString(invalidJSON))
+		req, err := http.NewRequest("POST", "/heartbeat", bytes.NewBufferString(invalidJSON))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
@@ -244,14 +244,14 @@ func TestJSONParsingDetails(t *testing.T) {
 
 		// Now send via HTTP to validate full round-trip
 		router := setupMinimalServer()
-		req, err := http.NewRequest("POST", "/agents/register", bytes.NewBuffer(jsonData))
+		req, err := http.NewRequest("POST", "/heartbeat", bytes.NewBuffer(jsonData))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusCreated, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response generated.MeshRegistrationResponse
 		err = json.Unmarshal(w.Body.Bytes(), &response)

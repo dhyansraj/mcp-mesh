@@ -74,85 +74,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/RootResponse"
 
-  /agents/register:
-    post:
-      tags: [agents]
-      summary: Register agent with registry
-      description: |
-        Register a new agent or update existing agent registration.
-
-        🤖 AI CRITICAL CONTRACT:
-        - Request format is FIXED - do not modify without user approval
-        - Both Go and Python must accept this exact format
-        - Response must include agent_id for heartbeat correlation
-        - Uses flattened structure with tools array for @mesh.tool based agents
-      operationId: registerAgent
-      requestBody:
-        required: true
-        description: Agent registration data
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MeshAgentRegistration"
-            examples:
-              minimal_agent:
-                summary: Minimal agent registration
-                value:
-                  agent_id: "hello-world"
-                  tools:
-                    - function_name: "greet"
-                      capability: "greeting"
-
-              full_agent:
-                summary: Complete agent with multiple tools and dependencies
-                value:
-                  agent_id: "multi-service-agent"
-                  agent_type: "mcp_agent"
-                  name: "multi-service-agent"
-                  version: "2.0.0"
-                  namespace: "production"
-                  http_host: "0.0.0.0"
-                  http_port: 8080
-                  timestamp: "2024-01-20T10:30:45Z"
-                  tools:
-                    - function_name: "smart_greet"
-                      capability: "personalized_greeting"
-                      version: "1.0.0"
-                      tags: ["demo", "v1"]
-                      dependencies:
-                        - capability: "date_service"
-                          tags: ["system"]
-                          version: ">=1.0.0"
-                          namespace: "default"
-                      description: "Greeting function with date dependency"
-                    - function_name: "get_weather"
-                      capability: "weather_report"
-                      dependencies:
-                        - capability: "weather_service"
-                        - capability: "location_service"
-      responses:
-        "201":
-          description: Agent registered successfully
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MeshRegistrationResponse"
-        "400":
-          description: Invalid registration data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
   /heartbeat:
     post:
       tags: [agents]
-      summary: Send agent heartbeat
+      summary: Agent registration and heartbeat
       description: |
-        Send periodic heartbeat to maintain agent registration and get dependency updates.
+        Register agent and send periodic heartbeat to maintain registration and get dependency updates.
 
         🤖 AI CRITICAL CONTRACT:
-        - Uses same format as /agents/register for passive registry design
+        - Serves as both initial registration and periodic heartbeat
         - Enables late registration when registry comes online after agent startup
         - Response includes dependencies_resolved for dependency injection updates
         - Agents work standalone when registry is down, register via heartbeat when available
@@ -421,7 +351,7 @@ components:
           type: array
           items:
             type: string
-          example: ["/health", "/heartbeat", "/agents", "/agents/register"]
+          example: ["/health", "/heartbeat", "/agents"]
           description: Available API endpoints
 
     # Agent registration schemas

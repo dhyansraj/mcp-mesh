@@ -53,94 +53,12 @@ func (h *BusinessLogicHandlers) GetRoot(c *gin.Context) {
 		Service:   "mcp-mesh-registry",
 		Version:   "1.0.0",
 		Status:    "running",
-		Endpoints: []string{"/health", "/heartbeat", "/agents", "/agents/register"},
+		Endpoints: []string{"/health", "/heartbeat", "/agents"},
 	}
 
 	c.JSON(http.StatusOK, response)
 }
 
-// RegisterAgent implements POST /agents/register
-func (h *BusinessLogicHandlers) RegisterAgent(c *gin.Context) {
-	var req generated.MeshAgentRegistration
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now(),
-		})
-		return
-	}
-
-	// Convert generated.MeshAgentRegistration to service.AgentRegistrationRequest
-	serviceReq := &AgentRegistrationRequest{
-		AgentID:   req.AgentId,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Metadata:  ConvertMeshAgentRegistrationToMap(req),
-	}
-	if req.Timestamp != nil {
-		serviceReq.Timestamp = req.Timestamp.Format(time.RFC3339)
-	}
-
-	// Call the actual service registration logic
-	serviceResp, err := h.service.RegisterAgent(serviceReq)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     err.Error(),
-			Timestamp: time.Now(),
-		})
-		return
-	}
-
-	// Convert service response to generated response format
-	response := generated.MeshRegistrationResponse{
-		Status:    generated.MeshRegistrationResponseStatus(serviceResp.Status),
-		Timestamp: time.Now(),
-		Message:   serviceResp.Message,
-		AgentId:   serviceResp.AgentID,
-	}
-
-	// Include dependency resolution if available
-	if serviceResp.DependenciesResolved != nil {
-		depsMap := make(map[string][]struct {
-			AgentId      string                                                       `json:"agent_id"`
-			Capability   string                                                       `json:"capability"`
-			Endpoint     string                                                       `json:"endpoint"`
-			FunctionName string                                                       `json:"function_name"`
-			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-		})
-
-		for functionName, deps := range serviceResp.DependenciesResolved {
-			if len(deps) > 0 {
-				depsList := make([]struct {
-					AgentId      string                                                       `json:"agent_id"`
-					Capability   string                                                       `json:"capability"`
-					Endpoint     string                                                       `json:"endpoint"`
-					FunctionName string                                                       `json:"function_name"`
-					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-				}, len(deps))
-
-				for i, dep := range deps {
-					depsList[i] = struct {
-						AgentId      string                                                       `json:"agent_id"`
-						Capability   string                                                       `json:"capability"`
-						Endpoint     string                                                       `json:"endpoint"`
-						FunctionName string                                                       `json:"function_name"`
-						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-					}{
-						AgentId:      dep.AgentID,
-						Capability:   dep.Capability,
-						Endpoint:     dep.Endpoint,
-						FunctionName: dep.FunctionName,
-						Status:       generated.MeshRegistrationResponseDependenciesResolvedStatus(dep.Status),
-					}
-				}
-				depsMap[functionName] = depsList
-			}
-		}
-		response.DependenciesResolved = &depsMap
-	}
-
-	c.JSON(http.StatusCreated, response)
-}
 
 // SendHeartbeat implements POST /heartbeat
 func (h *BusinessLogicHandlers) SendHeartbeat(c *gin.Context) {

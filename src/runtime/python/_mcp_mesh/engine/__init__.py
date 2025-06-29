@@ -1,0 +1,87 @@
+"""Engine components for MCP Mesh.
+
+Contains core mesh processing infrastructure:
+- HTTP transport capabilities
+- Dependency injection system
+- MCP client proxies for cross-service communication
+- Self-dependency proxies for local calls
+- Decorator registry for mesh decorators
+- Function signature analysis
+"""
+
+# Avoid circular imports by using lazy loading
+__all__ = [
+    # HTTP infrastructure
+    "HttpMcpWrapper",
+    "HttpConfig",
+    # Dependency injection
+    "DependencyInjector",
+    "get_global_injector",
+    # MCP client proxies
+    "MCPClientProxy",
+    "AsyncMCPClient",
+    # Self-dependency proxy
+    "SelfDependencyProxy",
+    # Decorator registry
+    "DecoratorRegistry",
+    # Signature analysis
+    "get_mesh_agent_positions",
+    "get_mesh_agent_parameter_names",
+    "validate_mesh_dependencies",
+]
+
+
+def __getattr__(name):
+    """Lazy import to avoid circular dependencies."""
+    # HTTP infrastructure
+    if name == "HttpMcpWrapper":
+        from .http_wrapper import HttpMcpWrapper
+
+        return HttpMcpWrapper
+    elif name == "HttpConfig":
+        from .http_wrapper import HttpConfig
+
+        return HttpConfig
+    # Dependency injection
+    elif name == "DependencyInjector":
+        from .dependency_injector import DependencyInjector
+
+        return DependencyInjector
+    elif name == "get_global_injector":
+        from .dependency_injector import get_global_injector
+
+        return get_global_injector
+    # MCP client proxies
+    elif name == "MCPClientProxy":
+        from .mcp_client_proxy import MCPClientProxy
+
+        return MCPClientProxy
+    elif name == "AsyncMCPClient":
+        from .mcp_client_proxy import AsyncMCPClient
+
+        return AsyncMCPClient
+    # Self-dependency proxy
+    elif name == "SelfDependencyProxy":
+        from .self_dependency_proxy import SelfDependencyProxy
+
+        return SelfDependencyProxy
+    # Decorator registry
+    elif name == "DecoratorRegistry":
+        from .decorator_registry import DecoratorRegistry
+
+        return DecoratorRegistry
+    # Signature analysis
+    elif name == "get_mesh_agent_positions":
+        from .signature_analyzer import get_mesh_agent_positions
+
+        return get_mesh_agent_positions
+    elif name == "get_mesh_agent_parameter_names":
+        from .signature_analyzer import get_mesh_agent_parameter_names
+
+        return get_mesh_agent_parameter_names
+    elif name == "validate_mesh_dependencies":
+        from .signature_analyzer import validate_mesh_dependencies
+
+        return validate_mesh_dependencies
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
