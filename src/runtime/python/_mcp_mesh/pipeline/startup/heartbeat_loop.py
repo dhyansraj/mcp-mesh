@@ -3,6 +3,7 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
+from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -32,39 +33,43 @@ class HeartbeatLoopStep(PipelineStep):
         try:
             # Get configuration
             agent_config = context.get("agent_config", {})
-            registry_wrapper = context.get("registry_wrapper")
 
             # Get agent ID and heartbeat interval configuration
             agent_id = context.get("agent_id", "unknown-agent")
-            heartbeat_interval = self._get_heartbeat_interval(agent_config)
+            heartbeat_interval = agent_config.get("health_interval", 30)
+
+            # Check for explicit standalone mode configuration
+            standalone_mode = self._get_standalone_mode()
 
             # Import heartbeat task function
             from ..heartbeat import heartbeat_lifespan_task
 
-            # Create heartbeat config for standalone mode (registry_wrapper may be None)
+            # Create heartbeat config - registry connection will be attempted in heartbeat pipeline
             heartbeat_config = {
-                "registry_wrapper": registry_wrapper,  # May be None in standalone mode
+                "registry_wrapper": None,  # Will be created in heartbeat pipeline
                 "agent_id": agent_id,
                 "interval": heartbeat_interval,
                 "context": context,  # Pass full context for health status building
                 "heartbeat_task_fn": heartbeat_lifespan_task,  # Pass function to avoid cross-imports
-                "standalone_mode": registry_wrapper is None,
+                "standalone_mode": standalone_mode,
             }
 
             # Store heartbeat config for FastAPI lifespan
             result.add_context("heartbeat_config", heartbeat_config)
 
-            if registry_wrapper:
+            if standalone_mode:
+                result.message = (
+                    "Heartbeat disabled for standalone mode (no registry communication)"
+                )
+                self.logger.info(
+                    "💓 Heartbeat disabled for standalone mode - no registry communication"
+                )
+            else:
                 result.message = (
                     f"Heartbeat config prepared (interval: {heartbeat_interval}s)"
                 )
                 self.logger.info(
-                    f"💓 Heartbeat config prepared for FastAPI lifespan with {heartbeat_interval}s interval"
-                )
-            else:
-                result.message = f"Heartbeat config prepared for standalone mode (interval: {heartbeat_interval}s, no registry)"
-                self.logger.info(
-                    f"💓 Heartbeat config prepared for standalone mode - {heartbeat_interval}s interval (no registry communication)"
+                    f"💓 Heartbeat config prepared for FastAPI lifespan with {heartbeat_interval}s interval (registry connection in heartbeat pipeline)"
                 )
 
         except Exception as e:
@@ -75,23 +80,8 @@ class HeartbeatLoopStep(PipelineStep):
 
         return result
 
-    def _get_heartbeat_interval(self, agent_config: dict[str, Any]) -> int:
-        """Get heartbeat interval from configuration sources."""
-
-        # Priority order: ENV > agent_config > default
-        env_interval = os.getenv("MCP_MESH_HEARTBEAT_INTERVAL")
-        if env_interval:
-            try:
-                return int(env_interval)
-            except ValueError:
-                self.logger.warning(
-                    f"Invalid MCP_MESH_HEARTBEAT_INTERVAL: {env_interval}"
-                )
-
-        # Check agent config
-        health_interval = agent_config.get("health_interval")
-        if health_interval:
-            return int(health_interval)
-
-        # Default to 30 seconds
-        return 30
+    def _get_standalone_mode(self) -> bool:
+        """Check if standalone mode is explicitly enabled."""
+        return get_config_value(
+            "MCP_MESH_STANDALONE", default=False, rule=ValidationRule.TRUTHY_RULE
+        )

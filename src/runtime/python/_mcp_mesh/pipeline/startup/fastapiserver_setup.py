@@ -49,48 +49,52 @@ class FastAPIServerSetupStep(PipelineStep):
             # Get heartbeat config for lifespan integration
             heartbeat_config = context.get("heartbeat_config")
 
-            # Create FastAPI application with proper FastMCP lifespan integration
-            fastapi_app = self._create_fastapi_app(
-                agent_config, fastmcp_servers, heartbeat_config
-            )
-
-            # Add K8s health endpoints
-            self._add_k8s_endpoints(fastapi_app, agent_config, {})
-
-            # Create HTTP wrappers for FastMCP servers (instead of direct mounting)
+            # Create HTTP wrappers for FastMCP servers FIRST (so we can use their lifespans)
             mcp_wrappers = {}
             if fastmcp_servers:
                 for server_key, server_instance in fastmcp_servers.items():
                     try:
-                        # Create HttpMcpWrapper for proper MCP protocol handling
-                        from ...engine.http_wrapper import HttpConfig, HttpMcpWrapper
+                        # Create HttpMcpWrapper for FastMCP app creation and mounting
+                        from ...engine.http_wrapper import HttpMcpWrapper
 
-                        # Use wrapper config - it will create its own FastAPI app
-                        http_config = HttpConfig(
-                            host=binding_config["bind_host"],
-                            port=binding_config["bind_port"],
-                        )
-
-                        mcp_wrapper = HttpMcpWrapper(server_instance, http_config)
+                        mcp_wrapper = HttpMcpWrapper(server_instance)
                         await mcp_wrapper.setup()
-
-                        # Add MCP endpoints to our main FastAPI app
-                        self._integrate_mcp_wrapper(
-                            fastapi_app, mcp_wrapper, server_key
-                        )
 
                         mcp_wrappers[server_key] = {
                             "wrapper": mcp_wrapper,
                             "server_instance": server_instance,
                         }
                         self.logger.info(
-                            f"🔌 Integrated MCP wrapper for FastMCP server '{server_key}'"
+                            f"🔌 Created MCP wrapper for FastMCP server '{server_key}'"
                         )
                     except Exception as e:
                         self.logger.error(
                             f"❌ Failed to create MCP wrapper for server '{server_key}': {e}"
                         )
                         result.add_error(f"Failed to wrap server '{server_key}': {e}")
+
+            # Create FastAPI application with proper FastMCP lifespan integration (AFTER wrappers)
+            fastapi_app = self._create_fastapi_app(
+                agent_config, fastmcp_servers, heartbeat_config, mcp_wrappers
+            )
+
+            # Add K8s health endpoints
+            self._add_k8s_endpoints(fastapi_app, agent_config, mcp_wrappers)
+
+            # Integrate MCP wrappers into the main FastAPI app
+            for server_key, wrapper_data in mcp_wrappers.items():
+                try:
+                    mcp_wrapper = wrapper_data["wrapper"]
+                    # Add MCP endpoints to our main FastAPI app
+                    self._integrate_mcp_wrapper(fastapi_app, mcp_wrapper, server_key)
+                    self.logger.info(
+                        f"🔌 Integrated MCP wrapper for FastMCP server '{server_key}'"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"❌ Failed to integrate MCP wrapper for server '{server_key}': {e}"
+                    )
+                    result.add_error(f"Failed to integrate server '{server_key}': {e}")
 
             # Store results in context (app prepared, but server not started yet)
             result.add_context("fastapi_app", fastapi_app)
@@ -131,12 +135,10 @@ class FastAPIServerSetupStep(PipelineStep):
 
     def _resolve_binding_config(self, agent_config: dict[str, Any]) -> dict[str, Any]:
         """Resolve local server binding configuration."""
-        from _mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
+        from ...shared.host_resolver import HostResolver
 
-        # Local binding - HOST env var controls server binding (default: 0.0.0.0 for all interfaces)
-        bind_host = get_config_value(
-            "HOST", override=None, default="0.0.0.0", rule=ValidationRule.STRING_RULE
-        )
+        # Use centralized binding host resolution (always 0.0.0.0 for all interfaces)
+        bind_host = HostResolver.get_binding_host()
 
         # Port from agent config or environment
         bind_port = int(os.getenv("MCP_MESH_HTTP_PORT", 0)) or agent_config.get(
@@ -152,17 +154,12 @@ class FastAPIServerSetupStep(PipelineStep):
         self, agent_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Resolve external advertisement configuration for registry."""
+        from ...shared.host_resolver import HostResolver
 
-        # External hostname - for registry advertisement (MCP_MESH_HTTP_HOST)
-        # This is what other agents will use to connect to this agent
-        # Examples: localhost (dev), mcp-mesh-hello-world (K8s service name)
-        external_host = (
-            os.getenv("MCP_MESH_HTTP_HOST")
-            or os.getenv("POD_IP")
-            or self._auto_detect_external_ip()
-        )
+        # Use centralized host resolution for external hostname
+        external_host = HostResolver.get_external_host()
 
-        # Full endpoint override
+        # Full endpoint override (if provided)
         external_endpoint = os.getenv("MCP_MESH_HTTP_ENDPOINT")
 
         return {
@@ -170,31 +167,14 @@ class FastAPIServerSetupStep(PipelineStep):
             "external_endpoint": external_endpoint,  # May be None - will build dynamically
         }
 
-    def _auto_detect_external_ip(self) -> str:
-        """Auto-detect external IP address for advertisement."""
-        try:
-            import socket
-
-            # Try to get the IP that would be used to reach external hosts
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                self.logger.debug(f"Auto-detected external IP: {local_ip}")
-                return local_ip
-
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to auto-detect external IP: {e}, using localhost"
-            )
-            return "localhost"
-
     def _create_fastapi_app(
         self,
         agent_config: dict[str, Any],
         fastmcp_servers: dict[str, Any],
         heartbeat_config: dict[str, Any] = None,
+        mcp_wrappers: dict[str, Any] = None,
     ) -> Any:
-        """Create FastAPI application with FastMCP lifespan integration."""
+        """Create FastAPI application with proper FastMCP lifespan integration."""
         try:
             import asyncio
             from contextlib import asynccontextmanager
@@ -206,68 +186,183 @@ class FastAPIServerSetupStep(PipelineStep):
                 "description", "MCP Mesh Agent with FastAPI integration"
             )
 
-            # Collect lifespans from FastMCP servers
-            fastmcp_lifespans = []
-            for server_key, server_instance in fastmcp_servers.items():
-                if hasattr(server_instance, "http_app") and callable(
-                    server_instance.http_app
-                ):
-                    http_app = server_instance.http_app()
-                    if hasattr(http_app, "lifespan"):
-                        fastmcp_lifespans.append(http_app.lifespan)
-                        self.logger.debug(
-                            f"Collected lifespan from FastMCP server '{server_key}'"
-                        )
+            # Determine lifespan strategy based on configuration
+            primary_lifespan = None
 
-            # Create combined lifespan manager
-            @asynccontextmanager
-            async def combined_lifespan(app):
-                """Combined lifespan manager for FastAPI + FastMCP + Heartbeat."""
-                # Start all FastMCP lifespans
-                lifespan_contexts = []
-                for lifespan in fastmcp_lifespans:
-                    ctx = lifespan(app)
-                    await ctx.__aenter__()
-                    lifespan_contexts.append(ctx)
+            # Helper function to get FastMCP lifespan from wrapper
+            def get_fastmcp_lifespan():
+                if mcp_wrappers:
+                    wrapper_key = next(iter(mcp_wrappers.keys()))
+                    mcp_wrapper = mcp_wrappers[wrapper_key]["wrapper"]
+                    if (
+                        hasattr(mcp_wrapper, "_mcp_app")
+                        and mcp_wrapper._mcp_app
+                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
+                    ):
+                        return mcp_wrapper._mcp_app.lifespan
+                return None
 
-                # Start heartbeat task if configured
-                heartbeat_task = None
-                if heartbeat_config:
-                    import asyncio
+            if heartbeat_config and len(fastmcp_servers) == 1:
+                # Single FastMCP server with heartbeat - combine FastMCP lifespan + heartbeat
+                self.logger.debug(
+                    "Creating combined lifespan for single FastMCP server with heartbeat"
+                )
 
-                    # Get heartbeat task function from config to avoid cross-imports
+                fastmcp_lifespan = get_fastmcp_lifespan()
+                if not fastmcp_lifespan:
+                    self.logger.warning(
+                        "No FastMCP lifespan available for heartbeat combination"
+                    )
+
+                # Create combined lifespan for single FastMCP + heartbeat
+                @asynccontextmanager
+                async def single_fastmcp_with_heartbeat_lifespan(main_app):
+                    """Lifespan manager for single FastMCP + heartbeat."""
+                    # Start FastMCP lifespan - use main app as recommended by FastMCP docs
+                    fastmcp_ctx = None
+                    if fastmcp_lifespan:
+                        try:
+                            fastmcp_ctx = fastmcp_lifespan(main_app)
+                            await fastmcp_ctx.__aenter__()
+                            self.logger.debug(
+                                "Started FastMCP lifespan with main app context"
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
+
+                    # Start heartbeat task
+                    heartbeat_task = None
                     heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
                     if heartbeat_task_fn:
                         heartbeat_task = asyncio.create_task(
                             heartbeat_task_fn(heartbeat_config)
                         )
+                        self.logger.info(
+                            f"💓 Started heartbeat task with {heartbeat_config['interval']}s interval"
+                        )
+
+                    try:
+                        yield
+                    finally:
+                        # Clean up heartbeat task
+                        if heartbeat_task:
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                self.logger.info(
+                                    "🛑 Heartbeat task cancelled during shutdown"
+                                )
+
+                        # Clean up FastMCP lifespan
+                        if fastmcp_ctx:
+                            try:
+                                await fastmcp_ctx.__aexit__(None, None, None)
+                                self.logger.debug("FastMCP lifespan stopped")
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Error closing FastMCP lifespan: {e}"
+                                )
+
+                primary_lifespan = single_fastmcp_with_heartbeat_lifespan
+
+            elif heartbeat_config and len(fastmcp_servers) == 0:
+                # Heartbeat only - no FastMCP servers
+                self.logger.debug(
+                    "Creating lifespan for heartbeat only (no FastMCP servers)"
+                )
+
+                @asynccontextmanager
+                async def heartbeat_only_lifespan(main_app):
+                    """Lifespan manager for heartbeat only."""
+                    # Start heartbeat task
+                    heartbeat_task = None
+                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
+                    if heartbeat_task_fn:
+                        heartbeat_task = asyncio.create_task(
+                            heartbeat_task_fn(heartbeat_config)
+                        )
+                        self.logger.info(
+                            f"💓 Started heartbeat task with {heartbeat_config['interval']}s interval"
+                        )
+
+                    try:
+                        yield
+                    finally:
+                        # Clean up heartbeat task
+                        if heartbeat_task:
+                            heartbeat_task.cancel()
+                            try:
+                                await heartbeat_task
+                            except asyncio.CancelledError:
+                                self.logger.info(
+                                    "🛑 Heartbeat task cancelled during shutdown"
+                                )
+
+                primary_lifespan = heartbeat_only_lifespan
+
+            elif len(fastmcp_servers) > 1:
+                # Multiple FastMCP servers - use combined lifespan
+                self.logger.debug(
+                    "Creating combined lifespan for multiple FastMCP servers"
+                )
+
+                # Collect FastMCP lifespans from pre-created wrappers
+                fastmcp_lifespans = []
+                for server_key, wrapper_data in mcp_wrappers.items():
+                    mcp_wrapper = wrapper_data["wrapper"]
+                    if (
+                        hasattr(mcp_wrapper, "_mcp_app")
+                        and mcp_wrapper._mcp_app
+                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
+                    ):
+                        fastmcp_lifespans.append(mcp_wrapper._mcp_app.lifespan)
+                        self.logger.debug(
+                            f"Collected lifespan from FastMCP wrapper '{server_key}'"
+                        )
                     else:
                         self.logger.warning(
-                            "⚠️ Heartbeat config provided but no heartbeat_task_fn found"
+                            f"No lifespan available from wrapper '{server_key}'"
                         )
-                    self.logger.info(
-                        f"💓 Started heartbeat task in FastAPI lifespan with {heartbeat_config['interval']}s interval"
-                    )
 
-                try:
-                    yield
-                finally:
-                    # Clean up heartbeat task
-                    if heartbeat_task:
-                        heartbeat_task.cancel()
+                # Create combined lifespan manager for multiple servers
+                @asynccontextmanager
+                async def multiple_fastmcp_lifespan(main_app):
+                    """Combined lifespan manager for multiple FastMCP servers."""
+                    # Start all FastMCP lifespans
+                    lifespan_contexts = []
+                    for lifespan in fastmcp_lifespans:
                         try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            self.logger.info(
-                                "🛑 Heartbeat task cancelled during shutdown"
-                            )
-
-                    # Clean up all lifespans in reverse order
-                    for ctx in reversed(lifespan_contexts):
-                        try:
-                            await ctx.__aexit__(None, None, None)
+                            ctx = lifespan(main_app)
+                            await ctx.__aenter__()
+                            lifespan_contexts.append(ctx)
                         except Exception as e:
-                            self.logger.warning(f"Error closing FastMCP lifespan: {e}")
+                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
+
+                    try:
+                        yield
+                    finally:
+                        # Clean up all lifespans in reverse order
+                        for ctx in reversed(lifespan_contexts):
+                            try:
+                                await ctx.__aexit__(None, None, None)
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Error closing FastMCP lifespan: {e}"
+                                )
+
+                primary_lifespan = multiple_fastmcp_lifespan
+
+            elif len(fastmcp_servers) == 1:
+                # Single FastMCP server without heartbeat - use its lifespan directly
+                self.logger.debug(
+                    "Using direct FastMCP lifespan for single server (no heartbeat)"
+                )
+                primary_lifespan = get_fastmcp_lifespan()
+                if not primary_lifespan:
+                    self.logger.warning(
+                        "No FastMCP lifespan available for single server"
+                    )
 
             app = FastAPI(
                 title=f"MCP Mesh Agent: {agent_name}",
@@ -275,15 +370,11 @@ class FastAPIServerSetupStep(PipelineStep):
                 version=agent_config.get("version", "1.0.0"),
                 docs_url="/docs",  # Enable OpenAPI docs
                 redoc_url="/redoc",
-                lifespan=(
-                    combined_lifespan
-                    if (fastmcp_lifespans or heartbeat_config)
-                    else None
-                ),
+                lifespan=primary_lifespan,
             )
 
             self.logger.debug(
-                f"Created FastAPI app for agent '{agent_name}' with {len(fastmcp_lifespans)} FastMCP lifespans"
+                f"Created FastAPI app for agent '{agent_name}' with lifespan: {primary_lifespan is not None}"
             )
             return app
 
@@ -351,25 +442,22 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
     def _integrate_mcp_wrapper(
         self, app: Any, mcp_wrapper: Any, server_key: str
     ) -> None:
-        """Integrate HttpMcpWrapper MCP endpoints into the main FastAPI app."""
+        """Integrate HttpMcpWrapper FastMCP app into the main FastAPI app."""
         try:
-            # The HttpMcpWrapper creates its own FastAPI app with MCP endpoints
-            # We need to extract the MCP endpoint handlers and add them to our main app
+            # The HttpMcpWrapper provides a FastMCP app for direct mounting
+            fastmcp_app = mcp_wrapper._mcp_app
 
-            # Get the MCP route handlers from the wrapper's app
-            wrapper_app = mcp_wrapper.app
-
-            # Find the /mcp route and copy it to our main app
-            for route in wrapper_app.routes:
-                if hasattr(route, "path") and route.path == "/mcp":
-                    # Add the MCP endpoint to our main app
-                    app.add_route("/mcp", route.endpoint, methods=["POST"])
-                    self.logger.debug(
-                        f"Added /mcp endpoint from wrapper '{server_key}'"
-                    )
-                    break
+            if fastmcp_app is not None:
+                # Mount the FastMCP app at root since it already provides /mcp routes
+                # FastMCP creates routes like /mcp/, so mounting at root gives us the correct paths
+                app.mount("", fastmcp_app)
+                self.logger.debug(
+                    f"Mounted FastMCP app from wrapper '{server_key}' at root (provides /mcp routes)"
+                )
             else:
-                self.logger.warning(f"No /mcp route found in wrapper '{server_key}'")
+                self.logger.warning(
+                    f"No FastMCP app available in wrapper '{server_key}'"
+                )
 
         except Exception as e:
             self.logger.error(f"Failed to integrate MCP wrapper '{server_key}': {e}")

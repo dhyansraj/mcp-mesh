@@ -60,7 +60,7 @@ class MCPClientProxy:
                 "params": {"name": self.function_name, "arguments": kwargs},
             }
 
-            url = f"{self.endpoint}/mcp"
+            url = f"{self.endpoint}/mcp/"  # Use trailing slash to avoid 307 redirect
             data = json.dumps(payload).encode("utf-8")
 
             req = urllib.request.Request(
@@ -68,13 +68,32 @@ class MCPClientProxy:
                 data=data,
                 headers={
                     "Content-Type": "application/json",
-                    "Accept": "application/json",
+                    "Accept": "application/json, text/event-stream",  # FastMCP requires both
                 },
             )
 
             with urllib.request.urlopen(req, timeout=30.0) as response:
                 response_data = response.read().decode("utf-8")
-                data = json.loads(response_data)
+
+                # Handle Server-Sent Events format from FastMCP
+                if response_data.startswith("event:"):
+                    # Parse SSE format: extract JSON from "data:" lines
+                    json_data = None
+                    for line in response_data.split("\n"):
+                        if line.startswith("data:"):
+                            json_str = line[5:].strip()  # Remove 'data:' prefix
+                            try:
+                                json_data = json.loads(json_str)
+                                break
+                            except json.JSONDecodeError:
+                                continue
+
+                    if json_data is None:
+                        raise RuntimeError("Could not parse SSE response from FastMCP")
+                    data = json_data
+                else:
+                    # Plain JSON response
+                    data = json.loads(response_data)
 
             # Check for JSON-RPC error
             if "error" in data:

@@ -1,12 +1,13 @@
 import inspect
 import logging
-import os
 import re
 from datetime import UTC, datetime
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from ...engine.decorator_registry import DecoratorRegistry
 from ...engine.signature_analyzer import validate_mesh_dependencies
+from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.support_types import HealthStatus, HealthStatusType
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -43,12 +44,12 @@ class HeartbeatPreparationStep(PipelineStep):
 
             # Build agent registration payload
             registration_data = self._build_registration_payload(
-                agent_id, agent_config, tools_list, context
+                agent_id, agent_config, tools_list
             )
 
             # Build health status for heartbeat
             health_status = self._build_health_status(
-                agent_id, agent_config, tools_list, context
+                agent_id, agent_config, tools_list
             )
 
             # Store in context
@@ -103,7 +104,9 @@ class HeartbeatPreparationStep(PipelineStep):
             }
 
             # Add debug pointer information only if debug flag is enabled
-            if self._is_debug_enabled():
+            if get_config_value(
+                "MCP_MESH_DEBUG", default=False, rule=ValidationRule.TRUTHY_RULE
+            ):
                 debug_pointers = self._get_function_pointer_debug_info(
                     current_function, func_name
                 )
@@ -212,64 +215,22 @@ class HeartbeatPreparationStep(PipelineStep):
 
         return debug_info
 
-    def _is_debug_enabled(self) -> bool:
-        """Check if debug mode is enabled via environment variable."""
-        return os.environ.get("MCP_MESH_DEBUG", "").lower() in (
-            "true",
-            "1",
-            "yes",
-            "on",
-        )
-
-    def _resolve_external_endpoint(
-        self, agent_config: dict[str, Any], context: dict[str, Any] = None
-    ) -> tuple[str, int]:
-        """Resolve external host and port for registry advertisement."""
-        # Get external endpoint information from FastAPI advertisement config
-        advertisement_config = {}
-        if context:
-            advertisement_config = context.get("fastapi_advertisement_config", {})
-
-        # Use external host/port for registry advertisement (not binding address)
-        external_host = advertisement_config.get("external_host") or agent_config.get(
-            "http_host", "localhost"
-        )
-        external_endpoint = advertisement_config.get("external_endpoint")
-
-        # Parse external endpoint if provided, otherwise use external_host + port
-        if external_endpoint:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(external_endpoint)
-            http_host = parsed.hostname or external_host
-            http_port = parsed.port or agent_config.get("http_port", 8080)
-        else:
-            http_host = external_host
-            http_port = agent_config.get("http_port", 8080)
-
-        # Don't send 0.0.0.0 as it's a binding address, not an external address
-        if http_host == "0.0.0.0":
-            http_host = "localhost"
-
-        return http_host, http_port
-
     def _build_registration_payload(
         self,
         agent_id: str,
         agent_config: dict[str, Any],
         tools_list: list[dict[str, Any]],
-        context: dict[str, Any] = None,
     ) -> dict[str, Any]:
         """Build agent registration payload."""
-        http_host, http_port = self._resolve_external_endpoint(agent_config, context)
+        from ...shared.host_resolver import HostResolver
 
         return {
             "agent_id": agent_id,
             "agent_type": "mcp_agent",
             "name": agent_id,
             "version": agent_config.get("version", "1.0.0"),
-            "http_host": http_host,
-            "http_port": http_port,
+            "http_host": HostResolver.get_external_host(),
+            "http_port": agent_config.get("http_port", 0),
             "timestamp": datetime.now(UTC),
             "namespace": agent_config.get("namespace", "default"),
             "tools": tools_list,
@@ -294,33 +255,13 @@ class HeartbeatPreparationStep(PipelineStep):
         agent_id: str,
         agent_config: dict[str, Any],
         tools_list: list[dict[str, Any]],
-        context: dict[str, Any] = None,
     ) -> HealthStatus:
         """Build health status for heartbeat."""
-        # Extract capabilities from tools list (reuse logic)
+        # Extract capabilities from tools list
         capabilities = self._extract_capabilities(tools_list)
 
-        # Build metadata with external endpoint information
+        # Build metadata from agent config
         metadata = dict(agent_config)  # Copy agent config
-
-        # Add external endpoint information using consolidated logic
-        if context:
-            advertisement_config = context.get("fastapi_advertisement_config", {})
-            external_host = advertisement_config.get("external_host")
-            external_endpoint = advertisement_config.get("external_endpoint")
-
-            if external_host:
-                metadata["external_host"] = external_host
-            if external_endpoint:
-                metadata["external_endpoint"] = external_endpoint
-                # Parse endpoint for individual components
-                from urllib.parse import urlparse
-
-                parsed = urlparse(external_endpoint)
-                if parsed.hostname:
-                    metadata["external_host"] = parsed.hostname
-                if parsed.port:
-                    metadata["external_port"] = parsed.port
 
         return HealthStatus(
             agent_name=agent_id,

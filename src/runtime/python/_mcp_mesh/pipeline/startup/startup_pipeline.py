@@ -8,7 +8,6 @@ and FastAPI server preparation.
 
 import logging
 
-from ..shared import RegistryConnectionStep
 from ..shared.mesh_pipeline import MeshPipeline
 from . import (
     ConfigurationStep,
@@ -31,11 +30,11 @@ class StartupPipeline(MeshPipeline):
     2. Configuration setup
     3. Heartbeat preparation
     4. FastMCP server discovery
-    5. Registry connection
-    6. Heartbeat loop setup
-    7. FastAPI server setup
+    5. Heartbeat loop setup
+    6. FastAPI server setup
 
-    Each step builds context for subsequent steps.
+    Registry connection is handled in the heartbeat pipeline for automatic
+    retry behavior. Agents start immediately regardless of registry availability.
     """
 
     def __init__(self, name: str = "startup-pipeline"):
@@ -44,17 +43,15 @@ class StartupPipeline(MeshPipeline):
 
     def _setup_startup_steps(self) -> None:
         """Setup the startup pipeline steps."""
-        # Essential startup steps - optimized to skip redundant heartbeat during startup
+        # Essential startup steps - agent preparation without registry dependency
         steps = [
             DecoratorCollectionStep(),
             ConfigurationStep(),
             HeartbeatPreparationStep(),  # Prepare heartbeat payload structure
             FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances
-            RegistryConnectionStep(),  # Connect to registry
-            # REMOVED: HeartbeatSendStep() - redundant, background loop handles this
-            # REMOVED: DependencyResolutionStep() - redundant, background loop handles this
-            HeartbeatLoopStep(),  # Setup background heartbeat config
+            HeartbeatLoopStep(),  # Setup background heartbeat config (handles no registry gracefully)
             FastAPIServerSetupStep(),  # Setup FastAPI app with background heartbeat
+            # Note: Registry connection is handled in heartbeat pipeline for retry behavior
             # Note: FastAPI server will be started with uvicorn.run() after pipeline
         ]
 

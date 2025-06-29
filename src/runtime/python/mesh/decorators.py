@@ -389,14 +389,10 @@ def agent(
         if auto_run_interval < 1:
             raise ValueError("auto_run_interval must be at least 1 second")
 
-        # Get final values with environment variable precedence using config resolver
-        # MCP_MESH_HTTP_HOST = Advertised hostname (for registry registration, not server binding)
-        final_http_host = get_config_value(
-            "MCP_MESH_HTTP_HOST",
-            override=http_host,
-            default="localhost",
-            rule=ValidationRule.STRING_RULE,
-        )
+        # Use centralized host resolution for external hostname
+        from _mcp_mesh.shared.host_resolver import HostResolver
+
+        final_http_host = HostResolver.get_external_host()
 
         final_http_port = get_config_value(
             "MCP_MESH_HTTP_PORT",

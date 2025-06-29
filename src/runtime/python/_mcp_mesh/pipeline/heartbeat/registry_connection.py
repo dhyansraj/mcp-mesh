@@ -11,8 +11,7 @@ from typing import Any
 from ...generated.mcp_mesh_registry_client.api_client import ApiClient
 from ...generated.mcp_mesh_registry_client.configuration import Configuration
 from ...shared.registry_client_wrapper import RegistryClientWrapper
-from .base_step import PipelineStep
-from .pipeline_types import PipelineResult, PipelineStatus
+from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ class RegistryConnectionStep(PipelineStep):
             registry_client = ApiClient(config)
 
             # Create wrapper for type-safe operations
-            registry_wrapperg = RegistryClientWrapper(registry_client)
+            registry_wrapper = RegistryClientWrapper(registry_client)
 
             # Store in context
             result.add_context("registry_url", registry_url)

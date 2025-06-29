@@ -47,7 +47,7 @@ async def heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
             try:
                 # Execute heartbeat pipeline
                 success = await heartbeat_orchestrator.execute_heartbeat(
-                    registry_wrapper, agent_id, context
+                    agent_id, context
                 )
 
                 if not success:

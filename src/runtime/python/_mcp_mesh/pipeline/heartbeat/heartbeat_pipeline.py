@@ -9,10 +9,11 @@ dependency resolution.
 import logging
 from typing import Any
 
-from ..shared import PipelineResult, PipelineStatus, RegistryConnectionStep
+from ..shared import PipelineResult, PipelineStatus
 from ..shared.mesh_pipeline import MeshPipeline
 from .dependency_resolution import DependencyResolutionStep
 from .heartbeat_send import HeartbeatSendStep
+from .registry_connection import RegistryConnectionStep
 
 logger = logging.getLogger(__name__)
 

@@ -29,14 +29,11 @@ class HeartbeatOrchestrator:
         self.pipeline = HeartbeatPipeline()
         self._heartbeat_count = 0
 
-    async def execute_heartbeat(
-        self, registry_wrapper: Any, agent_id: str, context: dict[str, Any]
-    ) -> bool:
+    async def execute_heartbeat(self, agent_id: str, context: dict[str, Any]) -> bool:
         """
         Execute a complete heartbeat cycle with comprehensive error handling.
 
         Args:
-            registry_wrapper: Registry client wrapper for communication
             agent_id: Agent identifier
             context: Full pipeline context from startup
 
@@ -47,9 +44,7 @@ class HeartbeatOrchestrator:
 
         try:
             # Prepare heartbeat context with validation
-            heartbeat_context = self._prepare_heartbeat_context(
-                registry_wrapper, agent_id, context
-            )
+            heartbeat_context = self._prepare_heartbeat_context(agent_id, context)
 
             # Validate required context before proceeding
             if not self._validate_heartbeat_context(heartbeat_context):
@@ -106,7 +101,7 @@ class HeartbeatOrchestrator:
             return False
 
     def _prepare_heartbeat_context(
-        self, registry_wrapper: Any, agent_id: str, startup_context: dict[str, Any]
+        self, agent_id: str, startup_context: dict[str, Any]
     ) -> dict[str, Any]:
         """Prepare context for heartbeat pipeline execution."""
 
@@ -115,9 +110,8 @@ class HeartbeatOrchestrator:
             startup_context, agent_id
         )
 
-        # Prepare heartbeat-specific context
+        # Prepare heartbeat-specific context - registry_wrapper will be created in pipeline
         heartbeat_context = {
-            "registry_wrapper": registry_wrapper,
             "agent_id": agent_id,
             "health_status": health_status,
             "agent_config": startup_context.get("agent_config", {}),
@@ -132,7 +126,7 @@ class HeartbeatOrchestrator:
     def _validate_heartbeat_context(self, heartbeat_context: dict[str, Any]) -> bool:
         """Validate that heartbeat context has all required components."""
 
-        required_fields = ["registry_wrapper", "agent_id", "health_status"]
+        required_fields = ["agent_id", "health_status"]
 
         for field in required_fields:
             if field not in heartbeat_context or heartbeat_context[field] is None:
