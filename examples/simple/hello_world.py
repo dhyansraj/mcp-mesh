@@ -20,8 +20,6 @@ from fastmcp import FastMCP
 app = FastMCP("Hello World Service")
 
 
-
-
 # ===== MESH FUNCTION WITH SIMPLE TYPING =====
 # Uses Any type for maximum simplicity and flexibility
 

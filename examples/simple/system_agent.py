@@ -24,8 +24,6 @@ from fastmcp import FastMCP
 app = FastMCP("System Agent Service")
 
 
-
-
 # Store start time for uptime calculations
 start_time = datetime.now()
 
