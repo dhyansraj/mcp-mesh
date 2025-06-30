@@ -48,7 +48,7 @@ func (h *EntBusinessLogicHandlers) HeadHealth(c *gin.Context) {
 	c.Header("X-Health-Status", "healthy")
 	c.Header("X-Service-Version", "1.0.0")
 	c.Header("X-Uptime-Seconds", fmt.Sprintf("%d", int(uptime)))
-	
+
 	c.Status(http.StatusOK)
 }
 
