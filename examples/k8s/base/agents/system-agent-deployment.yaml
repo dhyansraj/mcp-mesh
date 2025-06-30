@@ -62,6 +62,8 @@ spec:
                   fieldPath: status.podIP
             - name: MCP_MESH_AGENT_NAME
               value: "system-agent"
+            - name: MCP_MESH_AGENT_ID
+              value: "system-agent"
           envFrom:
             - configMapRef:
                 name: mcp-agent-config
