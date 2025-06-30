@@ -790,11 +790,18 @@ func (c *CLIConfig) GetRegistryEnvironmentVariables() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Determine effective log level (debug mode forces DEBUG level)
+	effectiveLogLevel := c.LogLevel
+	if c.DebugMode {
+		effectiveLogLevel = "DEBUG"
+	}
+
 	return []string{
 		fmt.Sprintf("HOST=%s", c.RegistryHost),
 		fmt.Sprintf("PORT=%d", c.RegistryPort),
 		fmt.Sprintf("DATABASE_URL=%s", c.DBPath),
-		fmt.Sprintf("LOG_LEVEL=%s", strings.ToLower(c.LogLevel)),
+		fmt.Sprintf("MCP_MESH_LOG_LEVEL=%s", strings.ToUpper(effectiveLogLevel)),
+		fmt.Sprintf("MCP_MESH_DEBUG_MODE=%t", c.DebugMode),
 		fmt.Sprintf("HEALTH_CHECK_INTERVAL=%d", c.HealthCheckInterval),
 	}
 }

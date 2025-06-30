@@ -32,7 +32,7 @@ func NewSignalHandler() *SignalHandler {
 	return &SignalHandler{
 		shutdownCallbacks: make([]func() error, 0),
 		logger:            log.New(os.Stdout, "[SignalHandler] ", log.LstdFlags),
-		shutdownTimeout:   30 * time.Second,
+		shutdownTimeout:   5 * time.Second, // Optimized for FastAPI agents that terminate quickly
 		shutdownChan:      make(chan struct{}),
 	}
 }
@@ -42,7 +42,7 @@ func NewProcessCleanupManager(pm *ProcessManager) *ProcessCleanupManager {
 	return &ProcessCleanupManager{
 		processManager: pm,
 		logger:         log.New(os.Stdout, "[ProcessCleanup] ", log.LstdFlags),
-		cleanupTimeout: 30 * time.Second,
+		cleanupTimeout: 5 * time.Second, // Optimized for FastAPI agents that terminate quickly
 	}
 }
 
@@ -210,58 +210,97 @@ func (pcm *ProcessCleanupManager) PerformProcessCleanup() error {
 	return nil
 }
 
-// stopAgentProcesses stops all agent processes gracefully
+// stopAgentProcesses stops all agent processes gracefully in parallel
 func (pcm *ProcessCleanupManager) stopAgentProcesses(processes map[string]*ProcessInfo) []error {
-	var errors []error
+	pcm.logger.Println("Stopping agent processes in parallel...")
 
-	pcm.logger.Println("Stopping agent processes...")
+	var wg sync.WaitGroup
+	errorChan := make(chan error, len(processes))
 
 	for name, info := range processes {
 		if info.ServiceType == "agent" {
-			pcm.logger.Printf("Stopping agent: %s", name)
-			if err := pcm.processManager.StopProcess(name, 10*time.Second); err != nil {
-				pcm.logger.Printf("Error stopping agent %s: %v", name, err)
-				errors = append(errors, err)
-			}
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				pcm.logger.Printf("Stopping agent: %s", name)
+				if err := pcm.processManager.StopProcess(name, 3*time.Second); err != nil { // Reduced for FastAPI agents
+					pcm.logger.Printf("Error stopping agent %s: %v", name, err)
+					errorChan <- err
+				}
+			}(name)
 		}
+	}
+
+	wg.Wait()
+	close(errorChan)
+
+	var errors []error
+	for err := range errorChan {
+		errors = append(errors, err)
 	}
 
 	return errors
 }
 
-// stopRegistryProcesses stops all registry processes gracefully
+// stopRegistryProcesses stops all registry processes gracefully in parallel
 func (pcm *ProcessCleanupManager) stopRegistryProcesses(processes map[string]*ProcessInfo) []error {
-	var errors []error
+	pcm.logger.Println("Stopping registry processes in parallel...")
 
-	pcm.logger.Println("Stopping registry processes...")
+	var wg sync.WaitGroup
+	errorChan := make(chan error, len(processes))
 
 	for name, info := range processes {
 		if info.ServiceType == "registry" {
-			pcm.logger.Printf("Stopping registry: %s", name)
-			if err := pcm.processManager.StopProcess(name, 15*time.Second); err != nil {
-				pcm.logger.Printf("Error stopping registry %s: %v", name, err)
-				errors = append(errors, err)
-			}
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				pcm.logger.Printf("Stopping registry: %s", name)
+				if err := pcm.processManager.StopProcess(name, 5*time.Second); err != nil { // Reduced for FastAPI registry
+					pcm.logger.Printf("Error stopping registry %s: %v", name, err)
+					errorChan <- err
+				}
+			}(name)
 		}
+	}
+
+	wg.Wait()
+	close(errorChan)
+
+	var errors []error
+	for err := range errorChan {
+		errors = append(errors, err)
 	}
 
 	return errors
 }
 
-// forceKillRemainingProcesses force kills any processes that didn't stop gracefully
+// forceKillRemainingProcesses force kills any processes that didn't stop gracefully in parallel
 func (pcm *ProcessCleanupManager) forceKillRemainingProcesses() []error {
-	var errors []error
-
 	processes := pcm.processManager.GetAllProcesses()
+
+	var wg sync.WaitGroup
+	errorChan := make(chan error, len(processes))
 
 	for name, info := range processes {
 		if info.Status == "running" {
-			pcm.logger.Printf("Force killing remaining process: %s", name)
-			if err := pcm.processManager.TerminateProcess(name, 5*time.Second); err != nil {
-				pcm.logger.Printf("Error force killing %s: %v", name, err)
-				errors = append(errors, err)
-			}
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				pcm.logger.Printf("Force killing remaining process: %s", name)
+				if err := pcm.processManager.TerminateProcess(name, 2*time.Second); err != nil { // Reduced timeout for force kill
+					pcm.logger.Printf("Error force killing %s: %v", name, err)
+					errorChan <- err
+				}
+			}(name)
 		}
+	}
+
+	wg.Wait()
+	close(errorChan)
+
+	var errors []error
+	for err := range errorChan {
+		errors = append(errors, err)
 	}
 
 	return errors

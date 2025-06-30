@@ -320,6 +320,8 @@ func applyAllStartFlags(cmd *cobra.Command, config *CLIConfig) error {
 // Registry-only mode
 func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	pm := GetGlobalProcessManager()
+	// Update ProcessManager config with current config (including command-line flags)
+	pm.config = config
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	if !quiet {
@@ -762,34 +764,65 @@ func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
 }
 
 func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
-	// Prepare the registry command - use bin/ directory for consistency with Makefile
-	registryBinary := "./bin/mcp-mesh-registry"
+	// Try to find registry binary in multiple locations
+	possiblePaths := []string{
+		"./bin/mcp-mesh-registry",           // Relative to current working directory
+		"./mcp-mesh-registry",               // For compatibility with process_lifecycle.go
+		"./build/mcp-mesh-registry",         // Build directory
+		"mcp-mesh-registry",                 // In PATH
+	}
 
-	// Check if binary exists, if not try to build it
-	if _, err := os.Stat(registryBinary); os.IsNotExist(err) {
-		// Try building the registry using the same path as Makefile
-		fmt.Println("Building registry service...")
-		buildCmd := exec.Command("go", "build", "-o", registryBinary, "./cmd/mcp-mesh-registry")
+	var registryBinary string
+	var binaryFound bool
 
-		// Ensure Go is in PATH
-		env := os.Environ()
-		pathFound := false
-		for i, envVar := range env {
-			if strings.HasPrefix(envVar, "PATH=") {
-				env[i] = "PATH=/usr/local/go/bin:" + envVar[5:]
-				pathFound = true
-				break
+	// Check each possible location
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			registryBinary = path
+			binaryFound = true
+			break
+		}
+	}
+
+	// If binary not found, try to build it
+	if !binaryFound {
+		// Use bin/ directory for consistency with Makefile
+		registryBinary = "./bin/mcp-mesh-registry"
+
+		// Check if we have the source to build from
+		if _, err := os.Stat("./cmd/mcp-mesh-registry"); err == nil {
+			fmt.Println("Registry binary not found, building from source...")
+
+			// Ensure bin directory exists
+			if err := os.MkdirAll("./bin", 0755); err != nil {
+				return nil, fmt.Errorf("failed to create bin directory: %w", err)
 			}
-		}
-		if !pathFound {
-			env = append(env, "PATH=/usr/local/go/bin")
-		}
-		buildCmd.Env = env
 
-		if err := buildCmd.Run(); err != nil {
-			return nil, fmt.Errorf("failed to build registry: %w", err)
+			buildCmd := exec.Command("go", "build", "-o", registryBinary, "./cmd/mcp-mesh-registry")
+
+			// Ensure Go is in PATH
+			env := os.Environ()
+			pathFound := false
+			for i, envVar := range env {
+				if strings.HasPrefix(envVar, "PATH=") {
+					env[i] = "PATH=/usr/local/go/bin:" + envVar[5:]
+					pathFound = true
+					break
+				}
+			}
+			if !pathFound {
+				env = append(env, "PATH=/usr/local/go/bin")
+			}
+			buildCmd.Env = env
+
+			if err := buildCmd.Run(); err != nil {
+				return nil, fmt.Errorf("failed to build registry from source: %w", err)
+			}
+			fmt.Println("Registry built successfully")
+		} else {
+			// No source available, cannot build
+			return nil, fmt.Errorf("registry binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", possiblePaths)
 		}
-		fmt.Println("Registry built successfully")
 	}
 
 	// Create registry command

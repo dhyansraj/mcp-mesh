@@ -218,13 +218,22 @@ func KillProcess(pid int, timeout time.Duration) error {
 		}
 	}
 
-	// Wait for graceful shutdown
-	deadline := time.Now().Add(timeout)
+	// For FastAPI agents, use shorter timeout and more frequent checks
+	// Most FastAPI agents terminate within 1-2 seconds
+	effectiveTimeout := timeout
+	if effectiveTimeout > 5*time.Second {
+		effectiveTimeout = 5 * time.Second // Cap at 5 seconds for responsive agents
+	}
+
+	// Wait for graceful shutdown with more frequent checks
+	deadline := time.Now().Add(effectiveTimeout)
+	checkInterval := 50 * time.Millisecond // Check every 50ms instead of 100ms
+
 	for time.Now().Before(deadline) {
 		if !IsProcessAlive(pid) {
-			return nil
+			return nil // Process terminated gracefully
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(checkInterval)
 	}
 
 	// Force kill if graceful shutdown failed
