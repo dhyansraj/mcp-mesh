@@ -1,7 +1,7 @@
 {
   "agent_id": "multi-service-agent",
   "agent_type": "mcp_agent",
-  "name": "Multi-Service Agent",
+  "name": "multi-service-agent",
   "version": "2.1.0",
   "http_host": "0.0.0.0",
   "http_port": 8080,

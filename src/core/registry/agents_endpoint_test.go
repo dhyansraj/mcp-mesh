@@ -18,7 +18,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "test-agent-1",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Test Agent One",
+				"name":       "test-agent-one",
 				"version":    "2.1.0",
 				"http_host":  "localhost",
 				"http_port":  float64(8080),
@@ -54,7 +54,7 @@ func TestAgentsEndpoint(t *testing.T) {
 
 		agent := response.Agents[0]
 		assert.Equal(t, "test-agent-1", agent.Id)
-		assert.Equal(t, "Test Agent One", agent.Name)
+		assert.Equal(t, "test-agent-one", agent.Name)
 		assert.Equal(t, "healthy", string(agent.Status)) // Should be healthy since just registered
 		assert.Equal(t, "2.1.0", *agent.Version)
 		// Note: namespace is not part of AgentInfo response per OpenAPI spec
@@ -86,7 +86,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "weather-agent",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Weather Service",
+				"name":       "weather-service",
 				"version":    "1.0.0",
 				"namespace":  "external",
 				"tools": []interface{}{
@@ -103,7 +103,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "database-agent",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Database Service",
+				"name":       "database-service",
 				"version":    "2.0.0",
 				"namespace":  "internal",
 				"tools": []interface{}{
@@ -168,7 +168,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "health-test-agent",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Health Test Agent",
+				"name":       "health-test-agent",
 				"tools": []interface{}{
 					map[string]interface{}{
 						"function_name": "test_function",
@@ -201,7 +201,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "provider-agent",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Provider Agent",
+				"name":       "provider-agent",
 				"tools": []interface{}{
 					map[string]interface{}{
 						"function_name": "provide_service",
@@ -216,7 +216,7 @@ func TestAgentsEndpoint(t *testing.T) {
 			AgentID: "consumer-agent",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Consumer Agent",
+				"name":       "consumer-agent",
 				"tools": []interface{}{
 					map[string]interface{}{
 						"function_name": "consume_service",

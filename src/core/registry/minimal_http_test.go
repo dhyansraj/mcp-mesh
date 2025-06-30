@@ -234,13 +234,20 @@ func TestJSONParsingDetails(t *testing.T) {
 
 		// Test service layer conversion
 		metadata := ConvertMeshAgentRegistrationToMap(registration)
-		capabilities := metadata["capabilities"].([]string)
-		assert.Equal(t, 3, len(capabilities))
-		assert.Contains(t, capabilities, "personalized_greeting")
-		assert.Contains(t, capabilities, "weather_report")
-		assert.Contains(t, capabilities, "send_notification")
+		tools := metadata["tools"].([]interface{})
+		assert.Equal(t, 3, len(tools))
 
-		t.Logf("✅ Parsed %d tools with %d total capabilities", len(registration.Tools), len(capabilities))
+		// Extract capability names from tools
+		capabilityNames := make([]string, 0)
+		for _, tool := range tools {
+			toolMap := tool.(map[string]interface{})
+			capabilityNames = append(capabilityNames, toolMap["capability"].(string))
+		}
+		assert.Contains(t, capabilityNames, "personalized_greeting")
+		assert.Contains(t, capabilityNames, "weather_report")
+		assert.Contains(t, capabilityNames, "send_notification")
+
+		t.Logf("✅ Parsed %d tools with %d total capabilities", len(registration.Tools), len(capabilityNames))
 
 		// Now send via HTTP to validate full round-trip
 		router := setupMinimalServer()

@@ -3,8 +3,10 @@ package registry
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"mcp-mesh/src/core/database"
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
@@ -258,6 +260,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 										tags = append(tags, tagStr)
 									}
 								}
+							} else if stringSlice, ok := tagsInterface.([]string); ok {
+								// Handle direct []string case
+								tags = stringSlice
 							}
 						}
 
@@ -475,6 +480,38 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		return nil, fmt.Errorf("failed to query agents: %w", err)
 	}
 
+	// Apply capability filtering after query (in-memory filtering)
+	if params != nil && len(params.Capabilities) > 0 {
+		var filteredAgents []*ent.Agent
+		for _, a := range agents {
+			agentMatches := false
+			for _, requestedCap := range params.Capabilities {
+				for _, agentCap := range a.Edges.Capabilities {
+					if params.FuzzyMatch {
+						// Fuzzy matching: check if requested capability is contained in agent capability
+						if strings.Contains(strings.ToLower(agentCap.Capability), strings.ToLower(requestedCap)) {
+							agentMatches = true
+							break
+						}
+					} else {
+						// Exact matching
+						if agentCap.Capability == requestedCap {
+							agentMatches = true
+							break
+						}
+					}
+				}
+				if agentMatches {
+					break
+				}
+			}
+			if agentMatches {
+				filteredAgents = append(filteredAgents, a)
+			}
+		}
+		agents = filteredAgents
+	}
+
 	// Convert to response format
 	var agentInfos []generated.AgentInfo
 	for _, a := range agents {
@@ -518,6 +555,7 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 				Name:         cap.Capability,
 				Version:      cap.Version,
 				Description:  &cap.Description,
+				Tags:         &cap.Tags,
 			})
 		}
 		agentInfo.Capabilities = capabilities
@@ -628,6 +666,7 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 					}
 
 					if tags, exists := depMap["tags"]; exists {
+						s.logger.Info("Found tags in dependency: %T = %v", tags, tags)
 						if tagsList, ok := tags.([]interface{}); ok {
 							dep.Tags = make([]string, len(tagsList))
 							for i, tag := range tagsList {
@@ -635,16 +674,27 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 									dep.Tags[i] = tagStr
 								}
 							}
+							s.logger.Info("Parsed dependency tags: %v", dep.Tags)
+						} else if stringSlice, ok := tags.([]string); ok {
+							// Handle direct []string case
+							dep.Tags = stringSlice
+							s.logger.Info("Direct string slice tags: %v", dep.Tags)
+						} else {
+							s.logger.Info("Tags not []interface{} or []string, type is: %T", tags)
 						}
+					} else {
+						s.logger.Info("No tags field found in dependency")
 					}
 
 					// Find provider with TTL and strict matching using Ent
+					s.logger.Info("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
 					provider := s.findHealthyProviderWithTTL(dep)
 					if provider != nil {
+						s.logger.Info("Found provider for %s: %+v", dep.Capability, provider)
 						resolvedDeps = append(resolvedDeps, provider)
 					} else {
 						// Dependency cannot be resolved - log but continue with other dependencies
-						s.logger.Debug("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
+						s.logger.Info("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
 						// Continue processing other dependencies instead of breaking
 					}
 				}
@@ -708,6 +758,9 @@ func (s *EntService) GetAgentWithCapabilities(agentID string) (map[string]interf
 func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *DependencyResolution {
 	ctx := context.Background()
 
+	// Use Info level to ensure it gets logged
+	s.logger.Info("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
+
 	// Calculate TTL threshold
 	timeoutDuration := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
 	ttlThreshold := time.Now().UTC().Add(-timeoutDuration)
@@ -742,6 +795,8 @@ func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *Depend
 
 		// Check TTL - agent must have been updated recently
 		if cap.Edges.Agent.UpdatedAt.Before(ttlThreshold) {
+			s.logger.Debug("Skipping stale agent %s: UpdatedAt=%v, TTLThreshold=%v",
+				cap.Edges.Agent.ID, cap.Edges.Agent.UpdatedAt, ttlThreshold)
 			continue // Skip stale agents
 		}
 
@@ -765,10 +820,15 @@ func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *Depend
 			UpdatedAt:    cap.Edges.Agent.UpdatedAt,
 		}
 		candidates = append(candidates, candidate)
+		s.logger.Info("Found candidate for %s: AgentID=%s, Version=%s, Tags=%v",
+			dep.Capability, candidate.AgentID, candidate.Version, candidate.Tags)
 	}
+
+	s.logger.Info("Total candidates found for %s: %d", dep.Capability, len(candidates))
 
 	// Filter by version constraint if specified
 	if dep.Version != "" && len(candidates) > 0 {
+		s.logger.Info("Filtering candidates by version constraint: %s", dep.Version)
 		filtered := make([]struct {
 			AgentID      string
 			FunctionName string
@@ -780,17 +840,13 @@ func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *Depend
 			UpdatedAt    time.Time
 		}, 0)
 
-		constraint, err := parseVersionConstraint(dep.Version)
-		if err == nil {
-			for _, c := range candidates {
-				if matchesVersion(c.Version, constraint) {
-					filtered = append(filtered, c)
-				}
+		for _, c := range candidates {
+			if matchesVersion(c.Version, dep.Version) {
+				filtered = append(filtered, c)
 			}
-			candidates = filtered
-		} else {
-			s.logger.Warning("Invalid version constraint %s: %v", dep.Version, err)
 		}
+		candidates = filtered
+		s.logger.Info("After version filtering: %d candidates remain", len(candidates))
 	}
 
 	// Filter by tags if specified (ALL tags must match)
@@ -935,14 +991,35 @@ func getStringFromMap(m map[string]interface{}, key, defaultValue string) string
 	return defaultValue
 }
 
-func parseVersionConstraint(version string) (string, error) {
-	// Simple version constraint parsing - can be enhanced later
-	return version, nil
+func parseVersionConstraint(version string) (*semver.Constraints, error) {
+	if version == "" {
+		return nil, nil
+	}
+	return semver.NewConstraint(version)
 }
 
 func matchesVersion(version, constraint string) bool {
-	// Simple version matching - can be enhanced later
-	return version == constraint
+	// Handle empty cases
+	if constraint == "" || version == "" {
+		return version == constraint
+	}
+
+	// Parse the version
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		// If version parsing fails, fall back to string comparison
+		return version == constraint
+	}
+
+	// Parse the constraint
+	c, err := semver.NewConstraint(constraint)
+	if err != nil {
+		// If constraint parsing fails, fall back to string comparison
+		return version == constraint
+	}
+
+	// Check if version satisfies constraint
+	return c.Check(v)
 }
 
 func hasAllTags(available, required []string) bool {

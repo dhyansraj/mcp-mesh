@@ -64,9 +64,11 @@ func createTestLogger(cfg interface{}) *logger.Logger {
 
 // setupTestService creates a test EntService with an in-memory database
 func setupTestService(t *testing.T) *EntService {
-	// Create in-memory database
+	// Use separate in-memory database for each test to ensure isolation
 	config := &database.Config{
-		DatabaseURL: ":memory:",
+		DatabaseURL:        ":memory:",
+		MaxOpenConnections: 1,
+		MaxIdleConnections: 1,
 	}
 
 	entDB, err := database.InitializeEnt(config, true) // Enable debug for tests to see SQL
@@ -80,15 +82,23 @@ func setupTestService(t *testing.T) *EntService {
 		LogLevel  string
 		DebugMode bool
 	}{
-		LogLevel:  "INFO",
-		DebugMode: false,
+		LogLevel:  "DEBUG",
+		DebugMode: true,
 	}
 
 	// Create logger using a config that satisfies the interface
 	testLogger := createTestLogger(testConfig)
 
+	// Create test config with very long timeout for test stability
+	testRegistryConfig := &RegistryConfig{
+		CacheTTL:                 30,
+		DefaultTimeoutThreshold:  3600, // 1 hour - very long for tests
+		DefaultEvictionThreshold: 7200, // 2 hours
+		EnableResponseCache:      false,
+	}
+
 	// Create and return EntService
-	return NewEntService(entDB, nil, testLogger)
+	return NewEntService(entDB, testRegistryConfig, testLogger)
 }
 
 // loadTestJSON loads test JSON data from testdata directory
