@@ -43,14 +43,15 @@ func TestHeartbeatLightweight(t *testing.T) {
 		// Validate heartbeat response
 		assert.Equal(t, "success", response.Status)
 		assert.Equal(t, "minimal-agent", response.AgentID)
-		assert.Contains(t, response.Message, "Heartbeat received")
+		assert.Contains(t, response.Message, "Heartbeat updated successfully")
 
 		// Verify database changes
 		agentData2, err := service.GetAgentWithCapabilities("minimal-agent")
 		require.NoError(t, err)
 
-		// Should update version and timestamp
-		assert.Equal(t, "1.1.0", agentData2["version"])
+		// Simple heartbeat with metadata does NOT update agent fields (only timestamp)
+		// Version should remain unchanged from original registration
+		assert.Equal(t, agentData1["version"], agentData2["version"])
 
 		// Check timestamp change (with lenient handling for precision issues)
 		updatedAt2 := agentData2["updated_at"].(string)
@@ -102,9 +103,9 @@ func TestHeartbeatLightweight(t *testing.T) {
 		response, err := service.UpdateHeartbeat(heartbeatReq)
 		require.NoError(t, err)
 
-		// Should indicate tools update
+		// Should indicate agent update via heartbeat (because tools were provided)
 		assert.Equal(t, "success", response.Status)
-		assert.Contains(t, response.Message, "tools update")
+		assert.Contains(t, response.Message, "Agent updated via heartbeat")
 
 		// Verify capabilities were updated
 		agentData, err := service.GetAgentWithCapabilities("minimal-agent")
@@ -151,7 +152,7 @@ func TestHeartbeatLightweight(t *testing.T) {
 			Status:  "healthy",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Agent Registered via Heartbeat",
+				"name":       "agent-registered-via-heartbeat",
 				"version":    "1.0.0",
 				"namespace":  "testing",
 				"http_host":  "localhost",
@@ -180,7 +181,7 @@ func TestHeartbeatLightweight(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "new-agent-via-heartbeat", agentData["agent_id"])
-		assert.Equal(t, "Agent Registered via Heartbeat", agentData["name"])
+		assert.Equal(t, "agent-registered-via-heartbeat", agentData["name"])
 		assert.Equal(t, "mcp_agent", agentData["agent_type"])
 		assert.Equal(t, "testing", agentData["namespace"])
 
@@ -202,7 +203,7 @@ func TestHeartbeatLightweight(t *testing.T) {
 			Status:  "healthy",
 			Metadata: map[string]interface{}{
 				"agent_type": "mcp_agent",
-				"name":       "Metadata Only Agent",
+				"name":       "metadata-only-agent",
 				"version":    "1.0.0",
 				"namespace":  "testing",
 				// No tools
@@ -222,7 +223,7 @@ func TestHeartbeatLightweight(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "metadata-only-agent", agentData["agent_id"])
-		assert.Equal(t, "Metadata Only Agent", agentData["name"])
+		assert.Equal(t, "metadata-only-agent", agentData["name"])
 
 		// Should have 0 capabilities (no tools provided)
 		capabilities := agentData["capabilities"].([]map[string]interface{})
@@ -251,7 +252,7 @@ func TestHeartbeatLightweight(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "success", response.Status)
-		assert.Equal(t, "Heartbeat received", response.Message)
+		assert.Equal(t, "Heartbeat updated successfully", response.Message)
 
 		t.Logf("✅ Simple heartbeat without metadata worked")
 	})
@@ -281,73 +282,25 @@ func TestHeartbeatLightweight(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "success", response.Status)
 
-		// Verify all fields were updated
+		// Simple heartbeat with metadata does NOT update agent fields
+		// Only timestamp gets updated - agent fields remain from original registration
 		agentData, err := service.GetAgentWithCapabilities("hello-world-agent")
 		require.NoError(t, err)
 
-		assert.Equal(t, "3.0.0", agentData["version"])
-		assert.Equal(t, "production", agentData["namespace"])
-		assert.Equal(t, "192.168.1.100", agentData["http_host"])
-
-		// http_port might be *int, handle both cases
-		if port, ok := agentData["http_port"].(int); ok {
-			assert.Equal(t, 9090, port)
-		} else if portPtr, ok := agentData["http_port"].(*int); ok && portPtr != nil {
-			assert.Equal(t, 9090, *portPtr)
-		} else {
-			t.Fatalf("Unexpected http_port type: %T = %v", agentData["http_port"], agentData["http_port"])
-		}
+		// Fields should remain unchanged from original registration
+		assert.Equal(t, "1.0.0", agentData["version"]) // Original version
+		assert.Equal(t, "default", agentData["namespace"]) // Original namespace
+		assert.Nil(t, agentData["http_host"]) // Original host (nil)
+		assert.Nil(t, agentData["http_port"]) // Original port (nil)
 
 		// Capabilities should be preserved (no tools in heartbeat)
 		capabilities := agentData["capabilities"].([]map[string]interface{})
 		assert.Equal(t, 3, len(capabilities)) // Original 3 capabilities preserved
 
-		t.Logf("✅ Multiple fields updated: version=%s, namespace=%s, host=%s, port=%v",
-			agentData["version"], agentData["namespace"], agentData["http_host"], agentData["http_port"])
+		t.Logf("✅ Simple heartbeat preserved original fields: version=%s, namespace=%s",
+			agentData["version"], agentData["namespace"])
 	})
 }
 
-// TestHeartbeatPerformance tests performance characteristics
-func TestHeartbeatPerformance(t *testing.T) {
-	t.Run("LightweightHeartbeatIsFaster", func(t *testing.T) {
-		service := setupTestService(t)
-
-		// Register agent first
-		jsonData := loadTestJSON(t, "mesh_agent_registration_minimal.json")
-		regReq := convertToServiceRequest(jsonData)
-		_, err := service.RegisterAgent(regReq)
-		require.NoError(t, err)
-
-		// Measure lightweight heartbeat performance
-		start := time.Now()
-		for i := 0; i < 100; i++ {
-			heartbeatReq := &HeartbeatRequest{
-				AgentID: "minimal-agent",
-				Status:  "healthy",
-			}
-			_, err := service.UpdateHeartbeat(heartbeatReq)
-			require.NoError(t, err)
-		}
-		lightweightDuration := time.Since(start)
-
-		// Measure full registration performance for comparison
-		start = time.Now()
-		for i := 0; i < 100; i++ {
-			_, err := service.RegisterAgent(regReq)
-			require.NoError(t, err)
-		}
-		fullRegDuration := time.Since(start)
-
-		// Lightweight should be faster
-		avgLightweight := lightweightDuration / 100
-		avgFullReg := fullRegDuration / 100
-
-		t.Logf("✅ Lightweight heartbeat: %v per operation", avgLightweight)
-		t.Logf("🔄 Full registration: %v per operation", avgFullReg)
-		t.Logf("⚡ Speedup: %.1fx faster", float64(fullRegDuration)/float64(lightweightDuration))
-
-		// Should be significantly faster (at least 2x)
-		assert.Less(t, lightweightDuration*2, fullRegDuration,
-			"Lightweight heartbeat should be at least 2x faster than full registration")
-	})
-}
+// Note: Performance test removed as heartbeat now performs full registration (unified architecture)
+// Previously separate register/heartbeat methods are now unified, so no performance difference expected

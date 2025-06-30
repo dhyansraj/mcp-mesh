@@ -10,6 +10,7 @@ import (
 
 	"mcp-mesh/src/core/config"
 	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry"
 )
 
@@ -34,7 +35,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  HOST                     - Host to bind to (default: localhost)\n")
 		fmt.Fprintf(os.Stderr, "  PORT                     - Port to bind to (default: 8000)\n")
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Database connection URL (default: mcp_mesh_registry.db)\n")
-		fmt.Fprintf(os.Stderr, "  LOG_LEVEL                - Log level (debug, info, warn, error) (default: info)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: INFO)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_DEBUG_MODE      - Enable debug mode (true/false, 1/0, yes/no) - forces DEBUG level\n")
 		fmt.Fprintf(os.Stderr, "  HEALTH_CHECK_INTERVAL    - Health check interval in seconds (default: 30)\n")
 		fmt.Fprintf(os.Stderr, "  CACHE_TTL                - Response cache TTL in seconds (default: 30)\n")
 		fmt.Fprintf(os.Stderr, "\nThe registry service provides:\n")
@@ -75,15 +77,25 @@ func main() {
 		log.Fatalf("❌ Configuration validation failed: %v", err)
 	}
 
-	// Initialize database
-	log.Printf("🗄️  Initializing database: %s", cfg.GetDatabaseURL())
-	db, err := database.Initialize(cfg.Database)
+	// Initialize structured logger
+	appLogger := logger.New(cfg)
+
+	// Set Gin mode early before any Gin engine creation
+	appLogger.SetGinMode()
+
+	// Show startup banner with log level info
+	appLogger.Info("🚀 Starting MCP Mesh Registry Service | %s", appLogger.GetStartupBanner())
+
+	// Initialize database with Ent
+	appLogger.Info("🗄️  Initializing database: %s", cfg.GetDatabaseURL())
+	db, err := database.InitializeEnt(cfg.Database, cfg.IsDebugMode())
 	if err != nil {
-		log.Fatalf("❌ Failed to initialize database: %v", err)
+		appLogger.Error("❌ Failed to initialize database: %v", err)
+		os.Exit(1)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			log.Printf("Warning: Failed to close database: %v", err)
+			appLogger.Warning("Failed to close database: %v", err)
 		}
 	}()
 
@@ -95,8 +107,8 @@ func main() {
 		EnableResponseCache:      cfg.EnableResponseCache,
 	}
 
-	// Create and configure server
-	server := registry.NewServer(db, registryConfig)
+	// Create and configure server using Ent
+	server := registry.NewServer(db, registryConfig, appLogger)
 
 	// Setup graceful shutdown
 	go func() {
@@ -104,21 +116,22 @@ func main() {
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigChan
 
-		log.Printf("🛑 Received signal %v, initiating graceful shutdown...", sig)
+		appLogger.Info("🛑 Received signal %v, initiating graceful shutdown...", sig)
 
 		// Stop server
 		if err := server.Stop(); err != nil {
-			log.Printf("Error during server shutdown: %v", err)
+			appLogger.Error("Error during server shutdown: %v", err)
 		}
 
-		log.Println("✅ Registry service stopped")
+		appLogger.Info("✅ Registry service stopped")
 		os.Exit(0)
 	}()
 
 	// Start server
-	log.Printf("🚀 Starting MCP Mesh Registry Service on %s:%d", cfg.Host, cfg.Port)
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	appLogger.Info("🌟 MCP Mesh Registry Service listening on %s", addr)
 	if err := server.Run(addr); err != nil {
-		log.Fatalf("❌ Failed to start server: %v", err)
+		appLogger.Error("❌ Failed to start server: %v", err)
+		os.Exit(1)
 	}
 }

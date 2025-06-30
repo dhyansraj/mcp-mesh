@@ -47,11 +47,14 @@ func TestConvertMeshAgentRegistrationToMap(t *testing.T) {
 	// Validate basic fields
 	assert.Equal(t, "test-agent", metadata["name"])
 	assert.Equal(t, "mcp_agent", metadata["agent_type"])
-	assert.Equal(t, "stdio", metadata["endpoint"])
 
-	capabilities, ok := metadata["capabilities"].([]string)
+	// Validate tools are preserved
+	tools, ok := metadata["tools"].([]interface{})
 	require.True(t, ok)
-	assert.Contains(t, capabilities, "test_cap")
+	assert.Len(t, tools, 1)
+
+	tool := tools[0].(map[string]interface{})
+	assert.Equal(t, "test_cap", tool["capability"])
 
 	t.Logf("✅ Successfully converted MeshAgentRegistration to service layer format")
 }
