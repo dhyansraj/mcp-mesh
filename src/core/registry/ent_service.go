@@ -319,8 +319,20 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		return nil, fmt.Errorf("failed to register agent: %w", err)
 	}
 
-	// Now that capabilities are saved, calculate dependencies and update agent
-	totalDeps, resolvedDeps := s.calculateAndResolveDependencies(req.Metadata)
+	// Now that capabilities are saved, resolve dependencies for both response AND database counts
+	dependenciesResolved, err := s.ResolveAllDependenciesFromMetadata(req.Metadata)
+	if err != nil {
+		s.logger.Warning("Failed to resolve dependencies for response: %v", err)
+		dependenciesResolved = make(map[string][]*DependencyResolution)
+	}
+
+	// Calculate totals from the resolution map (single source of truth)
+	totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+	resolvedDeps := 0
+	for _, deps := range dependenciesResolved {
+		resolvedDeps += len(deps)
+	}
+
 	s.logger.Info("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedDeps)
 
 	// Update dependency counts in agent record (outside transaction)
@@ -332,13 +344,6 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	if err != nil {
 		s.logger.Warning("Failed to update dependency counts: %v", err)
 		// Don't fail registration over this
-	}
-
-	// Get dependencies resolved for response
-	dependenciesResolved, err := s.ResolveAllDependenciesFromMetadata(req.Metadata)
-	if err != nil {
-		s.logger.Warning("Failed to resolve dependencies for response: %v", err)
-		dependenciesResolved = make(map[string][]*DependencyResolution)
 	}
 
 	s.logger.Info("Agent %s registered successfully", req.AgentID)
@@ -893,93 +898,6 @@ func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *Depend
 	return nil
 }
 
-// calculateAndResolveDependencies counts total dependencies and resolves them at registration time
-func (s *EntService) calculateAndResolveDependencies(metadata map[string]interface{}) (int, int) {
-	totalDeps := 0
-	resolvedDeps := 0
-
-	// Extract tools from metadata
-	toolsData, exists := metadata["tools"]
-	if !exists {
-		return 0, 0
-	}
-
-	toolsList, ok := toolsData.([]interface{})
-	if !ok {
-		return 0, 0
-	}
-
-	// Process each tool and count/resolve dependencies
-	for _, toolData := range toolsList {
-		toolMap, ok := toolData.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Get dependencies for this function
-		if deps, exists := toolMap["dependencies"]; exists {
-			// Handle both []interface{} and []map[string]interface{} formats
-			var depsList []map[string]interface{}
-
-			if depsSlice, ok := deps.([]interface{}); ok {
-				// Convert []interface{} to []map[string]interface{}
-				depsList = make([]map[string]interface{}, len(depsSlice))
-				for i, item := range depsSlice {
-					if depMap, ok := item.(map[string]interface{}); ok {
-						depsList[i] = depMap
-					}
-				}
-			} else if depsMapSlice, ok := deps.([]map[string]interface{}); ok {
-				// Direct []map[string]interface{} format
-				depsList = depsMapSlice
-			}
-
-			for _, depMap := range depsList {
-				totalDeps++
-
-				// Extract dependency info
-				requiredCapability, _ := depMap["capability"].(string)
-				if requiredCapability == "" {
-					continue
-				}
-
-				// Create dependency object
-				dep := database.Dependency{
-					Capability: requiredCapability,
-				}
-
-				if version, exists := depMap["version"]; exists {
-					if vStr, ok := version.(string); ok {
-						dep.Version = vStr
-					}
-				}
-
-				if tags, exists := depMap["tags"]; exists {
-					if tagsList, ok := tags.([]interface{}); ok {
-						dep.Tags = make([]string, len(tagsList))
-						for i, tag := range tagsList {
-							if tagStr, ok := tag.(string); ok {
-								dep.Tags[i] = tagStr
-							}
-						}
-					}
-				}
-
-				// Try to resolve this dependency
-				provider := s.findHealthyProviderWithTTL(dep)
-				if provider != nil {
-					resolvedDeps++
-					s.logger.Debug("Resolved dependency %s -> %s", dep.Capability, provider.AgentID)
-				} else {
-					s.logger.Debug("Could not resolve dependency: %s", dep.Capability)
-				}
-			}
-		}
-	}
-
-	return totalDeps, resolvedDeps
-}
-
 // Helper functions
 
 func getStringFromMap(m map[string]interface{}, key, defaultValue string) string {
@@ -1036,6 +954,42 @@ func hasAllTags(available, required []string) bool {
 		}
 	}
 	return true
+}
+
+// countTotalDependenciesInMetadata counts the total number of dependencies across all tools in metadata
+func countTotalDependenciesInMetadata(metadata map[string]interface{}) int {
+	totalDeps := 0
+
+	// Extract tools from metadata
+	toolsData, exists := metadata["tools"]
+	if !exists {
+		return 0
+	}
+
+	toolsList, ok := toolsData.([]interface{})
+	if !ok {
+		return 0
+	}
+
+	// Process each tool and count dependencies
+	for _, toolData := range toolsList {
+		toolMap, ok := toolData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Get dependencies for this function
+		if deps, exists := toolMap["dependencies"]; exists {
+			// Handle both []interface{} and []map[string]interface{} formats
+			if depsSlice, ok := deps.([]interface{}); ok {
+				totalDeps += len(depsSlice)
+			} else if depsMapSlice, ok := deps.([]map[string]interface{}); ok {
+				totalDeps += len(depsMapSlice)
+			}
+		}
+	}
+
+	return totalDeps
 }
 
 func normalizeName(name string) string {
