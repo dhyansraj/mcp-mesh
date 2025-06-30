@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     git \
     build-essential \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the entire project source for building mcp_mesh
