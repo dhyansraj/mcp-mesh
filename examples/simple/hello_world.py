@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-MCP Mesh Hello World Example
+MCP Mesh Hello World Example with FastMCP Integration
 
-This example demonstrates the core concepts of MCP Mesh:
-1. MCP Mesh tools with automatic dependency injection
-2. Hybrid typing support for development flexibility
-3. Pure simplicity - just decorators, no manual setup!
+This example demonstrates the hybrid FastMCP + MCP Mesh approach:
+1. FastMCP decorators (@app.tool) for familiar MCP development
+2. MCP Mesh decorators (@mesh.tool) for dependency injection and orchestration
+3. Hybrid typing support for development flexibility
+4. Pure simplicity - just dual decorators, no manual setup!
 
 Start this agent, then start system_agent.py to see dependency injection in action!
 """
@@ -13,20 +14,19 @@ Start this agent, then start system_agent.py to see dependency injection in acti
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshAgent
+from fastmcp import FastMCP
+
+# Single FastMCP server instance
+app = FastMCP("Hello World Service")
 
 
-@mesh.agent(name="hello-world", http_port=9090)
-class HelloWorldAgent:
-    """Hello World agent demonstrating MCP Mesh features."""
-
-    pass
 
 
 # ===== MESH FUNCTION WITH SIMPLE TYPING =====
 # Uses Any type for maximum simplicity and flexibility
 
 
+@app.tool()
 @mesh.tool(
     capability="greeting",
     dependencies=["date_service"],
@@ -51,9 +51,10 @@ def hello_mesh_simple(date_service: Any = None) -> str:
 
 
 # ===== MESH FUNCTION WITH TYPED INTERFACE =====
-# Uses McpMeshAgent type for better IDE support and type safety
+# Uses mesh.McpMeshAgent type for better IDE support and type safety
 
 
+@app.tool()
 @mesh.tool(
     capability="advanced_greeting",
     dependencies=[
@@ -64,7 +65,7 @@ def hello_mesh_simple(date_service: Any = None) -> str:
     ],
     description="Advanced greeting with smart tag-based dependency resolution",
 )
-def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
+def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
     """
     MCP Mesh greeting with smart tag-based dependency resolution.
 
@@ -88,6 +89,7 @@ def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
 # Shows multiple dependencies with different typing approaches
 
 
+@app.tool()
 @mesh.tool(
     capability="dependency_test",
     dependencies=[
@@ -101,7 +103,7 @@ def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
 )
 def test_dependencies(
     date_service: Any = None,
-    info: McpMeshAgent | None = None,  # This will get the DISK info service!
+    info: mesh.McpMeshAgent | None = None,  # This will get the DISK info service!
 ) -> dict[str, Any]:
     """
     Test function showing hybrid dependency resolution.
@@ -138,3 +140,34 @@ def test_dependencies(
             result["disk_info_service"] = f"error: {e}"
 
     return result
+
+
+# AGENT configuration - this tells mesh how to run the FastMCP server
+@mesh.agent(
+    name="hello-world",
+    version="1.0.0",
+    description="Hello World service with FastMCP and mesh integration",
+    http_port=9090,
+    enable_http=True,
+    auto_run=True,
+)
+class HelloWorldAgent:
+    """
+    Agent class that configures how mesh should run the FastMCP server.
+
+    The mesh processor will:
+    1. Discover the 'app' FastMCP instance
+    2. Apply dependency injection to decorated functions
+    3. Start the FastMCP HTTP server on the configured port
+    4. Register all capabilities with the mesh registry
+    """
+
+    pass
+
+
+# No main method needed!
+# Mesh processor automatically handles:
+# - FastMCP server discovery and startup
+# - Dependency injection between functions
+# - HTTP server configuration
+# - Service registration with mesh registry

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-MCP Mesh System Agent Example
+MCP Mesh System Agent Example with FastMCP Integration
 
 This agent provides system information capabilities that other agents can depend on.
-Demonstrates the tools vs capabilities architecture:
+Demonstrates the hybrid FastMCP + MCP Mesh architecture:
 
+- FastMCP decorators (@app.tool) for familiar MCP development
+- MCP Mesh decorators (@mesh.tool) for dependency injection and orchestration
 - Tools: Function names (MCP function names)
 - Capabilities: What others can depend on
-- Pure simplicity: Just decorators, no manual setup!
+- Pure simplicity: Just dual decorators, no manual setup!
 
 Function names can be different from capability names for maximum flexibility.
 """
@@ -16,14 +18,12 @@ from datetime import datetime
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshAgent
+from fastmcp import FastMCP
+
+# Single FastMCP server instance
+app = FastMCP("System Agent Service")
 
 
-@mesh.agent(name="system-agent")
-class SystemAgent:
-    """System information agent providing date and info capabilities."""
-
-    pass
 
 
 # Store start time for uptime calculations
@@ -33,6 +33,7 @@ start_time = datetime.now()
 # Tool: "get_current_time" | Capability: "date_service"
 
 
+@app.tool()
 @mesh.tool(
     capability="date_service",  # Capability name (what others depend on)
     description="Get current system date and time",
@@ -57,6 +58,7 @@ def get_current_time() -> str:  # Function name can be anything!
 # Tool: "fetch_system_overview" | Capability: "info"
 
 
+@app.tool()
 @mesh.tool(
     capability="info",  # Generic capability name for smart matching
     description="Get comprehensive system information",
@@ -93,6 +95,7 @@ def fetch_system_overview() -> dict[str, Any]:  # Clear: function name ≠ capab
 # Tool: "get_uptime" | Capability: "uptime_info"
 
 
+@app.tool()
 @mesh.tool(
     capability="uptime_info",  # Capability name (what others depend on)
     description="Get system uptime information",
@@ -119,6 +122,7 @@ def check_how_long_running() -> str:  # Function name can be descriptive and dif
 # Same capability "info" but different tags - shows tag-based filtering
 
 
+@app.tool()
 @mesh.tool(
     capability="info",  # Same capability name!
     description="Get disk and OS information",
@@ -151,6 +155,7 @@ def analyze_storage_and_os() -> dict[str, Any]:  # Completely different function
 # ===== STATUS SERVICE WITH DEPENDENCY =====
 
 
+@app.tool()
 @mesh.tool(
     capability="health_check",
     dependencies=["date_service"],  # Depends on capability name, not function name!
@@ -158,7 +163,7 @@ def analyze_storage_and_os() -> dict[str, Any]:  # Completely different function
     version="1.0.0",
 )
 def perform_health_diagnostic(
-    date_service: McpMeshAgent | None = None,
+    date_service: mesh.McpMeshAgent | None = None,
 ) -> dict[str, Any]:
     """
     Get system status including current time.
@@ -193,3 +198,34 @@ def perform_health_diagnostic(
         status["time_service"] = "not_injected"
 
     return status
+
+
+# AGENT configuration - this tells mesh how to run the FastMCP server
+@mesh.agent(
+    name="system-agent",
+    version="1.0.0",
+    description="System Agent service with FastMCP and mesh integration",
+    http_port=8080,
+    enable_http=True,
+    auto_run=True,
+)
+class SystemAgent:
+    """
+    Agent class that configures how mesh should run the FastMCP server.
+
+    The mesh processor will:
+    1. Discover the 'app' FastMCP instance
+    2. Apply dependency injection to decorated functions
+    3. Start the FastMCP HTTP server on the configured port
+    4. Register all capabilities with the mesh registry
+    """
+
+    pass
+
+
+# No main method needed!
+# Mesh processor automatically handles:
+# - FastMCP server discovery and startup
+# - Dependency injection between functions
+# - HTTP server configuration
+# - Service registration with mesh registry
