@@ -56,6 +56,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+    head:
+      tags: [health]
+      summary: Registry health check (headers only)
+      description: |
+        Returns registry health status headers without response body.
+        Used by Docker/K8s health checks with wget --spider.
+
+        🤖 AI NOTE: Same logic as GET /health but returns only headers.
+        Enables simple health checks: wget --spider http://localhost:8000/health
+      operationId: headHealth
+      responses:
+        "200":
+          description: Registry is healthy (headers only)
 
   /:
     get:

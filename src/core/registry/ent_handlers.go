@@ -38,6 +38,20 @@ func (h *EntBusinessLogicHandlers) GetHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// HeadHealth implements HEAD /health
+func (h *EntBusinessLogicHandlers) HeadHealth(c *gin.Context) {
+	uptime := time.Since(h.startTime).Seconds()
+
+	// Set the same headers as GET /health but without response body
+	c.Header("Content-Type", "application/json")
+	// Optional: Add custom headers that indicate health status
+	c.Header("X-Health-Status", "healthy")
+	c.Header("X-Service-Version", "1.0.0")
+	c.Header("X-Uptime-Seconds", fmt.Sprintf("%d", int(uptime)))
+	
+	c.Status(http.StatusOK)
+}
+
 // GetRoot implements GET /
 func (h *EntBusinessLogicHandlers) GetRoot(c *gin.Context) {
 	response := generated.RootResponse{

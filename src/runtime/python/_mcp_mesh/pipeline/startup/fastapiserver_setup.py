@@ -388,6 +388,7 @@ class FastAPIServerSetupStep(PipelineStep):
         agent_name = agent_config.get("name", "mcp-mesh-agent")
 
         @app.get("/health")
+        @app.head("/health")
         async def health():
             """Basic health check endpoint for Kubernetes."""
             return {
@@ -397,6 +398,7 @@ class FastAPIServerSetupStep(PipelineStep):
             }
 
         @app.get("/ready")
+        @app.head("/ready")
         async def ready():
             """Readiness check for Kubernetes."""
             # Simple readiness check - always ready for now
@@ -409,6 +411,7 @@ class FastAPIServerSetupStep(PipelineStep):
             }
 
         @app.get("/livez")
+        @app.head("/livez")
         async def livez():
             """Liveness check for Kubernetes."""
             return {
