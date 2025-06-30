@@ -253,15 +253,29 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 		dbPath = pm.config.DBPath
 	}
 
-	// Start registry process
-	registryBinary := "./mcp-mesh-registry"
-	if _, err := os.Stat(registryBinary); err != nil {
-		// Try different locations
-		if _, err := os.Stat("cmd/mcp-mesh-registry/mcp-mesh-registry"); err == nil {
-			registryBinary = "cmd/mcp-mesh-registry/mcp-mesh-registry"
-		} else {
-			return nil, fmt.Errorf("registry binary not found")
+	// Start registry process - try multiple locations for registry binary
+	possiblePaths := []string{
+		"./bin/mcp-mesh-registry",           // Preferred location (matches Makefile)
+		"./mcp-mesh-registry",               // Legacy location
+		"./build/mcp-mesh-registry",         // Build directory
+		"cmd/mcp-mesh-registry/mcp-mesh-registry", // Legacy build location
+		"mcp-mesh-registry",                 // In PATH
+	}
+
+	var registryBinary string
+	var binaryFound bool
+
+	// Check each possible location
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			registryBinary = path
+			binaryFound = true
+			break
 		}
+	}
+
+	if !binaryFound {
+		return nil, fmt.Errorf("registry binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", possiblePaths)
 	}
 
 	args := []string{
@@ -271,6 +285,9 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 	// Database path is passed via environment variable, not as an argument
 
 	cmd := exec.Command(registryBinary, args...)
+
+	// Set up environment variables
+	cmd.Env = append(os.Environ(), pm.config.GetRegistryEnvironmentVariables()...)
 
 	// Set working directory
 	workingDir, _ := os.Getwd()
@@ -300,8 +317,8 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 
 	pm.logger.Printf("Started registry process: %s (PID: %d, Port: %d)", name, cmd.Process.Pid, port)
 
-	// Wait for registry to be ready
-	if err := pm.waitForRegistryReady(30 * time.Second); err != nil {
+	// Wait for registry to be ready (reduced timeout for FastAPI registry)
+	if err := pm.waitForRegistryReady(10 * time.Second); err != nil {
 		pm.logger.Printf("Warning: Registry may not be fully ready: %v", err)
 	}
 
@@ -469,7 +486,7 @@ func (pm *ProcessManager) waitForRegistryReady(timeout time.Duration) error {
 			}
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(250 * time.Millisecond) // More frequent checks for FastAPI registry startup
 	}
 
 	return fmt.Errorf("registry did not become ready within timeout")

@@ -78,7 +78,7 @@ func (ppm *PlatformProcessManager) terminateProcessGroup(pgid int, timeout time.
 		return err
 	}
 
-	// Wait for processes to terminate
+	// Wait for processes to terminate with frequent checks for FastAPI agents
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		// Check if process group still exists
@@ -86,7 +86,7 @@ func (ppm *PlatformProcessManager) terminateProcessGroup(pgid int, timeout time.
 			// Process group no longer exists
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) // Optimized for FastAPI agents that terminate quickly
 	}
 
 	// Force kill the process group
