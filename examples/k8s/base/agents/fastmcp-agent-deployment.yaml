@@ -62,8 +62,6 @@ spec:
                   fieldPath: status.podIP
             - name: MCP_MESH_AGENT_NAME
               value: "fastmcp-service"
-            - name: MCP_MESH_AGENT_ID
-              value: "fastmcp-service"
             - name: MCP_MESH_HTTP_HOST
               value: "mcp-mesh-fastmcp-agent"
             - name: MCP_MESH_HTTP_PORT

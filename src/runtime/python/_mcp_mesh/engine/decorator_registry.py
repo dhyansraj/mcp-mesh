@@ -334,18 +334,42 @@ class DecoratorRegistry:
         return overrides
 
     @classmethod
-    def _generate_agent_id(cls, agent_name: Optional[str]) -> str:
-        """Generate agent ID with proper precedence."""
-        # Precedence: env var > agent_name > default "agent"
+    def _resolve_agent_id(cls, agent_name: Optional[str]) -> str:
+        """Resolve agent ID with proper precedence: env var > decorator > default."""
+        # Highest precedence: MCP_MESH_AGENT_ID environment variable (use as-is)
+        if "MCP_MESH_AGENT_ID" in os.environ:
+            agent_id = os.environ["MCP_MESH_AGENT_ID"]
+            logger.debug(f"🔧 Using agent ID from MCP_MESH_AGENT_ID: '{agent_id}'")
+            return agent_id
+
+        # Medium precedence: @mesh.agent(name="...") decorator value
+        if agent_name is not None:
+            logger.debug(
+                f"🔧 Using agent ID from @mesh.agent decorator: '{agent_name}'"
+            )
+            return agent_name
+
+        # Lowest precedence: MCP_MESH_AGENT_NAME env var with UUID (legacy behavior)
         if "MCP_MESH_AGENT_NAME" in os.environ:
             prefix = os.environ["MCP_MESH_AGENT_NAME"]
-        elif agent_name is not None:
-            prefix = agent_name
-        else:
-            prefix = "agent"
+            uuid_suffix = str(uuid.uuid4())[:8]
+            agent_id = f"{prefix}-{uuid_suffix}"
+            logger.debug(
+                f"🔧 Generated agent ID from MCP_MESH_AGENT_NAME: '{agent_id}'"
+            )
+            return agent_id
 
+        # Default: Generate with UUID
         uuid_suffix = str(uuid.uuid4())[:8]
-        return f"{prefix}-{uuid_suffix}"
+        agent_id = f"agent-{uuid_suffix}"
+        logger.debug(f"🔧 Generated default agent ID: '{agent_id}'")
+        return agent_id
+
+    @classmethod
+    def _generate_agent_id(cls, agent_name: Optional[str]) -> str:
+        """Generate agent ID with proper precedence."""
+        # DEPRECATED: Use _resolve_agent_id instead
+        return cls._resolve_agent_id(agent_name)
 
     @classmethod
     def get_resolved_agent_config(cls) -> dict[str, Any]:
@@ -386,10 +410,12 @@ class DecoratorRegistry:
                 logger.debug(f"Applied @mesh.agent configuration from {agent_name}")
                 break  # Use first agent found
 
-        # Generate agent ID and set environment variable for self-dependency detection
-        agent_id = cls._generate_agent_id(config_data.get("name"))
+        # Generate agent ID with proper precedence: env var > decorator > default
+        agent_id = cls._resolve_agent_id(config_data.get("name"))
         config_data["agent_id"] = agent_id
-        os.environ["MCP_MESH_AGENT_ID"] = agent_id
+        # Only set environment variable if it wasn't already set (don't override)
+        if "MCP_MESH_AGENT_ID" not in os.environ:
+            os.environ["MCP_MESH_AGENT_ID"] = agent_id
 
         logger.debug(f"🔧 Resolved agent configuration: agent_id='{agent_id}'")
 

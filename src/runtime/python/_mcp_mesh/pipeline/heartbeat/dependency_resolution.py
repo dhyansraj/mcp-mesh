@@ -52,7 +52,9 @@ class DependencyResolutionStep(PipelineStep):
                 return result
 
             # Use the existing hash-based change detection and rewiring logic
-            await self.process_heartbeat_response_for_rewiring(heartbeat_response)
+            await self.process_heartbeat_response_for_rewiring(
+                heartbeat_response, context
+            )
 
             # For context consistency, also extract dependency count
             dependencies_resolved = registry_wrapper.parse_tool_dependencies(
@@ -124,7 +126,7 @@ class DependencyResolutionStep(PipelineStep):
         ]  # First 16 chars for readability
 
     async def process_heartbeat_response_for_rewiring(
-        self, heartbeat_response: dict[str, Any]
+        self, heartbeat_response: dict[str, Any], context: dict[str, Any] = None
     ) -> None:
         """Process heartbeat response to update existing dependency injection.
 
@@ -233,6 +235,7 @@ class DependencyResolutionStep(PipelineStep):
                         from ...engine.mcp_client_proxy import MCPClientProxy
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
 
+                        # Get current agent ID - should be properly set by configuration step
                         current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
                         target_agent_id = dep_info.get("agent_id")
 
