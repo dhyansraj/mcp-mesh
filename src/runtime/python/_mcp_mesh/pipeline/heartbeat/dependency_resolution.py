@@ -52,9 +52,7 @@ class DependencyResolutionStep(PipelineStep):
                 return result
 
             # Use the existing hash-based change detection and rewiring logic
-            await self.process_heartbeat_response_for_rewiring(
-                heartbeat_response, context
-            )
+            await self.process_heartbeat_response_for_rewiring(heartbeat_response)
 
             # For context consistency, also extract dependency count
             dependencies_resolved = registry_wrapper.parse_tool_dependencies(
@@ -126,7 +124,7 @@ class DependencyResolutionStep(PipelineStep):
         ]  # First 16 chars for readability
 
     async def process_heartbeat_response_for_rewiring(
-        self, heartbeat_response: dict[str, Any], context: dict[str, Any] = None
+        self, heartbeat_response: dict[str, Any]
     ) -> None:
         """Process heartbeat response to update existing dependency injection.
 
@@ -235,15 +233,39 @@ class DependencyResolutionStep(PipelineStep):
                         from ...engine.mcp_client_proxy import MCPClientProxy
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
 
-                        # Get current agent ID - should be properly set by configuration step
-                        current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
+                        # Get current agent ID from DecoratorRegistry (single source of truth)
+                        current_agent_id = None
+                        try:
+                            from ...engine.decorator_registry import DecoratorRegistry
+
+                            config = DecoratorRegistry.get_resolved_agent_config()
+                            current_agent_id = config["agent_id"]
+                            self.logger.debug(
+                                f"🔍 Current agent ID from DecoratorRegistry: '{current_agent_id}'"
+                            )
+                        except Exception as e:
+                            # Fallback to environment variable
+                            current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
+                            self.logger.debug(
+                                f"🔍 Current agent ID from environment: '{current_agent_id}' (fallback due to: {e})"
+                            )
+
                         target_agent_id = dep_info.get("agent_id")
+                        self.logger.debug(
+                            f"🔍 Target agent ID from registry: '{target_agent_id}'"
+                        )
 
                         # Determine if this is a self-dependency
                         is_self_dependency = (
                             current_agent_id
                             and target_agent_id
                             and current_agent_id == target_agent_id
+                        )
+
+                        self.logger.debug(
+                            f"🔍 Self-dependency check for '{capability}': "
+                            f"current='{current_agent_id}' vs target='{target_agent_id}' "
+                            f"→ {'SELF' if is_self_dependency else 'CROSS'}-dependency"
                         )
 
                         if is_self_dependency:

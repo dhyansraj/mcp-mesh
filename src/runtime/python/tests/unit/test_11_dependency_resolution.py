@@ -744,7 +744,6 @@ class TestRewiring:
         mock_injector.register_dependency.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch.dict("os.environ", {"MCP_MESH_AGENT_ID": "current-agent"})
     @patch("_mcp_mesh.engine.dependency_injector.get_global_injector")
     async def test_process_heartbeat_response_self_dependency(
         self, mock_get_injector, step, caplog, clear_global_hash
@@ -769,7 +768,7 @@ class TestRewiring:
                         "endpoint": "http://self:8080/mcp",
                         "function_name": "tool1_impl",
                         "status": "available",
-                        "agent_id": "current-agent",  # Same as MCP_MESH_AGENT_ID
+                        "agent_id": "current-agent",  # Same as DecoratorRegistry agent_id
                     }
                 ]
             }
@@ -777,19 +776,28 @@ class TestRewiring:
 
         caplog.set_level(logging.WARNING)
 
+        # Mock DecoratorRegistry to return the same agent_id as in heartbeat response
         with patch(
-            "_mcp_mesh.engine.self_dependency_proxy.SelfDependencyProxy"
-        ) as mock_self_proxy:
-            mock_proxy_instance = MagicMock()
-            mock_self_proxy.return_value = mock_proxy_instance
+            "_mcp_mesh.engine.decorator_registry.DecoratorRegistry"
+        ) as mock_decorator_registry:
+            mock_config = {"agent_id": "current-agent"}
+            mock_decorator_registry.get_resolved_agent_config.return_value = mock_config
 
-            await step.process_heartbeat_response_for_rewiring(heartbeat_response)
+            with patch(
+                "_mcp_mesh.engine.self_dependency_proxy.SelfDependencyProxy"
+            ) as mock_self_proxy:
+                mock_proxy_instance = MagicMock()
+                mock_self_proxy.return_value = mock_proxy_instance
 
-            assert "SELF-DEPENDENCY: Using direct function call" in caplog.text
-            mock_self_proxy.assert_called_once_with(mock_original_func, "tool1_impl")
-            mock_injector.register_dependency.assert_called_once_with(
-                "tool1", mock_proxy_instance
-            )
+                await step.process_heartbeat_response_for_rewiring(heartbeat_response)
+
+                assert "SELF-DEPENDENCY: Using direct function call" in caplog.text
+                mock_self_proxy.assert_called_once_with(
+                    mock_original_func, "tool1_impl"
+                )
+                mock_injector.register_dependency.assert_called_once_with(
+                    "tool1", mock_proxy_instance
+                )
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.engine.dependency_injector.get_global_injector")

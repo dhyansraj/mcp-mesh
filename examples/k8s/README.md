@@ -370,19 +370,6 @@ All health endpoints support both GET and HEAD methods for efficient monitoring:
 - Kubernetes DNS-based service resolution
 - Dynamic dependency injection between agents
 
-### Self-Dependency Proxy System
-
-MCP Mesh includes an intelligent self-dependency detection system:
-
-- **Automatic Detection**: When a function depends on another function in the same agent, the system detects this automatically
-- **Direct Function Calls**: Uses `SelfDependencyProxy` to call functions directly instead of through HTTP/MCP protocol
-- **Deadlock Prevention**: Avoids circular HTTP calls that would cause timeouts and failures
-- **Performance Optimization**: Direct function calls are much faster than HTTP round-trips
-
-Example: In the FastMCP agent, `calculate_with_timestamp` depends on `time_service` capability provided by `get_current_time` in the same agent. The system automatically creates a direct function call proxy instead of trying to make an HTTP call to itself.
-
-**Important**: Requires `MCP_MESH_AGENT_ID` environment variable to be set correctly for self-dependency detection to work.
-
 ### Agent Code Injection
 
 Agent Python code is stored in ConfigMaps and mounted into containers, allowing easy customization without rebuilding images.
