@@ -8,7 +8,7 @@ Install MCP Mesh using published packages:
 
 ```bash
 # Install MCP Mesh from PyPI with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
+pip install "mcp-mesh>=0.2.0,<0.3.0"
 
 # Download the CLI tools
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
@@ -137,28 +137,48 @@ meshctl start examples/hello_world.py
 Create `hello.py`:
 
 ```python
-from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
+import mesh
+from fastmcp import FastMCP
 
-server = FastMCP(name="hello")
+# Single FastMCP server instance
+app = FastMCP("Hello Service")
 
-@server.tool()
-@mesh_agent(capability="hello", enable_http=True, http_port=8000)
-def say_hello(name: str = "World"):
+@app.tool()  # FastMCP decorator for MCP protocol
+@mesh.tool(capability="greeting")  # Mesh decorator for orchestration
+def say_hello(name: str = "World") -> str:
     return f"Hello, {name}!"
 
-if __name__ == "__main__":
-    server.run(transport="stdio")
+# Agent configuration - mesh handles server startup
+@mesh.agent(
+    name="hello-service",
+    http_port=8000,
+    auto_run=True  # No main method needed!
+)
+class HelloService:
+    pass
+
+# Mesh discovers 'app' and handles everything automatically!
 ```
 
 Run it:
 
 ```bash
 # Start your agent (registry starts automatically)
-meshctl start hello.py  # or ./bin/meshctl start hello.py
+python hello.py
 
-# Test it
-curl http://localhost:8000/hello_say_hello
+# Test it (MCP JSON-RPC format)
+curl -X POST http://localhost:8000/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "say_hello",
+      "arguments": {"name": "MCP Mesh"}
+    }
+  }'
 ```
 
 That's it! You've just created and deployed your first MCP Mesh agent.
@@ -220,7 +240,12 @@ meshctl start --registry-port 8081
 
 Now that MCP Mesh is installed, let's run your first example:
 
-[Running Hello World Example](./03-hello-world.md) →
+**[Running Hello World Example](./03-hello-world.md)** →
+
+### Reference Guides
+
+- **[meshctl CLI](../meshctl-cli.md)** - Command-line tool reference
+- **[Environment Variables](../environment-variables.md)** - Configuration options
 
 ---
 

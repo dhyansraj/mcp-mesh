@@ -1,499 +1,405 @@
 # Understanding Dependency Injection in MCP Mesh
 
-> How agents discover and use each other's capabilities automatically
+> How the dual decorator pattern enables smart service discovery and dependency injection
 
-## What is Dependency Injection?
+## What is Dependency Injection in 0.2.x?
 
-Dependency Injection (DI) in MCP Mesh allows agents to:
+MCP Mesh 0.2.x revolutionizes dependency injection with the **dual decorator pattern**:
 
-- 🔗 Declare dependencies on other agents' capabilities
-- 🔍 Automatically discover and connect to required services
-- 📞 Call remote functions as if they were local
-- 🔄 Handle failover and load balancing transparently
-- 🎯 Focus on business logic, not service discovery
+- 🔗 **Smart capability matching** using tags and metadata
+- 🎯 **Type-safe injection** with `mesh.McpMeshAgent` or flexible `Any` types
+- 🏷️ **Tag-based resolution** for intelligent service selection
+- 📞 **Seamless function calls** - remote functions work like local ones
+- 🔄 **Automatic discovery** - no configuration files or service URLs needed
+- 🚀 **Zero boilerplate** - Mesh handles all the complexity
 
 ## Core Concepts
 
-### 1. Capabilities
+### 1. Capabilities vs Function Names
 
-Each agent exposes **capabilities** - named functionalities that other agents can use:
+In 0.2.x, there's an important distinction:
+
+- **Function names**: What you call via MCP (`hello_mesh_simple`)
+- **Capability names**: What other agents depend on (`greeting`)
 
 ```python
-@mesh_agent(
-    capability="weather",  # This agent provides "weather" capability
-    version="1.0.0"
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("Demo Service")
+
+@app.tool()  # MCP calls use function name: "get_current_time"
+@mesh.tool(
+    capability="date_service",  # Others depend on: "date_service"
+    tags=["system", "time"]
 )
-def get_weather(city: str) -> dict:
-    return {"city": city, "temp": 22, "condition": "sunny"}
+def get_current_time() -> str:  # Function name can be anything!
+    return datetime.now().strftime("%B %d, %Y")
 ```
 
-### 2. Dependencies
+### 2. Simple Dependency Declaration
 
-Agents declare what capabilities they need:
+Declare what capabilities you need:
 
 ```python
-@mesh_agent(
-    capability="travel_advisor",
-    dependencies=["weather_get_weather", "SystemAgent_getDate"]  # Needs these
+@app.tool()
+@mesh.tool(
+    capability="weather_advisor",
+    dependencies=["date_service"]  # ← Simple capability name
 )
-def plan_trip(destination: str, weather_get_weather=None, SystemAgent_getDate=None):
-    weather = weather_get_weather(destination)
-    date = SystemAgent_getDate()
-    return f"On {date}, {destination} will be {weather['condition']}"
+def get_weather_advice(date_service: mesh.McpMeshAgent = None) -> str:
+    if date_service:
+        current_date = date_service()  # Call remote function
+        return f"Weather advice for {current_date}"
+    return "Weather advice (date not available)"
 ```
 
-### 3. Automatic Injection
+### 3. Smart Tag-Based Dependencies
 
-MCP Mesh automatically:
-
-1. Finds agents providing required capabilities
-2. Creates proxy functions for remote calls
-3. Injects them as function parameters
-
-## How It Works
-
-### Step 1: Registration
-
-When an agent starts:
+Use tags for intelligent service selection:
 
 ```python
-# Agent registers its capabilities
-registry.register({
-    "name": "weather-service-001",
-    "capabilities": ["weather"],
-    "functions": ["weather_get_weather", "weather_get_forecast"],
-    "endpoint": "http://localhost:8082",
-    "metadata": {"version": "1.0.0"}
-})
-```
-
-### Step 2: Discovery
-
-When an agent needs dependencies:
-
-```python
-# MCP Mesh queries registry
-for dep in dependencies:
-    agents = registry.find_agents_with_capability(dep)
-    if agents:
-        selected = load_balancer.select(agents)
-        create_proxy_function(dep, selected.endpoint)
-```
-
-### Step 3: Injection
-
-The proxy function is injected:
-
-```python
-# Original function
-def plan_trip(destination: str, weather_get_weather=None):
-    # weather_get_weather is now a callable that makes HTTP requests
-    result = weather_get_weather(destination)  # Remote call happens here
-    return result
-```
-
-## Dependency Declaration Patterns
-
-### 1. Simple Dependencies
-
-```python
-@mesh_agent(
-    capability="analyzer",
-    dependencies=["calculator_add", "calculator_multiply"]
+@app.tool()
+@mesh.tool(
+    capability="system_reporter",
+    dependencies=[
+        "date_service",  # Simple dependency
+        {
+            "capability": "info",
+            "tags": ["system", "general"]  # ← Smart tag matching!
+        }
+    ]
 )
-def analyze_data(data: list, calculator_add=None, calculator_multiply=None):
-    total = calculator_add(data[0], data[1])
-    product = calculator_multiply(data[0], data[1])
-    return {"sum": total, "product": product}
-```
+def create_system_report(
+    date_service: mesh.McpMeshAgent = None,
+    info: mesh.McpMeshAgent = None  # Gets general system info
+) -> dict:
+    report = {"generated_at": "unknown", "system_info": "unavailable"}
 
-### 2. Optional Dependencies
+    if date_service:
+        report["generated_at"] = date_service()
 
-```python
-@mesh_agent(
-    capability="reporter",
-    dependencies=["formatter_pretty_print"],  # Required
-    optional_dependencies=["logger_log"]      # Optional
-)
-def generate_report(data: dict, formatter_pretty_print=None, logger_log=None):
-    report = formatter_pretty_print(data)
-
-    if logger_log:  # Use if available
-        logger_log(f"Report generated: {len(report)} bytes")
+    if info:
+        system_data = info()  # Smart matching gets general info
+        report["system_info"] = system_data
 
     return report
 ```
 
-### 3. Version-Specific Dependencies
+## Smart Tag Matching in Action
+
+### Multiple Services, Same Capability
+
+Consider a system agent providing two different `info` services:
 
 ```python
-@mesh_agent(
-    capability="processor",
+# System agent provides TWO info services with different tags
+app = FastMCP("System Agent")
+
+@app.tool()
+@mesh.tool(
+    capability="info",  # Same capability name
+    tags=["system", "general"]  # General system info
+)
+def fetch_system_overview() -> dict:
+    return {
+        "server_name": "system-agent",
+        "uptime": "120 seconds",
+        "version": "1.0.0"
+    }
+
+@app.tool()
+@mesh.tool(
+    capability="info",  # Same capability name
+    tags=["system", "disk"]  # Disk-specific info
+)
+def analyze_storage_and_os() -> dict:
+    return {
+        "disk_usage": "75%",
+        "filesystem": "ext4",
+        "mount_points": ["/", "/home"]
+    }
+```
+
+### Smart Resolution Based on Tags
+
+Now other agents can request specific info types:
+
+```python
+# Gets GENERAL system info (not disk info)
+@mesh.tool(
+    dependencies=[{
+        "capability": "info",
+        "tags": ["system", "general"]  # Matches first service
+    }]
+)
+def get_general_status(info: mesh.McpMeshAgent = None):
+    return info()  # Returns server_name, uptime, version
+
+# Gets DISK info (not general info)
+@mesh.tool(
+    dependencies=[{
+        "capability": "info",
+        "tags": ["system", "disk"]  # Matches second service
+    }]
+)
+def get_storage_status(info: mesh.McpMeshAgent = None):
+    return info()  # Returns disk_usage, filesystem, mount_points
+```
+
+## Type Safety Options
+
+### Option 1: Type-Safe with `mesh.McpMeshAgent`
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="analytics",
+    dependencies=["time_service", "data_service"]
+)
+def analyze_data(
+    data: list,
+    time_service: mesh.McpMeshAgent = None,  # Type-safe
+    data_service: mesh.McpMeshAgent = None   # IDE support
+) -> dict:
+    timestamp = time_service() if time_service else "unknown"
+    processed = data_service(data) if data_service else data
+
+    return {
+        "analysis": "completed",
+        "timestamp": timestamp,
+        "processed_data": processed
+    }
+```
+
+### Option 2: Flexible with `Any`
+
+```python
+from typing import Any
+
+@app.tool()
+@mesh.tool(
+    capability="flexible_processor",
+    dependencies=["time_service"]
+)
+def process_flexibly(data: Any, time_service: Any = None) -> dict:
+    # Maximum flexibility - works with any proxy implementation
+    result = {"data": data}
+    if time_service:
+        result["timestamp"] = time_service()
+    return result
+```
+
+## Advanced Dependency Patterns
+
+### Self-Dependencies
+
+Agents can depend on their own capabilities:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="health_check",
+    dependencies=["date_service"]  # Uses own date_service
+)
+def perform_health_check(date_service: mesh.McpMeshAgent = None) -> dict:
+    status = {"status": "healthy", "memory": "normal"}
+
+    if date_service:
+        status["timestamp"] = date_service()  # Self-dependency!
+
+    return status
+```
+
+### Complex Tag Combinations
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="comprehensive_report",
     dependencies=[
-        {"capability": "parser", "version": ">=2.0.0"},
-        {"capability": "validator", "version": "~1.5.0"}
+        "date_service",  # Simple dependency
+        {
+            "capability": "info",
+            "tags": ["system", "general"]  # General system info
+        },
+        {
+            "capability": "info",
+            "tags": ["system", "disk"]     # Disk info
+        }
     ]
 )
-def process_document(doc: str, parser_parse=None, validator_validate=None):
-    parsed = parser_parse(doc)
-    validated = validator_validate(parsed)
-    return validated
-```
-
-## Real-World Example
-
-Let's build a multi-agent system:
-
-### 1. Database Agent
-
-```python
-# database_agent.py
-from mcp_mesh import mesh_agent, create_server
-
-server = create_server("database-agent")
-db = {}  # Simple in-memory store
-
-@server.tool()
-@mesh_agent(
-    capability="database",
-    version="1.0.0",
-    enable_http=True,
-    http_port=8090
-)
-def database_save(key: str, value: str) -> bool:
-    """Save data to database"""
-    db[key] = value
-    return True
-
-@server.tool()
-@mesh_agent(
-    capability="database",
-    version="1.0.0",
-    enable_http=True,
-    http_port=8090
-)
-def database_load(key: str) -> str | None:
-    """Load data from database"""
-    return db.get(key)
-```
-
-### 2. Cache Agent
-
-```python
-# cache_agent.py
-from mcp_mesh import mesh_agent, create_server
-from datetime import datetime, timedelta
-
-server = create_server("cache-agent")
-cache = {}
-
-@server.tool()
-@mesh_agent(
-    capability="cache",
-    dependencies=["database_load", "database_save"],
-    version="1.0.0",
-    enable_http=True,
-    http_port=8091
-)
-def cache_get(key: str, database_load=None) -> str | None:
-    """Get from cache or database"""
-    if key in cache:
-        entry = cache[key]
-        if datetime.now() < entry["expires"]:
-            return entry["value"]
-
-    # Cache miss - load from database
-    value = database_load(key)
-    if value:
-        cache[key] = {
-            "value": value,
-            "expires": datetime.now() + timedelta(minutes=5)
-        }
-    return value
-
-@server.tool()
-@mesh_agent(
-    capability="cache",
-    dependencies=["database_save"],
-    version="1.0.0",
-    enable_http=True,
-    http_port=8091
-)
-def cache_set(key: str, value: str, database_save=None) -> bool:
-    """Set in cache and database"""
-    # Write through to database
-    database_save(key, value)
-
-    # Update cache
-    cache[key] = {
-        "value": value,
-        "expires": datetime.now() + timedelta(minutes=5)
+def create_full_report(
+    date_service: mesh.McpMeshAgent = None,
+    info: mesh.McpMeshAgent = None,      # Gets general info
+    disk_info: mesh.McpMeshAgent = None  # Gets disk info
+) -> dict:
+    # This function gets THREE injected services!
+    return {
+        "timestamp": date_service() if date_service else "unknown",
+        "system": info() if info else {},
+        "storage": disk_info() if disk_info else {}
     }
-    return True
 ```
 
-### 3. API Agent
+## How It Works Behind the Scenes
+
+### 1. Service Registration
+
+When agents start, mesh automatically:
 
 ```python
-# api_agent.py
-from mcp_mesh import mesh_agent, create_server
-
-server = create_server("api-agent")
-
-@server.tool()
-@mesh_agent(
-    capability="api",
-    dependencies=["cache_get", "cache_set"],
-    version="1.0.0",
-    enable_http=True,
-    http_port=8092
-)
-def api_store_user(user_id: str, name: str, cache_set=None) -> dict:
-    """Store user data"""
-    key = f"user:{user_id}"
-    value = f'{{"id":"{user_id}","name":"{name}"}}'
-
-    cache_set(key, value)
-    return {"status": "stored", "user_id": user_id}
-
-@server.tool()
-@mesh_agent(
-    capability="api",
-    dependencies=["cache_get"],
-    version="1.0.0",
-    enable_http=True,
-    http_port=8092
-)
-def api_get_user(user_id: str, cache_get=None) -> dict:
-    """Get user data"""
-    key = f"user:{user_id}"
-    value = cache_get(key)
-
-    if value:
-        import json
-        return json.loads(value)
-    return {"error": "User not found"}
+# System agent registers:
+{
+    "agent_id": "system-agent-abc123",
+    "capabilities": {
+        "date_service": {
+            "function": "get_current_time",
+            "tags": ["system", "time"],
+            "endpoint": "http://system-agent:8080/mcp"
+        },
+        "info": [
+            {
+                "function": "fetch_system_overview",
+                "tags": ["system", "general"],
+                "endpoint": "http://system-agent:8080/mcp"
+            },
+            {
+                "function": "analyze_storage_and_os",
+                "tags": ["system", "disk"],
+                "endpoint": "http://system-agent:8080/mcp"
+            }
+        ]
+    }
+}
 ```
 
-### 4. Running the System
+### 2. Dependency Resolution
 
-```bash
-# Terminal 1: Registry
-python -m mcp_mesh.registry.server
-
-# Terminal 2: Database Agent
-python database_agent.py
-
-# Terminal 3: Cache Agent
-python cache_agent.py
-
-# Terminal 4: API Agent
-python api_agent.py
-
-# Test the system
-curl -X POST http://localhost:8092/api_store_user \
-  -d '{"user_id": "123", "name": "Alice"}'
-
-curl -X POST http://localhost:8092/api_get_user \
-  -d '{"user_id": "123"}'
-# Returns: {"id": "123", "name": "Alice"}
-```
-
-## Advanced DI Features
-
-### 1. Circular Dependencies
-
-MCP Mesh detects and prevents circular dependencies:
+When hello world agent starts:
 
 ```python
-# This will raise an error during registration
-@mesh_agent(capability="A", dependencies=["B_func"])
-def a_func(B_func=None): pass
-
-@mesh_agent(capability="B", dependencies=["A_func"])
-def b_func(A_func=None): pass  # Error: Circular dependency
-```
-
-### 2. Dependency Health Checks
-
-```python
-@mesh_agent(
-    capability="critical_service",
-    dependencies=["data_source"],
-    health_check_dependencies=True  # Monitor dependency health
-)
-def process_critical_data(data_source=None):
-    # MCP Mesh ensures data_source is healthy before injection
-    return data_source()
-```
-
-### 3. Fallback Strategies
-
-```python
-@mesh_agent(
-    capability="resilient_service",
-    dependencies=["primary_db"],
-    fallback_mode=True,
-    fallback_strategy="retry"  # retry, circuit_breaker, or custom
-)
-def get_data(key: str, primary_db=None):
-    if primary_db:
-        return primary_db(key)
-    else:
-        # Fallback logic when dependency unavailable
-        return {"error": "Service degraded", "fallback": True}
-```
-
-## Best Practices
-
-### 1. Naming Conventions
-
-```python
-# Good: capability_function
-"database_save"
-"weather_get_forecast"
-"auth_validate_token"
-
-# Bad: ambiguous names
-"save"  # Which service?
-"get"   # Get what?
-```
-
-### 2. Granular Capabilities
-
-```python
-# Good: Specific capabilities
-@mesh_agent(capability="user_management")
-@mesh_agent(capability="user_authentication")
-@mesh_agent(capability="user_profile")
-
-# Bad: Monolithic capability
-@mesh_agent(capability="user")  # Too broad
-```
-
-### 3. Version Management
-
-```python
-# Specify compatible versions
-dependencies=[
-    "payment_v2_process",  # Specific version
-    {"capability": "email", "version": ">=1.0.0"},
-    {"capability": "sms", "version": "~2.1.0"}
+# Mesh resolves dependencies:
+dependencies = [
+    "date_service",  # Finds: system-agent.get_current_time
+    {
+        "capability": "info",
+        "tags": ["system", "general"]  # Finds: system-agent.fetch_system_overview
+    }
 ]
 ```
 
-## Debugging Dependency Injection
+### 3. Proxy Creation
 
-### 1. Enable Debug Logging
-
-```bash
-export MCP_MESH_LOG_LEVEL=DEBUG
-python your_agent.py
-```
-
-### 2. Check Dependency Resolution
+Mesh creates callable proxies:
 
 ```python
-# In your agent code
-import logging
-logger = logging.getLogger(__name__)
-
-@mesh_agent(
-    capability="debug_example",
-    dependencies=["some_service"]
-)
-def my_function(some_service=None):
-    logger.debug(f"Injected function: {some_service}")
-    logger.debug(f"Function type: {type(some_service)}")
-    logger.debug(f"Is callable: {callable(some_service)}")
+# Injected date_service becomes:
+def date_service_proxy():
+    response = http_post("http://system-agent:8080/mcp", {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "get_current_time",  # Function name!
+            "arguments": {}
+        }
+    })
+    return response.result
 ```
 
-### 3. Registry Inspection
+## Testing Dependency Injection
+
+### Check Service Registration
 
 ```bash
-# List all capabilities
-curl http://localhost:8000/capabilities
-
-# Find agents for a capability
-curl http://localhost:8000/agents?capability=weather
-
-# Check dependency graph
-curl http://localhost:8000/dependencies
+# See what services are registered
+curl -s http://localhost:8000/agents | \
+  jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
 ```
 
-## Common Issues and Solutions
+### Test Individual Services
 
-### 1. Dependency Not Found
+```bash
+# Test date service directly
+curl -s -X POST http://localhost:8080/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "get_current_time", "arguments": {}}
+  }' | jq '.result'
 
+# Test dependency injection
+curl -s -X POST http://localhost:9090/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "hello_mesh_simple", "arguments": {}}
+  }' | jq '.result'
 ```
-ERROR: Failed to resolve dependency: weather_get_forecast
+
+## Benefits of the New Pattern
+
+### For Developers
+
+- **Familiar FastMCP** - Keep using `@app.tool()` decorators
+- **Enhanced capabilities** - Add `@mesh.tool()` for orchestration
+- **Type safety** - Choose between `mesh.McpMeshAgent` and `Any`
+- **Smart resolution** - Tag-based service selection
+
+### For Operations
+
+- **Zero configuration** - No service URLs or config files
+- **Automatic discovery** - Services find each other automatically
+- **Graceful degradation** - Functions work without dependencies
+- **Real-time updates** - Dependencies resolve dynamically
+
+## Troubleshooting
+
+### Dependency Not Injected
+
+```bash
+# Check if provider is registered
+curl -s http://localhost:8000/agents | \
+  jq '.agents[] | select(.capabilities | has("date_service"))'
+
+# Check function names vs capabilities
+curl -s -X POST http://localhost:8080/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \
+  jq '.result.tools[] | {name: .name, description: .description}'
 ```
 
-**Solutions:**
+### Wrong Service Selected
 
-- Ensure the provider agent is running
-- Check capability name matches exactly
-- Verify provider registered successfully
+- Check your **tags** - they determine which service is selected
+- Use specific tag combinations for precise matching
+- Remember: `"general"` vs `"disk"` tags select different services
 
-### 2. Type Mismatch
+### Type Errors
 
-```
-ERROR: Dependency injection type mismatch
-```
-
-**Solutions:**
-
-- Ensure parameter name matches dependency
-- Add type hints for clarity
-- Check function signature compatibility
-
-### 3. Performance Issues
-
-**Solutions:**
-
-- Enable connection pooling
-- Use caching for frequently called dependencies
-- Consider colocating dependent services
+- Use `mesh.McpMeshAgent` for better IDE support
+- Use `Any` for maximum flexibility
+- Always check if dependency is `None` before calling
 
 ## Next Steps
 
-Now that you understand dependency injection, let's create your own agent:
+Now that you understand dependency injection, let's create a complete agent:
 
-[Creating Your First Agent](./05-first-agent.md) →
+**[Creating Your First Agent](./05-first-agent.md)** →
+
+### Reference Guides
+
+- **[Mesh Decorators](../mesh-decorators.md)** - Complete decorator parameters and patterns
 
 ---
 
-💡 **Pro Tip**: Use the registry UI (if available) to visualize dependency graphs.
+💡 **Key Insight**: The dual decorator pattern gives you familiar FastMCP development with powerful mesh orchestration - the best of both worlds!
 
-📚 **Exercise**: Modify the cache agent to use TTL from configuration instead of hardcoded 5 minutes.
-
-## 🔧 Troubleshooting
-
-### DI-Specific Issues
-
-1. **Circular dependencies** - Refactor to break the cycle or use lazy loading
-2. **Version conflicts** - Specify exact versions or use version ranges carefully
-3. **Injection not working** - Ensure parameter names match dependency names exactly
-4. **Performance degradation** - Enable connection pooling and caching
-5. **Intermittent failures** - Implement retry logic with exponential backoff
-
-For detailed solutions, see our [Troubleshooting Guide](./troubleshooting.md).
-
-## ⚠️ Known Limitations
-
-- **No compile-time checking**: Dependencies resolved at runtime
-- **Naming conventions**: Must follow capability_function pattern
-- **Type safety**: Limited type checking for injected functions
-- **Circular dependencies**: Not supported, will fail at registration
-- **Dynamic dependencies**: Cannot change dependencies after registration
-- **Cross-language**: Limited support for non-Python agents
-
-## 📝 TODO
-
-- [ ] Add dependency graph visualization UI
-- [ ] Implement compile-time dependency checking
-- [ ] Add support for optional dependencies with defaults
-- [ ] Create dependency mocking for testing
-- [ ] Add metrics for dependency call patterns
-- [ ] Support for GraphQL-style selective field resolution
-- [ ] Implement dependency versioning strategies
+🏷️ **Pro Tip**: Use tags strategically to enable smart service selection - same capability name, different behaviors based on tags.

@@ -50,11 +50,11 @@ Build and push the image:
 ```bash
 # For Minikube (local registry)
 eval $(minikube docker-env)
-docker build -t mcp-mesh/my-agent:latest .
+docker build -t mcp-mesh/my-agent:0.2 .
 
 # For remote registry
-docker build -t myregistry.io/mcp-mesh/my-agent:latest .
-docker push myregistry.io/mcp-mesh/my-agent:latest
+docker build -t myregistry.io/mcp-mesh/my-agent:0.2 .
+docker push myregistry.io/mcp-mesh/my-agent:0.2
 ```
 
 ### Step 2: Create Basic Agent Deployment
@@ -86,7 +86,7 @@ spec:
     spec:
       containers:
         - name: agent
-          image: mcp-mesh-base:latest
+          image: mcp-mesh-base:0.2
           imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:
@@ -612,7 +612,7 @@ kubectl get deployment my-agent -o yaml | grep -A20 env:
 kubectl get configmap,secret -n mcp-mesh
 
 # 3. Test with debug pod
-kubectl run -it debug --image=mcp-mesh/my-agent:latest --rm -- /bin/sh
+kubectl run -it debug --image=mcp-mesh/my-agent:0.2 --rm -- /bin/sh
 ```
 
 ### Issue 2: Deployment Stuck Updating

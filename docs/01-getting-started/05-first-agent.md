@@ -1,16 +1,16 @@
 # Creating Your First Agent
 
-> Build your own MCP Mesh agent from scratch
+> Build a complete weather service agent using the new dual decorator pattern
 
 ## Overview
 
-In this guide, you'll create a weather service agent that:
+In this guide, you'll create a sophisticated weather service agent using MCP Mesh 0.2.x that demonstrates:
 
-- 🌤️ Provides weather information (simulated)
-- 📊 Tracks request metrics
-- 🔗 Uses dependency injection for data formatting
-- 🌐 Exposes HTTP endpoints automatically
-- 💾 Integrates with other agents for persistence
+- 🌤️ **Multiple MCP decorators** - `@app.tool`, `@app.prompt`, `@app.resource`
+- 🔗 **Smart dependency injection** - Type-safe dependencies with tag-based resolution
+- 📊 **Advanced patterns** - Self-dependencies and complex service integration
+- 🎯 **Zero boilerplate** - No main methods or manual server setup
+- 🏷️ **Tag-based resolution** - Intelligent service selection
 
 ## Project Structure
 
@@ -26,678 +26,587 @@ touch requirements.txt
 touch README.md
 ```
 
-## Step 1: Basic Weather Agent
+## Step 1: Basic Weather Agent with Dual Decorators
 
-Let's start with a simple weather agent:
+Create `weather_agent.py`:
 
 ```python
-# weather_agent.py
 #!/usr/bin/env python3
 """
-Weather Service Agent for MCP Mesh
-Provides weather information for cities
+Advanced Weather Service Agent - MCP Mesh 0.2.x Pattern
+
+Demonstrates:
+- Dual decorator pattern (@app + @mesh)
+- All MCP decorators (tool, prompt, resource)
+- Smart dependency injection with type safety
+- Tag-based service resolution
+- Self-dependencies
 """
 
+import json
 import random
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any
 
-from mcp_mesh import mesh_agent, create_server
+import mesh
+from fastmcp import FastMCP
 
-# Create MCP server
-server = create_server("weather-agent")
+# Single FastMCP server instance
+app = FastMCP("Weather Service")
 
 # Simulated weather data
-WEATHER_CONDITIONS = ["sunny", "cloudy", "rainy", "stormy", "snowy"]
+WEATHER_CONDITIONS = ["sunny", "cloudy", "rainy", "snowy", "foggy", "windy"]
 CITIES_DATA = {
-    "london": {"lat": 51.5074, "lon": -0.1278, "timezone": "GMT"},
     "new york": {"lat": 40.7128, "lon": -74.0060, "timezone": "EST"},
+    "london": {"lat": 51.5074, "lon": -0.1278, "timezone": "GMT"},
     "tokyo": {"lat": 35.6762, "lon": 139.6503, "timezone": "JST"},
     "sydney": {"lat": -33.8688, "lon": 151.2093, "timezone": "AEST"},
+    "paris": {"lat": 48.8566, "lon": 2.3522, "timezone": "CET"},
 }
 
+# ===== TOOLS with Smart Dependencies =====
 
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Get current weather for a city",
-    tags=["weather", "temperature", "conditions"],
-    enable_http=True,
-    http_port=8083
+@app.tool()
+@mesh.tool(
+    capability="time_service",
+    tags=["weather", "time"],
+    description="Get current time for weather timestamp"
 )
-def weather_get_current(city: str) -> Dict[str, any]:
+def get_weather_time() -> str:
+    """Get current time in weather service format."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+@app.tool()
+@mesh.tool(
+    capability="weather_data",
+    dependencies=["time_service"],  # Self-dependency!
+    tags=["weather", "core"],
+    description="Get weather data for a city"
+)
+def get_weather(
+    city: str,
+    time_service: mesh.McpMeshAgent = None
+) -> dict[str, Any]:
     """
-    Get current weather for a city
+    Get weather information for a specified city.
 
-    Args:
-        city: City name (lowercase)
-
-    Returns:
-        Weather data including temperature, conditions, humidity
+    Demonstrates self-dependency: uses own time_service capability.
     """
     city_lower = city.lower()
 
     if city_lower not in CITIES_DATA:
         return {
             "error": f"City '{city}' not found",
-            "available_cities": list(CITIES_DATA.keys())
+            "available_cities": list(CITIES_DATA.keys()),
+            "timestamp": time_service() if time_service else "unknown"
         }
 
     # Simulate weather data
-    temp_celsius = random.randint(5, 35)
+    temp_celsius = random.randint(-10, 40)
     condition = random.choice(WEATHER_CONDITIONS)
-    humidity = random.randint(30, 90)
-    wind_speed = random.randint(5, 50)
+    humidity = random.randint(20, 95)
+    wind_speed = random.randint(0, 60)
 
-    return {
-        "city": city,
+    weather_data = {
+        "city": city.title(),
+        "coordinates": CITIES_DATA[city_lower],
         "temperature": {
             "celsius": temp_celsius,
-            "fahrenheit": (temp_celsius * 9/5) + 32
+            "fahrenheit": round((temp_celsius * 9/5) + 32, 1)
         },
         "condition": condition,
         "humidity": f"{humidity}%",
         "wind_speed": f"{wind_speed} km/h",
-        "timestamp": datetime.now().isoformat(),
-        "coordinates": CITIES_DATA[city_lower]
+        "visibility": "10 km" if condition != "foggy" else "2 km",
+        "timestamp": time_service() if time_service else "unknown"
     }
 
+    return weather_data
 
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Get weather forecast",
-    enable_http=True,
-    http_port=8083
+@app.tool()
+@mesh.tool(
+    capability="weather_forecast",
+    dependencies=[
+        "time_service",  # Self-dependency
+        {
+            "capability": "info",  # External dependency
+            "tags": ["system", "general"]  # Smart tag matching
+        }
+    ],
+    tags=["weather", "forecast"],
+    description="Get weather forecast with system info"
 )
-def weather_get_forecast(city: str, days: int = 5) -> Dict[str, any]:
+def get_forecast(
+    city: str,
+    days: int = 3,
+    time_service: mesh.McpMeshAgent = None,
+    info: mesh.McpMeshAgent = None
+) -> dict[str, Any]:
     """
-    Get weather forecast for multiple days
+    Get weather forecast for multiple days.
 
-    Args:
-        city: City name
-        days: Number of days (1-7)
+    Demonstrates:
+    - Self-dependency (time_service)
+    - External dependency (system info)
+    - Smart tag-based resolution
     """
     if days < 1 or days > 7:
-        return {"error": "Days must be between 1 and 7"}
+        days = 3
 
-    city_lower = city.lower()
-    if city_lower not in CITIES_DATA:
-        return {"error": f"City '{city}' not found"}
+    forecast = {
+        "city": city.title(),
+        "forecast_days": days,
+        "generated_at": time_service() if time_service else "unknown",
+        "days": []
+    }
 
-    forecast = []
+    # Add system info if available
+    if info:
+        try:
+            system_data = info()
+            forecast["system_info"] = {
+                "server": system_data.get("server_name", "unknown"),
+                "uptime": system_data.get("uptime_formatted", "unknown")
+            }
+        except Exception as e:
+            forecast["system_info"] = f"Error: {e}"
+
+    # Generate forecast days
     for day in range(days):
-        temp = random.randint(5, 35)
-        forecast.append({
+        temp = random.randint(-5, 35)
+        forecast["days"].append({
             "day": day + 1,
+            "date": f"2024-01-{day + 1:02d}",
             "temperature": {
-                "high": temp + random.randint(0, 5),
-                "low": temp - random.randint(0, 5)
+                "high": temp + random.randint(0, 10),
+                "low": temp - random.randint(0, 8)
             },
             "condition": random.choice(WEATHER_CONDITIONS),
             "precipitation": f"{random.randint(0, 100)}%"
         })
 
-    return {
-        "city": city,
-        "forecast": forecast,
-        "days": days,
-        "generated_at": datetime.now().isoformat()
-    }
+    return forecast
 
+# ===== PROMPTS with Dependencies =====
 
-if __name__ == "__main__":
-    import os
-    import logging
-
-    # Configure logging
-    logging.basicConfig(
-        level=os.environ.get("MCP_MESH_LOG_LEVEL", "INFO"),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    logger = logging.getLogger(__name__)
-    logger.info("Starting Weather Agent...")
-
-    # Run the server
-    from mcp_mesh.server.runner import run_server
-    run_server(server)
-```
-
-## Step 2: Add Dependencies
-
-Now let's enhance our agent to use other services:
-
-```python
-# Add to weather_agent.py
-
-# Import for type hints
-from typing import Any
-
-# Request counter for metrics
-request_count = 0
-
-
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Get weather with formatting",
-    dependencies=["formatter_format_json", "SystemAgent_getTime"],
-    enable_http=True,
-    http_port=8083
+@app.prompt()
+@mesh.tool(
+    capability="weather_prompt",
+    dependencies=["weather_data"],
+    tags=["weather", "ai"],
+    description="Generate weather analysis prompt"
 )
-def weather_get_detailed(
+def weather_analysis_prompt(
     city: str,
-    formatter_format_json: Any = None,
-    SystemAgent_getTime: Any = None
+    analysis_type: str = "detailed",
+    weather_data: mesh.McpMeshAgent = None
 ) -> str:
-    """
-    Get detailed weather with pretty formatting
+    """Generate weather analysis prompt with real data."""
 
-    Uses dependency injection for:
-    - formatter_format_json: Pretty print JSON data
-    - SystemAgent_getTime: Add current time
-    """
-    global request_count
-    request_count += 1
+    # Get current weather
+    weather = {}
+    if weather_data:
+        try:
+            weather = weather_data(city)
+        except Exception as e:
+            weather = {"error": str(e)}
 
-    # Get weather data
-    weather = weather_get_current(city)
+    prompt = f"""Analyze the weather conditions for {city.title()}:
 
-    # Add additional details
-    weather["request_id"] = request_count
+Current Weather Data:
+{json.dumps(weather, indent=2)}
 
-    if SystemAgent_getTime:
-        weather["server_time"] = SystemAgent_getTime()
+Analysis Type: {analysis_type}
 
-    # Format the output
-    if formatter_format_json:
-        return formatter_format_json(weather)
-    else:
-        # Fallback formatting
-        import json
-        return json.dumps(weather, indent=2)
+Please provide:
+1. Current conditions summary
+2. Comfort level assessment
+3. Activity recommendations
+4. What to wear suggestions
+5. Weather pattern insights
 
+Focus on practical advice for residents and visitors."""
 
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Store weather history",
-    dependencies=["database_save"],
-    optional_dependencies=["cache_set"],
-    enable_http=True,
-    http_port=8083
+    return prompt
+
+# ===== RESOURCES with Complex Dependencies =====
+
+@app.resource("weather://config/{city}")
+@mesh.tool(
+    capability="weather_config",
+    dependencies=["time_service"],
+    tags=["weather", "config"],
+    description="Weather service configuration"
 )
-def weather_record_observation(
-    city: str,
-    temperature: float,
-    condition: str,
-    database_save: Any = None,
-    cache_set: Any = None
-) -> Dict[str, any]:
-    """
-    Record a weather observation
+async def weather_config(city: str, time_service: mesh.McpMeshAgent = None) -> str:
+    """Weather service configuration for specific city."""
 
-    Dependencies:
-    - database_save: Store in persistent database
-    - cache_set: Cache for quick access (optional)
-    """
-    observation = {
-        "city": city,
-        "temperature": temperature,
-        "condition": condition,
-        "timestamp": datetime.now().isoformat(),
-        "source": "manual_observation"
-    }
-
-    # Generate unique key
-    key = f"weather:observation:{city}:{datetime.now().timestamp()}"
-
-    # Save to database (required)
-    if database_save:
-        database_save(key, json.dumps(observation))
-    else:
-        return {"error": "Database service unavailable"}
-
-    # Cache if available (optional)
-    if cache_set:
-        cache_key = f"weather:latest:{city}"
-        cache_set(cache_key, json.dumps(observation))
-
-    return {
-        "status": "recorded",
-        "key": key,
-        "observation": observation,
-        "cached": cache_set is not None
-    }
-```
-
-## Step 3: Add Health Checks and Metrics
-
-```python
-# Add to weather_agent.py
-
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Health check endpoint",
-    enable_http=True,
-    http_port=8083,
-    http_path="/health"  # Custom path
-)
-def weather_health() -> Dict[str, any]:
-    """Health check for weather service"""
-    return {
-        "status": "healthy",
+    config = {
+        "service_name": "Weather Service",
         "version": "1.0.0",
-        "requests_served": request_count,
-        "available_cities": len(CITIES_DATA),
-        "timestamp": datetime.now().isoformat()
+        "city": city.title(),
+        "capabilities": [
+            "weather_data",
+            "weather_forecast",
+            "weather_prompt",
+            "weather_config",
+            "time_service"
+        ],
+        "features": {
+            "real_time_data": False,
+            "forecast_days": 7,
+            "multiple_cities": True,
+            "ai_analysis": True
+        },
+        "dependencies": {
+            "internal": ["time_service"],
+            "external": ["info (system.general)"]
+        },
+        "last_updated": time_service() if time_service else "unknown"
     }
 
+    return json.dumps(config, indent=2)
 
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Get service metrics",
-    enable_http=True,
-    http_port=8083,
-    http_path="/metrics"
+@app.resource("weather://stats/{metric}")
+@mesh.tool(
+    capability="weather_stats",
+    dependencies=["weather_data", "time_service"],
+    tags=["weather", "metrics"],
+    description="Weather service statistics"
 )
-def weather_metrics() -> Dict[str, any]:
-    """Get weather service metrics"""
-    return {
-        "requests": {
-            "total": request_count,
-            "per_minute": request_count / max(1, (datetime.now().timestamp() - start_time) / 60)
+async def weather_stats(
+    metric: str,
+    weather_data: mesh.McpMeshAgent = None,
+    time_service: mesh.McpMeshAgent = None
+) -> str:
+    """Get weather service statistics."""
+
+    stats = {
+        "metric_type": metric,
+        "service_status": "operational",
+        "cities_supported": len(CITIES_DATA),
+        "features_count": 5,
+        "dependencies_resolved": {
+            "weather_data": weather_data is not None,
+            "time_service": time_service is not None
         },
-        "cities": {
-            "available": list(CITIES_DATA.keys()),
-            "count": len(CITIES_DATA)
-        },
-        "uptime_seconds": datetime.now().timestamp() - start_time,
-        "version": "1.0.0"
+        "generated_at": time_service() if time_service else "unknown"
     }
 
-# Add at module level
-start_time = datetime.now().timestamp()
+    if metric == "performance":
+        stats.update({
+            "avg_response_time": "150ms",
+            "uptime": "99.9%",
+            "requests_per_second": 42
+        })
+    elif metric == "usage":
+        stats.update({
+            "daily_requests": 1250,
+            "popular_cities": ["new york", "london", "tokyo"],
+            "forecast_vs_current": "60/40"
+        })
+
+    return json.dumps(stats, indent=2)
+
+# ===== AGENT CONFIGURATION =====
+
+@mesh.agent(
+    name="weather-service",
+    version="1.0.0",
+    description="Advanced weather service with FastMCP and mesh integration",
+    http_port=9091,
+    enable_http=True,
+    auto_run=True  # Zero boilerplate!
+)
+class WeatherService:
+    """
+    Weather Service Agent using dual decorator pattern.
+
+    Features:
+    - All MCP decorators: tools, prompts, resources
+    - Smart dependency injection with type safety
+    - Self-dependencies for internal coordination
+    - External dependencies with tag-based resolution
+    - Zero boilerplate - mesh handles everything
+    """
+    pass
+
+# No main method needed!
+# Mesh processor automatically:
+# 1. Discovers the 'app' FastMCP instance
+# 2. Applies dependency injection to all decorated functions
+# 3. Starts HTTP server on configured port
+# 4. Registers all capabilities with mesh registry
 ```
 
-## Step 4: Configuration and Requirements
+## Step 2: Dependencies File
 
-Create the requirements file:
+Create `requirements.txt`:
 
 ```txt
-# requirements.txt
-mcp-mesh>=1.0.0
-python-dotenv>=1.0.0
+mcp-mesh>=0.2.0,<0.3.0
+fastmcp>=0.2.0
 ```
 
-Create a configuration file:
+## Step 3: Documentation
 
-```python
-# config.py
-import os
-from dotenv import load_dotenv
+Create `README.md`:
 
-# Load environment variables
-load_dotenv()
+````markdown
+# Weather Service Agent
 
-class Config:
-    # Registry settings
-    REGISTRY_URL = os.getenv("MCP_MESH_REGISTRY_URL", "http://localhost:8000")
+Advanced weather service using MCP Mesh 0.2.x dual decorator pattern.
 
-    # HTTP settings
-    HTTP_HOST = os.getenv("MCP_MESH_HTTP_HOST", "0.0.0.0")
-    HTTP_PORT = int(os.getenv("MCP_MESH_HTTP_PORT", "8083"))
+## Features
 
-    # Weather settings
-    DEFAULT_CITY = os.getenv("WEATHER_DEFAULT_CITY", "london")
-    CACHE_DURATION = int(os.getenv("WEATHER_CACHE_DURATION", "300"))  # seconds
+- **All MCP Decorators**: Tools, prompts, and resources
+- **Smart Dependencies**: Type-safe injection with tag-based resolution
+- **Self-Dependencies**: Internal service coordination
+- **Zero Boilerplate**: No main methods or manual setup
 
-    # Logging
-    LOG_LEVEL = os.getenv("MCP_MESH_LOG_LEVEL", "INFO")
-```
-
-## Step 5: Running Your Agent
-
-### 1. Install Dependencies
+## Usage
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install requirements
-pip install -r requirements.txt
-```
-
-### 2. Start Required Services
-
-```bash
-# Terminal 1: Registry
-python -m mcp_mesh.registry.server
-
-# Terminal 2: System Agent (if using dependencies)
-cd ../examples
-python system_agent.py
-```
-
-### 3. Run Your Weather Agent
-
-```bash
-# Terminal 3: Your Weather Agent
-export MCP_MESH_REGISTRY_URL=http://localhost:8000
-export MCP_MESH_LOG_LEVEL=INFO
+# Start the weather service
 python weather_agent.py
 
-# You should see:
-# INFO: Starting Weather Agent...
-# INFO: Registering with registry at http://localhost:8000
-# INFO: HTTP server starting on http://0.0.0.0:8083
-# INFO: Agent registered successfully
+# Start system agent (for external dependencies)
+python ../examples/simple/system_agent.py
 ```
+````
 
-### 4. Test Your Agent
+## Testing
 
 ```bash
-# Get current weather
-curl http://localhost:8083/weather_get_current \
-  -d '{"city": "london"}'
+# Test weather data
+curl -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_weather", "arguments": {"city": "tokyo"}}}'
 
-# Get forecast
-curl http://localhost:8083/weather_get_forecast \
-  -d '{"city": "tokyo", "days": 3}'
-
-# Check health
-curl http://localhost:8083/health
-
-# Get metrics
-curl http://localhost:8083/metrics
+# Test forecast with dependencies
+curl -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_forecast", "arguments": {"city": "london", "days": 5}}}'
 ```
 
-## Step 6: Advanced Features
+````
 
-### 1. Add Caching
+## Step 4: Testing Your Agent
 
-```python
-# In-memory cache
-weather_cache = {}
+### Start the Services
 
-@mesh_agent(capability="weather", version="1.0.0")
-def weather_get_cached(city: str) -> Dict[str, any]:
-    """Get weather with caching"""
-    cache_key = f"weather:{city.lower()}"
+```bash
+# Terminal 1: Start system agent (provides external dependencies)
+python examples/simple/system_agent.py
 
-    # Check cache
-    if cache_key in weather_cache:
-        entry = weather_cache[cache_key]
-        if datetime.now().timestamp() - entry["timestamp"] < Config.CACHE_DURATION:
-            return entry["data"]
+# Terminal 2: Start your weather agent
+python weather_agent.py
+````
 
-    # Cache miss - get fresh data
-    data = weather_get_current(city)
-    weather_cache[cache_key] = {
-        "data": data,
-        "timestamp": datetime.now().timestamp()
+### Test All Features
+
+```bash
+# 1. Test basic weather data (self-dependency)
+curl -s -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_weather",
+      "arguments": {"city": "tokyo"}
     }
+  }' | jq '.result'
 
-    return data
-```
-
-### 2. Add Validation
-
-```python
-from pydantic import BaseModel, validator
-
-class WeatherRequest(BaseModel):
-    city: str
-    units: str = "celsius"
-
-    @validator('city')
-    def city_must_be_valid(cls, v):
-        if v.lower() not in CITIES_DATA:
-            raise ValueError(f"Unknown city: {v}")
-        return v.lower()
-
-@mesh_agent(capability="weather", version="1.0.0")
-def weather_get_validated(request: WeatherRequest) -> Dict[str, any]:
-    """Get weather with input validation"""
-    return weather_get_current(request.city)
-```
-
-### 3. Add Async Support
-
-```python
-import asyncio
-
-@server.tool()
-@mesh_agent(capability="weather", version="1.0.0")
-async def weather_get_async(city: str) -> Dict[str, any]:
-    """Async weather fetching"""
-    # Simulate async operation
-    await asyncio.sleep(0.1)
-    return weather_get_current(city)
-```
-
-## Testing Your Agent
-
-Create a test file:
-
-```python
-# test_weather_agent.py
-import pytest
-import requests
-
-BASE_URL = "http://localhost:8083"
-
-def test_get_current_weather():
-    """Test getting current weather"""
-    response = requests.post(
-        f"{BASE_URL}/weather_get_current",
-        json={"city": "london"}
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "temperature" in data
-    assert "condition" in data
-    assert data["city"] == "london"
-
-def test_invalid_city():
-    """Test with invalid city"""
-    response = requests.post(
-        f"{BASE_URL}/weather_get_current",
-        json={"city": "invalid_city"}
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "error" in data
-    assert "available_cities" in data
-
-def test_health_check():
-    """Test health endpoint"""
-    response = requests.get(f"{BASE_URL}/health")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "healthy"
-```
-
-## Packaging Your Agent
-
-### 1. Create Dockerfile
-
-```dockerfile
-# Dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-ENV MCP_MESH_REGISTRY_URL=http://mcp-mesh-registry:8000
-ENV MCP_MESH_HTTP_PORT=8083
-
-EXPOSE 8083
-
-CMD ["python", "weather_agent.py"]
-```
-
-### 2. Create docker-compose.yml
-
-```yaml
-# docker-compose.yml
-version: "3.8"
-
-services:
-  weather-agent:
-    build: .
-    ports:
-      - "8083:8083"
-    environment:
-      - MCP_MESH_REGISTRY_URL=http://registry:8000
-      - MCP_MESH_LOG_LEVEL=INFO
-    depends_on:
-      - registry
-    networks:
-      - mcp-mesh
-
-networks:
-  mcp-mesh:
-    external: true
-```
-
-## Best Practices
-
-### 1. Error Handling
-
-```python
-@mesh_agent(capability="weather")
-def weather_safe_get(city: str) -> Dict[str, any]:
-    """Weather with comprehensive error handling"""
-    try:
-        if not city or not isinstance(city, str):
-            return {"error": "Invalid city parameter"}
-
-        result = weather_get_current(city)
-        return result
-
-    except Exception as e:
-        logger.error(f"Error getting weather: {e}")
-        return {
-            "error": "Internal service error",
-            "message": str(e),
-            "city": city
-        }
-```
-
-### 2. Documentation
-
-```python
-@mesh_agent(
-    capability="weather",
-    version="1.0.0",
-    description="Production weather service",
-    tags=["weather", "api", "v1"],
-    metadata={
-        "author": "Your Name",
-        "docs": "https://docs.example.com/weather",
-        "sla": "99.9%"
+# 2. Test forecast (self + external dependencies)
+curl -s -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_forecast",
+      "arguments": {"city": "london", "days": 3}
     }
+  }' | jq '.result'
+
+# 3. Test prompt generation
+curl -s -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prompts/get",
+    "params": {
+      "name": "weather_analysis_prompt",
+      "arguments": {"city": "paris", "analysis_type": "detailed"}
+    }
+  }' | jq '.result'
+
+# 4. Test resource access
+curl -s -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "resources/read",
+    "params": {
+      "uri": "weather://config/sydney"
+    }
+  }' | jq '.result'
+```
+
+### Verify Service Integration
+
+```bash
+# Check what services are registered
+curl -s http://localhost:8000/agents | \
+  jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
+
+# List all available tools
+curl -s -X POST http://localhost:9091/mcp/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \
+  jq '.result.tools[] | {name: .name, description: .description}'
+```
+
+## Understanding What You Built
+
+### The Dual Decorator Pattern
+
+Your agent demonstrates the power of MCP Mesh 0.2.x:
+
+```python
+@app.tool()      # ← FastMCP: Handles MCP protocol
+@mesh.tool(      # ← Mesh: Adds orchestration
+    capability="weather_data",
+    dependencies=["time_service"]  # Smart dependency injection
 )
-def weather_documented(city: str) -> Dict[str, any]:
-    """
-    Get current weather conditions.
-
-    Args:
-        city: City name (case-insensitive)
-
-    Returns:
-        Dict containing:
-        - temperature: Current temperature in C and F
-        - condition: Weather condition string
-        - humidity: Humidity percentage
-        - wind_speed: Wind speed in km/h
-
-    Raises:
-        ValueError: If city is not found
-
-    Example:
-        >>> weather_documented("london")
-        {"temperature": {"celsius": 18, "fahrenheit": 64}, ...}
-    """
-    return weather_get_current(city)
+def get_weather(city: str, time_service: mesh.McpMeshAgent = None):
+    # Business logic here
 ```
+
+### Key Innovations
+
+1. **All MCP Decorators**: `@app.tool`, `@app.prompt`, `@app.resource`
+2. **Smart Dependencies**: Tag-based resolution with type safety
+3. **Self-Dependencies**: Internal service coordination
+4. **Zero Boilerplate**: Mesh discovers `app` and handles everything
+
+### Dependency Flow
+
+```
+Weather Agent Dependencies:
+├── Internal (Self-dependencies)
+│   └── time_service → get_weather_time()
+├── External (Cross-service)
+│   └── info (system.general) → system_agent.fetch_system_overview()
+└── Automatic Resolution
+    ├── Mesh finds providers
+    ├── Creates type-safe proxies
+    └── Injects into function parameters
+```
+
+## Advanced Patterns Demonstrated
+
+### 1. Self-Dependencies
+
+```python
+# Agent uses its own time service
+@mesh.tool(
+    capability="weather_data",
+    dependencies=["time_service"]  # Own capability!
+)
+```
+
+### 2. Smart Tag Resolution
+
+```python
+# Gets general system info (not disk info)
+dependencies=[{
+    "capability": "info",
+    "tags": ["system", "general"]  # Smart matching
+}]
+```
+
+### 3. Type Safety
+
+```python
+# Type-safe injection
+def get_forecast(
+    time_service: mesh.McpMeshAgent = None,  # IDE support
+    info: mesh.McpMeshAgent = None          # Type hints
+):
+```
+
+### 4. Graceful Degradation
+
+```python
+# Works with or without dependencies
+timestamp = time_service() if time_service else "unknown"
+```
+
+## Troubleshooting
+
+### Service Not Starting
+
+```bash
+# Check port availability
+lsof -i :9091
+
+# Check for import errors
+python -c "import mesh, fastmcp; print('Dependencies OK')"
+```
+
+### Dependencies Not Injected
+
+```bash
+# Verify system agent is running
+curl -s http://localhost:8080/health
+
+# Check service registration
+curl -s http://localhost:8000/agents | jq '.agents[].name'
+```
+
+### Function Not Found
+
+- MCP calls use **function names**: `get_weather`
+- Dependencies use **capability names**: `weather_data`
+- Make sure both are correct in your decorators
 
 ## Next Steps
 
-Congratulations! You've created a fully functional MCP Mesh agent with:
+Congratulations! You've built a sophisticated agent using MCP Mesh 0.2.x. You've learned:
 
-- ✅ Multiple endpoints
-- ✅ Dependency injection
-- ✅ Health checks and metrics
-- ✅ Error handling
-- ✅ Testing
-- ✅ Docker packaging
+✅ **Dual decorator pattern** - FastMCP + Mesh orchestration
+✅ **All MCP decorators** - Tools, prompts, and resources
+✅ **Smart dependencies** - Type-safe injection with tags
+✅ **Zero boilerplate** - Automatic service discovery and startup
 
-### Where to Go Next
+### What's Next?
 
-1. **[Local Development](../02-local-development.md)** - Set up a professional development environment
-2. **[Docker Deployment](../03-docker-deployment.md)** - Deploy multiple agents with Docker Compose
-3. **[Kubernetes Deployment](../04-kubernetes-basics.md)** - Scale to Kubernetes
+1. **[Local Development](../02-local-development.md)** - Set up professional dev environment
+2. **[Docker Deployment](../03-docker-deployment.md)** - Containerize your agents
+3. **[Kubernetes](../04-kubernetes-basics.md)** - Scale to production
 
-### Ideas for Enhancement
+### Reference Guides
 
-1. Add real weather API integration (OpenWeatherMap, etc.)
-2. Implement historical weather tracking
-3. Add weather alerts and notifications
-4. Create a web UI for your weather service
-5. Add machine learning for weather prediction
+- **[Mesh Decorators](../mesh-decorators.md)** - Complete decorator reference with all parameters
+- **[meshctl CLI](../meshctl-cli.md)** - Command-line tool for managing agents
+- **[Environment Variables](../environment-variables.md)** - Configuration options and templates
 
 ---
 
-🎉 **Congratulations!** You've completed the Getting Started guide!
+💡 **Key Insight**: The dual decorator pattern gives you the familiar FastMCP experience enhanced with powerful mesh orchestration!
 
-💡 **Challenge**: Extend your weather agent to use a real weather API and add a simple web interface.
+🎯 **Pro Tip**: Use self-dependencies for internal coordination and tag-based dependencies for smart external service selection.
 
-## 🔧 Troubleshooting
-
-### Development Issues
-
-1. **Agent won't register** - Check capability name is unique and valid
-2. **Dependencies not injecting** - Verify dependency services are running
-3. **HTTP endpoint not accessible** - Ensure firewall allows the port
-4. **Tests failing** - Start all required services before running tests
-5. **Memory leaks** - Monitor with memory profiler, check for circular references
-
-For detailed solutions, see our [Troubleshooting Guide](./troubleshooting.md).
-
-## ⚠️ Known Limitations
-
-- **Hot reload**: Changes to decorators require restart
-- **Async complexity**: Mixing sync/async requires careful handling
-- **Error propagation**: Remote errors may lose stack traces
-- **Testing dependencies**: Requires running actual services or mocks
-- **Code generation**: No automatic client SDK generation yet
-
-## 📝 TODO
-
-- [ ] Add agent template generator CLI command
-- [ ] Create VSCode extension for MCP Mesh development
-- [ ] Add automatic API documentation generation
-- [ ] Implement contract testing framework
-- [ ] Create agent marketplace/registry
-- [ ] Add performance profiling decorators
-- [ ] Support for streaming responses
-- [ ] Add GraphQL endpoint generation
+🚀 **Achievement Unlocked**: You've mastered the MCP Mesh 0.2.x dual decorator pattern! Ready for production deployment?

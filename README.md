@@ -8,47 +8,28 @@
 [![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
 [![License](https://img.shields.io/badge/license-Open%20Source-blue.svg)](#license)
 
-> **MCP Mesh extends the MCP ecosystem** to Kubernetes and distributed environments, bringing the same elegant simplicity of MCP to production-scale deployments with just two Python decorators. **MCP is revolutionizing AI tool integration** - but what if you could scale MCP applications across distributed infrastructure as easily as running them locally?
+> **The future of AI is not one large model, but many specialized agents working together.**
 
-A Kubernetes-native platform for building and orchestrating distributed MCP (Model Context Protocol) applications with dynamic dependency injection. Each agent runs independently but can dynamically discover and connect to other capabilities in the mesh.
+MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) to distributed environments. Build production-ready AI agent networks with just two Python decorators - agents automatically discover each other and work together across Kubernetes clusters.
 
-## Key Features
+## Why MCP Mesh?
 
-### **Dynamic Dependency Injection**
+**MCP revolutionized AI tool integration** - now scale those same patterns to production.
 
-- **Pull-based capability discovery**: Agents declare what they need, registry coordinates who provides it
-- **Runtime function injection**: Python runtime automatically injects remote capabilities as function parameters
-- **Transparent remote calls**: Call functions on other agents exactly like local functions - no networking code required
-- **Hot-swappable dependencies**: Add, remove, or update capabilities without restarting services
-- **Graceful degradation**: Agents work standalone and enhance when dependencies become available
+### **Core Design Principles**
 
-### **Resilient Architecture**
+- **Registry as Brain**: Centralized intelligence for dependency resolution and service discovery
+- **Runtime as Wrapper**: Thin language runtimes enable multi-language agent development
+- **Pre-Injected Dependencies**: Lightweight proxies are resolved in background, not at call time
+- **Background Orchestration**: Mesh coordinates in the background, agents focus on business logic
 
-- **Registry as facilitator, not gatekeeper**: Service discovery through registry, but MCP calls flow directly between agents
-- **Network-aware proxy generation**: Python runtime creates HTTP proxies for seamless remote MCP communication
-- **Fault tolerance**: Agents continue working if registry becomes unavailable
-- **Self-healing connections**: Automatic reconnection when services come back online
+### **Key Features**
 
-### **MCP Protocol Enhancement**
-
-- **Full MCP compatibility**: Works with existing MCP clients and tools
-- **Extended capabilities**: Advanced dependency resolution with version constraints and tags
-- **Dynamic topology**: Real-time capability updates as services join or leave the mesh
-- **Protocol transparency**: Remote calls look identical to local function calls
-
-### **Production-Ready Infrastructure**
-
-- **Kubernetes-native**: Deploy agents as independent pods with automatic scaling
-- **Database flexibility**: SQLite for development, PostgreSQL for production
-- **Multi-environment support**: Local development, Docker Compose, and Kubernetes deployment
-- **Service mesh architecture**: Intelligent routing and load balancing between agents
-
-### **Developer Experience**
-
-- **Two-decorator architecture**: Build distributed MCP agents with just `@mesh.agent` and `@mesh.tool`
-- **Zero boilerplate**: No manual server setup, routing, or service discovery code required
-- **Local-to-distributed**: Same code works locally and scales to Kubernetes automatically
-- **Familiar patterns**: Standard Python functions become distributed capabilities
+- **Two Decorators**: `@mesh.agent` and `@mesh.tool` - that's all you need
+- **Automatic Discovery**: Agents find each other without configuration
+- **Smart Dependencies**: Version constraints, tags, and graceful degradation
+- **Kubernetes Native**: Production-ready with scaling, health checks, and observability
+- **MCP Compatible**: Works with existing MCP tools and clients
 
 ## Architecture Overview
 
@@ -60,19 +41,23 @@ A Kubernetes-native platform for building and orchestrating distributed MCP (Mod
 │  │   Agent A       │    │   Agent B       │    │   Agent C   │  │
 │  │   @mesh.tool    │    │   @mesh.tool    │    │ @mesh.tool  │  │
 │  │   ┌───────────┐ │    │   ┌───────────┐ │    │ ┌─────────┐ │  │
-│  │   │FastMCP    │ │    │   │FastMCP    │ │    │ │FastMCP  │ │  │
+│  │   │FastMCP    │◄┼────┼──►│FastMCP    │◄┼────┼─►│FastMCP  │ │  │
 │  │   │Server     │ │    │   │Server     │ │    │ │Server   │ │  │
 │  │   └───────────┘ │    │   └───────────┘ │    │ └─────────┘ │  │
-│  └─────────────────┘    └─────────────────┘    └─────────────┘  │
-│           │                       │                     │       │
-│           └───────────────────────┼─────────────────────┘       │
-│                                   │                             │
+│  └─────────┬───────┘    └─────────┬───────┘    └─────┬───────┘  │
+│            │                      │                  │          │
+│            │                      │                  │          │
+│            │    Heartbeat +       │    Heartbeat +   │          │
+│            │    Discovery         │    Discovery     │          │
+│            │                      │                  │          │
+│            └──────────────────────┼──────────────────┘          │
+│                                   ▼                             │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │                    Registry Service                        │ │
+│  │             Registry Service (Background)                  │ │
 │  │                                                            │ │
 │  │  ┌─────────────────┐    ┌────────────────────────────────┐ │ │
 │  │  │   Capability    │    │     Dependency Resolution      │ │ │
-│  │  │   Discovery     │    │     & URL Coordination         │ │ │
+│  │  │   Discovery     │    │     & Proxy Coordination       │ │ │
 │  │  └─────────────────┘    └────────────────────────────────┘ │ │
 │  │                                                            │ │
 │  │  ┌─────────────────┐    ┌────────────────────────────────┐ │ │
@@ -80,25 +65,23 @@ A Kubernetes-native platform for building and orchestrating distributed MCP (Mod
 │  │  │   Monitoring    │    │     Management                 │ │ │
 │  │  └─────────────────┘    └────────────────────────────────┘ │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                                   │                             │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                    Database Layer                          │ │
-│  │              SQLite (dev) / PostgreSQL (prod)              │ │
-│  └────────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  Direct MCP JSON-RPC calls between FastMCP servers ◄──────────► │
+│  Registry provides coordination, not data path mediation        │
 └─────────────────────────────────────────────────────────────────┘
 
-Flow: Agents register capabilities → Registry provides dependency URLs →
-      Python runtime creates HTTP proxies → Dynamic injection enables remote MCP calls
+Flow: Agents heartbeat with capabilities → Registry resolves dependencies →
+      Lightweight proxies injected → Direct MCP calls between agents
 ```
 
 ### How Dynamic Injection Works
 
 1. **Agent Registration**: Agents declare capabilities and dependencies using `@mesh.tool` decorators
-2. **Registry Coordination**: Central registry provides discovery URLs for available capabilities
-3. **Runtime Injection**: Python runtime creates HTTP proxies for remote MCP calls
-4. **Transparent Access**: Remote capabilities work exactly like local function calls
+2. **Background Resolution**: Registry resolves dependencies during heartbeat pipeline, not at call time
+3. **Proxy Injection**: Lightweight proxy objects injected as function parameters
+4. **Direct MCP Calls**: Proxies make standard MCP JSON-RPC calls between FastMCP servers
 
-**The Magic**: No manual networking code - just declare what you need with two decorators!
+**The Magic**: Dependencies pre-resolved in background - zero call-time latency for resolution!
 
 ## Quick Start
 
@@ -112,77 +95,50 @@ _MCP Mesh sets the stage, but MCP agents steal the show! Watch as agents dynamic
 
 ```python
 #!/usr/bin/env python3
+from typing import Any
 import mesh
+from fastmcp import FastMCP
 
-@mesh.agent(name="hello-world")
-class HelloWorldAgent:
-    pass
+app = FastMCP("Hello World Service")
 
+@app.tool()
 @mesh.tool(
     capability="greeting",
-    dependencies=["date_service"],
-    description="Greet with current date"
+    dependencies=["date_service"]
 )
-def hello_mesh(date_service=None) -> str:
+def hello_mesh(date_service: Any = None) -> str:
     if date_service is None:
         return "👋 Hello from MCP Mesh! (Date service not available yet)"
 
-    try:
-        current_date = date_service()
-        return f"👋 Hello from MCP Mesh! Today is {current_date}"
-    except Exception as e:
-        return f"👋 Hello from MCP Mesh! (Error getting date: {e})"
+    current_date = date_service()
+    return f"👋 Hello from MCP Mesh! Today is {current_date}"
 
-# That's it! No manual server setup required.
-# The agent will automatically:
-# - Start a FastMCP server
-# - Register with the mesh registry
-# - Acquire dependencies when available
-# - Provide capabilities to other agents
-```
-
-### System Service Agent
-
-```python
-#!/usr/bin/env python3
-import mesh
-from datetime import datetime
-
-@mesh.agent(name="system-agent")
-class SystemAgent:
-    pass
-
-@mesh.tool(
-    capability="date_service",
-    description="Get current system date and time",
-    tags=["system", "time"]
+@mesh.agent(
+    name="hello-world",
+    http_port=9090,
+    auto_run=True
 )
-def get_current_time() -> str:
-    now = datetime.now()
-    return now.strftime("%B %d, %Y at %I:%M %p")
-
-# This agent provides the "date_service" capability
-# that hello-world agent depends on
+class HelloWorldAgent:
+    pass
 ```
 
 ### See It In Action
 
 ```bash
-# Start the system agent (provides date_service)
-python system_agent.py &
-
-# Start the hello world agent (consumes date_service)
-python hello_world.py &
+# Start agents with meshctl (registry starts automatically)
+meshctl start examples/simple/system_agent.py
+meshctl start examples/simple/hello_world.py
 
 # Test the dynamic dependency injection
-curl http://localhost:9090/mcp -X POST \
+curl http://localhost:9090/mcp/ -X POST \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh", "arguments": {}}}'
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}'
 
 # Response: "👋 Hello from MCP Mesh! Today is December 19, 2024 at 02:30 PM"
 ```
 
-**The magic**: `hello_world.py` automatically discovered and connected to `system_agent.py` without any manual configuration!
+**The magic**: Agents automatically discover and connect to each other without any configuration!
 
 ## 📦 Installation
 
@@ -190,7 +146,7 @@ curl http://localhost:9090/mcp -X POST \
 
 ```bash
 # Install with semantic versioning (allows patches, not minor versions)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
+pip install "mcp-mesh>=0.2.0,<0.3.0"
 ```
 
 ### CLI Tools
@@ -203,14 +159,14 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 ### Docker Images
 
 ```bash
-# Registry service (gets latest patches for 0.1.x)
-docker pull mcpmesh/registry:0.1
+# Registry service (gets latest patches for 0.2.x)
+docker pull mcpmesh/registry:0.2
 
-# Python runtime for agents (gets latest patches for 0.1.x)
-docker pull mcpmesh/python-runtime:0.1
+# Python runtime for agents (gets latest patches for 0.2.x)
+docker pull mcpmesh/python-runtime:0.2
 
-# CLI tools (gets latest patches for 0.1.x)
-docker pull mcpmesh/cli:0.1
+# CLI tools (gets latest patches for 0.2.x)
+docker pull mcpmesh/cli:0.2
 ```
 
 ### Quick Setup Options
@@ -218,170 +174,25 @@ docker pull mcpmesh/cli:0.1
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.1.0,<0.2.0"`             |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.2.0,<0.3.0"`             |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
 
-### Real-World Example: Distributed Chat History Service
+## How It Works
 
-Here's a more practical example showing how MCP Mesh handles distributed data services like Redis caching for chat history - a common requirement in AI applications:
+**Two-Pipeline Architecture:**
 
-```python
-# cache_service.py - Redis-backed chat history service
-import mesh
-import redis
-import json
-from typing import List, Dict, Any
-from datetime import datetime
+1. **Startup Pipeline**: Decorators notify → Registry coordinates → Dependencies resolved
+2. **Heartbeat Pipeline**: Continuous health checks → Dynamic topology updates
+3. **Direct Communication**: Agents call each other via standard MCP JSON-RPC
 
-@mesh.agent(name="cache-service")
-class CacheService:
-    def __init__(self):
-        self.redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
+**Smart Dependency Injection:**
 
-@mesh.tool(
-    capability="chat_storage",
-    description="Store and retrieve chat history from Redis cache",
-    version="1.0.0",
-    tags=["cache", "redis", "chat"]
-)
-def add_chat(user_id: str, message: str, role: str = "user") -> bool:
-    """Add a chat message to user's history."""
-    chat_entry = {
-        "message": message,
-        "role": role,
-        "timestamp": datetime.now().isoformat()
-    }
-
-    # Store in Redis list with user-specific key
-    key = f"chat_history:{user_id}"
-    redis_client.lpush(key, json.dumps(chat_entry))
-    redis_client.ltrim(key, 0, 99)  # Keep last 100 messages
-    return True
-
-@mesh.tool(
-    capability="chat_retrieval",
-    description="Get chat history for a user",
-    version="1.0.0",
-    tags=["cache", "redis", "chat"]
-)
-def get_chats(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-    """Retrieve recent chat messages for a user."""
-    key = f"chat_history:{user_id}"
-    messages = redis_client.lrange(key, 0, limit - 1)
-    return [json.loads(msg) for msg in messages]
-```
-
-```python
-# ai_assistant.py - Main AI assistant that uses chat history
-import mesh
-from mesh import McpMeshAgent
-from typing import List, Dict, Any
-
-@mesh.agent(name="ai-assistant")
-class AIAssistant:
-    pass
-
-@mesh.tool(
-    capability="chat_with_history",
-    dependencies=[
-        {"capability": "chat_storage", "version": ">= 1.0"},
-        {"capability": "chat_retrieval", "version": ">= 1.0"}
-    ],
-    description="AI chat with persistent history"
-)
-def chat_with_context(
-    user_id: str,
-    message: str,
-    add_chat: McpMeshAgent = None,      # Injected: cache_service.add_chat
-    get_chats: McpMeshAgent = None      # Injected: cache_service.get_chats
-) -> str:
-    """Process user message with chat history context."""
-
-    # Get previous conversation context
-    history = []
-    if get_chats:
-        try:
-            history = get_chats(user_id, limit=5)
-        except Exception as e:
-            print(f"Failed to get chat history: {e}")
-
-    # Build context from history
-    context = "Previous conversation:\n"
-    for chat in reversed(history):
-        context += f"{chat['role']}: {chat['message']}\n"
-
-    # Generate AI response (simplified)
-    ai_response = f"Based on our conversation, here's my response to: {message}"
-
-    # Store both user message and AI response
-    if add_chat:
-        try:
-            add_chat(user_id, message, "user")
-            add_chat(user_id, ai_response, "assistant")
-        except Exception as e:
-            print(f"Failed to store chat: {e}")
-
-    return ai_response
-```
-
-```bash
-# Deploy to Kubernetes with Redis
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-      - name: redis
-        image: redis:alpine
-        ports:
-        - containerPort: 6379
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis
-spec:
-  selector:
-    app: redis
-  ports:
-  - port: 6379
-EOF
-
-# Test the distributed chat system (port auto-assigned by MCP Mesh)
-curl http://localhost:$(meshctl list --filter ai-assistant --json | jq -r '.[0].http_port')/mcp -X POST \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "tools/call",
-    "params": {
-      "name": "chat_with_context",
-      "arguments": {
-        "user_id": "user123",
-        "message": "Hello, can you help me with Python?"
-      }
-    }
-  }'
-```
-
-**Key Benefits Demonstrated:**
-
-- **Service Separation**: Cache service runs independently from AI assistant
-- **Automatic Discovery**: AI assistant finds cache service without hardcoded Redis URLs
-- **Version Constraints**: Ensures compatible cache service versions (`>= 1.0`)
-- **Graceful Degradation**: Chat works even if cache service is unavailable
-- **Kubernetes Ready**: Easy to scale cache and AI services independently
+- **Registry as Brain**: Centralized dependency resolution with version constraints and tags
+- **Pre-Resolved Dependencies**: Lightweight proxies injected in background during heartbeat, not at call time
+- **Hash-based Updates**: Only update dependencies when topology actually changes
+- **Efficient Proxies**: In-memory proxy objects with no noticeable call-time delay
 
 ## Why MCP Mesh?
 
@@ -480,22 +291,22 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ```bash
 # Install everything with one command (requires curl and Python 3.11+)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.2
 ```
 
 ### Package Manager Installation
 
 ```bash
 # Python package from PyPI (allows patch updates)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
+pip install "mcp-mesh>=0.2.0,<0.3.0"
 
 # Docker images (use minor version tag for latest patches)
-docker pull mcpmesh/registry:0.1
-docker pull mcpmesh/python-runtime:0.1
-docker pull mcpmesh/cli:0.1
+docker pull mcpmesh/registry:0.2
+docker pull mcpmesh/python-runtime:0.2
+docker pull mcpmesh/cli:0.2
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.1.6/mcp-mesh_v0.1.6_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.2.0/mcp-mesh_v0.2.0_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 
@@ -522,37 +333,6 @@ MCP Mesh includes `meshctl`, a kubectl-like command-line tool for observing and 
 - **Beautiful visualizations**: kubectl-style table displays with filtering and sorting
 - **Dependency tracking**: Observe capability resolution and injection status
 - **Local development support**: Start agents for development and testing
-
-### Monitoring Commands
-
-```bash
-# Observe all agents in the mesh network (kubectl-style)
-./bin/meshctl list
-
-# Monitor with detailed dependency information
-./bin/meshctl list --wide --verbose
-
-# Filter agents by name pattern
-./bin/meshctl list --filter hello
-
-# Show only healthy agents
-./bin/meshctl list --healthy-only
-
-# Connect to remote registry (Docker/K8s)
-./bin/meshctl list --registry-url http://production-registry:8000
-
-# Monitor Kubernetes registry
-./bin/meshctl list --registry-url http://mcp-mesh-registry.mcp-mesh:8000
-
-# JSON output for automation/scripting
-./bin/meshctl list --json
-
-# Show detailed status of entire mesh
-./bin/meshctl status
-
-# Monitor agents in real-time
-watch ./bin/meshctl list --wide
-```
 
 ### Local Development Support
 
@@ -615,25 +395,21 @@ While existing solutions focus on static tool definitions or centralized orchest
 - **Language runtime flexibility**: Currently supports Python with plans for additional language runtimes
 - **Hot-swappable capabilities**: Add, remove, or update capabilities without restarting the entire system
 
-## Documentation
+## 📚 Learn More
 
-| Resource                                                | Description                                  |
-| ------------------------------------------------------- | -------------------------------------------- |
-| **[Getting Started Guide](docs/01-getting-started.md)** | Quick start tutorial and basic concepts      |
-| **[Examples](examples/)**                               | Sample agents and deployment patterns        |
-| **[Local Development](docs/02-local-development.md)**   | Get started on your machine                  |
-| **[Docker Deployment](docs/03-docker-deployment.md)**   | Multi-service development environment        |
-| **[Kubernetes Basics](docs/04-kubernetes-basics.md)**   | Production deployment guide                  |
-| **[Helm Charts](docs/06-helm-deployment.md)**           | Enterprise Kubernetes deployment             |
-| **[Observability](docs/07-observability.md)**           | Monitoring, metrics, and distributed tracing |
+### **Tutorials**
 
-### Quick Links
+- **[Getting Started Guide](docs/01-getting-started.md)** - Build your first distributed MCP agent
+- **[Local Development](docs/02-local-development.md)** - Professional development workflows
+- **[Docker Deployment](docs/03-docker-deployment.md)** - Multi-service environments
+- **[Kubernetes Basics](docs/04-kubernetes-basics.md)** - Production deployment
 
-- **[Local Development](docs/02-local-development.md)** - Get started on your machine
-- **[Docker Deployment](docs/03-docker-deployment.md)** - Multi-service development environment
-- **[Kubernetes Basics](docs/04-kubernetes-basics.md)** - Production deployment guide
-- **[Helm Charts](docs/06-helm-deployment.md)** - Enterprise Kubernetes deployment
-- **[Observability](docs/07-observability.md)** - Monitoring, metrics, and distributed tracing
+### **Reference Guides**
+
+- **[Mesh Decorators](docs/mesh-decorators.md)** - Complete decorator reference
+- **[meshctl CLI](docs/meshctl-cli.md)** - Command-line tool guide
+- **[Environment Variables](docs/environment-variables.md)** - Configuration options
+- **[Architecture & Design](docs/architecture-and-design.md)** - Deep technical details
 
 ## Development
 
@@ -693,19 +469,12 @@ We welcome contributions from the community! MCP Mesh is designed to be a collab
 - **Deployment**: Helm charts, operators, CI/CD integration
 - **Testing**: Unit tests, integration tests, performance benchmarks
 
-## Support & Community
+## 💬 Community & Support
 
-### Getting Help
-
-- **[Discord Community](https://discord.gg/KDFDREphWn)** - Join our community for real-time discussions and support
-- **[GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions)** - Ask questions and share ideas
-- **[Documentation](docs/)** - Comprehensive guides and references
-- **[Examples](examples/)** - Working code examples and patterns
+- **[Discord](https://discord.gg/KDFDREphWn)** - Real-time help and discussions
+- **[GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions)** - Share ideas and ask questions
 - **[Issues](https://github.com/dhyansraj/mcp-mesh/issues)** - Report bugs or request features
-
-### Community Guidelines
-
-We are committed to providing a welcoming and inclusive environment for all contributors. We follow standard open source community practices for respectful collaboration.
+- **[Examples](examples/)** - Working code examples and deployment patterns
 
 ## Roadmap
 
@@ -742,14 +511,10 @@ This project is open source. License details will be provided in the LICENSE fil
 
 ---
 
-## 🚀 Ready to Build the Future?
+## 🚀 Get Started
 
-**MCP Mesh is pioneering distributed AI agent architecture.** Join developers building the next generation of AI systems.
+1. **[⚡ Quick Tutorial](docs/01-getting-started.md)** - Build your first distributed MCP agent
+2. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
+3. **[🔧 Contribute](https://github.com/dhyansraj/mcp-mesh/issues)** - Help build the future of AI orchestration
 
-### Get Started Now:
-
-1. **[⚡ 5-Minute Tutorial](docs/01-getting-started.md)** - Build your first distributed MCP app
-2. **[💬 Join Discussion](https://github.com/dhyansraj/mcp-mesh/discussions)** - Connect with the community
-3. **[🔧 Contribute](CONTRIBUTING.md)** - Help shape the future of AI orchestration
-
-**Star the repo** if MCP Mesh solves a problem you have! ⭐
+**Star the repo** if MCP Mesh helps you build better AI systems! ⭐
