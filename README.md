@@ -10,11 +10,20 @@
 
 > **The future of AI is not one large model, but many specialized agents working together.**
 
-MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) to distributed environments. Build production-ready AI agent networks with just two Python decorators - agents automatically discover each other and work together across Kubernetes clusters.
+MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) to distributed environments. Bring your FastMCP code and run it in Kubernetes with just two decorators added - agents automatically discover each other and work together across clusters.
 
 ## Why MCP Mesh?
 
 **MCP revolutionized AI tool integration** - now scale those same patterns to production.
+
+### **Key Features**
+
+- **Dynamic Dependency Injection**: Pull-based discovery with runtime function injection - no networking code required
+- **Resilient Architecture**: Registry as facilitator, agents communicate directly with fault tolerance and self-healing
+- **Automatic Discovery**: Agents find each other without configuration
+- **MCP Compatible**: Works with existing MCP tools and clients
+- **Smart Dependencies**: Version constraints, tags, and graceful degradation
+- **Kubernetes Native**: Production-ready with scaling, health checks, and observability
 
 ### **Core Design Principles**
 
@@ -22,14 +31,6 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 - **Runtime as Wrapper**: Thin language runtimes enable multi-language agent development
 - **Pre-Injected Dependencies**: Lightweight proxies are resolved in background, not at call time
 - **Background Orchestration**: Mesh coordinates in the background, agents focus on business logic
-
-### **Key Features**
-
-- **Two Decorators**: `@mesh.agent` and `@mesh.tool` - that's all you need
-- **Automatic Discovery**: Agents find each other without configuration
-- **Smart Dependencies**: Version constraints, tags, and graceful degradation
-- **Kubernetes Native**: Production-ready with scaling, health checks, and observability
-- **MCP Compatible**: Works with existing MCP tools and clients
 
 ## Architecture Overview
 
@@ -178,21 +179,6 @@ docker pull mcpmesh/cli:0.2
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
-
-## How It Works
-
-**Two-Pipeline Architecture:**
-
-1. **Startup Pipeline**: Decorators notify → Registry coordinates → Dependencies resolved
-2. **Heartbeat Pipeline**: Continuous health checks → Dynamic topology updates
-3. **Direct Communication**: Agents call each other via standard MCP JSON-RPC
-
-**Smart Dependency Injection:**
-
-- **Registry as Brain**: Centralized dependency resolution with version constraints and tags
-- **Pre-Resolved Dependencies**: Lightweight proxies injected in background during heartbeat, not at call time
-- **Hash-based Updates**: Only update dependencies when topology actually changes
-- **Efficient Proxies**: In-memory proxy objects with no noticeable call-time delay
 
 ## Why MCP Mesh?
 
@@ -380,7 +366,7 @@ The MCP ecosystem has proven that standardized AI tool integration works brillia
 ### MCP Mesh: Built for MCP Developers
 
 - ✅ **Keep your existing MCP knowledge**: Same concepts, bigger scale
-- ✅ **Just two decorators**: `@mesh.agent` and `@mesh.tool`
+- ✅ **Bring your FastMCP code**: Run existing MCP agents in Kubernetes with just two decorators added
 - ✅ **MCP protocol compatible**: Works with existing MCP clients and tools
 - ✅ **Kubernetes-native**: Production-ready infrastructure patterns
 - ✅ **Gradual adoption**: Start small, scale as needed
