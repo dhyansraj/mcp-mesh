@@ -5,10 +5,10 @@
 replicaCount: 1
 
 image:
-  repository: mcp-mesh-base  # Matches working examples
-  pullPolicy: Never  # For local development
+  repository: mcp-mesh-base # Agent base image
+  pullPolicy: IfNotPresent # For production use
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "latest"
+  tag: "0.2"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -26,7 +26,7 @@ serviceAccount:
 podAnnotations: {}
 
 podSecurityContext:
-  runAsNonRoot: false  # Some agents need root for hello-world example
+  runAsNonRoot: false # Some agents need root for hello-world example
   runAsUser: 0
   fsGroup: 0
 
@@ -40,7 +40,7 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 8080  # Standard agent port
+  port: 8080 # Standard agent port
   targetPort: 8080
   annotations: {}
 
@@ -99,11 +99,11 @@ mesh:
 # Agent-specific configuration
 agent:
   # Python script to run (required)
-  script: "/app/agent.py"  # Matches working examples
+  script: "/app/agent.py" # Matches working examples
   # Example: "/app/agents/hello_world.py"
 
   # Agent metadata for mesh registration
-  name: "hello-world"  # Default agent name
+  name: "hello-world" # Default agent name
   version: "1.0.0"
   description: ""
 
@@ -165,38 +165,7 @@ agent:
     # - name: PYTHONUNBUFFERED
     #   value: "1"
 
-# Registry configuration
-registry:
-  # Registry URL (required)
-  url: "http://mcp-mesh-registry:8080"
-  # Connection timeout
-  timeout: 30
-  # Retry configuration
-  retry:
-    enabled: true
-    attempts: 3
-    delay: 5
-
-# MCP Mesh configuration
-mesh:
-  # Enable mesh features
-  enabled: true
-  # Debug mode
-  debug: false
-  # Log level
-  logLevel: "INFO"
-  # Enable distributed tracing
-  tracingEnabled: false
-  # Enable metrics collection
-  metricsEnabled: true
-  # Custom decorators
-  decorators: {}
-  # Example:
-  # decorators:
-  #   mesh_agent:
-  #     enable_http: true
-  #     health_interval: 30
-  #     fallback_mode: true
+# Duplicate registry and mesh sections removed - see lines 85-97 for the main definitions
 
 # ConfigMap for agent code
 agentCode:
@@ -277,34 +246,7 @@ secrets:
 # Existing secret to use
 existingSecret: ""
 
-# Liveness and readiness probes
-livenessProbe:
-  httpGet:
-    path: /livez
-    port: http
-  initialDelaySeconds: 30
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: http
-  initialDelaySeconds: 10
-  periodSeconds: 5
-  timeoutSeconds: 3
-  failureThreshold: 3
-
-# Startup probe for slow-starting agents
-startupProbe:
-  httpGet:
-    path: /health
-    port: http
-  initialDelaySeconds: 0
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 30
+# Duplicate probe sections removed - see lines 211-236 for the main probe definitions
 
 # Pod disruption budget
 podDisruptionBudget:

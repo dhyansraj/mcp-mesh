@@ -41,7 +41,7 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 │  │   Agent A       │    │   Agent B       │    │   Agent C   │  │
 │  │   @mesh.tool    │    │   @mesh.tool    │    │ @mesh.tool  │  │
 │  │   ┌───────────┐ │    │   ┌───────────┐ │    │ ┌─────────┐ │  │
-│  │   │FastMCP    │◄┼────┼──►│FastMCP    │◄┼────┼─►│FastMCP  │ │  │
+│  │   │FastMCP    │◄┼────┼──►│FastMCP    │◄┼─────►│FastMCP  │ │  │
 │  │   │Server     │ │    │   │Server     │ │    │ │Server   │ │  │
 │  │   └───────────┘ │    │   └───────────┘ │    │ └─────────┘ │  │
 │  └─────────┬───────┘    └─────────┬───────┘    └─────┬───────┘  │

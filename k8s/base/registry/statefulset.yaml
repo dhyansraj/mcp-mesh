@@ -90,8 +90,8 @@ spec:
 
       containers:
         - name: registry
-          image: localhost:5000/mcp-mesh-registry:debug-latest
-          imagePullPolicy: Never
+          image: mcp-mesh-registry:0.2
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000

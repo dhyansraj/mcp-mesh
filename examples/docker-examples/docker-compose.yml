@@ -25,7 +25,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/agent/Dockerfile.base
-    image: mcp-mesh-base:latest
+    image: mcp-mesh-base:0.2
     # This service only builds the base image, doesn't run
 
   # Go-based registry service (local build)
@@ -64,7 +64,7 @@ services:
 
   # Hello World Python agent - uses local build
   hello-world-agent:
-    image: mcp-mesh-base:latest
+    image: mcp-mesh-base:0.2
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -118,7 +118,7 @@ services:
 
   # System Agent Python service - uses local build
   system-agent:
-    image: mcp-mesh-base:latest
+    image: mcp-mesh-base:0.2
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -175,7 +175,7 @@ services:
 
   # FastMCP Agent with mesh integration
   fastmcp-agent:
-    image: mcp-mesh-base:latest
+    image: mcp-mesh-base:0.2
     container_name: mcp-mesh-fastmcp-agent
     hostname: fastmcp-agent
     ports:
@@ -232,7 +232,7 @@ services:
 
   # Dependent Agent that uses FastMCP agent's time service
   dependent-agent:
-    image: mcp-mesh-base:latest
+    image: mcp-mesh-base:0.2
     container_name: mcp-mesh-dependent-agent
     hostname: dependent-agent
     ports:
