@@ -16,6 +16,14 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
+// Dependency represents a tool dependency with constraints
+// Replaces the old database.Dependency from GORM models
+type Dependency struct {
+	Capability string   `json:"capability"`
+	Version    string   `json:"version,omitempty"` // e.g., ">=1.0.0"
+	Tags       []string `json:"tags,omitempty"`    // e.g., ["production", "US_EAST"]
+}
+
 // RegistryConfig holds registry-specific configuration
 type RegistryConfig struct {
 	CacheTTL                 int
@@ -660,7 +668,7 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 					}
 
 					// Create dependency object
-					dep := database.Dependency{
+					dep := Dependency{
 						Capability: requiredCapability,
 					}
 
@@ -760,7 +768,7 @@ func (s *EntService) GetAgentWithCapabilities(agentID string) (map[string]interf
 }
 
 // findHealthyProviderWithTTL finds a healthy provider using TTL check and strict matching using Ent queries
-func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *DependencyResolution {
+func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResolution {
 	ctx := context.Background()
 
 	// Use Info level to ensure it gets logged
