@@ -1,24 +1,38 @@
 # MCP Mesh Docker Compose Example
-# Demonstrates Go registry + Python agents architecture using published images
+# Demonstrates Go registry + Python agents architecture using local builds
 #
 # Services:
-# - registry: Go-based registry with SQLite storage (published image)
-# - hello-world-agent: Python agent with greeting capabilities (published runtime)
-# - system-agent: Python agent with system monitoring capabilities (published runtime)
+# - registry: Go-based registry with SQLite storage (local build)
+# - hello-world-agent: Python agent with greeting capabilities (local build)
+# - system-agent: Python agent with system monitoring capabilities (local build)
+# - fastmcp-agent: FastMCP service with mesh integration (local build)
+# - dependent-agent: Service that depends on fastmcp-agent (local build)
 #
 # Usage:
-#   docker-compose up
+#   docker-compose up --build
 #
 # Access points:
 #   - Registry API: http://localhost:8000
 #   - Hello World Agent: http://localhost:8081
 #   - System Agent: http://localhost:8082
+#   - FastMCP Agent: http://localhost:8091
+#   - Dependent Agent: http://localhost:8092
 #   - Use meshctl to interact with the mesh
 
 services:
-  # Go-based registry service (published image with working SQLite support)
+  # Build the base MCP Mesh Python image
+  mcp-mesh-base:
+    build:
+      context: ../..
+      dockerfile: docker/agent/Dockerfile.base
+    image: mcp-mesh-base:latest
+    # This service only builds the base image, doesn't run
+
+  # Go-based registry service (local build)
   registry:
-    image: mcpmesh/registry:0.1
+    build:
+      context: ../..
+      dockerfile: docker/registry/Dockerfile
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -48,18 +62,18 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Hello World Python agent - uses published Docker image
+  # Hello World Python agent - uses local build
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.1
+    image: mcp-mesh-base:latest
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
-      - "${HELLO_WORLD_PORT:-8081}:${MCP_MESH_HTTP_PORT:-8080}"
+      - "${HELLO_WORLD_PORT:-8081}:9090"
     volumes:
       # Mount agent code from outside
       - ../simple/hello_world.py:/app/agent.py:ro
     working_dir: /app
-    command: ["agent.py"]
+    command: ["python", "agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -67,7 +81,7 @@ services:
       - MCP_MESH_REGISTRY_PORT=8000
       - HOST=0.0.0.0
       - MCP_MESH_HTTP_HOST=hello-world-agent
-      - MCP_MESH_HTTP_PORT=${MCP_MESH_HTTP_PORT:-8080}
+      - MCP_MESH_HTTP_PORT=9090
       - POD_IP=hello-world-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=hello-world
@@ -81,18 +95,20 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      # Optional dependency on registry (resilient architecture - works without)
-      registry:
-        condition: service_started
+      mcp-mesh-base:
+        condition: service_completed_successfully
+      # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
     healthcheck:
       test:
         [
           "CMD",
-          "python",
-          "-c",
-          "import requests; requests.get('http://localhost:${MCP_MESH_HTTP_PORT:-8080}/health', timeout=5)",
+          "wget",
+          "--spider",
+          "--no-verbose",
+          "--tries=1",
+          "http://localhost:9090/health",
         ]
       interval: 30s
       timeout: 10s
@@ -100,18 +116,18 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # System Agent Python service - uses published Docker image
+  # System Agent Python service - uses local build
   system-agent:
-    image: mcpmesh/python-runtime:0.1
+    image: mcp-mesh-base:latest
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
-      - "${SYSTEM_AGENT_PORT:-8082}:${MCP_MESH_HTTP_PORT:-8080}"
+      - "${SYSTEM_AGENT_PORT:-8082}:8080"
     volumes:
       # Mount agent code from outside
       - ../simple/system_agent.py:/app/agent.py:ro
     working_dir: /app
-    command: ["agent.py"]
+    command: ["python", "agent.py"]
     environment:
       # MCP Mesh configuration - agent works standalone if registry unavailable
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -119,7 +135,7 @@ services:
       - MCP_MESH_REGISTRY_PORT=8000
       - HOST=0.0.0.0
       - MCP_MESH_HTTP_HOST=system-agent
-      - MCP_MESH_HTTP_PORT=${MCP_MESH_HTTP_PORT:-8080}
+      - MCP_MESH_HTTP_PORT=8080
       - POD_IP=system-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=system-agent
@@ -133,18 +149,137 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      # Optional dependency on registry (resilient architecture - works without)
-      registry:
-        condition: service_started
+      mcp-mesh-base:
+        condition: service_completed_successfully
+      # Agents are resilient - no registry dependency needed
+      # Start after hello-world agent for staggered startup
+      hello-world-agent:
+        condition: service_healthy
     networks:
       - mcp-mesh
     healthcheck:
       test:
         [
           "CMD",
-          "python",
-          "-c",
-          "import requests; requests.get('http://localhost:${MCP_MESH_HTTP_PORT:-8080}/health', timeout=5)",
+          "wget",
+          "--spider",
+          "--no-verbose",
+          "--tries=1",
+          "http://localhost:8080/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # FastMCP Agent with mesh integration
+  fastmcp-agent:
+    image: mcp-mesh-base:latest
+    container_name: mcp-mesh-fastmcp-agent
+    hostname: fastmcp-agent
+    ports:
+      - "8091:9092"
+    volumes:
+      # Mount FastMCP agent code
+      - ../simple/fastmcp_agent.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=fastmcp-agent
+      - MCP_MESH_HTTP_PORT=9092
+      - POD_IP=fastmcp-agent
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=fastmcp-service
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=${MCP_MESH_AUTO_RUN_INTERVAL:-30}
+      - MCP_MESH_HEALTH_INTERVAL=${MCP_MESH_HEALTH_INTERVAL:-30}
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+    depends_on:
+      mcp-mesh-base:
+        condition: service_completed_successfully
+      # Agents are resilient - no registry dependency needed
+      # Start after system agent for staggered startup
+      system-agent:
+        condition: service_healthy
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "--no-verbose",
+          "--tries=1",
+          "http://localhost:9092/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Dependent Agent that uses FastMCP agent's time service
+  dependent-agent:
+    image: mcp-mesh-base:latest
+    container_name: mcp-mesh-dependent-agent
+    hostname: dependent-agent
+    ports:
+      - "8092:9093"
+    volumes:
+      # Mount dependent agent code
+      - ../simple/dependent_agent.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=dependent-agent
+      - MCP_MESH_HTTP_PORT=9093
+      - POD_IP=dependent-agent
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=dependent-service
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=${MCP_MESH_AUTO_RUN_INTERVAL:-30}
+      - MCP_MESH_HEALTH_INTERVAL=${MCP_MESH_HEALTH_INTERVAL:-30}
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+    depends_on:
+      mcp-mesh-base:
+        condition: service_completed_successfully
+      # Agents are resilient - no registry dependency needed
+      # Depends on fastmcp-agent for time service - wait for it to be healthy
+      fastmcp-agent:
+        condition: service_healthy
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "--no-verbose",
+          "--tries=1",
+          "http://localhost:9093/health",
         ]
       interval: 30s
       timeout: 10s

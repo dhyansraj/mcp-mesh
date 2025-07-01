@@ -4,16 +4,17 @@ metadata:
   name: mcp-agent-code
   namespace: mcp-mesh
 data:
-  # Working hello world agent from Docker setup
+  # Updated hello world agent with FastMCP integration
   hello_world.py: |
     #!/usr/bin/env python3
     """
-    MCP Mesh Hello World Example
+    MCP Mesh Hello World Example with FastMCP Integration
 
-    This example demonstrates the core concepts of MCP Mesh:
-    1. MCP Mesh tools with automatic dependency injection
-    2. Hybrid typing support for development flexibility
-    3. Pure simplicity - just decorators, no manual setup!
+    This example demonstrates the hybrid FastMCP + MCP Mesh approach:
+    1. FastMCP decorators (@app.tool) for familiar MCP development
+    2. MCP Mesh decorators (@mesh.tool) for dependency injection and orchestration
+    3. Hybrid typing support for development flexibility
+    4. Pure simplicity - just dual decorators, no manual setup!
 
     Start this agent, then start system_agent.py to see dependency injection in action!
     """
@@ -21,20 +22,17 @@ data:
     from typing import Any
 
     import mesh
-    from mcp_mesh import McpMeshAgent
+    from fastmcp import FastMCP
 
-
-    @mesh.agent(name="hello-world", http_port=8080)
-    class HelloWorldAgent:
-        """Hello World agent demonstrating MCP Mesh features."""
-
-        pass
+    # Single FastMCP server instance
+    app = FastMCP("Hello World Service")
 
 
     # ===== MESH FUNCTION WITH SIMPLE TYPING =====
     # Uses Any type for maximum simplicity and flexibility
 
 
+    @app.tool()
     @mesh.tool(
         capability="greeting",
         dependencies=["date_service"],
@@ -59,9 +57,10 @@ data:
 
 
     # ===== MESH FUNCTION WITH TYPED INTERFACE =====
-    # Uses McpMeshAgent type for better IDE support and type safety
+    # Uses mesh.McpMeshAgent type for better IDE support and type safety
 
 
+    @app.tool()
     @mesh.tool(
         capability="advanced_greeting",
         dependencies=[
@@ -72,7 +71,7 @@ data:
         ],
         description="Advanced greeting with smart tag-based dependency resolution",
     )
-    def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
+    def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
         """
         MCP Mesh greeting with smart tag-based dependency resolution.
 
@@ -96,6 +95,7 @@ data:
     # Shows multiple dependencies with different typing approaches
 
 
+    @app.tool()
     @mesh.tool(
         capability="dependency_test",
         dependencies=[
@@ -109,7 +109,7 @@ data:
     )
     def test_dependencies(
         date_service: Any = None,
-        info: McpMeshAgent | None = None,  # This will get the DISK info service!
+        info: mesh.McpMeshAgent | None = None,  # This will get the DISK info service!
     ) -> dict[str, Any]:
         """
         Test function showing hybrid dependency resolution.
@@ -148,30 +148,50 @@ data:
         return result
 
 
-    # Keep the process alive for K8s deployment
-    # Background decorator processing runs in daemon thread - main thread needs to stay alive
-    if __name__ == "__main__":
-        import time
-        print("🚀 Agent ready - keeping alive for K8s...")
-        try:
-            while True:
-                time.sleep(60)
-                print("📡 Agent heartbeat - still alive...")
-        except KeyboardInterrupt:
-            print("👋 Agent shutting down gracefully...")
+    # AGENT configuration - this tells mesh how to run the FastMCP server
+    @mesh.agent(
+        name="hello-world",
+        version="1.0.0",
+        description="Hello World service with FastMCP and mesh integration",
+        http_port=9090,
+        enable_http=True,
+        auto_run=True,
+    )
+    class HelloWorldAgent:
+        """
+        Agent class that configures how mesh should run the FastMCP server.
 
-  # Working system agent from Docker setup
+        The mesh processor will:
+        1. Discover the 'app' FastMCP instance
+        2. Apply dependency injection to decorated functions
+        3. Start the FastMCP HTTP server on the configured port
+        4. Register all capabilities with the mesh registry
+        """
+
+        pass
+
+
+    # No main method needed!
+    # Mesh processor automatically handles:
+    # - FastMCP server discovery and startup
+    # - Dependency injection between functions
+    # - HTTP server configuration
+    # - Service registration with mesh registry
+
+  # Updated system agent with FastMCP integration
   system_agent.py: |
     #!/usr/bin/env python3
     """
-    MCP Mesh System Agent Example
+    MCP Mesh System Agent Example with FastMCP Integration
 
     This agent provides system information capabilities that other agents can depend on.
-    Demonstrates the tools vs capabilities architecture:
+    Demonstrates the hybrid FastMCP + MCP Mesh architecture:
 
+    - FastMCP decorators (@app.tool) for familiar MCP development
+    - MCP Mesh decorators (@mesh.tool) for dependency injection and orchestration
     - Tools: Function names (MCP function names)
     - Capabilities: What others can depend on
-    - Pure simplicity: Just decorators, no manual setup!
+    - Pure simplicity: Just dual decorators, no manual setup!
 
     Function names can be different from capability names for maximum flexibility.
     """
@@ -180,14 +200,10 @@ data:
     from typing import Any
 
     import mesh
-    from mcp_mesh import McpMeshAgent
+    from fastmcp import FastMCP
 
-
-    @mesh.agent(name="system-agent", http_port=8080)
-    class SystemAgent:
-        """System information agent providing date and info capabilities."""
-
-        pass
+    # Single FastMCP server instance
+    app = FastMCP("System Agent Service")
 
 
     # Store start time for uptime calculations
@@ -197,6 +213,7 @@ data:
     # Tool: "get_current_time" | Capability: "date_service"
 
 
+    @app.tool()
     @mesh.tool(
         capability="date_service",  # Capability name (what others depend on)
         description="Get current system date and time",
@@ -221,6 +238,7 @@ data:
     # Tool: "fetch_system_overview" | Capability: "info"
 
 
+    @app.tool()
     @mesh.tool(
         capability="info",  # Generic capability name for smart matching
         description="Get comprehensive system information",
@@ -257,6 +275,7 @@ data:
     # Tool: "get_uptime" | Capability: "uptime_info"
 
 
+    @app.tool()
     @mesh.tool(
         capability="uptime_info",  # Capability name (what others depend on)
         description="Get system uptime information",
@@ -283,6 +302,7 @@ data:
     # Same capability "info" but different tags - shows tag-based filtering
 
 
+    @app.tool()
     @mesh.tool(
         capability="info",  # Same capability name!
         description="Get disk and OS information",
@@ -315,6 +335,7 @@ data:
     # ===== STATUS SERVICE WITH DEPENDENCY =====
 
 
+    @app.tool()
     @mesh.tool(
         capability="health_check",
         dependencies=["date_service"],  # Depends on capability name, not function name!
@@ -322,7 +343,7 @@ data:
         version="1.0.0",
     )
     def perform_health_diagnostic(
-        date_service: McpMeshAgent | None = None,
+        date_service: mesh.McpMeshAgent | None = None,
     ) -> dict[str, Any]:
         """
         Get system status including current time.
@@ -359,14 +380,328 @@ data:
         return status
 
 
-    # Keep the process alive for K8s deployment
-    # Background decorator processing runs in daemon thread - main thread needs to stay alive
-    if __name__ == "__main__":
-        import time
-        print("🚀 Agent ready - keeping alive for K8s...")
-        try:
-            while True:
-                time.sleep(60)
-                print("📡 Agent heartbeat - still alive...")
-        except KeyboardInterrupt:
-            print("👋 Agent shutting down gracefully...")
+    # AGENT configuration - this tells mesh how to run the FastMCP server
+    @mesh.agent(
+        name="system-agent",
+        version="1.0.0",
+        description="System Agent service with FastMCP and mesh integration",
+        http_port=8080,
+        enable_http=True,
+        auto_run=True,
+    )
+    class SystemAgent:
+        """
+        Agent class that configures how mesh should run the FastMCP server.
+
+        The mesh processor will:
+        1. Discover the 'app' FastMCP instance
+        2. Apply dependency injection to decorated functions
+        3. Start the FastMCP HTTP server on the configured port
+        4. Register all capabilities with the mesh registry
+        """
+
+        pass
+
+
+    # No main method needed!
+    # Mesh processor automatically handles:
+    # - FastMCP server discovery and startup
+    # - Dependency injection between functions
+    # - HTTP server configuration
+    # - Service registration with mesh registry
+
+  # FastMCP agent with proper mesh integration (working version from Docker Compose)
+  fastmcp_agent.py: |
+    #!/usr/bin/env python3
+    """
+    FastMCP Agent with Mesh Integration Example
+
+    This demonstrates the ideal developer experience:
+    - Keep familiar FastMCP decorators (@app.tool, @app.prompt, @app.resource)
+    - Add minimal mesh decorators (@mesh.tool, @mesh.agent) for DI and orchestration
+    - No main method or server management needed - mesh handles it automatically
+    """
+
+    import json
+    from datetime import datetime
+
+    import mesh
+    from fastmcp import FastMCP
+
+    # Single FastMCP server instance
+    app = FastMCP("FastMCP Service")
+
+
+    # PROMPTS with mesh integration
+    @app.prompt()
+    @mesh.tool(capability="prompt_service", dependencies=["time_service"])
+    def analysis_prompt(
+        topic: str, depth: str = "basic", time_service: mesh.McpMeshAgent = None
+    ) -> str:
+        """Generate analysis prompt with current time."""
+        timestamp = time_service() if time_service else "unknown"
+
+        return f"""Please analyze the following topic in detail:
+
+    Topic: {topic}
+    Analysis Depth: {depth}
+    Generated At: {timestamp}
+
+    Provide:
+    1. Overview and context
+    2. Key points and insights
+    3. Conclusions and recommendations
+
+    Focus on delivering {depth} level analysis.
+    """
+
+
+    # TOOLS with mesh integration
+    @app.tool()
+    @mesh.tool(capability="time_service", tags=["system", "time"])
+    def get_current_time() -> str:
+        """Get the current system time."""
+        return datetime.now().isoformat()
+
+
+    @app.tool()
+    @mesh.tool(capability="math_service", dependencies=["time_service"])
+    def calculate_with_timestamp(
+        a: float, b: float, operation: str = "add", time_service: mesh.McpMeshAgent = None
+    ) -> dict:
+        """Perform math operation with timestamp from time service."""
+        if operation == "add":
+            result = a + b
+        elif operation == "multiply":
+            result = a * b
+        elif operation == "subtract":
+            result = a - b
+        else:
+            result = 0
+
+        timestamp = time_service() if time_service else "unknown"
+
+        return {
+            "operation": operation,
+            "operands": [a, b],
+            "result": result,
+            "timestamp": timestamp,
+        }
+
+
+    @app.tool()
+    @mesh.tool(capability="data_service", tags=["data", "json"])
+    def process_data(data: str, format_type: str = "json") -> dict:
+        """Process and format data."""
+        return {
+            "input": data,
+            "format": format_type,
+            "processed_at": datetime.now().isoformat(),
+            "length": len(data),
+        }
+
+
+    @app.prompt()
+    @mesh.tool(capability="template_service")
+    def report_template(title: str, sections: list | None = None) -> str:
+        """Generate report template."""
+        sections = sections or ["Introduction", "Analysis", "Conclusion"]
+
+        template = f"""# {title}
+
+    Generated: {datetime.now().isoformat()}
+
+    """
+
+        for i, section in enumerate(sections, 1):
+            template += f"## {i}. {section}\n\n[Content for {section.lower()}]\n\n"
+
+        return template
+
+
+    # RESOURCES with mesh integration
+    @app.resource("config://service")
+    @mesh.tool(capability="config_service")
+    async def service_config() -> str:
+        """Service configuration data."""
+        config = {
+            "service_name": "FastMCP Service",
+            "version": "1.0.0",
+            "capabilities": [
+                "time_service",
+                "math_service",
+                "data_service",
+                "prompt_service",
+                "template_service",
+                "config_service",
+            ],
+            "transport": "http",
+            "mesh_enabled": True,
+            "created_at": datetime.now().isoformat(),
+        }
+        return json.dumps(config, indent=2)
+
+
+    @app.resource("status://health/{status_type}")
+    @mesh.tool(capability="status_service", dependencies=["time_service"])
+    async def health_status(
+        status_type: str, time_service: mesh.McpMeshAgent = None
+    ) -> str:
+        """Health status information."""
+        timestamp = time_service() if time_service else "unknown"
+
+        status = {
+            "status": "healthy",
+            "status_type": status_type,
+            "uptime": "running",
+            "last_check": timestamp,
+            "services": {
+                "fastmcp": "active",
+                "mesh": "integrated",
+                "dependencies": "resolved",
+            },
+        }
+        return json.dumps(status, indent=2)
+
+
+    # AGENT configuration - this tells mesh how to run the FastMCP server
+    @mesh.agent(
+        name="fastmcp-service",
+        version="1.0.0",
+        description="FastMCP service with mesh integration",
+        http_port=9092,
+        enable_http=True,
+        auto_run=True,
+    )
+    class FastMCPService:
+        """
+        Agent class that configures how mesh should run the FastMCP server.
+
+        The mesh processor will:
+        1. Discover the 'app' FastMCP instance
+        2. Apply dependency injection to decorated functions
+        3. Start the FastMCP HTTP server on the configured port
+        4. Register all capabilities with the mesh registry
+        """
+
+        pass
+
+
+    # No main method needed!
+    # Mesh processor automatically handles:
+    # - FastMCP server discovery and startup
+    # - Dependency injection between functions
+    # - HTTP server configuration
+    # - Service registration with mesh registry
+
+  # Dependent agent that consumes services from other agents
+  dependent_agent.py: |
+    #!/usr/bin/env python3
+    """
+    Dependent Agent Example
+
+    This demonstrates an agent that depends on capabilities from other agents:
+    - Uses @mesh.tool with dependencies to require time_service capability
+    - Shows how dependency injection automatically resolves and injects services
+    - Minimal FastMCP setup with just two functions that depend on external services
+    """
+
+
+    import mesh
+    from fastmcp import FastMCP
+
+    # Single FastMCP server instance
+    app = FastMCP("Dependent Service")
+
+
+    @app.tool()
+    @mesh.tool(capability="report_service", dependencies=["time_service"])
+    def generate_report(
+        title: str, content: str = "Sample content", time_service: mesh.McpMeshAgent = None
+    ) -> dict:
+        """Generate a timestamped report using the time service."""
+        # Get timestamp from the injected time service
+        timestamp = time_service() if time_service else "unknown"
+
+        report = {
+            "title": title,
+            "content": content,
+            "generated_at": timestamp,
+            "agent": "dependent-service",
+            "status": "completed",
+        }
+
+        return report
+
+
+    @app.tool()
+    @mesh.tool(capability="analysis_service", dependencies=["time_service"])
+    def analyze_data(
+        data: list, analysis_type: str = "basic", time_service: mesh.McpMeshAgent = None
+    ) -> dict:
+        """Analyze data with timestamp from time service."""
+        # Get timestamp from the injected time service
+        timestamp = time_service() if time_service else "unknown"
+
+        # Simple analysis
+        if not data:
+            result = {"error": "No data provided", "count": 0, "average": None}
+        else:
+            # Try to analyze as numbers, fallback to general analysis
+            try:
+                numbers = [float(x) for x in data]
+                result = {
+                    "count": len(numbers),
+                    "sum": sum(numbers),
+                    "average": sum(numbers) / len(numbers),
+                    "min": min(numbers),
+                    "max": max(numbers),
+                }
+            except (ValueError, TypeError):
+                # Fallback for non-numeric data
+                result = {
+                    "count": len(data),
+                    "data_types": list(set(type(x).__name__ for x in data)),
+                    "sample": data[:3] if len(data) > 3 else data,
+                }
+
+        analysis = {
+            "analysis_type": analysis_type,
+            "result": result,
+            "analyzed_at": timestamp,
+            "agent": "dependent-service",
+        }
+
+        return analysis
+
+
+    # AGENT configuration - depends on time_service from the FastMCP agent
+    @mesh.agent(
+        name="dependent-service",
+        version="1.0.0",
+        description="Dependent service that uses time_service capability",
+        http_host="dependent-agent",
+        http_port=9093,
+        enable_http=True,
+        auto_run=True,
+    )
+    class DependentService:
+        """
+        Agent that demonstrates dependency injection.
+
+        This agent:
+        1. Provides report_service and analysis_service capabilities
+        2. Depends on time_service capability (from fastmcp-agent)
+        3. Uses dependency injection to get timestamps from the time service
+        4. Shows how mesh automatically resolves and injects dependencies
+        """
+
+        pass
+
+
+    # No main method needed!
+    # Mesh processor automatically handles:
+    # - Dependency resolution and injection
+    # - Service discovery and connection
+    # - HTTP server configuration
+    # - Service registration with mesh registry

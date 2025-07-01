@@ -1,35 +1,35 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mcp-mesh-hello-world
+  name: mcp-mesh-dependent-agent
   namespace: mcp-mesh
   labels:
-    app.kubernetes.io/name: mcp-mesh-hello-world
+    app.kubernetes.io/name: mcp-mesh-dependent-agent
     app.kubernetes.io/component: agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: mcp-mesh-hello-world
+      app.kubernetes.io/name: mcp-mesh-dependent-agent
       app.kubernetes.io/component: agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: mcp-mesh-hello-world
+        app.kubernetes.io/name: mcp-mesh-dependent-agent
         app.kubernetes.io/component: agent
     spec:
       securityContext:
-        runAsNonRoot: false
-        runAsUser: 0
-        fsGroup: 0
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
-        - name: hello-world-agent
+        - name: dependent-agent
           image: mcp-mesh-base:latest
           imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:
             - name: http
-              containerPort: 9090
+              containerPort: 9093
               protocol: TCP
           env:
             # Registry connection - configurable for federated networks
@@ -61,14 +61,18 @@ spec:
                 fieldRef:
                   fieldPath: status.podIP
             - name: MCP_MESH_AGENT_NAME
-              value: "hello-world"
+              value: "dependent-service"
+            - name: MCP_MESH_HTTP_HOST
+              value: "mcp-mesh-dependent-agent"
+            - name: MCP_MESH_HTTP_PORT
+              value: "9093"
           envFrom:
             - configMapRef:
                 name: mcp-agent-config
           livenessProbe:
             httpGet:
               path: /health
-              port: 9090
+              port: 9093
               httpHeaders:
                 - name: Accept
                   value: application/json
@@ -79,7 +83,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 9090
+              port: 9093
               httpHeaders:
                 - name: Accept
                   value: application/json
@@ -90,7 +94,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: 9090
+              port: 9093
               httpHeaders:
                 - name: Accept
                   value: application/json
@@ -108,11 +112,14 @@ spec:
           volumeMounts:
             - name: agent-code
               mountPath: /app/agent.py
-              subPath: hello_world.py
+              subPath: dependent_agent.py
               readOnly: true
           securityContext:
-            allowPrivilegeEscalation: true
-            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
 
       volumes:
         - name: agent-code
@@ -123,18 +130,18 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: mcp-mesh-hello-world
+  name: mcp-mesh-dependent-agent
   namespace: mcp-mesh
   labels:
-    app.kubernetes.io/name: mcp-mesh-hello-world
+    app.kubernetes.io/name: mcp-mesh-dependent-agent
     app.kubernetes.io/component: agent
 spec:
   type: ClusterIP
   ports:
     - name: http
-      port: 9090
+      port: 9093
       targetPort: http
       protocol: TCP
   selector:
-    app.kubernetes.io/name: mcp-mesh-hello-world
+    app.kubernetes.io/name: mcp-mesh-dependent-agent
     app.kubernetes.io/component: agent

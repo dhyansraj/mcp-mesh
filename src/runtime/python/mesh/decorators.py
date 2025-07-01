@@ -436,6 +436,9 @@ def agent(
             rule=ValidationRule.NONZERO_RULE,
         )
 
+        # Generate agent ID using shared function
+        agent_id = _get_or_create_agent_id(name)
+
         # Build agent metadata
         metadata = {
             "name": name,
@@ -448,6 +451,7 @@ def agent(
             "health_interval": final_health_interval,
             "auto_run": final_auto_run,
             "auto_run_interval": final_auto_run_interval,
+            "agent_id": agent_id,
             **kwargs,
         }
 

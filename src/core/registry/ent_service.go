@@ -770,14 +770,33 @@ func (s *EntService) findHealthyProviderWithTTL(dep database.Dependency) *Depend
 	timeoutDuration := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
 	ttlThreshold := time.Now().UTC().Add(-timeoutDuration)
 
-	// Query capabilities with healthy agents using Ent
-	capabilities, err := s.entDB.Capability.Query().
-		Where(capability.CapabilityEQ(dep.Capability)).
-		WithAgent().
-		All(ctx)
+	// Query capabilities with healthy agents using Ent with retry logic for database locks
+	var capabilities []*ent.Capability
+	var err error
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		capabilities, err = s.entDB.Capability.Query().
+			Where(capability.CapabilityEQ(dep.Capability)).
+			WithAgent().
+			All(ctx)
+
+		if err == nil {
+			break // Success
+		}
+
+		// Check if it's a database lock error
+		if strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "SQLITE_BUSY") {
+			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
+			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			continue
+		}
+
+		// Non-lock error, don't retry
+		break
+	}
 
 	if err != nil {
-		s.logger.Error("Error finding healthy providers for %s: %v", dep.Capability, err)
+		s.logger.Error("Error finding healthy providers for %s after %d attempts: %v", dep.Capability, maxRetries, err)
 		return nil
 	}
 

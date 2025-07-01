@@ -25,6 +25,8 @@ resources:
   - agents/secret.yaml
   - agents/hello-world-deployment.yaml
   - agents/system-agent-deployment.yaml
+  - agents/fastmcp-agent-deployment.yaml
+  - agents/dependent-agent-deployment.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh
