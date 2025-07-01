@@ -60,7 +60,7 @@ spec:
           containers:
             # SQLite backup
             - name: sqlite-backup
-              image: mcp-mesh-registry:latest
+              image: mcp-mesh-registry:0.2
               command: ["sh", "-c"]
               args:
                 - |

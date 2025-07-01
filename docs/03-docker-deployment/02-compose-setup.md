@@ -171,7 +171,7 @@ Create `.env` file for environment variables:
 # .env
 COMPOSE_PROJECT_NAME=mcp-mesh
 POSTGRES_PASSWORD=secure_password
-MCP_MESH_VERSION=latest
+MCP_MESH_VERSION=0.2
 REGISTRY_PORT=8000
 LOG_LEVEL=INFO
 ```
@@ -188,7 +188,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
 
   registry:
-    image: mcp-mesh/registry:${MCP_MESH_VERSION:-latest}
+    image: mcp-mesh/registry:${MCP_MESH_VERSION:-0.2}
     ports:
       - "${REGISTRY_PORT:-8000}:8000"
     environment:
@@ -268,7 +268,7 @@ services:
           memory: 256M
 
   registry:
-    image: mcp-mesh/registry:${VERSION:-latest}
+    image: mcp-mesh/registry:${VERSION:-0.2}
     environment:
       <<: *common-variables
       MCP_MESH_DB_PASSWORD_FILE: /run/secrets/db_password

@@ -1,217 +1,223 @@
 # Running Hello World Example
 
-> The simplest way to see MCP Mesh in action - as easy as running a Python script!
+> The simplest way to see MCP Mesh in action - dual decorators make it effortless!
 
 ## Overview
 
-Running MCP Mesh agents is as simple as running Python scripts. The mesh handles all the complexity of service discovery and dependency injection automatically.
+MCP Mesh 0.2.x introduces the **dual decorator pattern** that combines the familiar FastMCP development experience with powerful mesh orchestration. No main methods, no manual server setup - just add decorators and go!
 
-## Quick Start (3 Commands!)
+## Quick Start (2 Commands!)
 
 ```bash
-# 1. Start the first agent (provides system functions)
-meshctl start examples/system_agent.py
+# 1. Start the system agent (provides date services) - registry starts automatically
+meshctl start examples/simple/system_agent.py
 
-# 2. Start the Hello World agent (uses system functions)
-meshctl start examples/hello_world.py
+# 2. Start the hello world agent (uses date services)
+meshctl start examples/simple/hello_world.py
 
-# 3. Test it!
-curl http://localhost:8888/greet_from_mcp_mesh_dependency
+# 3. Test it with MCP JSON-RPC!
+curl -s -X POST http://localhost:9090/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_simple",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result'
 ```
 
-That's it! You've just run a distributed MCP system with automatic dependency injection. 🎉
+That's it! `meshctl` automatically starts the registry when needed, making it truly 2 commands for a distributed MCP system. 🎉
 
 ## What Just Happened?
 
-The Hello World example demonstrates the power of MCP Mesh:
+The Hello World example demonstrates the **dual decorator pattern**:
 
-1. **system_agent.py** provides functions like `getDate()` and `getTime()`
-2. **hello_world.py** automatically discovers and uses these functions
-3. No configuration files, no service URLs, no boilerplate - just decorators!
+1. **FastMCP decorators** (`@app.tool`) handle the MCP protocol
+2. **Mesh decorators** (`@mesh.tool`) add dependency injection and orchestration
+3. **Automatic discovery** - Mesh finds your FastMCP `app` instance and handles everything
+4. **Zero boilerplate** - No main methods or manual server management needed
 
-## Understanding the Code
+## Understanding the New Architecture
 
-Here's the key part of `hello_world.py`:
+### The Dual Decorator Pattern
+
+Here's the key part of `hello_world.py` using the new 0.2.x pattern:
 
 ```python
-@server.tool()
-@mesh_agent(
+from typing import Any
+
+import mesh
+from fastmcp import FastMCP
+
+# Single FastMCP server instance
+app = FastMCP("Hello World Service")
+
+@app.tool()  # ← FastMCP decorator (familiar MCP development)
+@mesh.tool(
     capability="greeting",
-    dependencies=["SystemAgent_getDate"],  # ← Declares what it needs
-    enable_http=True,
-    http_port=8888
+    dependencies=["date_service"]  # ← Mesh decorator (orchestration)
 )
-def greet_from_mcp_mesh_dependency(
-    name: str = "World",
-    SystemAgent_getDate=None  # ← Automatically injected!
-):
-    """This shows MCP Mesh dependency injection"""
-    if SystemAgent_getDate:
-        date_str = SystemAgent_getDate()
-        return f"Hello {name} from MCP Mesh Dependency Injection! Today is {date_str}"
-    else:
-        return f"Hello {name} from MCP Mesh (SystemAgent not available)"
-```
+def hello_mesh_simple(date_service: Any = None) -> str:
+    """MCP Mesh greeting with dependency injection."""
+    if date_service is None:
+        return "👋 Hello from MCP Mesh! (Date service not available yet)"
 
-Compare this to a regular MCP function in the same file:
+    current_date = date_service()  # Call injected function
+    return f"👋 Hello from MCP Mesh! Today is {current_date}"
 
-```python
-@server.tool()
-def greet_from_mcp(name: str = "World"):
-    """This is a regular MCP function - no mesh features"""
-    return f"Hello {name} from regular MCP!"
-```
-
-The only difference? The `@mesh_agent()` decorator and the dependency parameter!
-
-## Behind the Scenes
-
-When you run `meshctl start`, it automatically:
-
-1. **Starts the Registry** (if not already running) - A Go service that tracks all agents
-2. **Registers your agent** - Tells the registry what functions it provides
-3. **Resolves dependencies** - Finds and connects to required services
-4. **Injects functions** - Makes remote functions callable as if they were local
-5. **Monitors health** - Keeps everything running smoothly
-
-## Step-by-Step Breakdown
-
-### What `system_agent.py` provides:
-
-```python
-@server.tool()
-@mesh_agent(
-    capability="SystemAgent",
-    enable_http=True
+# Agent configuration - tells mesh how to run FastMCP
+@mesh.agent(
+    name="hello-world",
+    http_port=9090,
+    auto_run=True  # Mesh handles startup automatically
 )
-async def getDate() -> str:
-    """Get the current date"""
-    return datetime.now().strftime("%Y-%m-%d")
+class HelloWorldAgent:
+    pass
+
+# No main method needed! Mesh discovers 'app' and handles everything.
 ```
 
-### How `hello_world.py` uses it:
+### System Agent Architecture
+
+And here's how `system_agent.py` provides the date service:
 
 ```python
-# The function parameter name must match: capability_functionName
-def greet_from_mcp_mesh_dependency(
-    name: str = "World",
-    SystemAgent_getDate=None  # ← This gets injected automatically!
-):
-    if SystemAgent_getDate:
-        date_str = SystemAgent_getDate()  # ← Call it like a local function
-        return f"Hello {name}! Today is {date_str}"
+import mesh
+from fastmcp import FastMCP
+from datetime import datetime
+
+app = FastMCP("System Agent Service")
+
+@app.tool()  # ← FastMCP handles MCP protocol
+@mesh.tool(capability="date_service")  # ← What others can depend on
+def get_current_time() -> str:
+    """Get current system date and time."""
+    return datetime.now().strftime("%B %d, %Y at %I:%M %p")
+
+@mesh.agent(
+    name="system-agent",
+    http_port=8080,
+    auto_run=True
+)
+class SystemAgent:
+    pass
 ```
 
-## Try More Examples
+## Key Benefits of the New Pattern
+
+### 1. **Familiar FastMCP Development**
+
+- Keep using `@app.tool()`, `@app.prompt()`, `@app.resource()`
+- Same function signatures and return types
+- Full MCP protocol compatibility
+
+### 2. **Enhanced with Mesh Orchestration**
+
+- Add `@mesh.tool()` for dependency injection
+- Automatic service discovery and registration
+- Smart capability resolution with tags
+
+### 3. **Zero Boilerplate**
+
+- No main methods needed
+- No manual server startup
+- Mesh discovers your `app` instance automatically
+
+### 4. **Automatic Service Discovery**
+
+- No configuration files or service URLs needed
+- Services find each other automatically through the registry
+
+## Testing Your Setup
+
+### List Available Tools
 
 ```bash
-# Test different endpoints
-curl http://localhost:8888/greet_from_mcp       # Regular MCP (no injection)
-curl http://localhost:8888/greet_from_mcp_mesh  # With injection (fixed in code)
-curl http://localhost:8888/greet_from_mcp_mesh_dependency  # With injection (dynamic)
-
-# See all available functions
-curl http://localhost:8080/docs  # System agent docs
-curl http://localhost:8888/docs  # Hello world docs
-
-# Check what's running
-meshctl status
-
-# View logs
-meshctl logs hello_world
+# Check what tools are available on hello world agent
+curl -s -X POST http://localhost:9090/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 ```
 
-## Understanding the Architecture
-
-```
-Your Agent Code                    MCP Mesh (Installed via pip)              Registry (Go)
-┌─────────────────┐               ┌──────────────────────────┐            ┌─────────────┐
-│ @mesh_agent()   │──registers───▶│ • Service discovery      │◀──tracks──│ • Agent list │
-│ def my_func():  │               │ • Dependency injection   │            │ • Health     │
-│   ...           │◀──injects─────│ • HTTP transport         │            │ • Routing    │
-└─────────────────┘               └──────────────────────────┘            └─────────────┘
-     You write                          Handles complexity                   Runs automatically
-```
-
-## What's Next?
-
-Congratulations! You've successfully:
-
-- ✅ Run distributed MCP agents with one command
-- ✅ Seen automatic dependency injection in action
-- ✅ Tested cross-service communication
-
-The beauty of MCP Mesh is that **this is all you need to know** to start building distributed MCP systems!
-
-### Try This Yourself
-
-Create a new file `my_agent.py`:
-
-```python
-from mcp.server.fastmcp import FastMCP
-from mcp_mesh import mesh_agent
-
-server = FastMCP(name="my-agent")
-
-@server.tool()
-@mesh_agent(
-    capability="weather",
-    dependencies=["SystemAgent_getTime"],
-    enable_http=True,
-    http_port=9000
-)
-def get_weather(city: str = "London", SystemAgent_getTime=None):
-    time = SystemAgent_getTime() if SystemAgent_getTime else "unknown"
-    return f"Weather in {city} at {time}: Sunny, 22°C"
-
-if __name__ == "__main__":
-    import asyncio
-    from mcp_mesh.server.runner import run_server
-    asyncio.run(run_server(server))
-```
-
-Run it:
+### Test Different Functions
 
 ```bash
-meshctl start my_agent.py
-curl http://localhost:9000/weather_get_weather
+# Test simple greeting
+curl -s -X POST http://localhost:9090/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "hello_mesh_simple", "arguments": {}}
+  }' | jq '.result'
+
+# Test smart tag-based greeting
+curl -s -X POST http://localhost:9090/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "hello_mesh_typed", "arguments": {}}
+  }' | jq '.result'
 ```
 
-Next, let's understand how this magic works:
+## What's Different from 0.1.x?
 
-[Understanding Dependency Injection](./04-dependency-injection.md) →
+| Feature          | 0.1.x                            | 0.2.x                             |
+| ---------------- | -------------------------------- | --------------------------------- |
+| **Decorators**   | Only `@mesh.tool`, `@mesh.agent` | Dual: `@app.tool` + `@mesh.tool`  |
+| **MCP Support**  | Limited mesh-only protocol       | Full FastMCP compatibility        |
+| **Server Setup** | Manual configuration             | Automatic discovery               |
+| **Types**        | Basic typing                     | Enhanced with `mesh.McpMeshAgent` |
+| **Tags**         | Not supported                    | Smart tag-based resolution        |
+| **Main Method**  | Required for some cases          | Never needed                      |
+
+## Troubleshooting
+
+### Service Not Starting
+
+```bash
+# Check if ports are available
+lsof -i :9090  # Hello world agent port
+lsof -i :8080  # System agent port
+```
+
+### Dependency Not Injected
+
+```bash
+# Check registry for available services
+curl -s http://localhost:8000/agents | jq '.agents[] | {name: .name, capabilities: .capabilities}'
+```
+
+### Function Not Found
+
+- Make sure you're using the correct **function name** (not capability name) in MCP calls
+- Function name: `hello_mesh_simple`
+- Capability name: `greeting`
+
+## Next Steps
+
+Now that you understand the dual decorator pattern, let's explore:
+
+1. **[Dependency Injection](./04-dependency-injection.md)** - Deep dive into smart dependency resolution
+2. **[Creating Your First Agent](./05-first-agent.md)** - Build a complete agent from scratch
 
 ---
 
-💡 **Remember**: MCP Mesh is just a pip package. You write agents, it handles the mesh!
+💡 **Tip**: The dual decorator pattern gives you the best of both worlds - familiar FastMCP development with powerful mesh orchestration!
 
-📚 **Exercise**: Try modifying hello_world.py to use SystemAgent_getTime as well. What changes are needed?
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-1. **"Connection refused" errors** - Ensure registry is running on port 8000
-2. **"Dependency not found"** - Start System Agent before Hello World
-3. **"Port already in use"** - Kill existing processes or use different ports
-4. **"Import error: mcp_mesh"** - Activate virtual environment
-5. **Slow dependency resolution** - Check network connectivity to registry
-
-For detailed solutions, see our [Troubleshooting Guide](./troubleshooting.md).
-
-## ⚠️ Known Limitations
-
-- **Single registry**: Examples assume single registry instance
-- **Local only**: Examples use localhost; remote deployment requires configuration
-- **No persistence**: Registry uses in-memory storage by default
-- **HTTP only**: Examples don't include HTTPS/TLS configuration
-- **Basic auth**: No authentication in example setup
-
-## 📝 TODO
-
-- [ ] Add WebSocket transport example
-- [ ] Include gRPC transport option
-- [ ] Add multi-registry example
-- [ ] Create interactive web UI for testing
-- [ ] Add distributed tracing example
-- [ ] Include metrics visualization
+📚 **Note**: All examples use the new 0.2.x pattern - no more manual server management needed.

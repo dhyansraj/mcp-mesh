@@ -8,40 +8,60 @@ MCP Mesh makes building distributed MCP services as easy as writing Python funct
 
 ## What is MCP Mesh?
 
-MCP Mesh is a **distributed service mesh framework** that adds automatic discovery and dependency injection to your MCP agents:
+MCP Mesh is a **distributed service mesh framework** that enhances FastMCP with automatic discovery and dependency injection:
 
-- 🔌 **Simple decorators**: Add `@mesh.agent` and `@mesh.tool` to your code
-- 🔍 **Automatic discovery**: Services find each other via central registry
-- 💉 **Dependency injection**: Use remote functions like local parameters
-- 🚀 **Zero configuration**: No service URLs or config files needed
+- 🔌 **Dual decorators**: Combine familiar `@app.tool` (FastMCP) with `@mesh.tool` (orchestration)
+- 🔍 **All MCP decorators**: Support for `@app.tool`, `@app.prompt`, `@app.resource` from FastMCP
+- 💉 **Smart dependency injection**: Use remote functions with type safety (`mesh.McpMeshAgent`)
+- 🏷️ **Tag-based resolution**: Smart capability matching using tags and metadata
+- 🚀 **Zero boilerplate**: Mesh discovers your FastMCP `app` and handles everything
 - 📦 **Production ready**: Go registry + Python agents + Kubernetes support
 
 ## The Simplest Example
 
 ```python
-# 1. Define an agent class
-@mesh.agent(name="hello-world")
-class HelloWorldAgent:
-    pass
+import mesh
+from fastmcp import FastMCP
 
-# 2. Add a simple tool
-@mesh.tool(capability="greeting")
-def greet(name: str = "World"):
+# Single FastMCP server instance
+app = FastMCP("Hello World Service")
+
+# 1. Add a simple tool with dual decorators
+@app.tool()  # ← FastMCP decorator (familiar MCP development)
+@mesh.tool(capability="greeting")  # ← Mesh decorator (adds orchestration)
+def greet(name: str = "World") -> str:
     return f"Hello, {name}!"
 
-# 3. Add a tool with dependency injection
+# 2. Add a tool with dependency injection
+@app.tool()  # ← FastMCP handles MCP protocol
 @mesh.tool(
     capability="advanced_greeting",
-    dependencies=["date_service"]  # ← Uses another service
+    dependencies=["date_service"]  # ← Mesh handles service discovery
 )
-def greet_with_date(name: str = "World", date_service=None):
+def greet_with_date(name: str = "World", date_service: mesh.McpMeshAgent = None) -> str:
     if date_service:
         current_date = date_service()  # Calls remote system agent
         return f"Hello, {name}! Today is {current_date}"
     return f"Hello, {name}! (Date service not available)"
+
+# 3. Configure the agent
+@mesh.agent(
+    name="hello-world",
+    http_port=9090,
+    auto_run=True  # Mesh handles server startup automatically
+)
+class HelloWorldAgent:
+    pass
+
+# No main method needed! Mesh discovers 'app' and handles everything.
 ```
 
-That's it! The function automatically discovers and uses the system agent's date service.
+That's it! The **dual decorator pattern** gives you:
+
+- **FastMCP decorators** (`@app.tool`) for familiar MCP development
+- **Mesh decorators** (`@mesh.tool`) for dependency injection and orchestration
+- **Automatic discovery** - Mesh finds your FastMCP `app` and handles server startup
+- **Zero boilerplate** - No main methods or manual server management needed
 
 ## Quick Start (Docker - 2 Minutes)
 
@@ -77,10 +97,10 @@ That's it! You now have a working distributed MCP service mesh! 🎉
 
 ```bash
 # 1. Install MCP Mesh with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
+pip install "mcp-mesh>=0.2.0,<0.3.0"
 
 # 2. Download and start registry (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.2
 registry --host 0.0.0.0 --port 8000 &
 
 # 3. Download example agents

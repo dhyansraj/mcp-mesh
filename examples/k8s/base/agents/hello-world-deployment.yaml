@@ -24,7 +24,7 @@ spec:
         fsGroup: 0
       containers:
         - name: hello-world-agent
-          image: mcp-mesh-base:latest
+          image: mcp-mesh-base:0.2
           imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:

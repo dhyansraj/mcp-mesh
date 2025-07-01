@@ -50,7 +50,7 @@ replicaCount: 1
 
 image:
   repository: mcp-mesh-base
-  tag: "latest"
+  tag: "0.2"
   pullPolicy: Never
 
 service:
@@ -116,7 +116,7 @@ agent:
 
 image:
   repository: mcp-mesh-base
-  tag: "latest"
+  tag: "0.2"
   pullPolicy: Never
 
 resources:
@@ -142,7 +142,7 @@ agent:
 
 image:
   repository: mcp-mesh-base
-  tag: "latest"
+  tag: "0.2"
   pullPolicy: Never
 
 resources:
@@ -170,7 +170,7 @@ agent:
 
 image:
   repository: mcp-mesh-base
-  tag: "latest"
+  tag: "0.2"
   pullPolicy: Never
 
 env:
@@ -259,7 +259,7 @@ mcp-mesh-registry:
   replicaCount: 1
   image:
     repository: mcp-mesh-base
-    tag: "latest"
+    tag: "0.2"
     pullPolicy: Never
   service:
     port: 8000
@@ -286,7 +286,7 @@ hello-world-agent:
       - translation
   image:
     repository: mcp-mesh-base
-    tag: "latest"
+    tag: "0.2"
     pullPolicy: Never
 
 system-agent:
@@ -299,7 +299,7 @@ system-agent:
       - system_info
   image:
     repository: mcp-mesh-base
-    tag: "latest"
+    tag: "0.2"
     pullPolicy: Never
 
 weather-agent:
@@ -312,7 +312,7 @@ weather-agent:
       - weather_current
   image:
     repository: mcp-mesh-base
-    tag: "latest"
+    tag: "0.2"
     pullPolicy: Never
   env:
     WEATHER_API_KEY: "your-api-key"

@@ -373,7 +373,7 @@ kubectl exec <pod-name> -n mcp-mesh -- df -h
 **Symptoms:**
 
 ```
-Failed to pull image "mcp-mesh/agent:latest": rpc error: code = Unknown desc = Error response from daemon: pull access denied
+Failed to pull image "mcp-mesh/agent:0.2": rpc error: code = Unknown desc = Error response from daemon: pull access denied
 ```
 
 **Solutions:**
@@ -383,7 +383,7 @@ Failed to pull image "mcp-mesh/agent:latest": rpc error: code = Unknown desc = E
    ```bash
    # Use Minikube's Docker
    eval $(minikube docker-env)
-   docker build -t mcp-mesh/agent:latest .
+   docker build -t mcp-mesh/agent:0.2 .
 
    # Set imagePullPolicy
    kubectl patch deployment <deployment-name> -n mcp-mesh -p '

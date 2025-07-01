@@ -340,7 +340,7 @@ global:
 # Image configuration (updated to match working examples)
 image:
   repository: mcp-mesh-base  # 🎯 Updated from mcp-mesh/registry
-  tag: "latest"  # 🎯 Updated for local development
+  tag: "0.2"  # 🎯 Updated for local development
   pullPolicy: Never  # 🎯 For local development
 
 # Deployment settings
@@ -441,7 +441,7 @@ mesh:
 | Section        | Key          | Description        | Default (Updated) |
 | -------------- | ------------ | ------------------ | ----------------- |
 | `image`        | `repository` | Container image    | mcp-mesh-base     |
-| `image`        | `tag`        | Image version      | latest            |
+| `image`        | `tag`        | Image version      | 0.2               |
 | `image`        | `pullPolicy` | Pull policy        | Never             |
 | `replicaCount` | -            | Number of replicas | 1                 |
 | `service`      | `type`       | Service type       | ClusterIP         |
@@ -695,7 +695,7 @@ Key takeaways:
 - 🔑 **Registry chart**: Uses StatefulSet with port 8000, matches working K8s examples
 - 🔑 **Agent chart**: Includes automatic service discovery from `app.kubernetes.io/name` labels
 - 🔑 **Service discovery**: Auto-detects SERVICE_NAME and NAMESPACE from Kubernetes metadata
-- 🔑 **Image consistency**: Both charts use `mcp-mesh-base:latest` with `Never` pull policy
+- 🔑 **Image consistency**: Both charts use `mcp-mesh-base:0.2` with `Never` pull policy
 - 🔑 **Port standardization**: Registry=8000, Agents=8080
 - 🔑 **Health endpoints**: All use `/health` for startup, liveness, and readiness probes
 

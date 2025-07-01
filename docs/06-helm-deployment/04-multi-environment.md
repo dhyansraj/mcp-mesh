@@ -180,7 +180,7 @@ agents:
     enabled: true
     replicaCount: 1
     image:
-      tag: "latest" # Use latest in dev
+      tag: "0.2" # Use 0.2 in dev
     env:
       LOG_LEVEL: "DEBUG"
       CACHE_ENABLED: "false"
