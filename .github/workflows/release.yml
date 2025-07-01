@@ -289,7 +289,8 @@ jobs:
         run: |
           cp ../../src/runtime/python/README.md .
           cp ../../LICENSE .
-          cp -r ../../src/runtime/python/src .
+          cp -r ../../src/runtime/python/_mcp_mesh .
+          cp -r ../../src/runtime/python/mesh .
 
       - name: Update version in packaging files
         working-directory: packaging/pypi
