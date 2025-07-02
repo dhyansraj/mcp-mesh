@@ -27,6 +27,8 @@ const (
 	FieldHTTPPort = "http_port"
 	// FieldNamespace holds the string denoting the namespace field in the database.
 	FieldNamespace = "namespace"
+	// FieldStatus holds the string denoting the status field in the database.
+	FieldStatus = "status"
 	// FieldTotalDependencies holds the string denoting the total_dependencies field in the database.
 	FieldTotalDependencies = "total_dependencies"
 	// FieldDependenciesResolved holds the string denoting the dependencies_resolved field in the database.
@@ -35,6 +37,8 @@ const (
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
 	FieldUpdatedAt = "updated_at"
+	// FieldLastFullRefresh holds the string denoting the last_full_refresh field in the database.
+	FieldLastFullRefresh = "last_full_refresh"
 	// EdgeCapabilities holds the string denoting the capabilities edge name in mutations.
 	EdgeCapabilities = "capabilities"
 	// EdgeEvents holds the string denoting the events edge name in mutations.
@@ -70,10 +74,12 @@ var Columns = []string{
 	FieldHTTPHost,
 	FieldHTTPPort,
 	FieldNamespace,
+	FieldStatus,
 	FieldTotalDependencies,
 	FieldDependenciesResolved,
 	FieldCreatedAt,
 	FieldUpdatedAt,
+	FieldLastFullRefresh,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -99,6 +105,8 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// DefaultLastFullRefresh holds the default value on creation for the "last_full_refresh" field.
+	DefaultLastFullRefresh func() time.Time
 )
 
 // AgentType defines the type for the "agent_type" enum field.
@@ -125,6 +133,33 @@ func AgentTypeValidator(at AgentType) error {
 		return nil
 	default:
 		return fmt.Errorf("agent: invalid enum value for agent_type field: %q", at)
+	}
+}
+
+// Status defines the type for the "status" enum field.
+type Status string
+
+// StatusHealthy is the default value of the Status enum.
+const DefaultStatus = StatusHealthy
+
+// Status values.
+const (
+	StatusHealthy   Status = "healthy"
+	StatusUnhealthy Status = "unhealthy"
+	StatusUnknown   Status = "unknown"
+)
+
+func (s Status) String() string {
+	return string(s)
+}
+
+// StatusValidator is a validator for the "status" field enum values. It is called by the builders before save.
+func StatusValidator(s Status) error {
+	switch s {
+	case StatusHealthy, StatusUnhealthy, StatusUnknown:
+		return nil
+	default:
+		return fmt.Errorf("agent: invalid enum value for status field: %q", s)
 	}
 }
 
@@ -166,6 +201,11 @@ func ByNamespace(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldNamespace, opts...).ToFunc()
 }
 
+// ByStatus orders the results by the status field.
+func ByStatus(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
 // ByTotalDependencies orders the results by the total_dependencies field.
 func ByTotalDependencies(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTotalDependencies, opts...).ToFunc()
@@ -184,6 +224,11 @@ func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByUpdatedAt orders the results by the updated_at field.
 func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpdatedAt, opts...).ToFunc()
+}
+
+// ByLastFullRefresh orders the results by the last_full_refresh field.
+func ByLastFullRefresh(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLastFullRefresh, opts...).ToFunc()
 }
 
 // ByCapabilitiesCount orders the results by capabilities count.

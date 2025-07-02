@@ -139,6 +139,20 @@ func (au *AgentUpdate) SetNillableNamespace(s *string) *AgentUpdate {
 	return au
 }
 
+// SetStatus sets the "status" field.
+func (au *AgentUpdate) SetStatus(a agent.Status) *AgentUpdate {
+	au.mutation.SetStatus(a)
+	return au
+}
+
+// SetNillableStatus sets the "status" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableStatus(a *agent.Status) *AgentUpdate {
+	if a != nil {
+		au.SetStatus(*a)
+	}
+	return au
+}
+
 // SetTotalDependencies sets the "total_dependencies" field.
 func (au *AgentUpdate) SetTotalDependencies(i int) *AgentUpdate {
 	au.mutation.ResetTotalDependencies()
@@ -184,6 +198,20 @@ func (au *AgentUpdate) AddDependenciesResolved(i int) *AgentUpdate {
 // SetUpdatedAt sets the "updated_at" field.
 func (au *AgentUpdate) SetUpdatedAt(t time.Time) *AgentUpdate {
 	au.mutation.SetUpdatedAt(t)
+	return au
+}
+
+// SetLastFullRefresh sets the "last_full_refresh" field.
+func (au *AgentUpdate) SetLastFullRefresh(t time.Time) *AgentUpdate {
+	au.mutation.SetLastFullRefresh(t)
+	return au
+}
+
+// SetNillableLastFullRefresh sets the "last_full_refresh" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableLastFullRefresh(t *time.Time) *AgentUpdate {
+	if t != nil {
+		au.SetLastFullRefresh(*t)
+	}
 	return au
 }
 
@@ -307,6 +335,11 @@ func (au *AgentUpdate) check() error {
 			return &ValidationError{Name: "agent_type", err: fmt.Errorf(`ent: validator failed for field "Agent.agent_type": %w`, err)}
 		}
 	}
+	if v, ok := au.mutation.Status(); ok {
+		if err := agent.StatusValidator(v); err != nil {
+			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -352,6 +385,9 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if value, ok := au.mutation.Namespace(); ok {
 		_spec.SetField(agent.FieldNamespace, field.TypeString, value)
 	}
+	if value, ok := au.mutation.Status(); ok {
+		_spec.SetField(agent.FieldStatus, field.TypeEnum, value)
+	}
 	if value, ok := au.mutation.TotalDependencies(); ok {
 		_spec.SetField(agent.FieldTotalDependencies, field.TypeInt, value)
 	}
@@ -366,6 +402,9 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if value, ok := au.mutation.UpdatedAt(); ok {
 		_spec.SetField(agent.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if value, ok := au.mutation.LastFullRefresh(); ok {
+		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
 	}
 	if au.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -586,6 +625,20 @@ func (auo *AgentUpdateOne) SetNillableNamespace(s *string) *AgentUpdateOne {
 	return auo
 }
 
+// SetStatus sets the "status" field.
+func (auo *AgentUpdateOne) SetStatus(a agent.Status) *AgentUpdateOne {
+	auo.mutation.SetStatus(a)
+	return auo
+}
+
+// SetNillableStatus sets the "status" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableStatus(a *agent.Status) *AgentUpdateOne {
+	if a != nil {
+		auo.SetStatus(*a)
+	}
+	return auo
+}
+
 // SetTotalDependencies sets the "total_dependencies" field.
 func (auo *AgentUpdateOne) SetTotalDependencies(i int) *AgentUpdateOne {
 	auo.mutation.ResetTotalDependencies()
@@ -631,6 +684,20 @@ func (auo *AgentUpdateOne) AddDependenciesResolved(i int) *AgentUpdateOne {
 // SetUpdatedAt sets the "updated_at" field.
 func (auo *AgentUpdateOne) SetUpdatedAt(t time.Time) *AgentUpdateOne {
 	auo.mutation.SetUpdatedAt(t)
+	return auo
+}
+
+// SetLastFullRefresh sets the "last_full_refresh" field.
+func (auo *AgentUpdateOne) SetLastFullRefresh(t time.Time) *AgentUpdateOne {
+	auo.mutation.SetLastFullRefresh(t)
+	return auo
+}
+
+// SetNillableLastFullRefresh sets the "last_full_refresh" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableLastFullRefresh(t *time.Time) *AgentUpdateOne {
+	if t != nil {
+		auo.SetLastFullRefresh(*t)
+	}
 	return auo
 }
 
@@ -767,6 +834,11 @@ func (auo *AgentUpdateOne) check() error {
 			return &ValidationError{Name: "agent_type", err: fmt.Errorf(`ent: validator failed for field "Agent.agent_type": %w`, err)}
 		}
 	}
+	if v, ok := auo.mutation.Status(); ok {
+		if err := agent.StatusValidator(v); err != nil {
+			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -829,6 +901,9 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	if value, ok := auo.mutation.Namespace(); ok {
 		_spec.SetField(agent.FieldNamespace, field.TypeString, value)
 	}
+	if value, ok := auo.mutation.Status(); ok {
+		_spec.SetField(agent.FieldStatus, field.TypeEnum, value)
+	}
 	if value, ok := auo.mutation.TotalDependencies(); ok {
 		_spec.SetField(agent.FieldTotalDependencies, field.TypeInt, value)
 	}
@@ -843,6 +918,9 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if value, ok := auo.mutation.UpdatedAt(); ok {
 		_spec.SetField(agent.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if value, ok := auo.mutation.LastFullRefresh(); ok {
+		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
 	}
 	if auo.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{

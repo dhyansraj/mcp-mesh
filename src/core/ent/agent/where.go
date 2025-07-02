@@ -110,6 +110,11 @@ func UpdatedAt(v time.Time) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldUpdatedAt, v))
 }
 
+// LastFullRefresh applies equality check predicate on the "last_full_refresh" field. It's identical to LastFullRefreshEQ.
+func LastFullRefresh(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldLastFullRefresh, v))
+}
+
 // AgentTypeEQ applies the EQ predicate on the "agent_type" field.
 func AgentTypeEQ(v AgentType) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldAgentType, v))
@@ -460,6 +465,26 @@ func NamespaceContainsFold(v string) predicate.Agent {
 	return predicate.Agent(sql.FieldContainsFold(FieldNamespace, v))
 }
 
+// StatusEQ applies the EQ predicate on the "status" field.
+func StatusEQ(v Status) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldStatus, v))
+}
+
+// StatusNEQ applies the NEQ predicate on the "status" field.
+func StatusNEQ(v Status) predicate.Agent {
+	return predicate.Agent(sql.FieldNEQ(FieldStatus, v))
+}
+
+// StatusIn applies the In predicate on the "status" field.
+func StatusIn(vs ...Status) predicate.Agent {
+	return predicate.Agent(sql.FieldIn(FieldStatus, vs...))
+}
+
+// StatusNotIn applies the NotIn predicate on the "status" field.
+func StatusNotIn(vs ...Status) predicate.Agent {
+	return predicate.Agent(sql.FieldNotIn(FieldStatus, vs...))
+}
+
 // TotalDependenciesEQ applies the EQ predicate on the "total_dependencies" field.
 func TotalDependenciesEQ(v int) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldTotalDependencies, v))
@@ -618,6 +643,46 @@ func UpdatedAtLT(v time.Time) predicate.Agent {
 // UpdatedAtLTE applies the LTE predicate on the "updated_at" field.
 func UpdatedAtLTE(v time.Time) predicate.Agent {
 	return predicate.Agent(sql.FieldLTE(FieldUpdatedAt, v))
+}
+
+// LastFullRefreshEQ applies the EQ predicate on the "last_full_refresh" field.
+func LastFullRefreshEQ(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldLastFullRefresh, v))
+}
+
+// LastFullRefreshNEQ applies the NEQ predicate on the "last_full_refresh" field.
+func LastFullRefreshNEQ(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldNEQ(FieldLastFullRefresh, v))
+}
+
+// LastFullRefreshIn applies the In predicate on the "last_full_refresh" field.
+func LastFullRefreshIn(vs ...time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldIn(FieldLastFullRefresh, vs...))
+}
+
+// LastFullRefreshNotIn applies the NotIn predicate on the "last_full_refresh" field.
+func LastFullRefreshNotIn(vs ...time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldNotIn(FieldLastFullRefresh, vs...))
+}
+
+// LastFullRefreshGT applies the GT predicate on the "last_full_refresh" field.
+func LastFullRefreshGT(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldGT(FieldLastFullRefresh, v))
+}
+
+// LastFullRefreshGTE applies the GTE predicate on the "last_full_refresh" field.
+func LastFullRefreshGTE(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldGTE(FieldLastFullRefresh, v))
+}
+
+// LastFullRefreshLT applies the LT predicate on the "last_full_refresh" field.
+func LastFullRefreshLT(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldLT(FieldLastFullRefresh, v))
+}
+
+// LastFullRefreshLTE applies the LTE predicate on the "last_full_refresh" field.
+func LastFullRefreshLTE(v time.Time) predicate.Agent {
+	return predicate.Agent(sql.FieldLTE(FieldLastFullRefresh, v))
 }
 
 // HasCapabilities applies the HasEdge predicate on the "capabilities" edge.

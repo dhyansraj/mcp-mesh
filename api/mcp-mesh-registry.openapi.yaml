@@ -126,6 +126,40 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /heartbeat/{agent_id}:
+    head:
+      tags: [agents]
+      summary: Fast agent health check
+      description: |
+        Lightweight health check for agent status without full registration payload.
+        Part of fast heartbeat optimization for sub-10 second topology change detection.
+
+        🤖 AI CRITICAL CONTRACT:
+        - Returns HTTP status code only (no response body)
+        - 200 OK: No topology changes, keep sending HEAD requests
+        - 202 Accepted: Topology changed, please send full POST heartbeat
+        - 410 Gone: Unknown agent, please register with POST heartbeat
+        - 503 Service Unavailable: Registry error, back off and retry
+      operationId: fastHeartbeatCheck
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          example: "hello-world-uuid-123"
+          description: Agent identifier from registration
+      responses:
+        "200":
+          description: No topology changes detected
+        "202":
+          description: Topology changed, send full POST heartbeat
+        "410":
+          description: Unknown agent, please register
+        "503":
+          description: Registry error, back off
+
   /agents:
     get:
       tags: [agents]
@@ -142,6 +176,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentsListResponse"
+
+  /agents/{agent_id}:
+    delete:
+      tags: [agents]
+      summary: Graceful agent unregistration
+      description: |
+        Gracefully unregister an agent from the registry.
+        Creates an "unregister" event for topology change detection.
+
+        🤖 AI CRITICAL CONTRACT:
+        - Used during agent graceful shutdown (SIGTERM/SIGINT)
+        - Creates registry event for other agents to detect topology change
+        - Immediate removal from registry (no timeout needed)
+        - Other agents will get 202 response on next HEAD request
+      operationId: unregisterAgent
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          example: "hello-world-uuid-123"
+          description: Agent identifier to unregister
+      responses:
+        "204":
+          description: Agent unregistered successfully
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   schemas:

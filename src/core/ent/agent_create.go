@@ -98,6 +98,20 @@ func (ac *AgentCreate) SetNillableNamespace(s *string) *AgentCreate {
 	return ac
 }
 
+// SetStatus sets the "status" field.
+func (ac *AgentCreate) SetStatus(a agent.Status) *AgentCreate {
+	ac.mutation.SetStatus(a)
+	return ac
+}
+
+// SetNillableStatus sets the "status" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableStatus(a *agent.Status) *AgentCreate {
+	if a != nil {
+		ac.SetStatus(*a)
+	}
+	return ac
+}
+
 // SetTotalDependencies sets the "total_dependencies" field.
 func (ac *AgentCreate) SetTotalDependencies(i int) *AgentCreate {
 	ac.mutation.SetTotalDependencies(i)
@@ -150,6 +164,20 @@ func (ac *AgentCreate) SetUpdatedAt(t time.Time) *AgentCreate {
 func (ac *AgentCreate) SetNillableUpdatedAt(t *time.Time) *AgentCreate {
 	if t != nil {
 		ac.SetUpdatedAt(*t)
+	}
+	return ac
+}
+
+// SetLastFullRefresh sets the "last_full_refresh" field.
+func (ac *AgentCreate) SetLastFullRefresh(t time.Time) *AgentCreate {
+	ac.mutation.SetLastFullRefresh(t)
+	return ac
+}
+
+// SetNillableLastFullRefresh sets the "last_full_refresh" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableLastFullRefresh(t *time.Time) *AgentCreate {
+	if t != nil {
+		ac.SetLastFullRefresh(*t)
 	}
 	return ac
 }
@@ -233,6 +261,10 @@ func (ac *AgentCreate) defaults() {
 		v := agent.DefaultNamespace
 		ac.mutation.SetNamespace(v)
 	}
+	if _, ok := ac.mutation.Status(); !ok {
+		v := agent.DefaultStatus
+		ac.mutation.SetStatus(v)
+	}
 	if _, ok := ac.mutation.TotalDependencies(); !ok {
 		v := agent.DefaultTotalDependencies
 		ac.mutation.SetTotalDependencies(v)
@@ -248,6 +280,10 @@ func (ac *AgentCreate) defaults() {
 	if _, ok := ac.mutation.UpdatedAt(); !ok {
 		v := agent.DefaultUpdatedAt()
 		ac.mutation.SetUpdatedAt(v)
+	}
+	if _, ok := ac.mutation.LastFullRefresh(); !ok {
+		v := agent.DefaultLastFullRefresh()
+		ac.mutation.SetLastFullRefresh(v)
 	}
 }
 
@@ -267,6 +303,14 @@ func (ac *AgentCreate) check() error {
 	if _, ok := ac.mutation.Namespace(); !ok {
 		return &ValidationError{Name: "namespace", err: errors.New(`ent: missing required field "Agent.namespace"`)}
 	}
+	if _, ok := ac.mutation.Status(); !ok {
+		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "Agent.status"`)}
+	}
+	if v, ok := ac.mutation.Status(); ok {
+		if err := agent.StatusValidator(v); err != nil {
+			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
+		}
+	}
 	if _, ok := ac.mutation.TotalDependencies(); !ok {
 		return &ValidationError{Name: "total_dependencies", err: errors.New(`ent: missing required field "Agent.total_dependencies"`)}
 	}
@@ -278,6 +322,9 @@ func (ac *AgentCreate) check() error {
 	}
 	if _, ok := ac.mutation.UpdatedAt(); !ok {
 		return &ValidationError{Name: "updated_at", err: errors.New(`ent: missing required field "Agent.updated_at"`)}
+	}
+	if _, ok := ac.mutation.LastFullRefresh(); !ok {
+		return &ValidationError{Name: "last_full_refresh", err: errors.New(`ent: missing required field "Agent.last_full_refresh"`)}
 	}
 	return nil
 }
@@ -338,6 +385,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 		_spec.SetField(agent.FieldNamespace, field.TypeString, value)
 		_node.Namespace = value
 	}
+	if value, ok := ac.mutation.Status(); ok {
+		_spec.SetField(agent.FieldStatus, field.TypeEnum, value)
+		_node.Status = value
+	}
 	if value, ok := ac.mutation.TotalDependencies(); ok {
 		_spec.SetField(agent.FieldTotalDependencies, field.TypeInt, value)
 		_node.TotalDependencies = value
@@ -353,6 +404,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.UpdatedAt(); ok {
 		_spec.SetField(agent.FieldUpdatedAt, field.TypeTime, value)
 		_node.UpdatedAt = value
+	}
+	if value, ok := ac.mutation.LastFullRefresh(); ok {
+		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
+		_node.LastFullRefresh = value
 	}
 	if nodes := ac.mutation.CapabilitiesIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

@@ -39,6 +39,10 @@ func (Agent) Fields() []ent.Field {
 		field.String("namespace").
 			Default("default").
 			Comment("Namespace for the agent"),
+		field.Enum("status").
+			Values("healthy", "unhealthy", "unknown").
+			Default("healthy").
+			Comment("Current health status of the agent"),
 		field.Int("total_dependencies").
 			Default(0).
 			Comment("Total number of dependencies"),
@@ -53,6 +57,9 @@ func (Agent) Fields() []ent.Field {
 			Default(time.Now).
 			UpdateDefault(time.Now).
 			Comment("Last update timestamp"),
+		field.Time("last_full_refresh").
+			Default(time.Now).
+			Comment("Timestamp of last full heartbeat (vs HEAD check)"),
 	}
 }
 
@@ -78,5 +85,7 @@ func (Agent) Indexes() []ent.Index {
 		index.Fields("namespace"),
 		index.Fields("agent_type"),
 		index.Fields("updated_at"),
+		index.Fields("status"),
+		index.Fields("status", "updated_at"), // Composite index for health monitoring queries
 	}
 }

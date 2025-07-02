@@ -86,7 +86,48 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 
 ## Design Principles
 
-### 1. **Dual Decorator Pattern**
+### 1. **True Resilient Architecture**
+
+MCP Mesh implements a fundamentally resilient architecture where agents operate independently and enhance each other when available, rather than depending on each other:
+
+**Core Resilience Principles:**
+
+- **Standalone Operation**: Agents function as vanilla FastMCP servers without any dependencies
+- **Registry as Facilitator**: Registry enables discovery and wiring, but agents don't depend on it
+- **Dynamic Enhancement**: Agents get enhanced capabilities when other agents are available
+- **Graceful Degradation**: Loss of registry or other agents doesn't break existing functionality
+- **Self-Healing**: Agents automatically reconnect and refresh when components return
+
+**Architecture Flow:**
+
+```
+Agent Startup → Works Standalone (FastMCP mode)
+       ↓
+Registry Available → Agents Get Wired → Enhanced Capabilities
+       ↓
+Registry Down → Agents Continue Working → Direct MCP Communication Preserved
+       ↓
+Registry Returns → Agents Refresh → Topology Updates Resume
+```
+
+**Key Behavioral Characteristics:**
+
+1. **Agent Independence**: Agents start and work without waiting for registry or other agents
+2. **Background Wiring**: Registry connects agents in background - no blocking operations
+3. **Communication Persistence**: Once wired, agents communicate directly even if registry fails
+4. **Topology Awareness**: Agents can't react to changes while registry is down, but existing connections persist
+5. **Automatic Recovery**: When registry returns, agents automatically get updated topology
+
+**Practical Benefits:**
+
+- **Zero Downtime**: Individual component failures don't cascade
+- **Development Simplicity**: Test agents individually without infrastructure
+- **Production Reliability**: Partial failures don't affect unrelated functionality
+- **Deployment Flexibility**: Deploy agents incrementally without coordination
+
+This design contrasts with traditional service meshes where services fail when control planes are unavailable. MCP Mesh agents enhance each other's capabilities rather than creating hard dependencies.
+
+### 2. **Dual Decorator Pattern**
 
 MCP Mesh uses a dual decorator approach that preserves FastMCP familiarity while adding mesh orchestration:
 
@@ -107,7 +148,7 @@ def get_weather(time_service: Any = None) -> dict:
 - **Zero Boilerplate**: No manual server management or configuration
 - **Gradual Adoption**: Can add mesh features incrementally
 
-### 2. **Heartbeat-Only Architecture**
+### 3. **Heartbeat-Only Architecture**
 
 Unlike traditional service meshes, MCP Mesh uses a heartbeat-only registration model:
 
@@ -127,7 +168,7 @@ service.heartbeat(capabilities)   # Registration + health in one call
 - **Failure Recovery**: Missing heartbeats = automatic deregistration
 - **Reduced Complexity**: No separate registration lifecycle
 
-### 3. **Smart Dependency Resolution**
+### 4. **Smart Dependency Resolution**
 
 MCP Mesh supports sophisticated dependency matching using tags and metadata:
 
@@ -151,7 +192,7 @@ dependencies=[{
 4. **Load Balancing**: Select from multiple compatible providers
 5. **Fallback**: Graceful degradation if dependency unavailable
 
-### 4. **Zero Configuration Service Discovery**
+### 5. **Zero Configuration Service Discovery**
 
 Services find each other automatically without configuration files:
 

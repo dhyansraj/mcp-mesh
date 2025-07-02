@@ -126,8 +126,8 @@ data:
     # Default environment variables - matches Docker setup
     MCP_MESH_HTTP_ENABLED=true
     MCP_MESH_HTTP_PORT=8080
-    MCP_MESH_LOG_LEVEL=INFO
-    MCP_MESH_DEBUG_MODE=false
+    MCP_MESH_LOG_LEVEL=DEBUG
+    MCP_MESH_DEBUG_MODE=true
     MCP_MESH_ENABLED=true
     MCP_MESH_AUTO_RUN=true
     MCP_MESH_AUTO_RUN_INTERVAL=30
