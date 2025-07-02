@@ -27,7 +27,7 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 
 ### **Core Design Principles**
 
-- **Registry as Brain**: Centralized intelligence for dependency resolution and service discovery
+- **Registry as Facilitator**: Coordinates discovery and dependency resolution without mediating data flow
 - **Runtime as Wrapper**: Thin language runtimes enable multi-language agent development
 - **Pre-Injected Dependencies**: Lightweight proxies are resolved in background, not at call time
 - **Background Orchestration**: Mesh coordinates in the background, agents focus on business logic
@@ -377,7 +377,7 @@ The MCP ecosystem has proven that standardized AI tool integration works brillia
 While existing solutions focus on static tool definitions or centralized orchestration, MCP Mesh introduces:
 
 - **Pull-based dependency model**: Agents declare what they need, registry coordinates discovery, Python runtime handles injection
-- **Registry as facilitator, not gatekeeper**: Service discovery happens through the registry, but actual MCP calls flow directly between agents
+- **Registry as facilitator, not gatekeeper**: Coordinates service discovery and dependency resolution, but actual MCP calls flow directly between agents
 - **Language runtime flexibility**: Currently supports Python with plans for additional language runtimes
 - **Hot-swappable capabilities**: Add, remove, or update capabilities without restarting the entire system
 
