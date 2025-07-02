@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -267,14 +266,8 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
-	// If agent is unhealthy, force full registration
-	if agentEntity.Status == agent.StatusUnhealthy {
-		// Agent marked as unhealthy - please re-register with full POST heartbeat
-		c.Status(http.StatusGone) // 410
-		return
-	}
-
 	// Update agent timestamp to indicate recent activity (prevents health monitor eviction)
+	// This also handles recovery from unhealthy status if needed
 	err = h.entService.UpdateAgentHeartbeatTimestamp(c.Request.Context(), agentId)
 	if err != nil {
 		// Service error - back off and retry

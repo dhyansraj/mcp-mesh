@@ -20,6 +20,29 @@
 #   - Use meshctl to interact with the mesh
 
 services:
+  # PostgreSQL database service
+  postgres:
+    image: postgres:15
+    container_name: mcp-mesh-postgres
+    environment:
+      - POSTGRES_DB=mcpmesh
+      - POSTGRES_USER=mcpmesh
+      - POSTGRES_PASSWORD=mcpmesh123
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mcpmesh", "-d", "mcpmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   # Build the base MCP Mesh Python image
   mcp-mesh-base:
     build:
@@ -42,10 +65,13 @@ services:
       - PORT=${REGISTRY_PORT:-8000}
       - MCP_MESH_LOG_LEVEL=${MCP_MESH_LOG_LEVEL:-INFO}
       - MCP_MESH_DEBUG_MODE=${MCP_MESH_DEBUG_MODE:-false}
-    volumes:
-      - registry_data:/data
+      # PostgreSQL connection
+      - DATABASE_URL=postgres://mcpmesh:mcpmesh123@postgres:5432/mcpmesh?sslmode=disable
     networks:
       - mcp-mesh
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -152,9 +178,6 @@ services:
       mcp-mesh-base:
         condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
-      # Start after hello-world agent for staggered startup
-      hello-world-agent:
-        condition: service_healthy
     networks:
       - mcp-mesh
     healthcheck:
@@ -209,9 +232,6 @@ services:
       mcp-mesh-base:
         condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
-      # Start after system agent for staggered startup
-      system-agent:
-        condition: service_healthy
     networks:
       - mcp-mesh
     healthcheck:
@@ -293,5 +313,5 @@ networks:
     name: mcp-mesh-network
 
 volumes:
-  registry_data:
-    name: mcp-mesh-registry-data
+  postgres_data:
+    name: mcp-mesh-postgres-data
