@@ -37,7 +37,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Database connection URL (default: mcp_mesh_registry.db)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: INFO)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_DEBUG_MODE      - Enable debug mode (true/false, 1/0, yes/no) - forces DEBUG level\n")
-		fmt.Fprintf(os.Stderr, "  HEALTH_CHECK_INTERVAL    - Health check interval in seconds (default: 30)\n")
+		fmt.Fprintf(os.Stderr, "  HEALTH_CHECK_INTERVAL    - Health check interval in seconds (default: 10)\n")
+		fmt.Fprintf(os.Stderr, "  DEFAULT_TIMEOUT_THRESHOLD - Agent heartbeat timeout in seconds (default: 20)\n")
 		fmt.Fprintf(os.Stderr, "  CACHE_TTL                - Response cache TTL in seconds (default: 30)\n")
 		fmt.Fprintf(os.Stderr, "\nThe registry service provides:\n")
 		fmt.Fprintf(os.Stderr, "  - Agent registration and discovery\n")
@@ -104,6 +105,7 @@ func main() {
 		CacheTTL:                 cfg.CacheTTL,
 		DefaultTimeoutThreshold:  cfg.DefaultTimeoutThreshold,
 		DefaultEvictionThreshold: cfg.DefaultEvictionThreshold,
+		HealthCheckInterval:      cfg.HealthCheckInterval,
 		EnableResponseCache:      cfg.EnableResponseCache,
 	}
 

@@ -86,7 +86,48 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 
 ## Design Principles
 
-### 1. **Dual Decorator Pattern**
+### 1. **True Resilient Architecture**
+
+MCP Mesh implements a fundamentally resilient architecture where agents operate independently and enhance each other when available, rather than depending on each other:
+
+**Core Resilience Principles:**
+
+- **Standalone Operation**: Agents function as vanilla FastMCP servers without any dependencies
+- **Registry as Facilitator**: Registry enables discovery and wiring, but agents don't depend on it
+- **Dynamic Enhancement**: Agents get enhanced capabilities when other agents are available
+- **Graceful Degradation**: Loss of registry or other agents doesn't break existing functionality
+- **Self-Healing**: Agents automatically reconnect and refresh when components return
+
+**Architecture Flow:**
+
+```
+Agent Startup → Works Standalone (FastMCP mode)
+       ↓
+Registry Available → Agents Get Wired → Enhanced Capabilities
+       ↓
+Registry Down → Agents Continue Working → Direct MCP Communication Preserved
+       ↓
+Registry Returns → Agents Refresh → Topology Updates Resume
+```
+
+**Key Behavioral Characteristics:**
+
+1. **Agent Independence**: Agents start and work without waiting for registry or other agents
+2. **Background Wiring**: Registry connects agents in background - no blocking operations
+3. **Communication Persistence**: Once wired, agents communicate directly even if registry fails
+4. **Topology Awareness**: Agents can't react to changes while registry is down, but existing connections persist
+5. **Automatic Recovery**: When registry returns, agents automatically get updated topology
+
+**Practical Benefits:**
+
+- **Zero Downtime**: Individual component failures don't cascade
+- **Development Simplicity**: Test agents individually without infrastructure
+- **Production Reliability**: Partial failures don't affect unrelated functionality
+- **Deployment Flexibility**: Deploy agents incrementally without coordination
+
+This design contrasts with traditional service meshes where services fail when control planes are unavailable. MCP Mesh agents enhance each other's capabilities rather than creating hard dependencies.
+
+### 2. **Dual Decorator Pattern**
 
 MCP Mesh uses a dual decorator approach that preserves FastMCP familiarity while adding mesh orchestration:
 
@@ -107,27 +148,31 @@ def get_weather(time_service: Any = None) -> dict:
 - **Zero Boilerplate**: No manual server management or configuration
 - **Gradual Adoption**: Can add mesh features incrementally
 
-### 2. **Heartbeat-Only Architecture**
+### 3. **Fast Heartbeat Architecture**
 
-Unlike traditional service meshes, MCP Mesh uses a heartbeat-only registration model:
+MCP Mesh uses an optimized dual-heartbeat system for efficient health monitoring:
 
 ```python
-# Traditional: Register + Heartbeat
-service.register(capabilities)    # Initial registration
-service.heartbeat()              # Periodic updates
-
-# MCP Mesh: Heartbeat-Only
-service.heartbeat(capabilities)   # Registration + health in one call
+# Fast Heartbeat Pattern
+HEAD /heartbeat    # Lightweight timestamp update (5s intervals)
+POST /heartbeat    # Full registration triggered by HEAD response when needed
 ```
+
+**Heartbeat Types:**
+
+- **HEAD Request**: Minimal overhead timestamp update for health signaling
+- **POST Request**: Complete registration with capability updates - triggered when HEAD response indicates need
+- **Agent Status**: Explicit healthy/unhealthy/unknown states in database
+- **Full Refresh Tracking**: LastFullRefresh timestamp for topology change detection
 
 **Design Benefits:**
 
-- **Simplified Protocol**: Single operation for registration + health
-- **Automatic Updates**: Capability changes propagated immediately
-- **Failure Recovery**: Missing heartbeats = automatic deregistration
-- **Reduced Complexity**: No separate registration lifecycle
+- **Fast Failure Detection**: 5-second intervals with sub-20s failure detection
+- **Network Efficiency**: HEAD requests minimize bandwidth, POST only when registry signals need
+- **Automatic Recovery**: Unhealthy agents can recover via HEAD requests
+- **On-Demand Registration**: Full capability updates only when topology changes occur
 
-### 3. **Smart Dependency Resolution**
+### 4. **Smart Dependency Resolution**
 
 MCP Mesh supports sophisticated dependency matching using tags and metadata:
 
@@ -151,7 +196,7 @@ dependencies=[{
 4. **Load Balancing**: Select from multiple compatible providers
 5. **Fallback**: Graceful degradation if dependency unavailable
 
-### 4. **Zero Configuration Service Discovery**
+### 5. **Zero Configuration Service Discovery**
 
 Services find each other automatically without configuration files:
 
@@ -175,15 +220,23 @@ def get_user(auth_service=None, database_service=None):
 
 ## Implementation Architecture
 
-### Registry as the Brain, Runtime as Thin Wrapper
+### Registry as Facilitator, Runtime as Thin Wrapper
 
-MCP Mesh separates concerns between a smart registry and lightweight runtime:
+MCP Mesh separates concerns between a coordinating registry and lightweight runtime:
 
-- **Registry (Go)**: Centralized brain that handles dependency resolution, topology management, and service discovery
+- **Registry (Go)**: Facilitates dependency resolution, topology management, and service discovery
 - **Runtime (Python)**: Thin language wrapper that integrates with FastMCP and provides dependency injection
 - **No Direct Communication**: Registry never makes calls to runtime - runtime polls registry for updates
+- **Event-Driven Architecture**: Registry generates events for audit trails and topology changes
 
-This design allows multiple language runtimes (future: Go, Rust, Node.js) while keeping the intelligence centralized.
+**Key Registry Responsibilities:**
+
+- **Agent Status Management**: Track healthy/unhealthy/unknown states with explicit database fields
+- **Event Generation**: Create register/unregister events for audit and monitoring
+- **Fast Heartbeat Processing**: Handle both HEAD (timestamp) and POST (full registration) requests
+- **Health Monitoring**: Background health checks with configurable intervals and timeouts
+
+This design allows multiple language runtimes (future: Go, Rust, Node.js) while keeping the coordination centralized.
 
 ### Two-Pipeline Architecture
 
@@ -526,32 +579,65 @@ This architecture provides efficient, hash-based dependency updates with minimal
         │                 │                  │
 ```
 
-### 3. Health Monitoring Flow
+### 3. Fast Heartbeat Flow
 
 ```
 ┌─────────────┐    ┌─────────────┐
 │   Agent     │    │  Registry   │
 └─────────────┘    └─────────────┘
         │                  │
-        │  Heartbeat       │
-        │  every 30s       │
+        │  HEAD /heartbeat │
+        │  every 5s        │
         ├─────────────────►
+        │                 │ Update timestamp only
+        │  200 OK         │ Return 200 (healthy) or 410 (need refresh)
+        ◄─────────────────┤
         │                 │
-        │                 │ Mark healthy
-        │                 │ Update timestamp
+        │  (If 410 recv'd)│
+        │  POST /heartbeat│
+        ├─────────────────►
+        │                 │ Full registration + capabilities
+        │                 │ Update LastFullRefresh
+        │                 │ Generate register events
         │                 │
         │  (No heartbeat  │
-        │   for 90s)      │
+        │   for 20s)      │
         │                 │
-        │                 │ Mark unhealthy
+        │                 │ Health monitor marks unhealthy
         │                 │ Remove from discovery
         │                 │
-        │  Heartbeat       │
+        │  HEAD /heartbeat │
         │  resumed         │
         ├─────────────────►
+        │                 │ Update timestamp + status recovery
+        │  410 (refresh)  │ Signal need for full registration
+        ◄─────────────────┤
         │                 │
-        │                 │ Mark healthy
-        │                 │ Re-add to discovery
+        │  POST /heartbeat│
+        ├─────────────────►
+        │                 │ Full registration, re-add to discovery
+```
+
+### 4. Agent Lifecycle Events
+
+```
+┌─────────────┐    ┌─────────────┐
+│   Agent     │    │  Registry   │
+└─────────────┘    └─────────────┘
+        │                  │
+        │  Graceful        │
+        │  Shutdown        │
+        ├─────────────────►
+        │                 │ DELETE /agents/{id}
+        │                 │ Mark unhealthy (preserve audit)
+        │                 │ Generate unregister event
+        │                 │
+        │  Signal Handler  │
+        │  (SIGTERM)       │
+        │                 │
+        │  Cleanup &       │
+        │  Unregister      │
+        │                 │
 ```
 
 ## Performance Characteristics
@@ -578,7 +664,8 @@ This architecture provides efficient, hash-based dependency updates with minimal
 
 ### Network Overhead
 
-- **Heartbeat Size**: ~2KB per agent every 30 seconds
+- **HEAD Heartbeat**: ~200B per agent every 5 seconds (timestamp update only)
+- **POST Heartbeat**: ~2KB per agent when triggered by HEAD 410 response (on-demand registration)
 - **Discovery Query**: ~1KB request, ~5KB response
 - **Tool Call**: Standard MCP JSON-RPC (varies by payload)
 

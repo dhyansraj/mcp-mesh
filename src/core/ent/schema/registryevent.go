@@ -18,7 +18,7 @@ type RegistryEvent struct {
 func (RegistryEvent) Fields() []ent.Field {
 	return []ent.Field{
 		field.Enum("event_type").
-			Values("register", "heartbeat", "expire", "update", "unregister").
+			Values("register", "heartbeat", "expire", "update", "unregister", "unhealthy").
 			Comment("Type of registry event"),
 		field.String("function_name").
 			Optional().

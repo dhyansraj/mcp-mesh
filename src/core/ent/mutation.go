@@ -44,12 +44,14 @@ type AgentMutation struct {
 	http_port                *int
 	addhttp_port             *int
 	namespace                *string
+	status                   *agent.Status
 	total_dependencies       *int
 	addtotal_dependencies    *int
 	dependencies_resolved    *int
 	adddependencies_resolved *int
 	created_at               *time.Time
 	updated_at               *time.Time
+	last_full_refresh        *time.Time
 	clearedFields            map[string]struct{}
 	capabilities             map[int]struct{}
 	removedcapabilities      map[int]struct{}
@@ -442,6 +444,42 @@ func (m *AgentMutation) ResetNamespace() {
 	m.namespace = nil
 }
 
+// SetStatus sets the "status" field.
+func (m *AgentMutation) SetStatus(a agent.Status) {
+	m.status = &a
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *AgentMutation) Status() (r agent.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldStatus(ctx context.Context) (v agent.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *AgentMutation) ResetStatus() {
+	m.status = nil
+}
+
 // SetTotalDependencies sets the "total_dependencies" field.
 func (m *AgentMutation) SetTotalDependencies(i int) {
 	m.total_dependencies = &i
@@ -626,6 +664,42 @@ func (m *AgentMutation) ResetUpdatedAt() {
 	m.updated_at = nil
 }
 
+// SetLastFullRefresh sets the "last_full_refresh" field.
+func (m *AgentMutation) SetLastFullRefresh(t time.Time) {
+	m.last_full_refresh = &t
+}
+
+// LastFullRefresh returns the value of the "last_full_refresh" field in the mutation.
+func (m *AgentMutation) LastFullRefresh() (r time.Time, exists bool) {
+	v := m.last_full_refresh
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastFullRefresh returns the old "last_full_refresh" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldLastFullRefresh(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastFullRefresh is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastFullRefresh requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastFullRefresh: %w", err)
+	}
+	return oldValue.LastFullRefresh, nil
+}
+
+// ResetLastFullRefresh resets all changes to the "last_full_refresh" field.
+func (m *AgentMutation) ResetLastFullRefresh() {
+	m.last_full_refresh = nil
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by ids.
 func (m *AgentMutation) AddCapabilityIDs(ids ...int) {
 	if m.capabilities == nil {
@@ -768,7 +842,7 @@ func (m *AgentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 12)
 	if m.agent_type != nil {
 		fields = append(fields, agent.FieldAgentType)
 	}
@@ -787,6 +861,9 @@ func (m *AgentMutation) Fields() []string {
 	if m.namespace != nil {
 		fields = append(fields, agent.FieldNamespace)
 	}
+	if m.status != nil {
+		fields = append(fields, agent.FieldStatus)
+	}
 	if m.total_dependencies != nil {
 		fields = append(fields, agent.FieldTotalDependencies)
 	}
@@ -798,6 +875,9 @@ func (m *AgentMutation) Fields() []string {
 	}
 	if m.updated_at != nil {
 		fields = append(fields, agent.FieldUpdatedAt)
+	}
+	if m.last_full_refresh != nil {
+		fields = append(fields, agent.FieldLastFullRefresh)
 	}
 	return fields
 }
@@ -819,6 +899,8 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.HTTPPort()
 	case agent.FieldNamespace:
 		return m.Namespace()
+	case agent.FieldStatus:
+		return m.Status()
 	case agent.FieldTotalDependencies:
 		return m.TotalDependencies()
 	case agent.FieldDependenciesResolved:
@@ -827,6 +909,8 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.CreatedAt()
 	case agent.FieldUpdatedAt:
 		return m.UpdatedAt()
+	case agent.FieldLastFullRefresh:
+		return m.LastFullRefresh()
 	}
 	return nil, false
 }
@@ -848,6 +932,8 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldHTTPPort(ctx)
 	case agent.FieldNamespace:
 		return m.OldNamespace(ctx)
+	case agent.FieldStatus:
+		return m.OldStatus(ctx)
 	case agent.FieldTotalDependencies:
 		return m.OldTotalDependencies(ctx)
 	case agent.FieldDependenciesResolved:
@@ -856,6 +942,8 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldCreatedAt(ctx)
 	case agent.FieldUpdatedAt:
 		return m.OldUpdatedAt(ctx)
+	case agent.FieldLastFullRefresh:
+		return m.OldLastFullRefresh(ctx)
 	}
 	return nil, fmt.Errorf("unknown Agent field %s", name)
 }
@@ -907,6 +995,13 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetNamespace(v)
 		return nil
+	case agent.FieldStatus:
+		v, ok := value.(agent.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
 	case agent.FieldTotalDependencies:
 		v, ok := value.(int)
 		if !ok {
@@ -934,6 +1029,13 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetUpdatedAt(v)
+		return nil
+	case agent.FieldLastFullRefresh:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastFullRefresh(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)
@@ -1062,6 +1164,9 @@ func (m *AgentMutation) ResetField(name string) error {
 	case agent.FieldNamespace:
 		m.ResetNamespace()
 		return nil
+	case agent.FieldStatus:
+		m.ResetStatus()
+		return nil
 	case agent.FieldTotalDependencies:
 		m.ResetTotalDependencies()
 		return nil
@@ -1073,6 +1178,9 @@ func (m *AgentMutation) ResetField(name string) error {
 		return nil
 	case agent.FieldUpdatedAt:
 		m.ResetUpdatedAt()
+		return nil
+	case agent.FieldLastFullRefresh:
+		m.ResetLastFullRefresh()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)

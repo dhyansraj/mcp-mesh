@@ -19,7 +19,7 @@ type EntBusinessLogicHandlers struct {
 func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandlers {
 	return &EntBusinessLogicHandlers{
 		entService: entService,
-		startTime:  time.Now(),
+		startTime:  time.Now().UTC(),
 	}
 }
 
@@ -31,7 +31,7 @@ func (h *EntBusinessLogicHandlers) GetHealth(c *gin.Context) {
 		Status:        "healthy",
 		Version:       "1.0.0",
 		UptimeSeconds: int(uptime),
-		Timestamp:     time.Now(),
+		Timestamp:     time.Now().UTC(),
 		Service:       "mcp-mesh-registry",
 	}
 
@@ -70,7 +70,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -87,7 +87,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -102,7 +102,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 
 	response := generated.MeshRegistrationResponse{
 		Status:    status,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 		Message:   serviceResp.Message,
 		AgentId:   req.AgentId,
 	}
@@ -158,7 +158,7 @@ func (h *EntBusinessLogicHandlers) ListAgents(c *gin.Context) {
 	if err := c.ShouldBindQuery(&params); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Invalid query parameters: %v", err),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -168,7 +168,7 @@ func (h *EntBusinessLogicHandlers) ListAgents(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -254,4 +254,57 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	result["tools"] = toolsData
 
 	return result
+}
+
+// FastHeartbeatCheck implements HEAD /heartbeat/{agent_id}
+func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId string) {
+	// Check if agent exists in registry
+	agentEntity, err := h.entService.GetAgent(c.Request.Context(), agentId)
+	if err != nil || agentEntity == nil {
+		// Unknown agent - please register with POST heartbeat
+		c.Status(http.StatusGone) // 410
+		return
+	}
+
+	// Update agent timestamp to indicate recent activity (prevents health monitor eviction)
+	// This also handles recovery from unhealthy status if needed
+	err = h.entService.UpdateAgentHeartbeatTimestamp(c.Request.Context(), agentId)
+	if err != nil {
+		// Service error - back off and retry
+		c.Status(http.StatusServiceUnavailable) // 503
+		return
+	}
+
+	// Check for topology changes since last full refresh
+	hasChanges, err := h.entService.HasTopologyChanges(c.Request.Context(), agentId, agentEntity.LastFullRefresh)
+	if err != nil {
+		// Service error - back off and retry
+		c.Status(http.StatusServiceUnavailable) // 503
+		return
+	}
+
+	if hasChanges {
+		// Topology changed - please send full POST heartbeat
+		h.entService.logger.Info("Agent %s: topology changed, returning 202 (last_full_refresh: %v)", agentId, agentEntity.LastFullRefresh)
+		c.Status(http.StatusAccepted) // 202
+		return
+	}
+
+	// No changes - keep sending HEAD requests
+	c.Status(http.StatusOK) // 200
+}
+
+// UnregisterAgent implements DELETE /agents/{agent_id}
+func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId string) {
+	err := h.entService.UnregisterAgent(c.Request.Context(), agentId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     err.Error(),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Return 204 No Content - successfully unregistered (idempotent)
+	c.Status(http.StatusNoContent)
 }

@@ -11,10 +11,11 @@ import (
 
 // Server represents the registry HTTP server
 type Server struct {
-	engine    *gin.Engine
-	service   *EntService
-	startTime time.Time
-	handlers  *EntBusinessLogicHandlers
+	engine        *gin.Engine
+	service       *EntService
+	startTime     time.Time
+	handlers      *EntBusinessLogicHandlers
+	healthMonitor *AgentHealthMonitor
 }
 
 // NewServer creates a new registry server using Ent database
@@ -25,6 +26,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create Ent-based business logic handlers
 	handlers := NewEntBusinessLogicHandlers(entService)
 
+	// Create health monitor using configuration values
+	heartbeatTimeout := time.Duration(config.DefaultTimeoutThreshold) * time.Second
+	checkInterval := time.Duration(config.HealthCheckInterval) * time.Second
+	healthMonitor := NewAgentHealthMonitor(entService, logger, heartbeatTimeout, checkInterval)
+
 	// Create Gin engine
 	engine := gin.New()
 	engine.Use(gin.Recovery())
@@ -32,10 +38,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 
 	// Create server
 	server := &Server{
-		engine:    engine,
-		service:   entService,
-		startTime: time.Now(),
-		handlers:  handlers,
+		engine:        engine,
+		service:       entService,
+		startTime:     time.Now().UTC(),
+		handlers:      handlers,
+		healthMonitor: healthMonitor,
 	}
 
 	// Setup routes using generated interface
@@ -44,8 +51,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	return server
 }
 
-// Run starts the HTTP server
+// Run starts the HTTP server and health monitor
 func (s *Server) Run(addr string) error {
+	// Start health monitor
+	s.healthMonitor.Start()
+
 	return s.engine.Run(addr)
 }
 
@@ -54,9 +64,12 @@ func (s *Server) Start() error {
 	return s.engine.Run(":8080") // Default port
 }
 
-// Stop stops the HTTP server
+// Stop stops the HTTP server and health monitor
 func (s *Server) Stop() error {
-	// TODO: Implement graceful shutdown
+	// Stop health monitor
+	s.healthMonitor.Stop()
+
+	// TODO: Implement graceful shutdown for HTTP server
 	return nil
 }
 
@@ -71,11 +84,6 @@ func (s *Server) Stop() error {
 // 2. Run: make generate
 // 3. This method will automatically include new routes
 func (s *Server) SetupGeneratedRoutes() {
-	// Use the generated server interface wrapper
-	wrapper := generated.ServerInterfaceWrapper{
-		Handler: s.handlers,
-	}
-
-	// Register all routes from OpenAPI spec
-	generated.RegisterHandlers(s.engine, &wrapper)
+	// Register all routes from OpenAPI spec using handlers directly
+	generated.RegisterHandlers(s.engine, s.handlers)
 }

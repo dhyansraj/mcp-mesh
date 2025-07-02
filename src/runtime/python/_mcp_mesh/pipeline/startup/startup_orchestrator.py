@@ -119,7 +119,7 @@ class DebounceCoordinator:
     def _start_blocking_fastapi_server(
         self, app: Any, binding_config: dict[str, Any]
     ) -> None:
-        """Start FastAPI server with uvicorn.run() - blocks main thread naturally."""
+        """Start FastAPI server with uvicorn (signal handlers already registered)."""
         try:
             import uvicorn
 
@@ -129,7 +129,7 @@ class DebounceCoordinator:
             self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
             self.logger.info("🛑 Press Ctrl+C to stop the service")
 
-            # This blocks the main thread until interrupted - exactly what we want!
+            # Use uvicorn.run() - signal handlers should already be registered
             uvicorn.run(
                 app,
                 host=bind_host,
@@ -140,11 +140,72 @@ class DebounceCoordinator:
 
         except KeyboardInterrupt:
             self.logger.info(
-                "🔴 Received KeyboardInterrupt, shutting down FastAPI server"
+                "🔴 Received KeyboardInterrupt, performing graceful shutdown..."
             )
+            # Perform graceful shutdown before exiting
+            self._perform_graceful_shutdown()
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
+
+    def _perform_graceful_shutdown(self) -> None:
+        """Perform graceful shutdown by unregistering from registry."""
+        try:
+            # Run graceful shutdown asynchronously
+            import asyncio
+
+            asyncio.run(self._graceful_shutdown_async())
+        except Exception as e:
+            self.logger.error(f"❌ Graceful shutdown failed: {e}")
+
+    async def _graceful_shutdown_async(self) -> None:
+        """Async graceful shutdown implementation."""
+        try:
+            # Get the latest pipeline context from the orchestrator
+            if self._orchestrator is None:
+                self.logger.warning(
+                    "🚨 No orchestrator available for graceful shutdown"
+                )
+                return
+
+            # Access the pipeline context through the orchestrator
+            pipeline_context = getattr(self._orchestrator.pipeline, "_last_context", {})
+
+            # Get registry configuration
+            registry_url = pipeline_context.get("registry_url")
+            agent_id = pipeline_context.get("agent_id")
+
+            if not registry_url or not agent_id:
+                self.logger.warning(
+                    f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
+                )
+                return
+
+            # Create registry client for shutdown
+            from ...generated.mcp_mesh_registry_client.api_client import ApiClient
+            from ...generated.mcp_mesh_registry_client.configuration import (
+                Configuration,
+            )
+            from ...shared.registry_client_wrapper import RegistryClientWrapper
+
+            config = Configuration(host=registry_url)
+            api_client = ApiClient(configuration=config)
+            registry_wrapper = RegistryClientWrapper(api_client)
+
+            # Perform graceful unregistration
+            success = await registry_wrapper.unregister_agent(agent_id)
+            if success:
+                self.logger.info(
+                    f"🏁 Graceful shutdown completed for agent '{agent_id}'"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ Graceful shutdown failed for agent '{agent_id}' - continuing shutdown"
+                )
+
+        except Exception as e:
+            # Don't fail the shutdown process due to unregistration errors
+            self.logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
 
     def _check_auto_run_enabled(self) -> bool:
         """Check if auto-run is enabled (defaults to True for persistent service behavior)."""
@@ -307,6 +368,9 @@ def start_runtime() -> None:
     """
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
+    # Install signal handlers in main thread FIRST (before any threading)
+    _install_signal_handlers()
+
     # Create orchestrator and set up debouncing
     orchestrator = get_global_orchestrator()
     debounce_coordinator = get_debounce_coordinator()
@@ -320,3 +384,82 @@ def start_runtime() -> None:
 
     # The actual pipeline execution will be triggered by decorator registration
     # through the debounce coordinator
+
+
+def _install_signal_handlers() -> None:
+    """Install signal handlers for graceful shutdown in main thread."""
+    try:
+        import signal
+        import threading
+
+        # Only install if we're in the main thread
+        if threading.current_thread() is not threading.main_thread():
+            logger.debug("🚨 Not in main thread, skipping signal handler installation")
+            return
+
+        def signal_handler(signum, frame):
+            logger.info(f"🔴 Received signal {signum}, performing graceful shutdown...")
+
+            # Get the global orchestrator and perform shutdown
+            orchestrator = get_global_orchestrator()
+
+            # Create a simple sync shutdown using the stored context
+            import asyncio
+
+            try:
+                # Try to get pipeline context for graceful shutdown
+                pipeline_context = getattr(orchestrator.pipeline, "_last_context", {})
+                registry_url = pipeline_context.get("registry_url")
+                agent_id = pipeline_context.get("agent_id")
+
+                if registry_url and agent_id:
+                    # Perform synchronous graceful shutdown
+                    logger.info(
+                        f"🏁 Gracefully unregistering agent '{agent_id}' from {registry_url}"
+                    )
+
+                    # Import here to avoid circular imports
+                    from ...generated.mcp_mesh_registry_client.api_client import (
+                        ApiClient,
+                    )
+                    from ...generated.mcp_mesh_registry_client.configuration import (
+                        Configuration,
+                    )
+                    from ...shared.registry_client_wrapper import RegistryClientWrapper
+
+                    config = Configuration(host=registry_url)
+                    api_client = ApiClient(configuration=config)
+                    registry_wrapper = RegistryClientWrapper(api_client)
+
+                    # Run the async unregister in a new event loop
+                    success = asyncio.run(registry_wrapper.unregister_agent(agent_id))
+                    if success:
+                        logger.info(f"✅ Agent '{agent_id}' unregistered successfully")
+                    else:
+                        logger.warning(
+                            f"⚠️ Agent '{agent_id}' unregister failed - continuing shutdown"
+                        )
+                else:
+                    logger.warning(
+                        f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
+                    )
+
+            except Exception as e:
+                logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
+
+            # Exit gracefully
+            import sys
+
+            sys.exit(0)
+
+        # Register signal handlers for SIGINT (Ctrl+C) and SIGTERM
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        logger.info(
+            "📡 Signal handlers registered in main thread for graceful shutdown"
+        )
+
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to install signal handlers: {e}")
+        # Continue without signal handlers - graceful shutdown will rely on FastAPI lifespan

@@ -34,9 +34,16 @@ class HeartbeatLoopStep(PipelineStep):
             # Get configuration
             agent_config = context.get("agent_config", {})
 
-            # Get agent ID and heartbeat interval configuration
+            # Get agent ID and heartbeat interval configuration using centralized defaults
+            from ...shared.defaults import MeshDefaults
+
             agent_id = context.get("agent_id", "unknown-agent")
-            heartbeat_interval = agent_config.get("health_interval", 30)
+            heartbeat_interval = get_config_value(
+                "MCP_MESH_HEALTH_INTERVAL",
+                override=agent_config.get("health_interval"),
+                default=MeshDefaults.HEALTH_INTERVAL,
+                rule=ValidationRule.NONZERO_RULE,
+            )
 
             # Check for explicit standalone mode configuration
             standalone_mode = self._get_standalone_mode()

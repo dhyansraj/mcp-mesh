@@ -30,6 +30,8 @@ type Agent struct {
 	HTTPPort int `json:"http_port,omitempty"`
 	// Namespace for the agent
 	Namespace string `json:"namespace,omitempty"`
+	// Current health status of the agent
+	Status agent.Status `json:"status,omitempty"`
 	// Total number of dependencies
 	TotalDependencies int `json:"total_dependencies,omitempty"`
 	// Number of resolved dependencies
@@ -38,6 +40,8 @@ type Agent struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Last update timestamp
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	// Timestamp of last full heartbeat (vs HEAD check)
+	LastFullRefresh time.Time `json:"last_full_refresh,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AgentQuery when eager-loading is set.
 	Edges        AgentEdges `json:"edges"`
@@ -80,9 +84,9 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
-		case agent.FieldID, agent.FieldAgentType, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace:
+		case agent.FieldID, agent.FieldAgentType, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus:
 			values[i] = new(sql.NullString)
-		case agent.FieldCreatedAt, agent.FieldUpdatedAt:
+		case agent.FieldCreatedAt, agent.FieldUpdatedAt, agent.FieldLastFullRefresh:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -141,6 +145,12 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				a.Namespace = value.String
 			}
+		case agent.FieldStatus:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field status", values[i])
+			} else if value.Valid {
+				a.Status = agent.Status(value.String)
+			}
 		case agent.FieldTotalDependencies:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field total_dependencies", values[i])
@@ -164,6 +174,12 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field updated_at", values[i])
 			} else if value.Valid {
 				a.UpdatedAt = value.Time
+			}
+		case agent.FieldLastFullRefresh:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field last_full_refresh", values[i])
+			} else if value.Valid {
+				a.LastFullRefresh = value.Time
 			}
 		default:
 			a.selectValues.Set(columns[i], values[i])
@@ -229,6 +245,9 @@ func (a *Agent) String() string {
 	builder.WriteString("namespace=")
 	builder.WriteString(a.Namespace)
 	builder.WriteString(", ")
+	builder.WriteString("status=")
+	builder.WriteString(fmt.Sprintf("%v", a.Status))
+	builder.WriteString(", ")
 	builder.WriteString("total_dependencies=")
 	builder.WriteString(fmt.Sprintf("%v", a.TotalDependencies))
 	builder.WriteString(", ")
@@ -240,6 +259,9 @@ func (a *Agent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("updated_at=")
 	builder.WriteString(a.UpdatedAt.Format(time.ANSIC))
+	builder.WriteString(", ")
+	builder.WriteString("last_full_refresh=")
+	builder.WriteString(a.LastFullRefresh.Format(time.ANSIC))
 	builder.WriteByte(')')
 	return builder.String()
 }

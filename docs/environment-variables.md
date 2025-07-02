@@ -71,9 +71,133 @@ export MCP_MESH_HEALTH_INTERVAL=30
 export MCP_MESH_ENABLED=true
 ```
 
+## Registry Server Configuration
+
+> These variables configure the **Go registry server** (`mcp-mesh-registry`)
+
+### Core Server Settings
+
+```bash
+# Server binding host
+export HOST=localhost
+
+# Server port
+export PORT=8000
+
+# Database connection URL
+export DATABASE_URL=mcp_mesh_registry.db
+
+# Registry service name
+export REGISTRY_NAME=mcp-mesh-registry
+```
+
+### Fast Heartbeat & Health Monitoring
+
+```bash
+# Agent heartbeat timeout - when to mark agents as unhealthy (seconds)
+# Optimized for 5-second HEAD heartbeats: 4 missed beats = 20s
+export DEFAULT_TIMEOUT_THRESHOLD=20
+
+# Health monitor scan interval - how often to check for unhealthy agents (seconds)
+export HEALTH_CHECK_INTERVAL=10
+
+# Agent eviction threshold - when to remove stale agents (seconds)
+export DEFAULT_EVICTION_THRESHOLD=60
+```
+
+### Cache and Performance
+
+```bash
+# Response cache TTL (seconds)
+export CACHE_TTL=30
+
+# Enable response caching
+export ENABLE_RESPONSE_CACHE=true
+```
+
+### Logging and Debug
+
+```bash
+# Registry log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+export MCP_MESH_LOG_LEVEL=INFO
+
+# Enable debug mode (true/false)
+export MCP_MESH_DEBUG_MODE=false
+```
+
+### CORS Configuration
+
+```bash
+# Enable CORS support
+export ENABLE_CORS=true
+
+# Allowed origins (comma-separated)
+export ALLOWED_ORIGINS="*"
+
+# Allowed HTTP methods
+export ALLOWED_METHODS="GET,POST,PUT,DELETE,OPTIONS"
+
+# Allowed headers
+export ALLOWED_HEADERS="*"
+```
+
+### Feature Flags
+
+```bash
+# Enable metrics collection
+export ENABLE_METRICS=true
+
+# Enable Prometheus metrics
+export ENABLE_PROMETHEUS=true
+
+# Enable event system
+export ENABLE_EVENTS=true
+```
+
 ## Configuration Patterns
 
-### Development Environment
+### Registry Server Configurations
+
+#### Development Registry
+
+```bash
+# .env.registry.development
+MCP_MESH_LOG_LEVEL=DEBUG
+MCP_MESH_DEBUG_MODE=true
+HOST=localhost
+PORT=8000
+DEFAULT_TIMEOUT_THRESHOLD=10  # Fast detection for development
+HEALTH_CHECK_INTERVAL=5       # Quick scans for development
+ENABLE_RESPONSE_CACHE=false   # Disable cache for testing
+```
+
+#### Production Registry
+
+```bash
+# .env.registry.production
+MCP_MESH_LOG_LEVEL=INFO
+MCP_MESH_DEBUG_MODE=false
+HOST=0.0.0.0
+PORT=8000
+DEFAULT_TIMEOUT_THRESHOLD=20  # Balanced for production
+HEALTH_CHECK_INTERVAL=10      # Regular monitoring
+ENABLE_RESPONSE_CACHE=true
+CACHE_TTL=30
+DATABASE_URL=postgresql://user:pass@db:5432/mcp_mesh
+```
+
+#### High-Performance Registry
+
+```bash
+# .env.registry.high-perf
+MCP_MESH_LOG_LEVEL=WARNING
+DEFAULT_TIMEOUT_THRESHOLD=5   # Ultra-fast detection
+HEALTH_CHECK_INTERVAL=2       # Very frequent monitoring
+CACHE_TTL=60                  # Longer cache for performance
+ENABLE_RESPONSE_CACHE=true
+```
+
+### Agent Development Environment
 
 ```bash
 # .env.development
@@ -111,6 +235,23 @@ MCP_MESH_NAMESPACE=testing
 ```
 
 ## Using Environment Variables
+
+### With Registry Server
+
+```bash
+# Start registry with environment file
+mcp-mesh-registry --host 0.0.0.0 --port 8000
+
+# Or with environment variables
+DEFAULT_TIMEOUT_THRESHOLD=10 HEALTH_CHECK_INTERVAL=5 mcp-mesh-registry
+
+# Load environment file manually
+source .env.registry.development
+mcp-mesh-registry
+
+# Check registry configuration
+mcp-mesh-registry --help
+```
 
 ### With meshctl
 
@@ -214,6 +355,34 @@ export UVICORN_LOOP=auto
 export UVICORN_LIFESPAN=on
 ```
 
+### Fast Heartbeat Optimization
+
+> **New in v0.2+**: Ultra-fast topology change detection
+
+```bash
+# Ultra-aggressive (sub-5 second detection)
+export DEFAULT_TIMEOUT_THRESHOLD=5   # Mark unhealthy after 5s
+export HEALTH_CHECK_INTERVAL=2       # Scan every 2 seconds
+
+# Balanced (default - sub-20 second detection)  
+export DEFAULT_TIMEOUT_THRESHOLD=20  # Mark unhealthy after 20s (4 missed 5s heartbeats)
+export HEALTH_CHECK_INTERVAL=10      # Scan every 10 seconds
+
+# Conservative (legacy behavior)
+export DEFAULT_TIMEOUT_THRESHOLD=60  # Mark unhealthy after 60s
+export HEALTH_CHECK_INTERVAL=30      # Scan every 30 seconds
+
+# Production recommended
+export DEFAULT_TIMEOUT_THRESHOLD=20
+export HEALTH_CHECK_INTERVAL=10
+```
+
+**How it works:**
+- Agents send lightweight HEAD requests every ~5 seconds
+- Registry responds with topology change status (200/202/410)
+- Background monitor detects unhealthy agents and creates events
+- Other agents get notified via 202 responses on their HEAD checks
+
 ### Dynamic Updates
 
 ```bash
@@ -232,9 +401,11 @@ export MCP_MESH_UPDATE_GRACE_PERIOD=30
 ### Multi-Service Development
 
 ```bash
-# Terminal 1: Start registry
-export MCP_MESH_LOG_LEVEL=INFO
-meshctl start --registry-only
+# Terminal 1: Start registry with fast heartbeats
+export MCP_MESH_LOG_LEVEL=DEBUG
+export DEFAULT_TIMEOUT_THRESHOLD=10
+export HEALTH_CHECK_INTERVAL=5
+mcp-mesh-registry --host localhost --port 8000
 
 # Terminal 2: Start auth service
 export MCP_MESH_AGENT_NAME=auth-service
@@ -249,6 +420,26 @@ export MCP_MESH_HTTP_PORT=8082
 export MCP_MESH_NAMESPACE=dev
 export MCP_MESH_LOG_LEVEL=DEBUG
 python services/api.py
+```
+
+### Registry High Availability
+
+```bash
+# Primary registry (port 8000)
+export HOST=0.0.0.0
+export PORT=8000
+export DATABASE_URL=postgresql://user:pass@primary-db:5432/mcp_mesh
+export DEFAULT_TIMEOUT_THRESHOLD=20
+export HEALTH_CHECK_INTERVAL=10
+mcp-mesh-registry &
+
+# Backup registry (port 8001) - read-only mode for failover
+export HOST=0.0.0.0
+export PORT=8001  
+export DATABASE_URL=postgresql://user:pass@replica-db:5432/mcp_mesh
+export DEFAULT_TIMEOUT_THRESHOLD=30
+export HEALTH_CHECK_INTERVAL=15
+mcp-mesh-registry &
 ```
 
 ### Remote Registry Connection
@@ -440,8 +631,22 @@ Now that you understand environment configuration:
 
 ---
 
+## Summary
+
+### Agent Configuration (Python)
+Focus on `MCP_MESH_*` variables for agent behavior, heartbeat intervals, and service discovery.
+
+### Registry Configuration (Go)
+Focus on `DEFAULT_TIMEOUT_THRESHOLD` and `HEALTH_CHECK_INTERVAL` for fast topology detection.
+
+---
+
 💡 **Pro Tip**: Use environment files for different deployment stages - keeps configuration organized and secure.
 
 🔧 **Development Tip**: Set `MCP_MESH_DEBUG_MODE=true` during development for detailed logging and faster feedback.
 
-🚀 **Production Tip**: Use `MCP_MESH_UPDATE_STRATEGY=graceful` in production to ensure zero-downtime updates.
+🚀 **Production Tip**: Use `DEFAULT_TIMEOUT_THRESHOLD=20` and `HEALTH_CHECK_INTERVAL=10` for optimal fast heartbeat performance.
+
+⚡ **Performance Tip**: For ultra-fast systems, try `DEFAULT_TIMEOUT_THRESHOLD=5` and `HEALTH_CHECK_INTERVAL=2` for sub-5 second topology detection.
+
+🛡️ **Registry Tip**: Use `DATABASE_URL` with PostgreSQL in production for better performance and reliability.

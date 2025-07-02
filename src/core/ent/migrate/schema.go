@@ -17,10 +17,12 @@ var (
 		{Name: "http_host", Type: field.TypeString, Nullable: true},
 		{Name: "http_port", Type: field.TypeInt, Nullable: true},
 		{Name: "namespace", Type: field.TypeString, Default: "default"},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"healthy", "unhealthy", "unknown"}, Default: "healthy"},
 		{Name: "total_dependencies", Type: field.TypeInt, Default: 0},
 		{Name: "dependencies_resolved", Type: field.TypeInt, Default: 0},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "last_full_refresh", Type: field.TypeTime},
 	}
 	// AgentsTable holds the schema information for the "agents" table.
 	AgentsTable = &schema.Table{
@@ -41,7 +43,17 @@ var (
 			{
 				Name:    "agent_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[10]},
+				Columns: []*schema.Column{AgentsColumns[11]},
+			},
+			{
+				Name:    "agent_status",
+				Unique:  false,
+				Columns: []*schema.Column{AgentsColumns[7]},
+			},
+			{
+				Name:    "agent_status_updated_at",
+				Unique:  false,
+				Columns: []*schema.Column{AgentsColumns[7], AgentsColumns[11]},
 			},
 		},
 	}
@@ -86,7 +98,7 @@ var (
 	// RegistryEventsColumns holds the columns for the "registry_events" table.
 	RegistryEventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister"}},
+		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister", "unhealthy"}},
 		{Name: "function_name", Type: field.TypeString, Nullable: true},
 		{Name: "timestamp", Type: field.TypeTime},
 		{Name: "data", Type: field.TypeJSON},

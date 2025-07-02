@@ -1,0 +1,26 @@
+{
+  "status": "success",
+  "timestamp": "2025-07-01T19:52:08.561294-04:00",
+  "message": "Agent registered via heartbeat",
+  "agent_id": "dependent-service-00d6169a",
+  "dependencies_resolved": {
+    "analyze_data": [
+      {
+        "agent_id": "fastmcp-service-1c43fae9",
+        "function_name": "get_current_time",
+        "endpoint": "http://10.211.55.3:9092",
+        "capability": "time_service",
+        "status": "available"
+      }
+    ],
+    "generate_report": [
+      {
+        "agent_id": "fastmcp-service-1c43fae9",
+        "function_name": "get_current_time",
+        "endpoint": "http://10.211.55.3:9092",
+        "capability": "time_service",
+        "status": "available"
+      }
+    ]
+  }
+}

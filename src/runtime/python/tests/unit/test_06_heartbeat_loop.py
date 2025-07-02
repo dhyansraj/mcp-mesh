@@ -89,8 +89,9 @@ class TestHeartbeatLoopStepSuccess:
         self, mock_get_config_value, step, mock_context_with_health_interval
     ):
         """Test execute with health_interval in agent_config."""
-        # Mock standalone mode as False
-        mock_get_config_value.return_value = False
+        # Mock get_config_value to return the health_interval from agent_config (45)
+        # The first call gets the health interval, second call gets standalone mode
+        mock_get_config_value.side_effect = [45, False]
 
         result = await step.execute(mock_context_with_health_interval)
 
@@ -110,19 +111,19 @@ class TestHeartbeatLoopStepSuccess:
     async def test_execute_without_health_interval_defaults_to_30(
         self, mock_get_config_value, step, mock_context_without_health_interval
     ):
-        """Test execute without health_interval defaults to 30 seconds."""
-        # Mock standalone mode as False
-        mock_get_config_value.return_value = False
+        """Test execute without health_interval defaults to 5 seconds."""
+        # Mock get_config_value to return default health interval (5) and standalone mode (False)
+        mock_get_config_value.side_effect = [5, False]
 
         result = await step.execute(mock_context_without_health_interval)
 
         assert result.status == PipelineStatus.SUCCESS
-        assert "Heartbeat config prepared (interval: 30s)" in result.message
+        assert "Heartbeat config prepared (interval: 5s)" in result.message
 
         # Check heartbeat_config uses default interval
         heartbeat_config = result.context.get("heartbeat_config")
         assert heartbeat_config is not None
-        assert heartbeat_config["interval"] == 30
+        assert heartbeat_config["interval"] == 5
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
@@ -130,19 +131,19 @@ class TestHeartbeatLoopStepSuccess:
         self, mock_get_config_value, step, mock_context_minimal
     ):
         """Test execute with minimal context data."""
-        # Mock standalone mode as False
-        mock_get_config_value.return_value = False
+        # Mock get_config_value to return default health interval (5) and standalone mode (False)
+        mock_get_config_value.side_effect = [5, False]
 
         result = await step.execute(mock_context_minimal)
 
         assert result.status == PipelineStatus.SUCCESS
-        assert "Heartbeat config prepared (interval: 30s)" in result.message
+        assert "Heartbeat config prepared (interval: 5s)" in result.message
 
         # Check heartbeat_config is properly configured
         heartbeat_config = result.context.get("heartbeat_config")
         assert heartbeat_config is not None
         assert heartbeat_config["agent_id"] == "test-agent-abc12345"
-        assert heartbeat_config["interval"] == 30
+        assert heartbeat_config["interval"] == 5
 
 
 class TestHeartbeatLoopStepStandalone:
@@ -236,8 +237,8 @@ class TestHeartbeatLoopStepErrors:
         self, mock_get_config_value, step, mock_context_missing_agent_config
     ):
         """Test execute with missing agent_config."""
-        # Mock standalone mode as False
-        mock_get_config_value.return_value = False
+        # Mock get_config_value to return default health interval (5) and standalone mode (False)
+        mock_get_config_value.side_effect = [5, False]
 
         result = await step.execute(mock_context_missing_agent_config)
 
@@ -245,7 +246,7 @@ class TestHeartbeatLoopStepErrors:
         assert result.status == PipelineStatus.SUCCESS
         heartbeat_config = result.context.get("heartbeat_config")
         assert heartbeat_config is not None
-        assert heartbeat_config["interval"] == 30  # Default value
+        assert heartbeat_config["interval"] == 5  # Default value
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")

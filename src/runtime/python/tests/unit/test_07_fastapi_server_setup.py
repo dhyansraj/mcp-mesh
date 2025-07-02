@@ -6,8 +6,8 @@ app creation, K8s endpoints, and MCP wrapper integration without starting
 actual servers.
 """
 
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -218,7 +218,9 @@ class TestFastAPIAppCreation:
         assert call_kwargs["version"] == "1.2.3"
         assert call_kwargs["docs_url"] == "/docs"
         assert call_kwargs["redoc_url"] == "/redoc"
-        assert call_kwargs["lifespan"] is None  # No lifespans
+        # Should have graceful shutdown lifespan
+        assert call_kwargs["lifespan"] is not None
+        assert callable(call_kwargs["lifespan"])
 
     @patch("fastapi.FastAPI")
     def test_create_fastapi_app_with_heartbeat(
@@ -301,7 +303,7 @@ class TestK8sEndpoints:
         assert mock_app.get.call_count == 4
 
         # Check endpoint paths
-        call_args = [call[0][0] for call in mock_app.get.call_args_list]
+        call_args = [args[0][0] for args in mock_app.get.call_args_list]
         assert "/health" in call_args
         assert "/ready" in call_args
         assert "/livez" in call_args
@@ -538,6 +540,6 @@ class TestMCPIntegration:
         # Simulate exception by making _mcp_app access raise an error
         del wrapper._mcp_app
 
-        # Should raise exception since we don't handle AttributeError gracefully
-        with pytest.raises(Exception):
+        # Should raise AttributeError since _mcp_app was deleted
+        with pytest.raises(AttributeError):
             step._integrate_mcp_wrapper(mock_app, wrapper, "test_server")

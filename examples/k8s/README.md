@@ -34,7 +34,19 @@ docker build -f docker/agent/Dockerfile.base -t mcp-mesh-base:latest .
 docker images | grep mcp-mesh
 ```
 
-### 3. Deploy to Kubernetes
+### 3. Enable Ingress in Minikube
+
+Enable the ingress controller to access services without port forwarding:
+
+```bash
+# Enable ingress addon
+minikube addons enable ingress
+
+# Verify ingress controller is running
+kubectl get pods -n ingress-nginx
+```
+
+### 4. Deploy to Kubernetes
 
 ```bash
 # Deploy the complete MCP Mesh stack
@@ -42,9 +54,31 @@ kubectl apply -k examples/k8s/base/
 
 # Check deployment status
 kubectl get pods -n mcp-mesh
+
+# Check ingress status
+kubectl get ingress -n mcp-mesh
 ```
 
 Wait for all pods to be in `Running` state. The registry may take a few minutes to initialize the database.
+
+### 5. Configure Local Access
+
+Add the ingress hostnames to your `/etc/hosts` file for local access:
+
+```bash
+# Get minikube IP
+MINIKUBE_IP=$(minikube ip)
+
+# Add hostnames to /etc/hosts
+echo "
+# MCP Mesh services
+$MINIKUBE_IP mcp-mesh.local
+$MINIKUBE_IP registry.mcp-mesh.local
+$MINIKUBE_IP hello-world.mcp-mesh.local
+$MINIKUBE_IP system-agent.mcp-mesh.local
+$MINIKUBE_IP fastmcp-agent.mcp-mesh.local
+$MINIKUBE_IP dependent-agent.mcp-mesh.local" | sudo tee -a /etc/hosts
+```
 
 ## Architecture Overview
 
@@ -59,25 +93,40 @@ The deployment includes:
 
 ## Accessing Services
 
-### Port Forwarding for Local Access
+### Option 1: Host-based Ingress (Recommended)
 
-To access the services from your local machine, set up port forwarding:
+Each service has its own hostname:
+
+- **Registry**: `http://registry.mcp-mesh.local`
+- **Hello World Agent**: `http://hello-world.mcp-mesh.local`
+- **System Agent**: `http://system-agent.mcp-mesh.local`
+- **FastMCP Agent**: `http://fastmcp-agent.mcp-mesh.local`
+- **Dependent Agent**: `http://dependent-agent.mcp-mesh.local`
+
+### Option 2: Path-based Ingress
+
+All services accessible via `http://mcp-mesh.local/SERVICE_NAME/`:
+
+- **Registry**: `http://mcp-mesh.local/registry/`
+- **Hello World**: `http://mcp-mesh.local/hello-world/`
+- **System Agent**: `http://mcp-mesh.local/system-agent/`
+- **FastMCP Agent**: `http://mcp-mesh.local/fastmcp-agent/`
+- **Dependent Agent**: `http://mcp-mesh.local/dependent-agent/`
+
+### Configure meshctl for Ingress
+
+Configure meshctl to use the ingress registry:
 
 ```bash
-# Registry (health endpoint and agent registration)
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-registry 8000:8000 &
+# Configure meshctl to use ingress registry
+./bin/meshctl config set registry_host registry.mcp-mesh.local
+./bin/meshctl config set registry_port 80
 
-# Hello World Agent
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-hello-world 9090:9090 &
+# Verify configuration
+./bin/meshctl config show
 
-# System Agent
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-system-agent 8080:8080 &
-
-# FastMCP Agent
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-fastmcp-agent 9092:9092 &
-
-# Dependent Agent
-kubectl port-forward -n mcp-mesh svc/mcp-mesh-dependent-agent 9093:9093 &
+# Test connection
+./bin/meshctl list agents
 ```
 
 ### Testing Health Endpoints
@@ -86,12 +135,16 @@ All services support both GET and HEAD methods for health checks:
 
 ```bash
 # Registry health
-curl -X HEAD -I http://localhost:8000/health
-curl -s http://localhost:8000/health | jq
+curl -X HEAD -I http://registry.mcp-mesh.local/health
+curl -s http://registry.mcp-mesh.local/health | jq
 
 # Agent health examples
-curl -X HEAD -I http://localhost:9090/health
-curl -s http://localhost:9090/health | jq
+curl -X HEAD -I http://hello-world.mcp-mesh.local/health
+curl -s http://hello-world.mcp-mesh.local/health | jq
+
+# Or using path-based routing
+curl -s http://mcp-mesh.local/registry/health | jq
+curl -s http://mcp-mesh.local/hello-world/health | jq
 ```
 
 ### Testing MCP Tool Endpoints
@@ -100,7 +153,7 @@ List available tools on each agent:
 
 ```bash
 # Hello World Agent
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://hello-world.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -111,7 +164,7 @@ curl -s -X POST http://localhost:9090/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # System Agent
-curl -s -X POST http://localhost:8080/mcp/ \
+curl -s -X POST http://system-agent.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -122,7 +175,7 @@ curl -s -X POST http://localhost:8080/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # FastMCP Agent
-curl -s -X POST http://localhost:9092/mcp/ \
+curl -s -X POST http://fastmcp-agent.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -133,7 +186,7 @@ curl -s -X POST http://localhost:9092/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # Dependent Agent
-curl -s -X POST http://localhost:9093/mcp/ \
+curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -150,7 +203,7 @@ Call tools that demonstrate dependency injection:
 
 ```bash
 # Call dependent agent tool that uses time service from FastMCP agent
-curl -s -X POST http://localhost:9093/mcp/ \
+curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -164,10 +217,10 @@ curl -s -X POST http://localhost:9093/mcp/ \
         "content": "All systems operational"
       }
     }
-  }' | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].object'
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.structuredContent'
 
 # Call hello world tool that uses system agent dependency
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://hello-world.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -178,7 +231,23 @@ curl -s -X POST http://localhost:9090/mcp/ \
       "name": "hello_mesh_simple",
       "arguments": {}
     }
-  }' | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.structuredContent'
+
+# Test cross-agent dependency injection with data analysis
+curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "analyze_data",
+      "arguments": {
+        "data": ["metric1", "metric2", "metric3"]
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.structuredContent'
 ```
 
 ### Registry Agents List
@@ -186,8 +255,34 @@ curl -s -X POST http://localhost:9090/mcp/ \
 Check which agents are registered:
 
 ```bash
-curl -s http://localhost:8000/agents | jq '.agents[] | {name: .name, status: .status, capabilities: (.capabilities | length), endpoint: .endpoint}'
+curl -s http://registry.mcp-mesh.local/agents | jq '.agents[] | {name: .name, status: .status, capabilities: (.capabilities | length), endpoint: .endpoint}'
 ```
+
+## Ingress Configuration
+
+The deployment includes two ingress configurations for flexible access:
+
+### Host-based Ingress
+
+- Provides dedicated subdomains for each service
+- Easy to remember URLs: `registry.mcp-mesh.local`, `hello-world.mcp-mesh.local`
+- Direct access without path prefixes
+- Recommended for development and testing
+
+### Path-based Ingress
+
+- Single domain with service paths: `mcp-mesh.local/registry/`
+- Uses nginx rewrite rules to strip path prefixes
+- Useful for environments with limited hostname management
+- Supports the same functionality as host-based routing
+
+### Benefits of Ingress over Port Forwarding
+
+- **No background processes**: No need to manage multiple `kubectl port-forward` commands
+- **Persistent access**: Services remain accessible even after kubectl restarts
+- **Production-ready**: Ingress is the standard way to expose services in Kubernetes
+- **Load balancing**: Native support for multiple replicas
+- **SSL termination**: Can easily add HTTPS certificates
 
 ## Key Features Demonstrated
 
@@ -209,11 +304,25 @@ curl -s http://localhost:8000/agents | jq '.agents[] | {name: .name, status: .st
 - Hello World Agent uses system information from System Agent
 - Automatic capability resolution and service binding
 
-### 4. **Hybrid FastMCP + MCP Mesh Architecture**
+### 4. **Fast Heartbeat Optimization**
+
+- 5-second heartbeat intervals for rapid health monitoring
+- HEAD request optimization for minimal network overhead
+- Fast failure detection and recovery
+- Configurable via `MCP_MESH_HEALTH_INTERVAL` environment variable
+
+### 5. **Hybrid FastMCP + MCP Mesh Architecture**
 
 - FastMCP decorators (`@app.tool`) for familiar MCP development
 - MCP Mesh decorators (`@mesh.tool`) for dependency injection
 - No manual server setup required - mesh handles everything
+
+### 6. **Production-Ready Networking**
+
+- Ingress-based routing with both host and path-based access
+- No port forwarding required for development
+- Native Kubernetes service discovery and load balancing
+- Support for multiple replicas and high availability
 
 ## Troubleshooting
 
@@ -245,13 +354,23 @@ kubectl logs -n mcp-mesh mcp-mesh-postgres-0
 kubectl logs -n mcp-mesh mcp-mesh-registry-0
 ```
 
-### Port Forwarding Issues
+### Ingress Access Issues
 
-Kill existing port forwards and restart:
+Check ingress status and minikube IP:
 
 ```bash
-pkill -f "port-forward"
-# Then restart the port forwarding commands
+# Check ingress status
+kubectl get ingress -n mcp-mesh
+
+# Verify minikube IP matches /etc/hosts
+minikube ip
+
+# Test ingress connectivity
+curl -s http://registry.mcp-mesh.local/health
+
+# If hostnames don't resolve, re-add to /etc/hosts
+MINIKUBE_IP=$(minikube ip)
+echo "$MINIKUBE_IP registry.mcp-mesh.local" | sudo tee -a /etc/hosts
 ```
 
 ## Advanced Configuration

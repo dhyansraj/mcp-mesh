@@ -310,18 +310,53 @@ class DecoratorRegistry:
         # This happens when only @mesh.tool decorators are used
         from mesh.decorators import _get_or_create_agent_id
 
+        from ..shared.config_resolver import ValidationRule, get_config_value
+        from ..shared.defaults import MeshDefaults
+
         agent_id = _get_or_create_agent_id()
         fallback_config = {
             "name": None,
-            "version": "1.0.0",
+            "version": get_config_value(
+                "MCP_MESH_VERSION",
+                default=MeshDefaults.VERSION,
+                rule=ValidationRule.STRING_RULE,
+            ),
             "description": None,
-            "http_host": "localhost",
-            "http_port": 0,
-            "enable_http": True,
-            "namespace": "default",
-            "health_interval": 30,
-            "auto_run": True,
-            "auto_run_interval": 10,
+            "http_host": get_config_value(
+                "MCP_MESH_HTTP_HOST",
+                default=MeshDefaults.HTTP_HOST,
+                rule=ValidationRule.STRING_RULE,
+            ),
+            "http_port": get_config_value(
+                "MCP_MESH_HTTP_PORT",
+                default=MeshDefaults.HTTP_PORT,
+                rule=ValidationRule.PORT_RULE,
+            ),
+            "enable_http": get_config_value(
+                "MCP_MESH_HTTP_ENABLED",
+                default=MeshDefaults.HTTP_ENABLED,
+                rule=ValidationRule.TRUTHY_RULE,
+            ),
+            "namespace": get_config_value(
+                "MCP_MESH_NAMESPACE",
+                default=MeshDefaults.NAMESPACE,
+                rule=ValidationRule.STRING_RULE,
+            ),
+            "health_interval": get_config_value(
+                "MCP_MESH_HEALTH_INTERVAL",
+                default=MeshDefaults.HEALTH_INTERVAL,
+                rule=ValidationRule.NONZERO_RULE,
+            ),
+            "auto_run": get_config_value(
+                "MCP_MESH_AUTO_RUN",
+                default=MeshDefaults.AUTO_RUN,
+                rule=ValidationRule.TRUTHY_RULE,
+            ),
+            "auto_run_interval": get_config_value(
+                "MCP_MESH_AUTO_RUN_INTERVAL",
+                default=MeshDefaults.AUTO_RUN_INTERVAL,
+                rule=ValidationRule.NONZERO_RULE,
+            ),
             "agent_id": agent_id,
         }
 

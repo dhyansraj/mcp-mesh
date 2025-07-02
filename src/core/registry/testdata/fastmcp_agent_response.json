@@ -1,0 +1,35 @@
+{
+  "status": "success",
+  "timestamp": "2025-06-30T20:41:26.092136-04:00",
+  "message": "Agent updated via heartbeat",
+  "agent_id": "fastmcp-service-3a65d884",
+  "dependencies_resolved": {
+    "analysis_prompt": [
+      {
+        "agent_id": "fastmcp-service-3a65d884",
+        "function_name": "get_current_time",
+        "endpoint": "http://10.211.55.3:9092",
+        "capability": "time_service",
+        "status": "available"
+      }
+    ],
+    "calculate_with_timestamp": [
+      {
+        "agent_id": "fastmcp-service-3a65d884",
+        "function_name": "get_current_time",
+        "endpoint": "http://10.211.55.3:9092",
+        "capability": "time_service",
+        "status": "available"
+      }
+    ],
+    "health_status": [
+      {
+        "agent_id": "fastmcp-service-3a65d884",
+        "function_name": "get_current_time",
+        "endpoint": "http://10.211.55.3:9092",
+        "capability": "time_service",
+        "status": "available"
+      }
+    ]
+  }
+}

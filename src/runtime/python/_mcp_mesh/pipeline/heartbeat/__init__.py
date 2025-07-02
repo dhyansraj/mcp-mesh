@@ -7,6 +7,7 @@ and dependency resolution.
 """
 
 from .dependency_resolution import DependencyResolutionStep
+from .fast_heartbeat_check import FastHeartbeatStep
 from .heartbeat_orchestrator import HeartbeatOrchestrator
 from .heartbeat_pipeline import HeartbeatPipeline
 from .heartbeat_send import HeartbeatSendStep
@@ -15,6 +16,7 @@ from .registry_connection import RegistryConnectionStep
 
 __all__ = [
     "RegistryConnectionStep",
+    "FastHeartbeatStep",
     "HeartbeatSendStep",
     "DependencyResolutionStep",
     "HeartbeatPipeline",

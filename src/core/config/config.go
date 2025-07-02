@@ -21,15 +21,15 @@ type Config struct {
 
 	// Registry configuration
 	RegistryName        string `env:"REGISTRY_NAME" envDefault:"mcp-mesh-registry"`
-	HealthCheckInterval int    `env:"HEALTH_CHECK_INTERVAL" envDefault:"30"`
+	HealthCheckInterval int    `env:"HEALTH_CHECK_INTERVAL" envDefault:"10"`
 
 	// Cache configuration
 	CacheTTL            int  `env:"CACHE_TTL" envDefault:"30"` // seconds
 	EnableResponseCache bool `env:"ENABLE_RESPONSE_CACHE" envDefault:"true"`
 
-	// Health monitoring configuration
-	DefaultTimeoutThreshold  int `env:"DEFAULT_TIMEOUT_THRESHOLD" envDefault:"60"`   // seconds
-	DefaultEvictionThreshold int `env:"DEFAULT_EVICTION_THRESHOLD" envDefault:"120"` // seconds
+	// Health monitoring configuration (optimized for 5-second HEAD heartbeats)
+	DefaultTimeoutThreshold  int `env:"DEFAULT_TIMEOUT_THRESHOLD" envDefault:"20"`   // seconds (4 missed heartbeats)
+	DefaultEvictionThreshold int `env:"DEFAULT_EVICTION_THRESHOLD" envDefault:"60"`  // seconds (reduced from 120)
 
 	// CORS configuration
 	EnableCORS     bool     `env:"ENABLE_CORS" envDefault:"true"`
@@ -55,11 +55,11 @@ func LoadFromEnv() *Config {
 		Host:                     getEnvString("HOST", "localhost"),
 		Port:                     getEnvInt("PORT", 8000),
 		RegistryName:             getEnvString("REGISTRY_NAME", "mcp-mesh-registry"),
-		HealthCheckInterval:      getEnvInt("HEALTH_CHECK_INTERVAL", 30),
+		HealthCheckInterval:      getEnvInt("HEALTH_CHECK_INTERVAL", 10),
 		CacheTTL:                 getEnvInt("CACHE_TTL", 30),
 		EnableResponseCache:      getEnvBool("ENABLE_RESPONSE_CACHE", true),
-		DefaultTimeoutThreshold:  getEnvInt("DEFAULT_TIMEOUT_THRESHOLD", 60),
-		DefaultEvictionThreshold: getEnvInt("DEFAULT_EVICTION_THRESHOLD", 120),
+		DefaultTimeoutThreshold:  getEnvInt("DEFAULT_TIMEOUT_THRESHOLD", 20),
+		DefaultEvictionThreshold: getEnvInt("DEFAULT_EVICTION_THRESHOLD", 60),
 		EnableCORS:               getEnvBool("ENABLE_CORS", true),
 		AllowedOrigins:           getEnvStringSlice("ALLOWED_ORIGINS", []string{"*"}),
 		AllowedMethods:           getEnvStringSlice("ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}),

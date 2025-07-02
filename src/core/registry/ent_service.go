@@ -29,6 +29,7 @@ type RegistryConfig struct {
 	CacheTTL                 int
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
+	HealthCheckInterval      int
 	EnableResponseCache      bool
 }
 
@@ -191,6 +192,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			SetAgentType(agent.AgentType(agentType)).
 			SetName(name).
 			SetNamespace(namespace).
+			SetStatus(agent.StatusHealthy).
 			SetUpdatedAt(now)
 
 		if version != "" {
@@ -205,6 +207,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 		// Check if agent already exists and update or create
 		existingAgent, err := tx.Agent.Query().Where(agent.IDEQ(req.AgentID)).Only(ctx)
+		isNewAgent := false
 		if err != nil {
 			if ent.IsNotFound(err) {
 				// Create new agent
@@ -212,6 +215,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 				if err != nil {
 					return fmt.Errorf("failed to create agent: %w", err)
 				}
+				isNewAgent = true
 			} else {
 				return fmt.Errorf("failed to check existing agent: %w", err)
 			}
@@ -221,6 +225,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 				SetAgentType(agent.AgentType(agentType)).
 				SetName(name).
 				SetNamespace(namespace).
+				SetStatus(agent.StatusHealthy).
 				SetUpdatedAt(now)
 
 			if version != "" {
@@ -302,22 +307,24 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 		// Dependencies will be calculated after transaction commits
 
-		// Create registry event
-		eventData := map[string]interface{}{
-			"agent_type": agentType,
-			"name":       name,
-			"version":    version,
-		}
+		// Create registry event only for new agents
+		if isNewAgent {
+			eventData := map[string]interface{}{
+				"agent_type": agentType,
+				"name":       name,
+				"version":    version,
+			}
 
-		_, err = tx.RegistryEvent.Create().
-			SetEventType(registryevent.EventTypeRegister).
-			SetAgentID(req.AgentID).
-			SetTimestamp(now).
-			SetData(eventData).
-			Save(ctx)
-		if err != nil {
-			s.logger.Warning("Failed to create registry event: %v", err)
-			// Don't fail the registration over event creation
+			_, err = tx.RegistryEvent.Create().
+				SetEventType(registryevent.EventTypeRegister).
+				SetAgentID(req.AgentID).
+				SetTimestamp(now).
+				SetData(eventData).
+				Save(ctx)
+			if err != nil {
+				s.logger.Warning("Failed to create registry event: %v", err)
+				// Don't fail the registration over event creation
+			}
 		}
 
 		return nil
@@ -348,6 +355,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	_, err = s.entDB.Agent.UpdateOneID(req.AgentID).
 		SetTotalDependencies(totalDeps).
 		SetDependenciesResolved(resolvedDeps).
+		SetLastFullRefresh(now).
 		Save(ctx)
 	if err != nil {
 		s.logger.Warning("Failed to update dependency counts: %v", err)
@@ -412,15 +420,138 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 		return nil, fmt.Errorf("failed to check agent existence: %w", err)
 	}
 
-	// If metadata is provided and contains tools, do full registration instead
+	// Check for status transitions and handle accordingly
+	previousStatus := existingAgent.Status
+
+	// If metadata is provided and contains tools, handle metadata updates directly
+	var dependenciesResolved map[string][]*DependencyResolution
 	if req.Metadata != nil {
 		if _, hasTools := req.Metadata["tools"]; hasTools {
-			fullReq := &AgentRegistrationRequest{
-				AgentID:   req.AgentID,
-				Metadata:  req.Metadata,
-				Timestamp: now.Format(time.RFC3339),
-			}
-			regResp, err := s.RegisterAgent(fullReq)
+			// Update agent metadata and capabilities within transaction
+			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+				// Extract agent metadata for updates
+				agentType := "mcp_agent" // default
+				if aType, ok := req.Metadata["agent_type"]; ok {
+					if aTypeStr, ok := aType.(string); ok {
+						agentType = aTypeStr
+					}
+				}
+
+				name := req.AgentID // default to agent_id
+				if n, ok := req.Metadata["name"]; ok {
+					if nameStr, ok := n.(string); ok {
+						name = nameStr
+					}
+				}
+
+				version := ""
+				if v, ok := req.Metadata["version"]; ok {
+					if vStr, ok := v.(string); ok {
+						version = vStr
+					}
+				}
+
+				namespace := "default"
+				if ns, ok := req.Metadata["namespace"]; ok {
+					if nsStr, ok := ns.(string); ok {
+						namespace = nsStr
+					}
+				}
+
+				var httpHost string
+				var httpPort int
+				if host, ok := req.Metadata["http_host"]; ok {
+					if hostStr, ok := host.(string); ok {
+						httpHost = hostStr
+					}
+				}
+				if port, ok := req.Metadata["http_port"]; ok {
+					switch p := port.(type) {
+					case float64:
+						httpPort = int(p)
+					case int:
+						httpPort = p
+					}
+				}
+
+				// Update existing agent metadata and status using transaction client
+				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
+					SetAgentType(agent.AgentType(agentType)).
+					SetName(name).
+					SetNamespace(namespace).
+					SetStatus(agent.StatusHealthy).
+					SetUpdatedAt(now).
+					SetLastFullRefresh(now)
+
+				if version != "" {
+					updateBuilder = updateBuilder.SetVersion(version)
+				}
+				if httpHost != "" {
+					updateBuilder = updateBuilder.SetHTTPHost(httpHost)
+				}
+				if httpPort > 0 {
+					updateBuilder = updateBuilder.SetHTTPPort(httpPort)
+				}
+
+				existingAgent, err = updateBuilder.Save(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to update agent: %w", err)
+				}
+
+				// Process tools/capabilities
+				if tools, ok := req.Metadata["tools"]; ok {
+					if toolsArray, ok := tools.([]interface{}); ok {
+						// Clear existing capabilities for this agent
+						_, err := tx.Capability.Delete().Where(capability.HasAgentWith(agent.IDEQ(req.AgentID))).Exec(ctx)
+						if err != nil {
+							return fmt.Errorf("failed to clear existing capabilities: %w", err)
+						}
+
+						// Add new capabilities
+						for _, tool := range toolsArray {
+							if toolMap, ok := tool.(map[string]interface{}); ok {
+								functionName, _ := toolMap["function_name"].(string)
+								capabilityName, _ := toolMap["capability"].(string)
+								description, _ := toolMap["description"].(string)
+								capVersion := "1.0.0"
+								if v, ok := toolMap["version"].(string); ok && v != "" {
+									capVersion = v
+								}
+
+								tags := []string{}
+								if tagsInterface, ok := toolMap["tags"]; ok {
+									if tagsArray, ok := tagsInterface.([]interface{}); ok {
+										for _, tag := range tagsArray {
+											if tagStr, ok := tag.(string); ok {
+												tags = append(tags, tagStr)
+											}
+										}
+									} else if stringSlice, ok := tagsInterface.([]string); ok {
+										tags = stringSlice
+									}
+								}
+
+								if functionName != "" && capabilityName != "" {
+									_, err := tx.Capability.Create().
+										SetAgentID(req.AgentID).
+										SetFunctionName(functionName).
+										SetCapability(capabilityName).
+										SetVersion(capVersion).
+										SetNillableDescription(&description).
+										SetTags(tags).
+										Save(ctx)
+									if err != nil {
+										return fmt.Errorf("failed to create capability %s: %w", functionName, err)
+									}
+								}
+							}
+						}
+					}
+				}
+
+				return nil
+			})
+
 			if err != nil {
 				return &HeartbeatResponse{
 					Status:    "error",
@@ -428,19 +559,63 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					Message:   err.Error(),
 				}, nil
 			}
+
+			// Resolve dependencies after transaction commits
+			dependenciesResolved, err = s.ResolveAllDependenciesFromMetadata(req.Metadata)
+			if err != nil {
+				s.logger.Warning("Failed to resolve dependencies for response: %v", err)
+				dependenciesResolved = make(map[string][]*DependencyResolution)
+			}
+
+			// Calculate dependency counts and update agent record
+			totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+			resolvedDeps := 0
+			for _, deps := range dependenciesResolved {
+				resolvedDeps += len(deps)
+			}
+
+			_, err = s.entDB.Agent.UpdateOneID(req.AgentID).
+				SetTotalDependencies(totalDeps).
+				SetDependenciesResolved(resolvedDeps).
+				Save(ctx)
+			if err != nil {
+				s.logger.Warning("Failed to update dependency counts: %v", err)
+			}
+
+			// Only create register event if agent was unhealthy and is now recovering
+			if previousStatus == agent.StatusUnhealthy {
+				eventData := map[string]interface{}{
+					"reason": "recovery",
+					"previous_status": previousStatus.String(),
+					"new_status": "healthy",
+				}
+				_, err = s.entDB.RegistryEvent.Create().
+					SetEventType(registryevent.EventTypeRegister).
+					SetAgentID(req.AgentID).
+					SetTimestamp(now).
+					SetData(eventData).
+					Save(ctx)
+				if err != nil {
+					s.logger.Warning("Failed to create recovery register event: %v", err)
+				} else {
+					s.logger.Info("Agent %s recovered from unhealthy status", req.AgentID)
+				}
+			}
+
 			return &HeartbeatResponse{
-				Status:               regResp.Status,
+				Status:               "success",
 				Timestamp:            now.Format(time.RFC3339),
 				Message:              "Agent updated via heartbeat",
-				AgentID:              regResp.AgentID,
-				DependenciesResolved: regResp.DependenciesResolved,
+				AgentID:              req.AgentID,
+				DependenciesResolved: dependenciesResolved,
 			}, nil
 		}
 	}
 
-	// Simple heartbeat update - just update timestamp
+	// Simple heartbeat update - update timestamps
 	_, err = existingAgent.Update().
 		SetUpdatedAt(now).
+		SetLastFullRefresh(now).
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update agent heartbeat: %w", err)
@@ -534,22 +709,9 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			endpoint = fmt.Sprintf("http://%s:%d", a.HTTPHost, a.HTTPPort)
 		}
 
-		// Calculate health status based on TTL (matches old SQL service logic)
-		status := "expired" // Default
-		timeSinceLastSeen := time.Since(a.UpdatedAt)
-		timeoutThreshold := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
-
-		// Smart health calculation (same as old service):
-		// < timeout = healthy
-		// timeout to timeout*2 = degraded
-		// > timeout*2 = expired
-		if timeSinceLastSeen < timeoutThreshold {
-			status = "healthy"
-		} else if timeSinceLastSeen < timeoutThreshold*2 {
-			status = "degraded"
-		} else {
-			status = "expired"
-		}
+		// Use stored status column instead of calculating
+		// This provides consistency with health monitor and prevents mismatches
+		status := string(a.Status)
 
 		agentInfo := generated.AgentInfo{
 			Id:       a.ID,
@@ -583,7 +745,7 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 	return &generated.AgentsListResponse{
 		Agents:    agentInfos,
 		Count:     len(agentInfos),
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 	}, nil
 }
 
@@ -679,7 +841,7 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 					}
 
 					if tags, exists := depMap["tags"]; exists {
-						s.logger.Info("Found tags in dependency: %T = %v", tags, tags)
+						s.logger.Debug("Found tags in dependency: %T = %v", tags, tags)
 						if tagsList, ok := tags.([]interface{}); ok {
 							dep.Tags = make([]string, len(tagsList))
 							for i, tag := range tagsList {
@@ -691,7 +853,7 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 						} else if stringSlice, ok := tags.([]string); ok {
 							// Handle direct []string case
 							dep.Tags = stringSlice
-							s.logger.Info("Direct string slice tags: %v", dep.Tags)
+							s.logger.Debug("Direct string slice tags: %v", dep.Tags)
 						} else {
 							s.logger.Info("Tags not []interface{} or []string, type is: %T", tags)
 						}
@@ -700,14 +862,14 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 					}
 
 					// Find provider with TTL and strict matching using Ent
-					s.logger.Info("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
+					s.logger.Debug("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
 					provider := s.findHealthyProviderWithTTL(dep)
 					if provider != nil {
 						s.logger.Info("Found provider for %s: %+v", dep.Capability, provider)
 						resolvedDeps = append(resolvedDeps, provider)
 					} else {
 						// Dependency cannot be resolved - log but continue with other dependencies
-						s.logger.Info("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
+						s.logger.Debug("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
 						// Continue processing other dependencies instead of breaking
 					}
 				}
@@ -772,11 +934,11 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 	ctx := context.Background()
 
 	// Use Info level to ensure it gets logged
-	s.logger.Info("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
+	s.logger.Debug("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
 
 	// Calculate TTL threshold
-	timeoutDuration := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
-	ttlThreshold := time.Now().UTC().Add(-timeoutDuration)
+	// Health status checking is now handled by the health monitor
+	// No need for TTL threshold calculations here
 
 	// Query capabilities with healthy agents using Ent with retry logic for database locks
 	var capabilities []*ent.Capability
@@ -825,11 +987,12 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			continue // Skip if agent not loaded
 		}
 
-		// Check TTL - agent must have been updated recently
-		if cap.Edges.Agent.UpdatedAt.Before(ttlThreshold) {
-			s.logger.Debug("Skipping stale agent %s: UpdatedAt=%v, TTLThreshold=%v",
-				cap.Edges.Agent.ID, cap.Edges.Agent.UpdatedAt, ttlThreshold)
-			continue // Skip stale agents
+		// Check agent health status - only return healthy agents as available
+		// Health monitor is responsible for marking agents unhealthy based on timestamps
+		if cap.Edges.Agent.Status != agent.StatusHealthy {
+			s.logger.Debug("Skipping unhealthy agent %s: Status=%v",
+				cap.Edges.Agent.ID, cap.Edges.Agent.Status)
+			continue // Skip unhealthy agents
 		}
 
 		candidate := struct {
@@ -856,7 +1019,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			dep.Capability, candidate.AgentID, candidate.Version, candidate.Tags)
 	}
 
-	s.logger.Info("Total candidates found for %s: %d", dep.Capability, len(candidates))
+	s.logger.Debug("Total candidates found for %s: %d", dep.Capability, len(candidates))
 
 	// Filter by version constraint if specified
 	if dep.Version != "" && len(candidates) > 0 {
@@ -1022,4 +1185,145 @@ func countTotalDependenciesInMetadata(metadata map[string]interface{}) int {
 func normalizeName(name string) string {
 	// Simple name normalization
 	return name
+}
+
+// GetAgent retrieves an agent by ID for fast heartbeat check
+func (s *EntService) GetAgent(ctx context.Context, agentID string) (*ent.Agent, error) {
+	return s.entDB.Client.Agent.
+		Query().
+		Where(agent.IDEQ(agentID)).
+		Only(ctx)
+}
+
+// HasTopologyChanges checks if topology has changed since last full refresh
+func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, lastRefresh time.Time) (bool, error) {
+	// Count registry events after last refresh that indicate topology changes
+	count, err := s.entDB.Client.RegistryEvent.
+		Query().
+		Where(
+			registryevent.TimestampGT(lastRefresh),
+			registryevent.EventTypeIn("register", "unregister", "unhealthy"),
+		).
+		Count(ctx)
+
+	if err != nil {
+		return false, fmt.Errorf("failed to check topology changes: %w", err)
+	}
+
+	s.logger.Info("Topology changes check for agent %s: found %d events since %v", agentID, count, lastRefresh)
+	return count > 0, nil
+}
+
+// UnregisterAgent gracefully unregisters an agent by marking it as unhealthy
+func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
+	// Start a transaction for atomic operation
+	tx, err := s.entDB.Client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Check if agent exists
+	currentAgent, err := tx.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Agent doesn't exist - idempotent operation, return success
+			return nil
+		}
+		return fmt.Errorf("failed to query agent: %w", err)
+	}
+
+	// Update agent status to unhealthy while preserving original UpdatedAt timestamp
+	agentUpdated, err := tx.Agent.
+		Update().
+		Where(agent.IDEQ(agentID)).
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(currentAgent.UpdatedAt). // Preserve original timestamp like health monitor does
+		Save(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to update agent %s status to unhealthy: %w", agentID, err)
+	}
+
+	if agentUpdated == 0 {
+		// Agent doesn't exist, no need to create event
+		return nil
+	}
+
+	// Create unregister event (similar to health monitor creating unhealthy events)
+	eventData := map[string]interface{}{
+		"reason":      "graceful_shutdown",
+		"detected_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	_, err = tx.RegistryEvent.Create().
+		SetEventType("unregister").
+		SetAgentID(agentID).
+		SetTimestamp(time.Now().UTC()).
+		SetData(eventData).
+		Save(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to create unregister event: %w", err)
+	}
+
+	// Commit transaction
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	s.logger.Info("Marked agent %s as unhealthy and created unregister event (graceful shutdown)", agentID)
+	return nil
+}
+
+// UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests
+func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID string) error {
+	now := time.Now().UTC()
+
+	// Find the existing agent
+	existingAgent, err := s.entDB.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Agent doesn't exist - return without error (idempotent behavior)
+			return nil
+		}
+		return fmt.Errorf("failed to query agent: %w", err)
+	}
+
+	// Update timestamp and reset to healthy if agent was previously unhealthy
+	// If agent can send HEAD requests, it's clearly responsive and should be marked healthy
+	updateBuilder := existingAgent.Update().SetUpdatedAt(now)
+
+	if existingAgent.Status == agent.StatusUnhealthy {
+		s.logger.Info("Agent %s recovered: marking healthy (was %v)", agentID, existingAgent.Status)
+		updateBuilder = updateBuilder.SetStatus(agent.StatusHealthy)
+
+		// Create recovery event for audit trail
+		eventData := map[string]interface{}{
+			"reason":          "head_request_recovery",
+			"detected_at":     now.Format(time.RFC3339),
+			"previous_status": "unhealthy",
+			"new_status":      "healthy",
+		}
+
+		_, err := s.entDB.RegistryEvent.Create().
+			SetEventType("register").
+			SetAgentID(agentID).
+			SetTimestamp(now).
+			SetData(eventData).
+			Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to create recovery event for agent %s: %v", agentID, err)
+			// Don't fail the timestamp update due to event creation failure
+		}
+	}
+
+	_, err = updateBuilder.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update agent heartbeat timestamp: %w", err)
+	}
+
+	s.logger.Debug("Updated heartbeat timestamp for agent %s", agentID)
+	return nil
 }

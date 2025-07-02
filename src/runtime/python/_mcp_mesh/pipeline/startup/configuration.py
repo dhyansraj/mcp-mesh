@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 from ...engine.decorator_registry import DecoratorRegistry
+from ...shared.config_resolver import ValidationRule, get_config_value
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
@@ -34,14 +35,23 @@ class ConfigurationStep(PipelineStep):
             mesh_agents = DecoratorRegistry.get_mesh_agents()
             has_explicit_agent = bool(mesh_agents)
 
+            # Resolve registry URL (not part of agent parameters)
+            registry_url = get_config_value(
+                "MCP_MESH_REGISTRY_URL",
+                override=None,  # No decorator override for registry URL
+                default="http://localhost:8000",
+                rule=ValidationRule.URL_RULE,
+            )
+
             # Store in pipeline context
             result.add_context("agent_config", config)
             result.add_context("agent_id", config["agent_id"])
             result.add_context("has_explicit_agent", has_explicit_agent)
+            result.add_context("registry_url", registry_url)
 
             result.message = f"Configuration resolved for agent '{config['agent_id']}'"
             self.logger.info(
-                f"⚙️ Configuration resolved: agent_id='{config['agent_id']}', explicit_agent={has_explicit_agent}"
+                f"⚙️ Configuration resolved: agent_id='{config['agent_id']}', registry_url='{registry_url}', explicit_agent={has_explicit_agent}"
             )
 
         except Exception as e:

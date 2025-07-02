@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
@@ -95,6 +96,9 @@ class FastAPIServerSetupStep(PipelineStep):
                         f"❌ Failed to integrate MCP wrapper for server '{server_key}': {e}"
                     )
                     result.add_error(f"Failed to integrate server '{server_key}': {e}")
+
+            # Store context for graceful shutdown access
+            self._store_context_for_shutdown(context)
 
             # Store results in context (app prepared, but server not started yet)
             result.add_context("fastapi_app", fastapi_app)
@@ -244,6 +248,9 @@ class FastAPIServerSetupStep(PipelineStep):
                     try:
                         yield
                     finally:
+                        # Graceful shutdown - unregister from registry
+                        await self._graceful_shutdown(main_app)
+
                         # Clean up heartbeat task
                         if heartbeat_task:
                             heartbeat_task.cancel()
@@ -289,6 +296,9 @@ class FastAPIServerSetupStep(PipelineStep):
                     try:
                         yield
                     finally:
+                        # Graceful shutdown - unregister from registry
+                        await self._graceful_shutdown(main_app)
+
                         # Clean up heartbeat task
                         if heartbeat_task:
                             heartbeat_task.cancel()
@@ -342,6 +352,9 @@ class FastAPIServerSetupStep(PipelineStep):
                     try:
                         yield
                     finally:
+                        # Graceful shutdown - unregister from registry
+                        await self._graceful_shutdown(main_app)
+
                         # Clean up all lifespans in reverse order
                         for ctx in reversed(lifespan_contexts):
                             try:
@@ -354,15 +367,65 @@ class FastAPIServerSetupStep(PipelineStep):
                 primary_lifespan = multiple_fastmcp_lifespan
 
             elif len(fastmcp_servers) == 1:
-                # Single FastMCP server without heartbeat - use its lifespan directly
+                # Single FastMCP server without heartbeat - wrap lifespan with graceful shutdown
                 self.logger.debug(
-                    "Using direct FastMCP lifespan for single server (no heartbeat)"
+                    "Wrapping FastMCP lifespan for single server with graceful shutdown"
                 )
-                primary_lifespan = get_fastmcp_lifespan()
-                if not primary_lifespan:
+                fastmcp_lifespan = get_fastmcp_lifespan()
+
+                if fastmcp_lifespan:
+                    # Wrap the FastMCP lifespan with graceful shutdown
+                    @asynccontextmanager
+                    async def single_fastmcp_with_graceful_shutdown(main_app):
+                        """Lifespan wrapper for single FastMCP server with graceful shutdown."""
+                        # Start FastMCP lifespan
+                        fastmcp_ctx = None
+                        try:
+                            fastmcp_ctx = fastmcp_lifespan(main_app)
+                            await fastmcp_ctx.__aenter__()
+                            self.logger.debug("Started FastMCP lifespan")
+                        except Exception as e:
+                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
+
+                        try:
+                            yield
+                        finally:
+                            # Graceful shutdown - unregister from registry
+                            await self._graceful_shutdown(main_app)
+
+                            # Clean up FastMCP lifespan
+                            if fastmcp_ctx:
+                                try:
+                                    await fastmcp_ctx.__aexit__(None, None, None)
+                                    self.logger.debug("FastMCP lifespan stopped")
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"Error closing FastMCP lifespan: {e}"
+                                    )
+
+                    primary_lifespan = single_fastmcp_with_graceful_shutdown
+                else:
                     self.logger.warning(
                         "No FastMCP lifespan available for single server"
                     )
+                    primary_lifespan = None
+
+            # Add minimal graceful shutdown lifespan if no other lifespan is set
+            if primary_lifespan is None:
+                self.logger.debug(
+                    "Creating minimal lifespan for graceful shutdown only"
+                )
+
+                @asynccontextmanager
+                async def graceful_shutdown_only_lifespan(main_app):
+                    """Minimal lifespan for graceful shutdown only."""
+                    try:
+                        yield
+                    finally:
+                        # Graceful shutdown - unregister from registry
+                        await self._graceful_shutdown(main_app)
+
+                primary_lifespan = graceful_shutdown_only_lifespan
 
             app = FastAPI(
                 title=f"MCP Mesh Agent: {agent_name}",
@@ -559,3 +622,67 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         """Get current timestamp in ISO format."""
 
         return datetime.now(UTC).isoformat()
+
+    async def _graceful_shutdown(self, main_app: Any) -> None:
+        """
+        Perform graceful shutdown by unregistering agent from registry.
+
+        Args:
+            main_app: FastAPI application instance (unused but required by lifespan signature)
+        """
+        try:
+            # Get pipeline context from the step execution context
+            # Note: We need to access the context from where this was called
+            context = getattr(self, "_current_context", {})
+
+            # Get registry configuration
+            registry_url = context.get("registry_url")
+            agent_id = context.get("agent_id")
+
+            if not registry_url or not agent_id:
+                self.logger.warning(
+                    f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
+                )
+                return
+
+            # Get or create registry client wrapper
+            registry_wrapper = context.get("registry_wrapper")
+            if not registry_wrapper:
+                # Create new registry client for shutdown
+                from ...generated.mcp_mesh_registry_client.api_client import ApiClient
+                from ...generated.mcp_mesh_registry_client.configuration import (
+                    Configuration,
+                )
+                from ...shared.registry_client_wrapper import RegistryClientWrapper
+                from ..registry_connection import RegistryConnectionStep
+
+                config = Configuration(host=registry_url)
+                api_client = ApiClient(configuration=config)
+                registry_wrapper = RegistryClientWrapper(api_client)
+                self.logger.debug(
+                    f"🔧 Created registry client for graceful shutdown: {registry_url}"
+                )
+
+            # Perform graceful unregistration
+            success = await registry_wrapper.unregister_agent(agent_id)
+            if success:
+                self.logger.info(
+                    f"🏁 Graceful shutdown completed for agent '{agent_id}'"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ Graceful shutdown failed for agent '{agent_id}' - continuing shutdown"
+                )
+
+        except Exception as e:
+            # Don't fail the shutdown process due to unregistration errors
+            self.logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
+
+    def _store_context_for_shutdown(self, context: dict[str, Any]) -> None:
+        """Store context for access during shutdown."""
+        # Store essential shutdown information
+        self._current_context = {
+            "registry_url": context.get("registry_url"),
+            "agent_id": context.get("agent_id"),
+            "registry_wrapper": context.get("registry_wrapper"),
+        }

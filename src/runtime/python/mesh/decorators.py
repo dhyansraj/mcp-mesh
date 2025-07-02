@@ -289,7 +289,7 @@ def agent(
     http_port: int = 0,
     enable_http: bool = True,
     namespace: str = "default",
-    health_interval: int = 30,
+    health_interval: int = 5,  # Will be overridden by centralized defaults
     auto_run: bool = True,  # Changed to True by default!
     auto_run_interval: int = 10,
     **kwargs: Any,
@@ -415,24 +415,27 @@ def agent(
             rule=ValidationRule.STRING_RULE,
         )
 
+        # Import centralized defaults
+        from _mcp_mesh.shared.defaults import MeshDefaults
+
         final_health_interval = get_config_value(
             "MCP_MESH_HEALTH_INTERVAL",
             override=health_interval,
-            default=30,
+            default=MeshDefaults.HEALTH_INTERVAL,
             rule=ValidationRule.NONZERO_RULE,
         )
 
         final_auto_run = get_config_value(
             "MCP_MESH_AUTO_RUN",
             override=auto_run,
-            default=True,
+            default=MeshDefaults.AUTO_RUN,
             rule=ValidationRule.TRUTHY_RULE,
         )
 
         final_auto_run_interval = get_config_value(
             "MCP_MESH_AUTO_RUN_INTERVAL",
             override=auto_run_interval,
-            default=10,
+            default=MeshDefaults.AUTO_RUN_INTERVAL,
             rule=ValidationRule.NONZERO_RULE,
         )
 

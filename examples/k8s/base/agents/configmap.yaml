@@ -40,7 +40,7 @@ data:
       # Health check configuration
       health:
         enabled: true
-        interval: 30
+        interval: 5
         timeout: 10
         retry_attempts: 3
 
@@ -126,12 +126,12 @@ data:
     # Default environment variables - matches Docker setup
     MCP_MESH_HTTP_ENABLED=true
     MCP_MESH_HTTP_PORT=8080
-    MCP_MESH_LOG_LEVEL=INFO
-    MCP_MESH_DEBUG_MODE=false
+    MCP_MESH_LOG_LEVEL=DEBUG
+    MCP_MESH_DEBUG_MODE=true
     MCP_MESH_ENABLED=true
     MCP_MESH_AUTO_RUN=true
-    MCP_MESH_AUTO_RUN_INTERVAL=30
-    MCP_MESH_HEALTH_INTERVAL=30
+    MCP_MESH_AUTO_RUN_INTERVAL=5
+    MCP_MESH_HEALTH_INTERVAL=5
     MCP_MESH_DYNAMIC_UPDATES=true
     MCP_MESH_UPDATE_STRATEGY=immediate
     MCP_MESH_NAMESPACE=default
@@ -151,7 +151,7 @@ data:
     {
       "mesh_agent": {
         "enable_http": true,
-        "health_interval": 30,
+        "health_interval": 5,
         "timeout": 60,
         "retry_attempts": 3,
         "enable_caching": true,
