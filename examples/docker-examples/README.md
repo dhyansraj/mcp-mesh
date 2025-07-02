@@ -1,223 +1,157 @@
-# MCP Mesh Docker Examples
+# MCP Mesh Docker Compose Examples
 
-This directory contains a complete Docker Compose setup demonstrating the MCP Mesh architecture with:
+This directory contains Docker Compose examples for MCP Mesh, demonstrating how to deploy the registry and agents locally with proper health checks, service discovery, and dependency injection.
 
-- **Go-based Registry**: Service discovery and coordination (published image with semantic versioning)
-- **Python Agents**: Multiple containerized agents with dependency injection (published images)
-- **Automatic Service Discovery**: Agents automatically find and communicate with each other
-- **Published Docker Images**: Fast startup with pre-built, tested images
+## Quick Start
 
-## 🚀 Quick Start
+### Prerequisites
 
-```bash
-# Clone the repository (for agent code)
-git clone https://github.com/dhyansraj/mcp-mesh.git
-cd mcp-mesh/examples/docker-examples
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed
+- At least 4GB RAM available for containers
 
-# Start the entire mesh (no build required!)
-docker-compose up
-
-# In another terminal, install and use meshctl
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1
-meshctl list --registry http://localhost:8000
-```
-
-That's it! The mesh will automatically:
-
-1. Download published Docker images (mcpmesh/registry:0.1, mcpmesh/python-runtime:0.1)
-2. Start the Go registry on port 8000
-3. Start Python agents with your local code
-4. Agents auto-register with the registry
-5. Dependency injection happens automatically
-6. You can interact with the mesh using `meshctl`
-
-## 🏗️ Resilient Architecture
-
-MCP Mesh uses a **resilient architecture** where agents work independently and enhance themselves when the registry is available:
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Registry      │    │  Hello World     │    │  System Agent  │
-│   (Go + SQLite) │    │  (Python)        │    │  (Python)       │
-│   Port: 8000    │◄──►│  Port: 8081      │◄──►│  Port: 8082     │
-│   [Optional]    │    │  [Standalone]    │    │  [Standalone]   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-        ▲                        ▲                        ▲
-        │              ┌─────────┴────────┐              │
-        └──────────────│  meshctl Client  │──────────────┘
-                      │  (Dashboard)     │
-                      └──────────────────┘
-```
-
-### 🔄 Resilience Behavior
-
-1. **Agents Start Independently**: No hard dependency on registry
-2. **Registry Available**: Agents auto-register and wire up dependencies
-3. **Registry Goes Down**: Agents keep existing connections and continue working
-4. **Registry Returns**: Agents reconnect automatically
-
-### Services
-
-- **registry**: Go-based registry with SQLite database (optional for agent operation)
-- **hello-world-agent**: Python agent with greeting capabilities (works standalone)
-- **system-agent**: Python agent with system monitoring (works standalone)
-- **meshctl**: CLI tool for mesh management (run from host)
-
-## 📁 Directory Structure
-
-```
-examples/docker-examples/
-├── docker-compose.yml          # Main orchestration file
-├── docker-compose.override.yml # Development overrides
-├── .env                       # Environment defaults
-├── .dockerignore              # Docker build optimization
-├── README.md                  # This file
-├── ARM_BUILD_NOTES.md         # ARM/Apple Silicon build notes
-├── registry/
-│   ├── Dockerfile             # Go registry container (Alpine)
-│   └── Dockerfile.debian      # Alternative Debian build
-├── agents/
-│   └── base/
-│       ├── Dockerfile.base    # Base Python + mcp_mesh image
-│       └── requirements.txt   # Base Python dependencies
-└── scripts/
-    ├── demo.sh                # Interactive demo script
-    ├── health-check.sh        # Health monitoring script
-    └── switch-to-debian.sh    # Switch to Debian build if needed
-
-# Agent code is mounted from:
-../simple/hello_world.py       # → hello-world-agent container
-../simple/system_agent.py      # → system-agent container
-```
-
-## 🔧 Environment Variables
-
-All environment variables from `MCP_MESH_ENV_VARS.md` are supported. Key defaults:
+### 1. Build and Start Services
 
 ```bash
-# Registry
-MCP_MESH_REGISTRY_URL=http://registry:8000  # Internal container URL
-MCP_MESH_REGISTRY_PORT=8000
+# Build and start all services
+docker compose up --build -d
 
-# Agents HTTP Configuration
-MCP_MESH_HTTP_PORT=8080                     # Port agents use inside containers
-MCP_MESH_HTTP_HOST=0.0.0.0
-
-# Agents
-MCP_MESH_ENABLED=true
-MCP_MESH_AUTO_RUN=true
-MCP_MESH_NAMESPACE=default
-
-# Logging
-MCP_MESH_LOG_LEVEL=INFO
-MCP_MESH_DEBUG_MODE=false
+# Check service status
+docker compose ps
 ```
 
-Create a `.env.local` file to override defaults:
+Wait for all services to be healthy. The registry may take a minute to initialize the PostgreSQL database.
+
+### 2. View Logs
 
 ```bash
-# .env.local
-MCP_MESH_LOG_LEVEL=DEBUG
-MCP_MESH_DEBUG_MODE=true
-MCP_MESH_HTTP_PORT=9000  # Change internal port if needed
+# View all logs
+docker compose logs -f
+
+# View specific service logs
+docker compose logs -f registry
+docker compose logs -f hello-world-agent
 ```
 
-### 🔌 Using Your Own Agents
+## Architecture Overview
 
-The example mounts agents from `../simple/` but you can easily use your own:
+The deployment includes:
 
-**Option 1: Modify docker-compose.yml volumes:**
+- **PostgreSQL Database** - Persistent storage for registry data
+- **MCP Mesh Registry** - Central service registry and discovery
+- **Hello World Agent** - Example agent with greeting capabilities
+- **FastMCP Agent** - Demonstrates FastMCP integration with mesh capabilities
+- **Dependent Agent** - Shows dependency injection patterns
+- **System Agent** - System information services (can be started separately)
 
-```yaml
-volumes:
-  - /path/to/your/agent.py:/app/agent.py:ro
-```
+## Service Ports
 
-**Option 2: Set environment variables in your agent:**
+| Service           | Port | Description                             |
+| ----------------- | ---- | --------------------------------------- |
+| Registry          | 8000 | Registry API and health endpoint        |
+| Hello World Agent | 8081 | MCP agent with greeting tools           |
+| System Agent      | 8082 | System information tools (when running) |
+| FastMCP Agent     | 8091 | Time and calculation services           |
+| Dependent Agent   | 8092 | Tools using dependency injection        |
+| PostgreSQL        | 5432 | Database (internal)                     |
 
-```python
-import os
+## Testing Services
 
-@mesh.agent(
-    name=os.getenv("MCP_MESH_AGENT_NAME", "my-agent"),
-    http_port=int(os.getenv("MCP_MESH_HTTP_PORT", "8080"))
-)
-class MyAgent:
-    pass
-```
+### Health Checks
 
-**Option 3: Use advanced agents:**
-
-```yaml
-# Mount advanced agents instead
-volumes:
-  - ../advanced/weather_agent.py:/app/agent.py:ro
-  - ../advanced/llm_chat_agent.py:/app/agent.py:ro
-```
-
-**Option 4: Add your own service:**
-
-```yaml
-# Add to docker-compose.yml
-my-custom-agent:
-  image: mcp-mesh-base:latest
-  volumes:
-    - /path/to/my/custom_agent.py:/app/agent.py:ro
-  environment:
-    - MCP_MESH_AGENT_NAME=my-custom-agent
-    - MCP_MESH_HTTP_PORT=8080
-  # ... rest of configuration
-```
-
-## 🎯 Usage Examples
-
-### 1. Basic Operations
+All services support both GET and HEAD methods for health checks:
 
 ```bash
-# Start the mesh
-docker-compose up --build
+# Registry health
+curl -X HEAD -I http://localhost:8000/health
+curl -s http://localhost:8000/health | jq
 
-# Check status
-docker-compose ps
+# Agent health examples
+curl -X HEAD -I http://localhost:8081/health
+curl -s http://localhost:8081/health | jq
 
-# View logs
-docker-compose logs -f hello-world-agent
-docker-compose logs -f system-agent
-docker-compose logs -f registry
+curl -X HEAD -I http://localhost:8082/health
+curl -s http://localhost:8082/health | jq
 
-# Stop the mesh
-docker-compose down
+curl -X HEAD -I http://localhost:8091/health
+curl -s http://localhost:8091/health | jq
+
+curl -X HEAD -I http://localhost:8092/health
+curl -s http://localhost:8092/health | jq
 ```
 
-### 2. Using meshctl Commands
+### Registry Agents List
+
+Check which agents are currently registered:
 
 ```bash
-# From project root directory
-cd ../..
-
-# Build meshctl if not already built
-make build
-
-# List all registered agents and their capabilities
-./bin/meshctl list agents
-
-# List specific agent details
-./bin/meshctl get agent hello-world
-./bin/meshctl get agent system-agent
-
-# Monitor registry health
-./bin/meshctl health
-
-# Get dependency graph
-./bin/meshctl dependencies
+curl -s http://localhost:8000/agents | jq '.agents[] | {name: .name, status: .status, capabilities: (.capabilities | length), endpoint: .endpoint}'
 ```
 
-### 3. Testing MCP Function Calls with curl
+### MCP Tool Discovery
+
+List available tools on each agent:
 
 ```bash
-# Test hello world function (should get date from system agent)
-curl -X POST http://localhost:8081/mcp \
+# Hello World Agent Tools
+curl -s -X POST http://localhost:8081/mcp/ \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+
+# FastMCP Agent Tools
+curl -s -X POST http://localhost:8091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+
+# System Agent Tools
+curl -s -X POST http://localhost:8082/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+
+# Dependent Agent Tools
+curl -s -X POST http://localhost:8092/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+```
+
+## Tool Examples
+
+### Hello World Agent
+
+**Available Tools:**
+
+- `hello_mesh_simple` - MCP Mesh greeting with simple typing
+- `hello_mesh_typed` - MCP Mesh greeting with smart tag-based dependency resolution
+- `test_dependencies` - Test function showing hybrid dependency resolution
+
+```bash
+# Simple greeting
+curl -s -X POST http://localhost:8081/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -226,11 +160,36 @@ curl -X POST http://localhost:8081/mcp \
       "name": "hello_mesh_simple",
       "arguments": {}
     }
-  }'
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
-# Test system agent date service directly
-curl -X POST http://localhost:8082/mcp \
+# Typed greeting with dependency resolution
+curl -s -X POST http://localhost:8081/mcp/ \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_typed",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+```
+
+### FastMCP Agent
+
+**Available Tools:**
+
+- `get_current_time` - Get the current system time
+- `calculate_with_timestamp` - Perform math operation with timestamp from time service
+- `process_data` - Process and format data
+
+```bash
+# Get current time
+curl -s -X POST http://localhost:8091/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -239,299 +198,343 @@ curl -X POST http://localhost:8082/mcp \
       "name": "get_current_time",
       "arguments": {}
     }
-  }'
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
-# Test advanced greeting with system info
-curl -s -X POST http://localhost:8081/mcp \
+# Math calculation with timestamp
+curl -s -X POST http://localhost:8091/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_typed", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "calculate_with_timestamp",
+      "arguments": {
+        "operation": "add",
+        "a": 10,
+        "b": 5
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
-# Test dependency test function (multiple dependencies)
-curl -s -X POST http://localhost:8081/mcp \
+# Process data
+curl -s -X POST http://localhost:8091/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "test_dependencies", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "process_data",
+      "arguments": {
+        "input": "sample data to process"
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
-### 4. Health Checks and Status
+### System Agent
+
+**Available Tools:**
+
+- `get_current_time` - Get the current system date and time
+- `fetch_system_overview` - Get comprehensive system information
+- `check_how_long_running` - Get system uptime information
+- `analyze_storage_and_os` - Get disk and OS information
+- `perform_health_diagnostic` - Get system status including current time
 
 ```bash
-# Check agent health endpoints
-curl http://localhost:8081/health
-curl http://localhost:8082/health
-
-# Check registry health
-curl http://localhost:8000/health
-
-# List all tools available on each agent
-curl -s -X POST http://localhost:8081/mcp \
+# Get current time
+curl -s -X POST http://localhost:8082/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/list", "params": {}}' | jq .
-curl -s -X POST http://localhost:8082/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_current_time",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# Get system overview
+curl -s -X POST http://localhost:8082/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/list", "params": {}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "fetch_system_overview",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
+
+# Check system uptime
+curl -s -X POST http://localhost:8082/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "check_how_long_running",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
-### 5. Testing Resilience and Dependency Injection
+### Dependent Agent (Dependency Injection Demo)
+
+**Available Tools:**
+
+- `generate_report` - Generate a timestamped report using the time service
+- `analyze_data` - Analyze data with timestamp from time service
 
 ```bash
-# Start all services
-docker-compose up -d
-
-# Test agents work standalone (before they register with registry)
-curl -s -X POST http://localhost:8081/mcp \
+# Generate report (uses FastMCP agent's time service)
+curl -s -X POST http://localhost:8092/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "generate_report",
+      "arguments": {
+        "title": "System Status Report",
+        "content": "All systems operational"
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
-# Expected response: "Hello from MCP Mesh! (Date service not available yet)"
-
-# Wait for dependency injection to kick in (30-60 seconds)
-sleep 60
-
-# Test enhanced functionality with dependency injection
-curl -s -X POST http://localhost:8081/mcp \
+# Analyze data (uses dependency injection for timestamps)
+curl -s -X POST http://localhost:8092/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-
-# Expected response: "Hello from MCP Mesh! Today is [current date]"
-
-# Test resilience: stop system agent
-docker-compose stop system-agent
-
-# Hello world should gracefully degrade
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-
-# Expected response: "Hello from MCP Mesh! (Date service not available yet)"
-
-# Restart system agent
-docker-compose start system-agent
-
-# Wait for reconnection and test recovery
-sleep 30
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-
-# Expected response: "Hello from MCP Mesh! Today is [current date]"
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "analyze_data",
+      "arguments": {
+        "data": ["value1", "value2", "value3", "value4", "value5"]
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 ```
 
-## 🧪 Complete Testing Workflow
+## Key Features Demonstrated
 
-Here's a complete workflow combining meshctl and curl to test all functionality:
+### 1. **Fast Heartbeat Optimization**
+
+- Agents send heartbeats every 5 seconds via HEAD requests
+- Registry responds in microseconds for healthy agents
+- 20-second timeout threshold prevents false negatives
+- Automatic recovery from unhealthy status
+
+### 2. **Graceful Shutdown**
+
+- Agents automatically unregister on SIGTERM/SIGINT
+- Clean shutdown prevents stale registry entries
+- Test by stopping containers: `docker compose stop <service>`
+
+### 3. **Service Discovery & Dependency Injection**
+
+- Automatic agent registration with the central registry
+- Dynamic dependency injection between agents
+- Dependent Agent automatically finds and uses FastMCP Agent's time service
+- No manual service binding required
+
+### 4. **PostgreSQL Backend**
+
+- Persistent storage for registry data
+- Eliminates SQLite transaction locking issues
+- Supports concurrent agent operations
+- Automatic database initialization
+
+### 5. **Hybrid FastMCP + MCP Mesh Architecture**
+
+- FastMCP decorators (`@app.tool`) for familiar MCP development
+- MCP Mesh decorators (`@mesh.tool`) for dependency injection
+- No manual server setup required - mesh handles everything
+
+## Service Management
+
+### Start/Stop Individual Services
 
 ```bash
-# 1. Start the mesh
-docker-compose up -d
+# Stop a service (triggers graceful shutdown)
+docker compose stop fastmcp-agent
 
-# 2. Build and use meshctl
-cd ../.. && make build
+# Start a service
+docker compose up -d fastmcp-agent
 
-# 3. Verify agents are registered
-./bin/meshctl list agents
-# Should show hello-world and system-agent
+# Restart a service
+docker compose restart hello-world-agent
 
-# 4. Test individual agent health
-curl http://localhost:8081/health
-curl http://localhost:8082/health
-
-# 5. Test system agent capabilities
-curl -s -X POST http://localhost:8082/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {}}}' | jq .
-
-# 6. Test dependency injection (hello-world calling system-agent)
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-
-# 7. Test advanced dependencies
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "test_dependencies", "arguments": {}}}' | jq .
-
-# 8. Monitor with meshctl
-./bin/meshctl dependencies
-# Should show dependency graph between agents
-
-# 9. Test resilience by stopping system-agent
-docker-compose stop system-agent
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-# Should gracefully degrade
-
-# 10. Restart and verify recovery
-docker-compose start system-agent
-sleep 30
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
-# Should work again with date injection
-
-# 11. Clean up
-docker-compose down
+# View service logs
+docker compose logs -f dependent-agent
 ```
 
-## 🔍 Understanding Dependency Injection
-
-This example demonstrates automatic dependency injection:
-
-1. **System Agent provides**: `date_service`, `info`, `uptime_info`
-2. **Hello World Agent depends on**: `date_service`, `info`
-3. **Automatic Resolution**: Registry automatically connects them
-
-### Example Flow
-
-```python
-# In hello_world_agent.py
-@mesh.tool(dependencies=["date_service"])
-def hello_mesh_simple(date_service=None):
-    if date_service:
-        current_date = date_service()  # Calls system agent!
-        return f"Hello! Today is {current_date}"
-```
-
-The `date_service` parameter is automatically injected with a proxy to the system agent's `get_current_time()` function.
-
-## 🐛 Debugging
-
-### Check Container Health
+### Scale Services
 
 ```bash
-# Check all container health
-docker-compose ps
-
-# Check specific service
-docker inspect mcp-mesh-hello-world --format='{{json .State.Health}}'
+# Not recommended for stateful registry/database
+# But agents can be scaled:
+docker compose up -d --scale hello-world-agent=2
 ```
 
-### View Detailed Logs
+## Troubleshooting
+
+### Service Not Starting
+
+Check service dependencies and logs:
 
 ```bash
-# All services
-docker-compose logs
+# Check service status
+docker compose ps
 
-# Specific service with timestamps
-docker-compose logs -t -f system-agent
+# View detailed logs
+docker compose logs <service-name>
 
-# Follow logs for dependency resolution
-docker-compose logs -f | grep -i "inject\|depend\|register"
+# Check resource usage
+docker stats
 ```
 
-### Common Issues
+### Tool Calls Failing
 
-1. **Port conflicts**: Change ports in `.env.local`
-2. **Build issues**: Clean and rebuild with `docker-compose build --no-cache`
-3. **Registry connection**: Check `MCP_MESH_REGISTRY_URL` in agent logs
-4. **Dependency injection delays**: Normal for agents to take 30-60 seconds to fully connect
+1. **Check agent registration:**
 
-## 🧪 Development Workflow
+   ```bash
+   curl -s http://localhost:8000/agents | jq '.agents[].name'
+   ```
 
-### Modify an Agent
+2. **Check agent health:**
+
+   ```bash
+   curl -s http://localhost:8081/health | jq '.status'
+   ```
+
+3. **Check dependency resolution:**
+   ```bash
+   # Look for dependency resolution in agent logs
+   docker compose logs dependent-agent | grep -i "dependency\|resolve"
+   ```
+
+### Database Issues
+
+Reset PostgreSQL data:
 
 ```bash
-# 1. Edit agent code
-vim agents/hello-world/hello_world_agent.py
+# Stop services
+docker compose down
 
-# 2. Rebuild specific service
-docker-compose build hello-world-agent
+# Remove database volume
+docker volume rm mcp-mesh-postgres-data
 
-# 3. Restart just that service
-docker-compose up -d hello-world-agent
-
-# 4. Check logs
-docker-compose logs -f hello-world-agent
+# Restart services
+docker compose up -d
 ```
 
-### Add a New Agent
+### Port Conflicts
+
+If ports are already in use, modify the port mappings in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "8001:8000" # Change host port from 8000 to 8001
+```
+
+## Development Workflow
+
+1. **Make code changes** in `../simple/` directory
+2. **Restart affected services** to pick up changes:
+   ```bash
+   docker compose restart hello-world-agent
+   ```
+3. **Test changes** using the curl commands above
+4. **Check logs** for debugging:
+   ```bash
+   docker compose logs -f hello-world-agent
+   ```
+
+## Configuration
+
+### Environment Variables
+
+Key configuration in `docker-compose.yml`:
+
+- `MCP_MESH_AUTO_RUN_INTERVAL=5` - Heartbeat frequency (seconds)
+- `MCP_MESH_HEALTH_INTERVAL=5` - Health check frequency (seconds)
+- `MCP_MESH_LOG_LEVEL=DEBUG` - Logging verbosity
+- `DATABASE_URL` - PostgreSQL connection string
+
+### Agent Code
+
+Agent implementations are in:
+
+- `../simple/hello_world.py` - Hello World Agent
+- `../simple/fastmcp_agent.py` - FastMCP Agent
+- `../simple/dependent_agent.py` - Dependent Agent
+- `../simple/system_agent.py` - System Agent
+
+## Cleanup
+
+Remove all services and data:
 
 ```bash
-# 1. Create agent directory
-mkdir agents/my-agent
+# Stop and remove containers, networks, and volumes
+docker compose down -v
 
-# 2. Create Dockerfile (copy from hello-world)
-cp agents/hello-world/Dockerfile agents/my-agent/
-
-# 3. Create agent code
-vim agents/my-agent/my_agent.py
-
-# 4. Add to docker-compose.yml
-# (Add new service definition)
-
-# 5. Start the new agent
-docker-compose up --build my-agent
+# Remove built images (optional)
+docker rmi mcp-mesh-base:0.2
+docker rmi $(docker images | grep mcp-mesh | awk '{print $3}')
 ```
 
-### Update mcp_mesh Source
+## Expected Output Examples
 
-```bash
-# Rebuild base image with latest source
-docker-compose build --no-cache mcp-mesh-base
+### Successful Tool Call Response Format
 
-# Rebuild all agents
-docker-compose build
+All tool calls return Server-Sent Events (SSE) format:
 
-# Restart everything
-docker-compose up -d
+```
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"..."}],"isError":false}}
 ```
 
-## 📊 Monitoring
+### Registry Health Response
 
-### Health Checks
-
-All services include health checks:
-
-- **Registry**: `GET /health`
-- **Agents**: Python health check script
-
-### Metrics
-
-The registry provides basic metrics:
-
-```bash
-curl http://localhost:8000/agents | jq '.[] | {name: .name, status: .status}'
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime_seconds": 123,
+  "timestamp": "2025-07-02T18:00:00.000000Z",
+  "service": "mcp-mesh-registry"
+}
 ```
 
-### Logs
+### Agent Registration Response
 
-Structured logging is available:
-
-```bash
-# JSON formatted logs
-docker-compose logs registry | jq '.'
-
-# Filter for errors
-docker-compose logs | grep -i error
+```json
+{
+  "agents": [
+    {
+      "name": "hello-world",
+      "status": "healthy",
+      "capabilities": 3,
+      "endpoint": "http://hello-world-agent:9090"
+    }
+  ]
+}
 ```
 
-## 🔐 Security Notes
-
-- All containers run as non-root users
-- Internal network isolation via Docker networks
-- External access only on specified ports
-- SQLite database is persisted in Docker volume
-
-## 🤝 Contributing
-
-To contribute to these examples:
-
-1. Test your changes with: `docker-compose up --build`
-2. Verify with meshctl: `./bin/meshctl list --registry http://localhost:8000`
-3. Check all health checks pass: `docker-compose ps`
-4. Update documentation if needed
-
-## 📝 Next Steps
-
-- **Scale up**: Add more agent types
-- **Production**: Use external databases and service mesh
-- **Monitoring**: Integrate with Prometheus/Grafana
-- **Security**: Add TLS and authentication
-- **CI/CD**: Automate builds and deployments
-
-## 🆘 Getting Help
-
-- Check container logs: `docker-compose logs`
-- Verify networking: `docker network inspect mcp-mesh-network`
-- Test connectivity: `docker-compose exec hello-world-agent ping registry`
-- Use meshctl debugging: `./bin/meshctl status --registry http://localhost:8000 --verbose`
+This deployment demonstrates a production-ready MCP Mesh setup with optimized heartbeats, graceful shutdown, dependency injection, and persistent storage.
