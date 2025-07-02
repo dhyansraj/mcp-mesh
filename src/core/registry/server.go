@@ -40,7 +40,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	server := &Server{
 		engine:        engine,
 		service:       entService,
-		startTime:     time.Now(),
+		startTime:     time.Now().UTC(),
 		handlers:      handlers,
 		healthMonitor: healthMonitor,
 	}

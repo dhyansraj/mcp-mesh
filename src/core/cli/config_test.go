@@ -23,8 +23,8 @@ func TestDefaultConfig(t *testing.T) {
 	if config.LogLevel != "INFO" {
 		t.Errorf("Expected LogLevel 'INFO', got '%s'", config.LogLevel)
 	}
-	if config.HealthCheckInterval != 30 {
-		t.Errorf("Expected HealthCheckInterval 30, got %d", config.HealthCheckInterval)
+	if config.HealthCheckInterval != 10 {
+		t.Errorf("Expected HealthCheckInterval 10, got %d", config.HealthCheckInterval)
 	}
 	if !config.AutoRestart {
 		t.Error("Expected AutoRestart to be true")
@@ -185,7 +185,7 @@ func TestConfigValidation(t *testing.T) {
 	if err := config.Validate(); err == nil {
 		t.Error("Expected validation error for invalid health check interval")
 	}
-	config.HealthCheckInterval = 30 // Reset
+	config.HealthCheckInterval = 10 // Reset
 }
 
 func TestConfigClone(t *testing.T) {

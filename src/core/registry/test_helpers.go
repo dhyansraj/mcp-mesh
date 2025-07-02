@@ -201,9 +201,9 @@ func (h *HealthMonitor) CheckUnhealthyAgents() {
 
 	now := time.Now()
 	for _, agent := range agents {
-		// Check if agent is unhealthy based on last update time
+		// Check if agent is unhealthy based on last update time AND not already unhealthy
 		timeSinceLastSeen := now.Sub(agent.UpdatedAt)
-		if timeSinceLastSeen > h.heartbeatTimeout {
+		if timeSinceLastSeen > h.heartbeatTimeout && agent.Status != "unhealthy" {
 			h.MarkAgentUnhealthy(agent.ID, "heartbeat_timeout")
 		}
 	}
@@ -220,7 +220,7 @@ func (h *HealthMonitor) MarkAgentUnhealthy(agentID string, reason string) {
 	}
 
 	// Update agent status to unhealthy
-	agentEntity.Status = agent.StatusUnhealthy
+	agentEntity.Status = "unhealthy"
 
 	// Create unhealthy event
 	event := &ent.RegistryEvent{

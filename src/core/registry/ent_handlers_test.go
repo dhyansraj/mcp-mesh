@@ -877,3 +877,38 @@ func TestFastHeartbeatCheck_MixedHeartbeatPattern(t *testing.T) {
 	assert.True(t, updatedAgent.UpdatedAt.After(initialTime.Add(time.Minute)),
 		"HEAD request should update timestamp even when topology changed")
 }
+
+// TDD: Test that health monitor doesn't repeatedly mark already-unhealthy agents
+func TestHealthMonitor_SkipsAlreadyUnhealthyAgents(t *testing.T) {
+	// Setup: Create test environment with mock service
+	mockService := NewMockEntService()
+
+	agentID := "already-unhealthy-agent"
+	staleTime := time.Now().Add(-120 * time.Second) // Very old timestamp
+
+	// Create agent that is already unhealthy with stale timestamp
+	mockAgent := &ent.Agent{
+		ID:        agentID,
+		Name:      agentID,
+		Status:    agent.StatusUnhealthy, // Already unhealthy
+		UpdatedAt: staleTime,             // Old timestamp that would trigger health check
+	}
+	mockService.SetAgent(agentID, mockAgent)
+
+	// Track initial event count
+	initialEventCount := len(mockService.GetEvents())
+
+	// Execute: Run health monitor check
+	healthMonitor := NewHealthMonitor(mockService, 60*time.Second)
+	healthMonitor.CheckUnhealthyAgents()
+
+	// Assert: No new events should be created for already-unhealthy agents
+	events := mockService.GetEvents()
+	newEventCount := len(events) - initialEventCount
+	assert.Equal(t, 0, newEventCount, "Should not create events for already-unhealthy agents")
+
+	// Assert: Agent status should remain unchanged
+	finalAgent := mockService.GetAgent(agentID)
+	require.NotNil(t, finalAgent)
+	assert.Equal(t, agent.StatusUnhealthy, finalAgent.Status, "Already-unhealthy agent status should remain unchanged")
+}

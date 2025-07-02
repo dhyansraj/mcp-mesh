@@ -59,6 +59,7 @@ func (h *AgentHealthMonitor) Start() {
 		for {
 			select {
 			case <-ticker.C:
+				h.logger.Debug("🔍 Health monitor timer triggered - checking agent health")
 				h.checkUnhealthyAgents()
 			case <-h.stopChan:
 				h.logger.Info("🛑 Agent health monitor stopped")
@@ -86,13 +87,42 @@ func (h *AgentHealthMonitor) Stop() {
 // checkUnhealthyAgents scans all agents and marks unhealthy ones
 func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	ctx := context.Background()
-	now := time.Now()
+	startTime := time.Now().UTC()
+	now := time.Now().UTC()
 	threshold := now.Add(-h.heartbeatTimeout)
 
-	// Query agents that haven't been updated within the threshold
+	h.logger.Debug("Health monitor check started (threshold: %v)", h.heartbeatTimeout)
+
+	// First, get all agents to see what we're working with
+	allAgents, err := h.entService.entDB.Client.Agent.Query().All(ctx)
+	if err != nil {
+		h.logger.Error("Failed to query all agents: %v", err)
+		return
+	}
+
+	h.logger.Debug("Health monitor: checking %d total agents (now: %v, threshold: %v, heartbeat_timeout: %v)", len(allAgents), now, threshold, h.heartbeatTimeout)
+	for _, agent := range allAgents {
+		timeSinceUpdate := now.Sub(agent.UpdatedAt)
+		isStale := agent.UpdatedAt.Before(threshold)
+		h.logger.Debug("Agent %s: last_update=%v (%v ago), status=%s, is_stale=%v, threshold_comparison=%v", agent.ID, agent.UpdatedAt, timeSinceUpdate, agent.Status, isStale, agent.UpdatedAt.Unix() < threshold.Unix())
+	}
+
+	// Query agents that haven't been updated within the threshold AND are not already unhealthy
+	h.logger.Debug("Health monitor: querying agents with UpdatedAt < %v AND Status != %s", threshold, agent.StatusUnhealthy)
+
+	// Manual check - let's see if any agents meet the criteria
+	for _, ag := range allAgents {
+		if ag.UpdatedAt.Before(threshold) && ag.Status != agent.StatusUnhealthy {
+			h.logger.Warning("Manual check: Agent %s should be marked unhealthy (last_update=%v, threshold=%v, status=%s)",
+				ag.ID, ag.UpdatedAt, threshold, ag.Status)
+		}
+	}
+
+	// Query agents that haven't been updated within the threshold AND are not already unhealthy
 	unhealthyAgents, err := h.entService.entDB.Client.Agent.
 		Query().
 		Where(agent.UpdatedAtLT(threshold)).
+		Where(agent.StatusNEQ(agent.StatusUnhealthy)).
 		All(ctx)
 
 	if err != nil {
@@ -100,8 +130,11 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 		return
 	}
 
+	h.logger.Debug("Health monitor: query returned %d unhealthy agents", len(unhealthyAgents))
+
 	if len(unhealthyAgents) == 0 {
-		h.logger.Debug("Health monitor: all agents are healthy")
+		duration := time.Since(startTime)
+		h.logger.Info("Health monitor check completed - all agents are healthy (took %v)", duration)
 		return
 	}
 
@@ -117,15 +150,33 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 			h.logger.Error("Failed to mark agent %s as unhealthy: %v", agent.ID, err)
 		}
 	}
+
+	duration := time.Since(startTime)
+	h.logger.Debug("Health monitor check completed - processed %d unhealthy agents (took %v)", len(unhealthyAgents), duration)
 }
 
 // markAgentUnhealthy creates an unhealthy event and updates agent status
 func (h *AgentHealthMonitor) markAgentUnhealthy(ctx context.Context, agentID, reason string) error {
-	// Update agent status to unhealthy atomically
+	// Get the current agent to preserve its UpdatedAt timestamp
+	currentAgent, err := h.entService.entDB.Client.Agent.
+		Query().
+		Where(agent.IDEQ(agentID)).
+		Only(ctx)
+
+	if err != nil {
+		if ent.IsNotFound(err) {
+			h.logger.Warning("Agent %s not found when marking unhealthy", agentID)
+			return nil
+		}
+		return fmt.Errorf("failed to query agent %s: %w", agentID, err)
+	}
+
+	// Update agent status to unhealthy while preserving original UpdatedAt timestamp
 	agentUpdated, err := h.entService.entDB.Client.Agent.
 		Update().
 		Where(agent.IDEQ(agentID)).
 		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(currentAgent.UpdatedAt). // Preserve original timestamp
 		Save(ctx)
 
 	if err != nil {
@@ -140,14 +191,14 @@ func (h *AgentHealthMonitor) markAgentUnhealthy(ctx context.Context, agentID, re
 	// Create unhealthy event
 	eventData := map[string]interface{}{
 		"reason":          reason,
-		"detected_at":     time.Now().Format(time.RFC3339),
+		"detected_at":     time.Now().UTC().Format(time.RFC3339),
 		"heartbeat_timeout": h.heartbeatTimeout.String(),
 	}
 
 	_, err = h.entService.entDB.Client.RegistryEvent.Create().
 		SetEventType(registryevent.EventTypeUnhealthy).
 		SetAgentID(agentID).
-		SetTimestamp(time.Now()).
+		SetTimestamp(time.Now().UTC()).
 		SetData(eventData).
 		Save(ctx)
 
@@ -168,7 +219,7 @@ func (h *AgentHealthMonitor) IsRunning() bool {
 
 // GetUnhealthyAgents returns a list of agents that are currently unhealthy
 func (h *AgentHealthMonitor) GetUnhealthyAgents(ctx context.Context) ([]*ent.Agent, error) {
-	threshold := time.Now().Add(-h.heartbeatTimeout)
+	threshold := time.Now().UTC().Add(-h.heartbeatTimeout)
 
 	return h.entService.entDB.Client.Agent.
 		Query().

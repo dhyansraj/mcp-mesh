@@ -225,20 +225,25 @@ class TestHeartbeatPipelineResilientLogic:
         mock_dependency_resolution_step,
     ):
         """Test that fast heartbeat step failure falls back to full pipeline."""
-        # Setup - fast heartbeat step fails
+        # Setup - fast heartbeat step succeeds but sets network error for resilience
         fast_result = PipelineResult(
-            status=PipelineStatus.FAILED, message="Fast heartbeat failed"
+            status=PipelineStatus.SUCCESS,
+            message="Fast heartbeat check: Skip for resilience (network error)",
+        )
+        fast_result.add_context(
+            "fast_heartbeat_status", FastHeartbeatStatus.NETWORK_ERROR
         )
         mock_fast_heartbeat_step.execute.return_value = fast_result
 
         # Execute
         result = await heartbeat_pipeline.execute_heartbeat_cycle(base_context)
 
-        # Verify - pipeline should fallback to full execution
+        # Verify - pipeline should skip remaining steps for resilience
         assert result.is_success() or result.status == PipelineStatus.PARTIAL
         mock_fast_heartbeat_step.execute.assert_called_once()
-        mock_agent_refresh_step.execute.assert_called_once()
-        mock_dependency_resolution_step.execute.assert_called_once()
+        # With network error status, remaining steps are skipped for resilience
+        mock_agent_refresh_step.execute.assert_not_called()
+        mock_dependency_resolution_step.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_context_passing_between_steps(

@@ -379,8 +379,8 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		fmt.Println("Registry is running. Press Ctrl+C to stop.")
 	}
 
-	// Start health monitoring
-	pm.StartHealthMonitoring()
+	// Don't start CLI health monitoring when we have an embedded registry
+	// The registry will handle health monitoring internally
 
 	// Wait for shutdown signal
 	signalHandler := GetGlobalSignalHandler()

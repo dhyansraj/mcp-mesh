@@ -131,24 +131,16 @@ class RegistryClientWrapper:
                 f"🚀 Performing fast heartbeat check for agent '{agent_id}'"
             )
 
-            # Call generated client fast heartbeat check
-            response = self.agents_api.fast_heartbeat_check(agent_id)
+            # Call generated client fast heartbeat check with HTTP info to get status code
+            http_response = self.agents_api.fast_heartbeat_check_with_http_info(
+                agent_id
+            )
 
-            # The fast_heartbeat_check HEAD request returns None for successful responses
-            # since HEAD requests don't have response bodies. The actual HTTP status
-            # is communicated through exceptions for non-200 status codes.
-            if response is None:
-                # Successful HEAD request - this means 200 OK (no changes)
-                status_code = 200
-                self.logger.debug(
-                    f"Fast heartbeat HEAD request successful for agent '{agent_id}' - 200 OK"
-                )
-            else:
-                # Unexpected non-None response - extract status if available
-                status_code = getattr(response, "status", 200)
-                self.logger.debug(
-                    f"Fast heartbeat HEAD request returned response for agent '{agent_id}': {response}"
-                )
+            # Extract the actual HTTP status code from the response
+            status_code = http_response.status_code
+            self.logger.debug(
+                f"Fast heartbeat HEAD request for agent '{agent_id}' returned HTTP {status_code}"
+            )
 
             # Convert HTTP status to semantic status
             status = FastHeartbeatStatusUtil.from_http_code(status_code)

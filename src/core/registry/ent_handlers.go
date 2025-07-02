@@ -20,7 +20,7 @@ type EntBusinessLogicHandlers struct {
 func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandlers {
 	return &EntBusinessLogicHandlers{
 		entService: entService,
-		startTime:  time.Now(),
+		startTime:  time.Now().UTC(),
 	}
 }
 
@@ -32,7 +32,7 @@ func (h *EntBusinessLogicHandlers) GetHealth(c *gin.Context) {
 		Status:        "healthy",
 		Version:       "1.0.0",
 		UptimeSeconds: int(uptime),
-		Timestamp:     time.Now(),
+		Timestamp:     time.Now().UTC(),
 		Service:       "mcp-mesh-registry",
 	}
 
@@ -71,7 +71,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -88,7 +88,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -103,7 +103,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 
 	response := generated.MeshRegistrationResponse{
 		Status:    status,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 		Message:   serviceResp.Message,
 		AgentId:   req.AgentId,
 	}
@@ -159,7 +159,7 @@ func (h *EntBusinessLogicHandlers) ListAgents(c *gin.Context) {
 	if err := c.ShouldBindQuery(&params); err != nil {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Invalid query parameters: %v", err),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -169,7 +169,7 @@ func (h *EntBusinessLogicHandlers) ListAgents(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}
@@ -292,6 +292,7 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 
 	if hasChanges {
 		// Topology changed - please send full POST heartbeat
+		h.entService.logger.Info("Agent %s: topology changed, returning 202 (last_full_refresh: %v)", agentId, agentEntity.LastFullRefresh)
 		c.Status(http.StatusAccepted) // 202
 		return
 	}
@@ -306,7 +307,7 @@ func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId strin
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     err.Error(),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		})
 		return
 	}

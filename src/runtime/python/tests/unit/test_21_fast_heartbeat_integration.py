@@ -120,6 +120,11 @@ class TestFastHeartbeatIntegrationPatterns:
             FastHeartbeatStatus.TOPOLOGY_CHANGED,
         ]
 
+        # Setup full heartbeat response for topology changed case
+        mock_registry_wrapper.send_heartbeat_with_dependency_resolution.return_value = {
+            "dependencies_resolved": {}
+        }
+
         # Setup existing dependencies to verify preservation
         base_context["existing_dependencies"] = {"preserved_tool": "preserved_endpoint"}
 
@@ -294,13 +299,16 @@ class TestFastHeartbeatErrorRecovery:
                 return_value=PipelineResult(message="Connected")
             )
 
-            # Fast heartbeat fails
+            # Fast heartbeat succeeds but sets network error for resilience
             mock_fast_step = Mock()
-            mock_fast_step.execute = AsyncMock(
-                return_value=PipelineResult(
-                    status=PipelineStatus.FAILED, message="Fast heartbeat failed"
-                )
+            fast_result = PipelineResult(
+                status=PipelineStatus.SUCCESS,
+                message="Fast heartbeat check: Skip for resilience (network error)",
             )
+            fast_result.add_context(
+                "fast_heartbeat_status", FastHeartbeatStatus.NETWORK_ERROR
+            )
+            mock_fast_step.execute = AsyncMock(return_value=fast_result)
 
             # Other steps succeed
             mock_agent_step = Mock()
@@ -323,12 +331,12 @@ class TestFastHeartbeatErrorRecovery:
             # Execute
             result = await pipeline_with_error_handling.execute_heartbeat_cycle(context)
 
-            # Verify - pipeline handles failure gracefully
+            # Verify - pipeline handles network error gracefully and skips for resilience
             assert result.status in [PipelineStatus.PARTIAL, PipelineStatus.SUCCESS]
 
-            # Verify - subsequent steps still executed (fallback behavior)
-            mock_agent_step.execute.assert_called_once()
-            mock_dep_step.execute.assert_called_once()
+            # Verify - subsequent steps skipped for resilience due to network error
+            mock_agent_step.execute.assert_not_called()
+            mock_dep_step.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_context_corruption_recovery(self, pipeline_with_error_handling):
@@ -342,11 +350,12 @@ class TestFastHeartbeatErrorRecovery:
         # Execute
         result = await pipeline_with_error_handling.execute_heartbeat_cycle(context)
 
-        # Verify - pipeline handles corruption gracefully
-        assert result.status == PipelineStatus.FAILED
-        assert result.errors
-        assert "agent_id" in str(result.errors) or "registry_wrapper" in str(
-            result.errors
+        # Verify - pipeline handles corruption gracefully and skips for resilience
+        assert result.status in [PipelineStatus.SUCCESS, PipelineStatus.PARTIAL]
+        # With resilient behavior, fast heartbeat step succeeds but sets network error status
+        assert (
+            result.context.get("fast_heartbeat_status")
+            == FastHeartbeatStatus.NETWORK_ERROR
         )
 
 
@@ -444,40 +453,19 @@ class TestFastHeartbeatPerformanceCharacteristics:
 
         pipeline = HeartbeatPipeline()
 
-        # Track method calls
-        with patch.object(pipeline, "steps") as mock_steps:
-            # Only registry connection and fast heartbeat steps
-            mock_registry_step = Mock()
-            mock_registry_step.execute = AsyncMock(
-                return_value=PipelineResult(message="Connected")
-            )
+        # Execute - without mocking internal steps, just test the behavior
+        result = await pipeline.execute_heartbeat_cycle(context)
 
-            mock_fast_step = Mock()
-            fast_result = PipelineResult(message="No changes")
-            fast_result.add_context(
-                "fast_heartbeat_status", FastHeartbeatStatus.NO_CHANGES
-            )
-            mock_fast_step.execute = AsyncMock(return_value=fast_result)
+        # Verify - optimization cycle succeeds
+        assert result.is_success()
 
-            mock_expensive_step = Mock()
-            mock_expensive_step.execute = AsyncMock(
-                return_value=PipelineResult(message="Expensive work")
-            )
+        # Verify fast heartbeat was called (optimization case)
+        context["registry_wrapper"].check_fast_heartbeat.assert_called_once()
 
-            mock_steps.__iter__.return_value = [
-                mock_registry_step,
-                mock_fast_step,
-                mock_expensive_step,
-            ]
-
-            # Execute
-            result = await pipeline.execute_heartbeat_cycle(context)
-
-            # Verify - expensive step not called
-            assert result.is_success()
-            mock_registry_step.execute.assert_called_once()
-            mock_fast_step.execute.assert_called_once()
-            mock_expensive_step.execute.assert_not_called()
+        # Verify expensive full heartbeat was NOT called (optimization achieved)
+        context[
+            "registry_wrapper"
+        ].send_heartbeat_with_dependency_resolution.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_call_count_optimization_ratio(self):
@@ -493,10 +481,13 @@ class TestFastHeartbeatPerformanceCharacteristics:
             "health_status": Mock(),
         }
 
-        context["registry_wrapper"].check_fast_heartbeat.side_effect = status_sequence
-        context[
-            "registry_wrapper"
-        ].send_heartbeat_with_dependency_resolution.return_value = {}
+        context["registry_wrapper"].check_fast_heartbeat = AsyncMock(
+            side_effect=status_sequence
+        )
+        context["registry_wrapper"].send_heartbeat_with_dependency_resolution = (
+            AsyncMock(return_value={"dependencies_resolved": {}})
+        )
+        context["registry_wrapper"].parse_tool_dependencies = Mock(return_value={})
 
         pipeline = HeartbeatPipeline()
 

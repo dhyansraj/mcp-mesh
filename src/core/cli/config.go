@@ -29,7 +29,7 @@ type CLIConfig struct {
 	LogLevel string `json:"log_level"` // default: "INFO"
 
 	// Health monitoring
-	HealthCheckInterval int `json:"health_check_interval"` // default: 30
+	HealthCheckInterval int `json:"health_check_interval"` // default: 10
 
 	// Development settings
 	AutoRestart bool `json:"auto_restart"` // default: true
@@ -69,7 +69,7 @@ func DefaultConfig() *CLIConfig {
 		RegistryHost:        "localhost",
 		DBPath:              "./dev_registry.db",
 		LogLevel:            "INFO",
-		HealthCheckInterval: 30,
+		HealthCheckInterval: 10,
 		AutoRestart:         true,
 		WatchFiles:          true,
 		DebugMode:           false,

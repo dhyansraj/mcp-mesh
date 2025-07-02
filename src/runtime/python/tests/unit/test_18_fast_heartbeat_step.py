@@ -111,7 +111,7 @@ class TestFastHeartbeatStep:
             result.context.get("fast_heartbeat_status")
             == FastHeartbeatStatus.AGENT_UNKNOWN
         )
-        assert "agent unknown" in result.message.lower()
+        assert "agent re-registration" in result.message.lower()
         mock_registry_wrapper.check_fast_heartbeat.assert_called_once_with(
             "test-agent-123"
         )
@@ -175,10 +175,13 @@ class TestFastHeartbeatStep:
         # Execute
         result = await fast_heartbeat_step.execute(context)
 
-        # Verify - step should fail
-        assert result.status == PipelineStatus.FAILED
-        assert "agent_id" in result.message.lower()
-        assert result.errors
+        # Verify - step succeeds but indicates network error for resilience
+        assert result.status == PipelineStatus.SUCCESS
+        assert "skip for resilience" in result.message.lower()
+        assert (
+            result.context.get("fast_heartbeat_status")
+            == FastHeartbeatStatus.NETWORK_ERROR
+        )
         mock_registry_wrapper.check_fast_heartbeat.assert_not_called()
 
     @pytest.mark.asyncio
@@ -190,10 +193,13 @@ class TestFastHeartbeatStep:
         # Execute
         result = await fast_heartbeat_step.execute(context)
 
-        # Verify - step should fail
-        assert result.status == PipelineStatus.FAILED
-        assert "registry_wrapper" in result.message.lower()
-        assert result.errors
+        # Verify - step succeeds but indicates network error for resilience
+        assert result.status == PipelineStatus.SUCCESS
+        assert "skip for resilience" in result.message.lower()
+        assert (
+            result.context.get("fast_heartbeat_status")
+            == FastHeartbeatStatus.NETWORK_ERROR
+        )
 
     @pytest.mark.asyncio
     async def test_execute_empty_context(self, fast_heartbeat_step):
@@ -201,9 +207,13 @@ class TestFastHeartbeatStep:
         # Execute
         result = await fast_heartbeat_step.execute({})
 
-        # Verify - step should fail
-        assert result.status == PipelineStatus.FAILED
-        assert result.errors
+        # Verify - step succeeds but indicates network error for resilience
+        assert result.status == PipelineStatus.SUCCESS
+        assert "skip for resilience" in result.message.lower()
+        assert (
+            result.context.get("fast_heartbeat_status")
+            == FastHeartbeatStatus.NETWORK_ERROR
+        )
 
     @pytest.mark.asyncio
     async def test_execute_unexpected_exception(

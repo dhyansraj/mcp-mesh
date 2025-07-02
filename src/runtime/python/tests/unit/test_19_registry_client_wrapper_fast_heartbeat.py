@@ -38,17 +38,19 @@ class TestRegistryClientWrapperFastHeartbeat:
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_200_ok(self, registry_wrapper, mock_agents_api):
         """Test fast heartbeat check with 200 OK response."""
-        # Setup - mock successful response
+        # Setup - mock successful response with HTTP info
         mock_response = Mock()
-        mock_response.status = 200
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 200
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         # Execute
         result = await registry_wrapper.check_fast_heartbeat("test-agent-123")
 
         # Verify
         assert result == FastHeartbeatStatus.NO_CHANGES
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_202_accepted(
@@ -57,15 +59,17 @@ class TestRegistryClientWrapperFastHeartbeat:
         """Test fast heartbeat check with 202 Accepted response."""
         # Setup - mock topology changed response
         mock_response = Mock()
-        mock_response.status = 202
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 202
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         # Execute
         result = await registry_wrapper.check_fast_heartbeat("test-agent-123")
 
         # Verify
         assert result == FastHeartbeatStatus.TOPOLOGY_CHANGED
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_410_gone(
@@ -74,15 +78,17 @@ class TestRegistryClientWrapperFastHeartbeat:
         """Test fast heartbeat check with 410 Gone response."""
         # Setup - mock agent unknown response
         mock_response = Mock()
-        mock_response.status = 410
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 410
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         # Execute
         result = await registry_wrapper.check_fast_heartbeat("test-agent-123")
 
         # Verify
         assert result == FastHeartbeatStatus.AGENT_UNKNOWN
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_503_service_unavailable(
@@ -91,15 +97,17 @@ class TestRegistryClientWrapperFastHeartbeat:
         """Test fast heartbeat check with 503 Service Unavailable response."""
         # Setup - mock registry error response
         mock_response = Mock()
-        mock_response.status = 503
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 503
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         # Execute
         result = await registry_wrapper.check_fast_heartbeat("test-agent-123")
 
         # Verify
         assert result == FastHeartbeatStatus.REGISTRY_ERROR
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_connection_error(
@@ -107,8 +115,8 @@ class TestRegistryClientWrapperFastHeartbeat:
     ):
         """Test fast heartbeat check with connection error."""
         # Setup - mock connection exception
-        mock_agents_api.fast_heartbeat_check.side_effect = ConnectionError(
-            "Network failure"
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = (
+            ConnectionError("Network failure")
         )
 
         # Execute
@@ -116,7 +124,9 @@ class TestRegistryClientWrapperFastHeartbeat:
 
         # Verify
         assert result == FastHeartbeatStatus.NETWORK_ERROR
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_timeout_error(
@@ -124,7 +134,7 @@ class TestRegistryClientWrapperFastHeartbeat:
     ):
         """Test fast heartbeat check with timeout error."""
         # Setup - mock timeout exception
-        mock_agents_api.fast_heartbeat_check.side_effect = TimeoutError(
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = TimeoutError(
             "Request timeout"
         )
 
@@ -133,7 +143,9 @@ class TestRegistryClientWrapperFastHeartbeat:
 
         # Verify
         assert result == FastHeartbeatStatus.NETWORK_ERROR
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_generic_exception(
@@ -141,14 +153,18 @@ class TestRegistryClientWrapperFastHeartbeat:
     ):
         """Test fast heartbeat check with generic exception."""
         # Setup - mock generic exception
-        mock_agents_api.fast_heartbeat_check.side_effect = Exception("Unexpected error")
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = Exception(
+            "Unexpected error"
+        )
 
         # Execute
         result = await registry_wrapper.check_fast_heartbeat("test-agent-123")
 
         # Verify
         assert result == FastHeartbeatStatus.NETWORK_ERROR
-        mock_agents_api.fast_heartbeat_check.assert_called_once_with("test-agent-123")
+        mock_agents_api.fast_heartbeat_check_with_http_info.assert_called_once_with(
+            "test-agent-123"
+        )
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_different_agent_ids(
@@ -157,8 +173,8 @@ class TestRegistryClientWrapperFastHeartbeat:
         """Test fast heartbeat check with different agent IDs."""
         # Setup
         mock_response = Mock()
-        mock_response.status = 200
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 200
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         agent_ids = ["agent-1", "agent-2", "special-agent-123"]
 
@@ -170,9 +186,10 @@ class TestRegistryClientWrapperFastHeartbeat:
             assert result == FastHeartbeatStatus.NO_CHANGES
 
         # Verify all calls were made with correct agent IDs
-        expected_calls = [((agent_id,),) for agent_id in agent_ids]
+        expected_calls = [(agent_id,) for agent_id in agent_ids]
         actual_calls = [
-            call.args for call in mock_agents_api.fast_heartbeat_check.call_args_list
+            call.args
+            for call in mock_agents_api.fast_heartbeat_check_with_http_info.call_args_list
         ]
         assert actual_calls == expected_calls
 
@@ -183,8 +200,8 @@ class TestRegistryClientWrapperFastHeartbeat:
         """Test that appropriate log messages are generated."""
         # Setup
         mock_response = Mock()
-        mock_response.status = 200
-        mock_agents_api.fast_heartbeat_check.return_value = mock_response
+        mock_response.status_code = 200
+        mock_agents_api.fast_heartbeat_check_with_http_info.return_value = mock_response
 
         with patch.object(registry_wrapper, "logger") as mock_logger:
             # Execute
@@ -200,8 +217,8 @@ class TestRegistryClientWrapperFastHeartbeat:
     ):
         """Test that error cases log appropriately."""
         # Setup - simulate exception
-        mock_agents_api.fast_heartbeat_check.side_effect = ConnectionError(
-            "Network failure"
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = (
+            ConnectionError("Network failure")
         )
 
         with patch.object(registry_wrapper, "logger") as mock_logger:
@@ -231,15 +248,17 @@ class TestRegistryClientWrapperFastHeartbeatIntegration:
 
         # Test cases for different response formats
         test_cases = [
-            # Standard response object with status attribute
-            (Mock(status=200), FastHeartbeatStatus.NO_CHANGES),
-            (Mock(status=202), FastHeartbeatStatus.TOPOLOGY_CHANGED),
-            (Mock(status=410), FastHeartbeatStatus.AGENT_UNKNOWN),
-            (Mock(status=503), FastHeartbeatStatus.REGISTRY_ERROR),
+            # Standard response object with status_code attribute
+            (Mock(status_code=200), FastHeartbeatStatus.NO_CHANGES),
+            (Mock(status_code=202), FastHeartbeatStatus.TOPOLOGY_CHANGED),
+            (Mock(status_code=410), FastHeartbeatStatus.AGENT_UNKNOWN),
+            (Mock(status_code=503), FastHeartbeatStatus.REGISTRY_ERROR),
         ]
 
         for mock_response, expected_status in test_cases:
-            mock_agents_api.fast_heartbeat_check.return_value = mock_response
+            mock_agents_api.fast_heartbeat_check_with_http_info.return_value = (
+                mock_response
+            )
 
             result = await registry_wrapper.check_fast_heartbeat("test-agent")
             assert result == expected_status
@@ -253,12 +272,12 @@ class TestRegistryClientWrapperFastHeartbeatIntegration:
 
         # Simulate sequence of responses
         responses = [
-            Mock(status=200),  # NO_CHANGES
-            Mock(status=200),  # NO_CHANGES
-            Mock(status=202),  # TOPOLOGY_CHANGED
-            Mock(status=200),  # NO_CHANGES
+            Mock(status_code=200),  # NO_CHANGES
+            Mock(status_code=200),  # NO_CHANGES
+            Mock(status_code=202),  # TOPOLOGY_CHANGED
+            Mock(status_code=200),  # NO_CHANGES
         ]
-        mock_agents_api.fast_heartbeat_check.side_effect = responses
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = responses
 
         expected_statuses = [
             FastHeartbeatStatus.NO_CHANGES,
@@ -273,7 +292,7 @@ class TestRegistryClientWrapperFastHeartbeatIntegration:
             assert result == expected_status
 
         # Verify all calls were made
-        assert mock_agents_api.fast_heartbeat_check.call_count == 4
+        assert mock_agents_api.fast_heartbeat_check_with_http_info.call_count == 4
 
     @pytest.mark.asyncio
     async def test_error_recovery(self, registry_wrapper):
@@ -283,9 +302,9 @@ class TestRegistryClientWrapperFastHeartbeatIntegration:
         registry_wrapper.agents_api = mock_agents_api
 
         # Simulate error followed by successful response
-        mock_agents_api.fast_heartbeat_check.side_effect = [
+        mock_agents_api.fast_heartbeat_check_with_http_info.side_effect = [
             ConnectionError("Network failure"),  # First call fails
-            Mock(status=200),  # Second call succeeds
+            Mock(status_code=200),  # Second call succeeds
         ]
 
         # Execute - first call should handle error gracefully
@@ -297,4 +316,4 @@ class TestRegistryClientWrapperFastHeartbeatIntegration:
         assert result2 == FastHeartbeatStatus.NO_CHANGES
 
         # Verify both calls were attempted
-        assert mock_agents_api.fast_heartbeat_check.call_count == 2
+        assert mock_agents_api.fast_heartbeat_check_with_http_info.call_count == 2
