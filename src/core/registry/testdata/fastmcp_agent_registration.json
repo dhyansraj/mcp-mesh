@@ -1,0 +1,89 @@
+{
+  "agent_id": "fastmcp-service-3a65d884",
+  "agent_type": "mcp_agent",
+  "name": "fastmcp-service-3a65d884",
+  "version": "1.0.0",
+  "http_host": "10.211.55.3",
+  "http_port": 9092,
+  "timestamp": "2025-07-01T00:41:26.065248Z",
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "analysis_prompt",
+      "capability": "prompt_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "time_service",
+          "tags": [],
+          "version": "",
+          "namespace": "default"
+        }
+      ],
+      "description": "Generate analysis prompt with current time."
+    },
+    {
+      "function_name": "get_current_time",
+      "capability": "time_service",
+      "version": "1.0.0",
+      "tags": ["system", "time"],
+      "dependencies": [],
+      "description": "Get the current system time."
+    },
+    {
+      "function_name": "calculate_with_timestamp",
+      "capability": "math_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "time_service",
+          "tags": [],
+          "version": "",
+          "namespace": "default"
+        }
+      ],
+      "description": "Perform math operation with timestamp from time service."
+    },
+    {
+      "function_name": "process_data",
+      "capability": "data_service",
+      "version": "1.0.0",
+      "tags": ["data", "json"],
+      "dependencies": [],
+      "description": "Process and format data."
+    },
+    {
+      "function_name": "report_template",
+      "capability": "template_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [],
+      "description": "Generate report template."
+    },
+    {
+      "function_name": "service_config",
+      "capability": "config_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [],
+      "description": "Service configuration data."
+    },
+    {
+      "function_name": "health_status",
+      "capability": "status_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "time_service",
+          "tags": [],
+          "version": "",
+          "namespace": "default"
+        }
+      ],
+      "description": "Health status information."
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -254,4 +255,54 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	result["tools"] = toolsData
 
 	return result
+}
+
+// FastHeartbeatCheck implements HEAD /heartbeat/{agent_id}
+func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId string) {
+	// Check if agent exists in registry
+	agentEntity, err := h.entService.GetAgent(c.Request.Context(), agentId)
+	if err != nil || agentEntity == nil {
+		// Unknown agent - please register with POST heartbeat
+		c.Status(http.StatusGone) // 410
+		return
+	}
+
+	// If agent is unhealthy, force full registration
+	if agentEntity.Status == agent.StatusUnhealthy {
+		// Agent marked as unhealthy - please re-register with full POST heartbeat
+		c.Status(http.StatusGone) // 410
+		return
+	}
+
+	// Check for topology changes since last full refresh
+	hasChanges, err := h.entService.HasTopologyChanges(c.Request.Context(), agentId, agentEntity.LastFullRefresh)
+	if err != nil {
+		// Service error - back off and retry
+		c.Status(http.StatusServiceUnavailable) // 503
+		return
+	}
+
+	if hasChanges {
+		// Topology changed - please send full POST heartbeat
+		c.Status(http.StatusAccepted) // 202
+		return
+	}
+
+	// No changes - keep sending HEAD requests
+	c.Status(http.StatusOK) // 200
+}
+
+// UnregisterAgent implements DELETE /agents/{agent_id}
+func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId string) {
+	err := h.entService.UnregisterAgent(c.Request.Context(), agentId)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Return 204 No Content - successfully unregistered (idempotent)
+	c.Status(http.StatusNoContent)
 }

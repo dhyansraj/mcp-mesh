@@ -1,0 +1,7 @@
+{
+  "status": "success",
+  "timestamp": "2025-07-01T19:54:08.672631-04:00",
+  "message": "Agent updated via heartbeat",
+  "agent_id": "dependent-service-00d6169a",
+  "dependencies_resolved": {}
+}

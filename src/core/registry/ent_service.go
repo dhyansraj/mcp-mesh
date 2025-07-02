@@ -29,6 +29,7 @@ type RegistryConfig struct {
 	CacheTTL                 int
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
+	HealthCheckInterval      int
 	EnableResponseCache      bool
 }
 
@@ -191,6 +192,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			SetAgentType(agent.AgentType(agentType)).
 			SetName(name).
 			SetNamespace(namespace).
+			SetStatus(agent.StatusHealthy).
 			SetUpdatedAt(now)
 
 		if version != "" {
@@ -221,6 +223,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 				SetAgentType(agent.AgentType(agentType)).
 				SetName(name).
 				SetNamespace(namespace).
+				SetStatus(agent.StatusHealthy).
 				SetUpdatedAt(now)
 
 			if version != "" {
@@ -348,6 +351,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	_, err = s.entDB.Agent.UpdateOneID(req.AgentID).
 		SetTotalDependencies(totalDeps).
 		SetDependenciesResolved(resolvedDeps).
+		SetLastFullRefresh(now).
 		Save(ctx)
 	if err != nil {
 		s.logger.Warning("Failed to update dependency counts: %v", err)
@@ -412,9 +416,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 		return nil, fmt.Errorf("failed to check agent existence: %w", err)
 	}
 
+	// Check for status transitions and handle accordingly
+	previousStatus := existingAgent.Status
+
 	// If metadata is provided and contains tools, do full registration instead
 	if req.Metadata != nil {
 		if _, hasTools := req.Metadata["tools"]; hasTools {
+			// If agent was unhealthy and this is a full heartbeat, this will restore to healthy
 			fullReq := &AgentRegistrationRequest{
 				AgentID:   req.AgentID,
 				Metadata:  req.Metadata,
@@ -428,6 +436,27 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					Message:   err.Error(),
 				}, nil
 			}
+
+			// If agent was unhealthy and now healthy, create register event (recovery)
+			if previousStatus == agent.StatusUnhealthy {
+				eventData := map[string]interface{}{
+					"reason": "recovery",
+					"previous_status": previousStatus.String(),
+					"new_status": "healthy",
+				}
+				_, err = s.entDB.RegistryEvent.Create().
+					SetEventType(registryevent.EventTypeRegister).
+					SetAgentID(req.AgentID).
+					SetTimestamp(now).
+					SetData(eventData).
+					Save(ctx)
+				if err != nil {
+					s.logger.Warning("Failed to create recovery register event: %v", err)
+				} else {
+					s.logger.Info("Agent %s recovered from unhealthy status", req.AgentID)
+				}
+			}
+
 			return &HeartbeatResponse{
 				Status:               regResp.Status,
 				Timestamp:            now.Format(time.RFC3339),
@@ -438,9 +467,10 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 		}
 	}
 
-	// Simple heartbeat update - just update timestamp
+	// Simple heartbeat update - update timestamps
 	_, err = existingAgent.Update().
 		SetUpdatedAt(now).
+		SetLastFullRefresh(now).
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update agent heartbeat: %w", err)
@@ -534,22 +564,9 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			endpoint = fmt.Sprintf("http://%s:%d", a.HTTPHost, a.HTTPPort)
 		}
 
-		// Calculate health status based on TTL (matches old SQL service logic)
-		status := "expired" // Default
-		timeSinceLastSeen := time.Since(a.UpdatedAt)
-		timeoutThreshold := time.Duration(s.config.DefaultTimeoutThreshold) * time.Second
-
-		// Smart health calculation (same as old service):
-		// < timeout = healthy
-		// timeout to timeout*2 = degraded
-		// > timeout*2 = expired
-		if timeSinceLastSeen < timeoutThreshold {
-			status = "healthy"
-		} else if timeSinceLastSeen < timeoutThreshold*2 {
-			status = "degraded"
-		} else {
-			status = "expired"
-		}
+		// Use stored status column instead of calculating
+		// This provides consistency with health monitor and prevents mismatches
+		status := string(a.Status)
 
 		agentInfo := generated.AgentInfo{
 			Id:       a.ID,
@@ -1022,4 +1039,71 @@ func countTotalDependenciesInMetadata(metadata map[string]interface{}) int {
 func normalizeName(name string) string {
 	// Simple name normalization
 	return name
+}
+
+// GetAgent retrieves an agent by ID for fast heartbeat check
+func (s *EntService) GetAgent(ctx context.Context, agentID string) (*ent.Agent, error) {
+	return s.entDB.Client.Agent.
+		Query().
+		Where(agent.IDEQ(agentID)).
+		Only(ctx)
+}
+
+// HasTopologyChanges checks if topology has changed since last full refresh
+func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, lastRefresh time.Time) (bool, error) {
+	// Count registry events after last refresh that indicate topology changes
+	count, err := s.entDB.Client.RegistryEvent.
+		Query().
+		Where(
+			registryevent.TimestampGT(lastRefresh),
+			registryevent.EventTypeIn("register", "unregister", "unhealthy"),
+		).
+		Count(ctx)
+
+	if err != nil {
+		return false, fmt.Errorf("failed to check topology changes: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// UnregisterAgent gracefully unregisters an agent from the registry
+func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
+	// Start a transaction for atomic operation
+	tx, err := s.entDB.Client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Check if agent exists
+	agent, err := tx.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Agent doesn't exist - idempotent operation, return success
+			return nil
+		}
+		return fmt.Errorf("failed to query agent: %w", err)
+	}
+
+	// Create unregister event
+	_, err = tx.RegistryEvent.Create().
+		SetEventType("unregister").
+		SetTimestamp(time.Now()).
+		SetData(map[string]interface{}{"reason": "graceful_shutdown"}).
+		SetAgent(agent).
+		Save(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to create unregister event: %w", err)
+	}
+
+	// Remove agent from registry (cascades to capabilities and events)
+	err = tx.Agent.DeleteOneID(agentID).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete agent: %w", err)
+	}
+
+	// Commit transaction
+	return tx.Commit()
 }

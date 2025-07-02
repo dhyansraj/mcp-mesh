@@ -1,0 +1,42 @@
+{
+  "agent_id": "dependent-service-00d6169a",
+  "agent_type": "mcp_agent",
+  "name": "dependent-service-00d6169a",
+  "version": "1.0.0",
+  "http_host": "10.211.55.3",
+  "http_port": 9093,
+  "timestamp": "2025-07-01T23:52:08.552503Z",
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "generate_report",
+      "capability": "report_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "time_service",
+          "tags": [],
+          "version": "",
+          "namespace": "default"
+        }
+      ],
+      "description": "Generate a timestamped report using the time service."
+    },
+    {
+      "function_name": "analyze_data",
+      "capability": "analysis_service",
+      "version": "1.0.0",
+      "tags": [],
+      "dependencies": [
+        {
+          "capability": "time_service",
+          "tags": [],
+          "version": "",
+          "namespace": "default"
+        }
+      ],
+      "description": "Analyze data with timestamp from time service."
+    }
+  ]
+}
