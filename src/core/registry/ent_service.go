@@ -1214,7 +1214,7 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 	return count > 0, nil
 }
 
-// UnregisterAgent gracefully unregisters an agent from the registry
+// UnregisterAgent gracefully unregisters an agent by marking it as unhealthy
 func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
 	// Start a transaction for atomic operation
 	tx, err := s.entDB.Client.Tx(ctx)
@@ -1224,7 +1224,7 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 	defer tx.Rollback()
 
 	// Check if agent exists
-	agent, err := tx.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
+	currentAgent, err := tx.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			// Agent doesn't exist - idempotent operation, return success
@@ -1233,26 +1233,48 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		return fmt.Errorf("failed to query agent: %w", err)
 	}
 
-	// Create unregister event
+	// Update agent status to unhealthy while preserving original UpdatedAt timestamp
+	agentUpdated, err := tx.Agent.
+		Update().
+		Where(agent.IDEQ(agentID)).
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(currentAgent.UpdatedAt). // Preserve original timestamp like health monitor does
+		Save(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to update agent %s status to unhealthy: %w", agentID, err)
+	}
+
+	if agentUpdated == 0 {
+		// Agent doesn't exist, no need to create event
+		return nil
+	}
+
+	// Create unregister event (similar to health monitor creating unhealthy events)
+	eventData := map[string]interface{}{
+		"reason":      "graceful_shutdown",
+		"detected_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
 	_, err = tx.RegistryEvent.Create().
 		SetEventType("unregister").
+		SetAgentID(agentID).
 		SetTimestamp(time.Now().UTC()).
-		SetData(map[string]interface{}{"reason": "graceful_shutdown"}).
-		SetAgent(agent).
+		SetData(eventData).
 		Save(ctx)
 
 	if err != nil {
 		return fmt.Errorf("failed to create unregister event: %w", err)
 	}
 
-	// Remove agent from registry (cascades to capabilities and events)
-	err = tx.Agent.DeleteOneID(agentID).Exec(ctx)
+	// Commit transaction
+	err = tx.Commit()
 	if err != nil {
-		return fmt.Errorf("failed to delete agent: %w", err)
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Commit transaction
-	return tx.Commit()
+	s.logger.Info("Marked agent %s as unhealthy and created unregister event (graceful shutdown)", agentID)
+	return nil
 }
 
 // UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests

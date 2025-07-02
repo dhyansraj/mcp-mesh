@@ -29,6 +29,9 @@ class MeshPipeline:
         self.steps: list[PipelineStep] = []
         self.logger = logging.getLogger(f"{__name__}.{name}")
         self.context: dict[str, Any] = {}
+        self._last_context: dict[str, Any] = (
+            {}
+        )  # Store final context for graceful shutdown
 
     def add_step(self, step: PipelineStep) -> None:
         """Add a step to the pipeline."""
@@ -144,6 +147,9 @@ class MeshPipeline:
             self.logger.error(
                 f"💔 Pipeline '{self.name}' failed (status: {overall_result.status.value}, {executed_steps}/{len(self.steps)} steps)"
             )
+
+        # Store final context for graceful shutdown access
+        self._last_context = self.context.copy()
 
         return overall_result
 

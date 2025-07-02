@@ -188,6 +188,36 @@ class RegistryClientWrapper:
             )
             return FastHeartbeatStatusUtil.from_exception(e)
 
+    async def unregister_agent(self, agent_id: str) -> bool:
+        """
+        Gracefully unregister agent from registry.
+
+        Args:
+            agent_id: Agent identifier to unregister
+
+        Returns:
+            True if successful, False if failed
+        """
+        try:
+            self.logger.info(f"🏁 Gracefully unregistering agent '{agent_id}'")
+
+            # Call generated client unregister method
+            response = self.agents_api.unregister_agent_with_http_info(agent_id)
+
+            success = response.status_code == 204
+            if success:
+                self.logger.info(f"✅ Agent '{agent_id}' unregistered successfully")
+            else:
+                self.logger.warning(
+                    f"⚠️ Agent '{agent_id}' unregister returned unexpected status: {response.status_code}"
+                )
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"❌ Failed to unregister agent '{agent_id}': {e}")
+            return False
+
     def _build_agent_registration(
         self, agent_id: str, metadata: dict[str, Any]
     ) -> MeshAgentRegistration:
