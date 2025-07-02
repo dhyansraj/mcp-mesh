@@ -20,6 +20,10 @@ from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_dependency_re
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import (
     MeshToolRegistration,
 )
+from _mcp_mesh.shared.fast_heartbeat_status import (
+    FastHeartbeatStatus,
+    FastHeartbeatStatusUtil,
+)
 from _mcp_mesh.shared.support_types import HealthStatus
 
 
@@ -35,33 +39,6 @@ class RegistryClientWrapper:
         self.api_client = api_client
         self.agents_api = AgentsApi(api_client)
         self.logger = logging.getLogger(__name__)
-
-    async def register_multi_tool_agent(
-        self, agent_id: str, metadata: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
-        """
-        Register an agent with multiple tools.
-
-        Args:
-            agent_id: Unique agent identifier
-            metadata: Agent metadata with tools array
-
-        Returns:
-            Registry response as dict or None if failed
-        """
-        try:
-            # Convert metadata to MeshAgentRegistration
-            agent_registration = self._build_agent_registration(agent_id, metadata)
-
-            # Call generated client
-            response = self.agents_api.register_agent(agent_registration)
-
-            # Convert response to dict
-            return self._response_to_dict(response)
-
-        except Exception as e:
-            self.logger.error(f"Failed to register multi-tool agent {agent_id}: {e}")
-            return None
 
     async def send_heartbeat_with_dependency_resolution(
         self, health_status: HealthStatus
@@ -138,6 +115,86 @@ class RegistryClientWrapper:
         except Exception as e:
             self.logger.error(f"Failed to parse tool dependencies: {e}")
             return {}
+
+    async def check_fast_heartbeat(self, agent_id: str) -> FastHeartbeatStatus:
+        """
+        Perform fast heartbeat check using HEAD request.
+
+        Args:
+            agent_id: Unique agent identifier
+
+        Returns:
+            FastHeartbeatStatus indicating required action
+        """
+        try:
+            self.logger.debug(
+                f"🚀 Performing fast heartbeat check for agent '{agent_id}'"
+            )
+
+            # Call generated client fast heartbeat check
+            response = self.agents_api.fast_heartbeat_check(agent_id)
+
+            # The fast_heartbeat_check HEAD request returns None for successful responses
+            # since HEAD requests don't have response bodies. The actual HTTP status
+            # is communicated through exceptions for non-200 status codes.
+            if response is None:
+                # Successful HEAD request - this means 200 OK (no changes)
+                status_code = 200
+                self.logger.debug(
+                    f"Fast heartbeat HEAD request successful for agent '{agent_id}' - 200 OK"
+                )
+            else:
+                # Unexpected non-None response - extract status if available
+                status_code = getattr(response, "status", 200)
+                self.logger.debug(
+                    f"Fast heartbeat HEAD request returned response for agent '{agent_id}': {response}"
+                )
+
+            # Convert HTTP status to semantic status
+            status = FastHeartbeatStatusUtil.from_http_code(status_code)
+
+            self.logger.debug(
+                f"✅ Fast heartbeat check completed for agent '{agent_id}': {status.value}"
+            )
+            return status
+
+        except ValueError as e:
+            # HTTP status code not supported
+            self.logger.warning(
+                f"Unsupported HTTP status in fast heartbeat for agent '{agent_id}': {e}"
+            )
+            return FastHeartbeatStatus.NETWORK_ERROR
+
+        except Exception as e:
+            # Check if this is an HTTP error with a specific status code
+            error_str = str(e)
+
+            # Handle 410 Gone specifically (agent unknown)
+            if "(410)" in error_str or "Gone" in error_str:
+                self.logger.info(
+                    f"🔍 Fast heartbeat: Agent '{agent_id}' unknown (410 Gone) - re-registration needed"
+                )
+                return FastHeartbeatStatus.AGENT_UNKNOWN
+
+            # Handle 503 Service Unavailable specifically (registry error)
+            if "(503)" in error_str or "Service Unavailable" in error_str:
+                self.logger.warning(
+                    f"⚠️ Fast heartbeat: Registry error for agent '{agent_id}' (503) - skipping for resilience"
+                )
+                return FastHeartbeatStatus.REGISTRY_ERROR
+
+            # Handle 202 Accepted specifically (topology changed)
+            if "(202)" in error_str or "Accepted" in error_str:
+                self.logger.info(
+                    f"🔄 Fast heartbeat: Topology changed for agent '{agent_id}' (202) - full refresh needed"
+                )
+                return FastHeartbeatStatus.TOPOLOGY_CHANGED
+
+            # All other errors treated as network errors
+            self.logger.warning(
+                f"Fast heartbeat check failed for agent '{agent_id}': {e}"
+            )
+            return FastHeartbeatStatusUtil.from_exception(e)
 
     def _build_agent_registration(
         self, agent_id: str, metadata: dict[str, Any]

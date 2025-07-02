@@ -57,7 +57,7 @@ class RegistryConnectionStep(PipelineStep):
             registry_client = ApiClient(config)
 
             # Create wrapper for type-safe operations
-            registry_wrapperg = RegistryClientWrapper(registry_client)
+            registry_wrapper = RegistryClientWrapper(registry_client)
 
             # Store in context
             result.add_context("registry_url", registry_url)

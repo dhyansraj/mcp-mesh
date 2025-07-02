@@ -211,34 +211,68 @@ class HeartbeatOrchestrator:
         """Process heartbeat pipeline result and log appropriately."""
 
         if result.is_success():
-            # Check if we got a heartbeat response from pipeline context
-            pipeline_context = result.context.get("pipeline_context", {})
-            heartbeat_response = pipeline_context.get("heartbeat_response")
+            # Check fast heartbeat status to understand what happened
+            fast_heartbeat_status = result.context.get("fast_heartbeat_status")
+            heartbeat_response = result.context.get("heartbeat_response")
 
-            if heartbeat_response:
-                # Log response details for debugging
-                response_json = json.dumps(heartbeat_response, indent=2, default=str)
-                self.logger.debug(
-                    f"🔍 Heartbeat response #{heartbeat_count}:\n{response_json}"
+            # Import FastHeartbeatStatus for comparison
+            from ...shared.fast_heartbeat_status import (
+                FastHeartbeatStatus,
+                FastHeartbeatStatusUtil,
+            )
+
+            if not fast_heartbeat_status:
+                self.logger.error(
+                    f"💔 Heartbeat #{heartbeat_count} failed for agent '{agent_id}' - missing fast_heartbeat_status"
                 )
+                return False
 
-                # Log dependency resolution info if available
-                deps_resolved = heartbeat_response.get("dependencies_resolved", {})
-                if deps_resolved:
-                    self.logger.info(
-                        f"🔗 Dependencies resolved: {len(deps_resolved)} items"
-                    )
-
+            if FastHeartbeatStatusUtil.should_skip_for_optimization(
+                fast_heartbeat_status
+            ):
+                # Fast heartbeat optimization - no changes detected
                 self.logger.info(
-                    f"💚 Heartbeat #{heartbeat_count} sent successfully for agent '{agent_id}'"
+                    f"🚀 Heartbeat #{heartbeat_count} optimized for agent '{agent_id}' - no changes detected"
                 )
                 return True
-            else:
-                self.logger.debug(
-                    f"🔍 Heartbeat response #{heartbeat_count}: None (no response)"
+            elif FastHeartbeatStatusUtil.should_skip_for_resilience(
+                fast_heartbeat_status
+            ):
+                # Fast heartbeat resilience - registry/network error
+                self.logger.info(
+                    f"⚠️ Heartbeat #{heartbeat_count} skipped for agent '{agent_id}' - resilience mode ({fast_heartbeat_status.value})"
                 )
+                return True
+            elif FastHeartbeatStatusUtil.requires_full_heartbeat(fast_heartbeat_status):
+                # Full heartbeat was executed - check for response
+                if heartbeat_response:
+                    # Log response details for debugging
+                    response_json = json.dumps(
+                        heartbeat_response, indent=2, default=str
+                    )
+                    self.logger.debug(
+                        f"🔍 Heartbeat response #{heartbeat_count}:\n{response_json}"
+                    )
+
+                    # Log dependency resolution info if available
+                    deps_resolved = heartbeat_response.get("dependencies_resolved", {})
+                    if deps_resolved:
+                        self.logger.info(
+                            f"🔗 Dependencies resolved: {len(deps_resolved)} items"
+                        )
+
+                    self.logger.info(
+                        f"💚 Heartbeat #{heartbeat_count} sent successfully for agent '{agent_id}' (full refresh: {fast_heartbeat_status.value})"
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        f"💔 Heartbeat #{heartbeat_count} failed for agent '{agent_id}' - full heartbeat expected but no response"
+                    )
+                    return False
+            else:
                 self.logger.warning(
-                    f"💔 Heartbeat #{heartbeat_count} failed for agent '{agent_id}' - no response"
+                    f"💔 Heartbeat #{heartbeat_count} unknown status for agent '{agent_id}': {fast_heartbeat_status}"
                 )
                 return False
         else:

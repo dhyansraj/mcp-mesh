@@ -150,7 +150,7 @@ class AgentRegistration(BaseModel):
     # Health and lifecycle
     status: str = "pending"  # pending, healthy, degraded, expired, offline
     last_heartbeat: datetime | None = None
-    health_interval: int = 30  # seconds
+    health_interval: int = 5  # seconds - uses centralized MeshDefaults.HEALTH_INTERVAL
     timeout_threshold: int = 60  # seconds until marked degraded
     eviction_threshold: int = 120  # seconds until marked expired/evicted
     agent_type: str = "default"  # for type-specific timeout configuration
