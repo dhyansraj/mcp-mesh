@@ -24,7 +24,7 @@ spec:
         fsGroup: 65534
       containers:
         - name: dependent-agent
-          image: mcp-mesh-base:0.2
+          image: mcp-mesh-base:latest
           imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:
