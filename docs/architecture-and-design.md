@@ -148,25 +148,29 @@ def get_weather(time_service: Any = None) -> dict:
 - **Zero Boilerplate**: No manual server management or configuration
 - **Gradual Adoption**: Can add mesh features incrementally
 
-### 3. **Heartbeat-Only Architecture**
+### 3. **Fast Heartbeat Architecture**
 
-Unlike traditional service meshes, MCP Mesh uses a heartbeat-only registration model:
+MCP Mesh uses an optimized dual-heartbeat system for efficient health monitoring:
 
 ```python
-# Traditional: Register + Heartbeat
-service.register(capabilities)    # Initial registration
-service.heartbeat()              # Periodic updates
-
-# MCP Mesh: Heartbeat-Only
-service.heartbeat(capabilities)   # Registration + health in one call
+# Fast Heartbeat Pattern
+HEAD /heartbeat    # Lightweight timestamp update (5s intervals)
+POST /heartbeat    # Full registration triggered by HEAD response when needed
 ```
+
+**Heartbeat Types:**
+
+- **HEAD Request**: Minimal overhead timestamp update for health signaling
+- **POST Request**: Complete registration with capability updates - triggered when HEAD response indicates need
+- **Agent Status**: Explicit healthy/unhealthy/unknown states in database
+- **Full Refresh Tracking**: LastFullRefresh timestamp for topology change detection
 
 **Design Benefits:**
 
-- **Simplified Protocol**: Single operation for registration + health
-- **Automatic Updates**: Capability changes propagated immediately
-- **Failure Recovery**: Missing heartbeats = automatic deregistration
-- **Reduced Complexity**: No separate registration lifecycle
+- **Fast Failure Detection**: 5-second intervals with sub-20s failure detection
+- **Network Efficiency**: HEAD requests minimize bandwidth, POST only when registry signals need
+- **Automatic Recovery**: Unhealthy agents can recover via HEAD requests
+- **On-Demand Registration**: Full capability updates only when topology changes occur
 
 ### 4. **Smart Dependency Resolution**
 
@@ -216,15 +220,23 @@ def get_user(auth_service=None, database_service=None):
 
 ## Implementation Architecture
 
-### Registry as the Brain, Runtime as Thin Wrapper
+### Registry as Facilitator, Runtime as Thin Wrapper
 
-MCP Mesh separates concerns between a smart registry and lightweight runtime:
+MCP Mesh separates concerns between a coordinating registry and lightweight runtime:
 
-- **Registry (Go)**: Centralized brain that handles dependency resolution, topology management, and service discovery
+- **Registry (Go)**: Facilitates dependency resolution, topology management, and service discovery
 - **Runtime (Python)**: Thin language wrapper that integrates with FastMCP and provides dependency injection
 - **No Direct Communication**: Registry never makes calls to runtime - runtime polls registry for updates
+- **Event-Driven Architecture**: Registry generates events for audit trails and topology changes
 
-This design allows multiple language runtimes (future: Go, Rust, Node.js) while keeping the intelligence centralized.
+**Key Registry Responsibilities:**
+
+- **Agent Status Management**: Track healthy/unhealthy/unknown states with explicit database fields
+- **Event Generation**: Create register/unregister events for audit and monitoring
+- **Fast Heartbeat Processing**: Handle both HEAD (timestamp) and POST (full registration) requests
+- **Health Monitoring**: Background health checks with configurable intervals and timeouts
+
+This design allows multiple language runtimes (future: Go, Rust, Node.js) while keeping the coordination centralized.
 
 ### Two-Pipeline Architecture
 
@@ -567,32 +579,65 @@ This architecture provides efficient, hash-based dependency updates with minimal
         │                 │                  │
 ```
 
-### 3. Health Monitoring Flow
+### 3. Fast Heartbeat Flow
 
 ```
 ┌─────────────┐    ┌─────────────┐
 │   Agent     │    │  Registry   │
 └─────────────┘    └─────────────┘
         │                  │
-        │  Heartbeat       │
-        │  every 30s       │
+        │  HEAD /heartbeat │
+        │  every 5s        │
         ├─────────────────►
+        │                 │ Update timestamp only
+        │  200 OK         │ Return 200 (healthy) or 410 (need refresh)
+        ◄─────────────────┤
         │                 │
-        │                 │ Mark healthy
-        │                 │ Update timestamp
+        │  (If 410 recv'd)│
+        │  POST /heartbeat│
+        ├─────────────────►
+        │                 │ Full registration + capabilities
+        │                 │ Update LastFullRefresh
+        │                 │ Generate register events
         │                 │
         │  (No heartbeat  │
-        │   for 90s)      │
+        │   for 20s)      │
         │                 │
-        │                 │ Mark unhealthy
+        │                 │ Health monitor marks unhealthy
         │                 │ Remove from discovery
         │                 │
-        │  Heartbeat       │
+        │  HEAD /heartbeat │
         │  resumed         │
         ├─────────────────►
+        │                 │ Update timestamp + status recovery
+        │  410 (refresh)  │ Signal need for full registration
+        ◄─────────────────┤
         │                 │
-        │                 │ Mark healthy
-        │                 │ Re-add to discovery
+        │  POST /heartbeat│
+        ├─────────────────►
+        │                 │ Full registration, re-add to discovery
+```
+
+### 4. Agent Lifecycle Events
+
+```
+┌─────────────┐    ┌─────────────┐
+│   Agent     │    │  Registry   │
+└─────────────┘    └─────────────┘
+        │                  │
+        │  Graceful        │
+        │  Shutdown        │
+        ├─────────────────►
+        │                 │ DELETE /agents/{id}
+        │                 │ Mark unhealthy (preserve audit)
+        │                 │ Generate unregister event
+        │                 │
+        │  Signal Handler  │
+        │  (SIGTERM)       │
+        │                 │
+        │  Cleanup &       │
+        │  Unregister      │
+        │                 │
 ```
 
 ## Performance Characteristics
@@ -619,7 +664,8 @@ This architecture provides efficient, hash-based dependency updates with minimal
 
 ### Network Overhead
 
-- **Heartbeat Size**: ~2KB per agent every 30 seconds
+- **HEAD Heartbeat**: ~200B per agent every 5 seconds (timestamp update only)
+- **POST Heartbeat**: ~2KB per agent when triggered by HEAD 410 response (on-demand registration)
 - **Discovery Query**: ~1KB request, ~5KB response
 - **Tool Call**: Standard MCP JSON-RPC (varies by payload)
 
