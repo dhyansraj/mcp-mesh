@@ -274,6 +274,14 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
+	// Update agent timestamp to indicate recent activity (prevents health monitor eviction)
+	err = h.entService.UpdateAgentHeartbeatTimestamp(c.Request.Context(), agentId)
+	if err != nil {
+		// Service error - back off and retry
+		c.Status(http.StatusServiceUnavailable) // 503
+		return
+	}
+
 	// Check for topology changes since last full refresh
 	hasChanges, err := h.entService.HasTopologyChanges(c.Request.Context(), agentId, agentEntity.LastFullRefresh)
 	if err != nil {

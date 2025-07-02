@@ -57,6 +57,20 @@ func (m *MockEntService) GetAllAgents() []*ent.Agent {
 	return agents
 }
 
+// UpdateAgentHeartbeatTimestamp updates the agent's timestamp (for TDD testing)
+func (m *MockEntService) UpdateAgentHeartbeatTimestamp(agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if agent, exists := m.agents[agentID]; exists {
+		// Update the agent's timestamp to current time
+		agent.UpdatedAt = time.Now()
+		return nil
+	}
+
+	return nil // No error even if agent doesn't exist (idempotent behavior)
+}
+
 // Event management methods
 func (m *MockEntService) AddEvent(event *ent.RegistryEvent) {
 	m.mu.Lock()

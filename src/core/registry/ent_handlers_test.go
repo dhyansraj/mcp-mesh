@@ -249,6 +249,13 @@ func (h *TestHandlers) FastHeartbeatCheck(c *gin.Context, agentId string) {
 		return
 	}
 
+	// Update agent timestamp to indicate recent activity (TDD fix)
+	err := h.entService.UpdateAgentHeartbeatTimestamp(agentId)
+	if err != nil {
+		c.Status(503) // Service unavailable - failed to update timestamp
+		return
+	}
+
 	// Check for topology changes since last full refresh
 	hasChanges := h.entService.GetTopologyChanges(agentId)
 	if hasChanges {
@@ -681,4 +688,192 @@ func TestAgentStatusTransitions(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TDD: Test for HEAD request timestamp updates (RED phase - will fail initially)
+func TestFastHeartbeatCheck_UpdatesTimestamp(t *testing.T) {
+	// Setup: Create test server with mocked EntService
+	mockService := NewMockEntService()
+	server := NewTestServer(mockService)
+	defer server.Close()
+
+	agentID := "timestamp-test-agent"
+	initialTime := time.Now().Add(-10 * time.Minute) // Old timestamp
+
+	// Setup: Create agent with old timestamp
+	mockAgent := &ent.Agent{
+		ID:              agentID,
+		Name:            agentID,
+		Status:          agent.StatusHealthy,
+		LastFullRefresh: initialTime,
+		UpdatedAt:       initialTime, // Old timestamp - should be updated
+	}
+	mockService.SetAgent(agentID, mockAgent)
+	mockService.SetTopologyChanges(agentID, false) // No topology changes
+
+	// Execute: Send HEAD request to /heartbeat/{agent_id}
+	req, err := http.NewRequest("HEAD", server.URL+"/heartbeat/"+agentID, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// Assert: Response should be 200 OK
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Assert: Agent timestamp should be updated (TDD - this will fail initially)
+	updatedAgent := mockService.GetAgent(agentID)
+	require.NotNil(t, updatedAgent)
+
+	// The timestamp should be significantly newer than the initial time
+	assert.True(t, updatedAgent.UpdatedAt.After(initialTime.Add(5*time.Minute)),
+		"HEAD request should update agent timestamp. Initial: %v, Updated: %v",
+		initialTime, updatedAgent.UpdatedAt)
+}
+
+// TDD: Test for unhealthy agent status after HEAD-only heartbeats
+func TestFastHeartbeatCheck_PreventAgentEviction(t *testing.T) {
+	// Setup: Create test server with mocked EntService
+	mockService := NewMockEntService()
+	server := NewTestServer(mockService)
+	defer server.Close()
+
+	agentID := "eviction-test-agent"
+
+	// Setup: Create healthy agent
+	mockAgent := &ent.Agent{
+		ID:              agentID,
+		Name:            agentID,
+		Status:          agent.StatusHealthy,
+		LastFullRefresh: time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	mockService.SetAgent(agentID, mockAgent)
+	mockService.SetTopologyChanges(agentID, false)
+
+	// Execute: Simulate multiple HEAD requests over time (like real agent behavior)
+	for i := 0; i < 5; i++ {
+		// Simulate time passing between HEAD requests
+		time.Sleep(10 * time.Millisecond)
+
+		req, err := http.NewRequest("HEAD", server.URL+"/heartbeat/"+agentID, nil)
+		require.NoError(t, err)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		// Each HEAD request should succeed
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "HEAD request #%d should succeed", i+1)
+	}
+
+	// Assert: Agent should still be healthy after HEAD-only heartbeats (TDD - might fail initially)
+	finalAgent := mockService.GetAgent(agentID)
+	require.NotNil(t, finalAgent)
+	assert.Equal(t, agent.StatusHealthy, finalAgent.Status,
+		"Agent should remain healthy after HEAD-only heartbeats")
+}
+
+// TDD: Test integration with health monitor behavior
+func TestFastHeartbeatCheck_HealthMonitorIntegration(t *testing.T) {
+	// Setup: Create test server with mocked EntService
+	mockService := NewMockEntService()
+	server := NewTestServer(mockService)
+	defer server.Close()
+
+	agentID := "health-monitor-test-agent"
+
+	// Setup: Create agent that would be considered stale by health monitor
+	staleTime := time.Now().Add(-45 * time.Minute) // Older than typical health check threshold
+	mockAgent := &ent.Agent{
+		ID:              agentID,
+		Name:            agentID,
+		Status:          agent.StatusHealthy,
+		LastFullRefresh: staleTime,
+		UpdatedAt:       staleTime, // This should be updated by HEAD request
+	}
+	mockService.SetAgent(agentID, mockAgent)
+	mockService.SetTopologyChanges(agentID, false)
+
+	// Execute: Send HEAD request (should update timestamp)
+	req, err := http.NewRequest("HEAD", server.URL+"/heartbeat/"+agentID, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// Assert: HEAD request succeeds
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Assert: Timestamp updated enough to prevent health monitor eviction (TDD - will fail initially)
+	updatedAgent := mockService.GetAgent(agentID)
+	require.NotNil(t, updatedAgent)
+
+	// The agent should now have a recent timestamp that wouldn't trigger health monitor eviction
+	healthThreshold := time.Now().Add(-30 * time.Minute) // Typical health monitor threshold
+	assert.True(t, updatedAgent.UpdatedAt.After(healthThreshold),
+		"HEAD request should update timestamp enough to prevent health monitor eviction. "+
+		"Threshold: %v, Updated: %v", healthThreshold, updatedAgent.UpdatedAt)
+}
+
+// TDD: Test mixed HEAD and POST heartbeat pattern
+func TestFastHeartbeatCheck_MixedHeartbeatPattern(t *testing.T) {
+	// Setup: Create test server with mocked EntService
+	mockService := NewMockEntService()
+	server := NewTestServer(mockService)
+	defer server.Close()
+
+	agentID := "mixed-pattern-test-agent"
+	initialTime := time.Now().Add(-5 * time.Minute)
+
+	// Setup: Create agent
+	mockAgent := &ent.Agent{
+		ID:              agentID,
+		Name:            agentID,
+		Status:          agent.StatusHealthy,
+		LastFullRefresh: initialTime,
+		UpdatedAt:       initialTime,
+	}
+	mockService.SetAgent(agentID, mockAgent)
+	mockService.SetTopologyChanges(agentID, false)
+
+	// Execute: Simulate realistic pattern - multiple HEAD requests followed by topology change
+
+	// Phase 1: Multiple HEAD requests (optimization)
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest("HEAD", server.URL+"/heartbeat/"+agentID, nil)
+		require.NoError(t, err)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "HEAD request #%d should succeed", i+1)
+	}
+
+	// Phase 2: Topology change detected
+	mockService.SetTopologyChanges(agentID, true)
+
+	req, err := http.NewRequest("HEAD", server.URL+"/heartbeat/"+agentID, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// Should get 202 (topology changed) but timestamp should still be updated (TDD)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode, "Should detect topology change")
+
+	// Assert: Even when topology changed, timestamp should be updated
+	updatedAgent := mockService.GetAgent(agentID)
+	require.NotNil(t, updatedAgent)
+	assert.True(t, updatedAgent.UpdatedAt.After(initialTime.Add(time.Minute)),
+		"HEAD request should update timestamp even when topology changed")
 }

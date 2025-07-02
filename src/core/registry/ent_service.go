@@ -1107,3 +1107,29 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 	// Commit transaction
 	return tx.Commit()
 }
+
+// UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests
+func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID string) error {
+	now := time.Now().UTC()
+
+	// Find the existing agent
+	existingAgent, err := s.entDB.Agent.Query().Where(agent.IDEQ(agentID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			// Agent doesn't exist - return without error (idempotent behavior)
+			return nil
+		}
+		return fmt.Errorf("failed to query agent: %w", err)
+	}
+
+	// Update only the timestamp to indicate recent activity
+	_, err = existingAgent.Update().
+		SetUpdatedAt(now).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update agent heartbeat timestamp: %w", err)
+	}
+
+	s.logger.Debug("Updated heartbeat timestamp for agent %s", agentID)
+	return nil
+}
