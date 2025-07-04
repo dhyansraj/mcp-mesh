@@ -188,6 +188,47 @@ class McpAgent(Protocol):
         """
         ...
 
+    # Phase 6: Explicit Session Management
+    async def create_session(self) -> str:
+        """
+        Create a new session and return session ID.
+        
+        For Phase 6 explicit session management. In Phase 8, this will be
+        automated based on @mesh.tool(session_required=True) annotations.
+        
+        Returns:
+            New session ID string
+        """
+        ...
+
+    async def call_with_session(self, session_id: str, **kwargs) -> Any:
+        """
+        Call tool with explicit session ID for stateful operations.
+        
+        This ensures all calls with the same session_id route to the same
+        agent instance for session affinity.
+        
+        Args:
+            session_id: Session ID to include in request headers
+            **kwargs: Tool arguments to pass
+            
+        Returns:
+            Tool response
+        """
+        ...
+
+    async def close_session(self, session_id: str) -> bool:
+        """
+        Close session and cleanup session state.
+        
+        Args:
+            session_id: Session ID to close
+            
+        Returns:
+            True if session was closed successfully
+        """
+        ...
+
     if PYDANTIC_AVAILABLE:
 
         @classmethod

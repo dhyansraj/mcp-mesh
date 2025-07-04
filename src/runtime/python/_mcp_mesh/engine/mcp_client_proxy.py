@@ -555,6 +555,139 @@ class FullMCPProxy(MCPClientProxy):
         finally:
             await client.close()
 
+    # Phase 6: Explicit Session Management
+    async def create_session(self) -> str:
+        """
+        Create a new session and return session ID.
+        
+        For Phase 6 explicit session management. In Phase 8, this will be
+        automated based on @mesh.tool(session_required=True) annotations.
+        
+        Returns:
+            New session ID string
+        """
+        import uuid
+        
+        # Generate unique session ID
+        session_id = f"session:{uuid.uuid4().hex[:16]}"
+        
+        # For Phase 6, we just return the ID. The session routing middleware
+        # will handle the actual session assignment when calls are made with
+        # the session ID in headers.
+        self.logger.debug(f"Created session ID: {session_id}")
+        return session_id
+
+    async def call_with_session(self, session_id: str, **kwargs) -> "Any":
+        """
+        Call tool with explicit session ID for stateful operations.
+        
+        This ensures all calls with the same session_id route to the same
+        agent instance for session affinity.
+        
+        Args:
+            session_id: Session ID to include in request headers
+            **kwargs: Tool arguments to pass
+            
+        Returns:
+            Tool response
+        """
+        try:
+            import httpx
+            import json
+            
+            # Build MCP tool call request
+            # Add session_id to function arguments if the function expects it
+            function_args = kwargs.copy()
+            function_args["session_id"] = session_id  # Pass session_id as function parameter
+            
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": self.function_name,
+                    "arguments": function_args,
+                },
+            }
+
+            # URL for MCP protocol endpoint
+            url = f"{self.endpoint.rstrip('/')}/mcp/"
+
+            # Add session ID to headers for session routing
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",  # Required by FastMCP
+                "X-Session-ID": session_id,  # Key header for session routing
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, headers=headers)
+
+                if response.status_code == 404:
+                    raise RuntimeError(f"MCP endpoint not found at {url}")
+                elif response.status_code >= 400:
+                    raise RuntimeError(
+                        f"HTTP error {response.status_code}: {response.reason_phrase}"
+                    )
+
+                response_text = response.text
+
+                # Handle Server-Sent Events format from FastMCP
+                if response_text.startswith("event:"):
+                    # Parse SSE format: extract JSON from "data:" lines
+                    json_data = None
+                    for line in response_text.split("\n"):
+                        if line.startswith("data:"):
+                            json_str = line[5:].strip()  # Remove 'data:' prefix
+                            try:
+                                json_data = json.loads(json_str)
+                                break
+                            except json.JSONDecodeError:
+                                continue
+
+                    if json_data is None:
+                        raise RuntimeError("Could not parse SSE response from FastMCP")
+                    data = json_data
+                else:
+                    # Plain JSON response
+                    data = response.json()
+
+            # Check for JSON-RPC error
+            if "error" in data:
+                error = data["error"]
+                error_msg = error.get("message", "Unknown error")
+                raise RuntimeError(f"Tool call error: {error_msg}")
+
+            # Return the result
+            if "result" in data:
+                return data["result"]
+            return data
+
+        except httpx.RequestError as e:
+            raise RuntimeError(f"Connection error to {url}: {e}")
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid JSON response: {e}")
+        except ImportError:
+            # Fallback error - session calls require httpx for header support
+            raise RuntimeError("Session calls require httpx library for header support")
+
+    async def close_session(self, session_id: str) -> bool:
+        """
+        Close session and cleanup session state.
+        
+        Args:
+            session_id: Session ID to close
+            
+        Returns:
+            True if session was closed successfully
+        """
+        # For Phase 6, session cleanup is handled by the session routing middleware
+        # and Redis TTL. In Phase 8, this might send explicit cleanup requests.
+        self.logger.debug(f"Session close requested for: {session_id}")
+        
+        # Always return True for Phase 6 - cleanup is automatic
+        return True
+
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (

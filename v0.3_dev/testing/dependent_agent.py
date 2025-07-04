@@ -8,6 +8,7 @@ This demonstrates an agent that depends on capabilities from other agents:
 - Minimal FastMCP setup with just two functions that depend on external services
 """
 
+from datetime import datetime
 
 import mesh
 from fastmcp import FastMCP
@@ -159,6 +160,81 @@ async def inspect_remote_agent(
 
     inspection_result["status"] = "completed"
     return inspection_result
+
+
+@app.tool()
+@mesh.tool(capability="session_test", dependencies=["session_counter"])
+async def test_session_affinity(
+    test_rounds: int = 3,
+    session_counter: McpAgent = None  # ✅ Using McpAgent for session support
+) -> dict:
+    """Test session affinity using explicit session management (Phase 6)."""
+    if not session_counter:
+        return {"error": "No session_counter service available", "agent": "dependent-service"}
+    
+    try:
+        # Phase 6: Create session explicitly
+        session_id = await session_counter.create_session()
+        
+        results = []
+        handled_by_agents = set()
+        
+        for round_num in range(1, test_rounds + 1):
+            try:
+                # Call with explicit session ID for session affinity
+                result = await session_counter.call_with_session(
+                    session_id=session_id,
+                    increment=round_num
+                )
+                
+                # Extract agent info from the response
+                agent_id = "unknown"
+                if isinstance(result, dict) and "structuredContent" in result:
+                    agent_id = result["structuredContent"].get("handled_by_agent", "unknown")
+                elif isinstance(result, dict):
+                    agent_id = result.get("handled_by_agent", "unknown")
+                
+                results.append({
+                    "round": round_num,
+                    "response": result,
+                    "handled_by": agent_id
+                })
+                
+                handled_by_agents.add(agent_id)
+                
+            except Exception as e:
+                results.append({
+                    "round": round_num,
+                    "error": str(e)
+                })
+        
+        # Clean up session
+        await session_counter.close_session(session_id)
+        
+        # Analyze session affinity
+        unique_agents = len(handled_by_agents)
+        session_affinity_working = unique_agents == 1
+        
+        return {
+            "session_id": session_id,
+            "test_rounds": test_rounds,
+            "results": results,
+            "handled_by_agents": list(handled_by_agents),
+            "unique_agent_count": unique_agents,
+            "session_affinity_working": session_affinity_working,
+            "affinity_status": "SUCCESS" if session_affinity_working else "FAILED",
+            "note": f"All {test_rounds} calls should go to the same agent instance for session affinity to work",
+            "phase": "Phase 6 - Explicit session management",
+            "tested_at": datetime.now().isoformat(),
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Session affinity test failed: {str(e)}",
+            "agent": "dependent-service",
+            "phase": "Phase 6 - Explicit session management",
+            "tested_at": datetime.now().isoformat(),
+        }
 
 
 # AGENT configuration - depends on time_service from the FastMCP agent
