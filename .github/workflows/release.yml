@@ -462,7 +462,10 @@ jobs:
             • [Docker Images](https://hub.docker.com/u/mcpmesh)
 
             🎉 **What's New:**
-            • Kubernetes-native MCP service mesh
-            • Dynamic dependency injection with Python decorators
-            • Multi-platform Docker images (amd64, arm64)
-            • Production-ready registry with SQLite/PostgreSQL support
+            • Enhanced proxy system with kwargs configuration
+            • Redis-backed session management and stickiness
+            • Advanced agent types (McpMeshAgent vs McpAgent)
+            • Streaming support with call_tool_streaming()
+            • Fast heartbeat optimization (sub-20s detection)
+            • Kubernetes ingress support
+          thread_name: "Release ${{ steps.version.outputs.version }}"
