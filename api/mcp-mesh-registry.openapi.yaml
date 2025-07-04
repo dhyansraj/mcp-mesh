@@ -327,7 +327,7 @@ components:
           example:
             timeout: 45
             retry_count: 3
-            custom_headers: {"X-API-Version": "v2"}
+            custom_headers: { "X-API-Version": "v2" }
             streaming: true
             auth_required: true
 
@@ -1122,6 +1122,6 @@ components:
           example:
             timeout: 45
             retry_count: 3
-            custom_headers: {"X-API-Version": "v2"}
+            custom_headers: { "X-API-Version": "v2" }
             streaming: true
             auth_required: true
