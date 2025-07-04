@@ -2,6 +2,7 @@
 MCP Mesh type definitions for dependency injection.
 """
 
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 try:
@@ -85,6 +86,124 @@ class McpMeshAgent(Protocol):
             at runtime, so MCP callers never need to provide these parameters.
             """
             # Treat McpMeshAgent as an optional Any type for MCP serialization
+            return core_schema.with_default_schema(
+                core_schema.nullable_schema(core_schema.any_schema()),
+                default=None,
+            )
+
+    else:
+        # Fallback for when pydantic-core is not available
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> dict:
+            return {
+                "type": "default",
+                "schema": {"type": "nullable", "schema": {"type": "any"}},
+                "default": None,
+            }
+
+
+class McpAgent(Protocol):
+    """
+    Protocol for Full MCP Agent proxies with complete MCP protocol support.
+
+    This agent type provides access to the complete MCP protocol including:
+    - Tools (call, list)
+    - Resources (read, list)
+    - Prompts (get, list)
+    - Streaming tool calls
+
+    Usage Examples:
+        @mesh.tool(dependencies=[{"capability": "file_service"}])
+        async def process_files(file_service: McpAgent) -> str:
+            # Vanilla MCP Protocol usage (100% compatible)
+            tools = await file_service.list_tools()
+            resources = await file_service.list_resources()
+            prompts = await file_service.list_prompts()
+
+            # Read a specific resource
+            config = await file_service.read_resource("file://config.json")
+
+            # Get a prompt template
+            prompt = await file_service.get_prompt("analysis_prompt", {"topic": "data"})
+
+            # Basic tool call (McpMeshAgent compatibility)
+            result = file_service({"action": "process"})
+
+            # Streaming tool call (breakthrough feature)
+            async for chunk in file_service.call_tool_streaming("process_large_file", {"file": "big.txt"}):
+                print(chunk)
+
+            return "Processing complete"
+
+    This proxy provides full MCP protocol access while maintaining backward compatibility
+    with the basic __call__ interface from McpMeshAgent.
+    """
+
+    # Basic compatibility with McpMeshAgent
+    def __call__(self, arguments: dict[str, Any] | None = None) -> Any:
+        """Call the bound remote function (McpMeshAgent compatibility)."""
+        ...
+
+    def invoke(self, arguments: dict[str, Any] | None = None) -> Any:
+        """Explicitly invoke the bound remote function (McpMeshAgent compatibility)."""
+        ...
+
+    # Vanilla MCP Protocol Methods (100% compatibility)
+    async def list_tools(self) -> list:
+        """List available tools from remote agent (vanilla MCP method)."""
+        ...
+
+    async def list_resources(self) -> list:
+        """List available resources from remote agent (vanilla MCP method)."""
+        ...
+
+    async def read_resource(self, uri: str) -> Any:
+        """Read resource contents from remote agent (vanilla MCP method)."""
+        ...
+
+    async def list_prompts(self) -> list:
+        """List available prompts from remote agent (vanilla MCP method)."""
+        ...
+
+    async def get_prompt(self, name: str, arguments: dict | None = None) -> Any:
+        """Get prompt template from remote agent (vanilla MCP method)."""
+        ...
+
+    # Streaming Support - THE BREAKTHROUGH METHOD!
+    async def call_tool_streaming(
+        self, name: str, arguments: dict | None = None
+    ) -> AsyncIterator[dict]:
+        """
+        Call a tool with streaming response using FastMCP's text/event-stream.
+
+        This enables multihop streaming (A→B→C chains) by leveraging FastMCP's
+        built-in streaming support with Accept: text/event-stream header.
+
+        Args:
+            name: Tool name to call
+            arguments: Tool arguments
+
+        Yields:
+            Streaming response chunks as dictionaries
+        """
+        ...
+
+    if PYDANTIC_AVAILABLE:
+
+        @classmethod
+        def __get_pydantic_core_schema__(
+            cls,
+            source_type: Any,
+            handler: Any,
+        ) -> core_schema.CoreSchema:
+            """
+            Custom Pydantic core schema for McpAgent.
+
+            Similar to McpMeshAgent, this makes McpAgent parameters appear as
+            optional/nullable in MCP schemas, preventing serialization errors
+            while maintaining type safety for dependency injection.
+            """
+            # Treat McpAgent as an optional Any type for MCP serialization
             return core_schema.with_default_schema(
                 core_schema.nullable_schema(core_schema.any_schema()),
                 default=None,

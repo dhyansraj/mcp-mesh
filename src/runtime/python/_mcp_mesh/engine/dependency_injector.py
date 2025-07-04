@@ -12,7 +12,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .signature_analyzer import get_mesh_agent_positions
+from .signature_analyzer import get_agent_parameter_types, get_mesh_agent_positions
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,9 @@ class DependencyInjector:
         # Use new smart injection strategy
         mesh_positions = analyze_injection_strategy(func, dependencies)
 
+        # Get parameter type information for proxy selection
+        parameter_types = get_agent_parameter_types(func)
+
         # Track which dependencies this function needs
         for dep in dependencies:
             if dep not in self._dependency_mapping:
@@ -373,6 +376,9 @@ class DependencyInjector:
         dependency_wrapper._mesh_update_dependency = update_dependency
         dependency_wrapper._mesh_dependencies = dependencies
         dependency_wrapper._mesh_positions = mesh_positions
+        dependency_wrapper._mesh_parameter_types = (
+            parameter_types  # Store for proxy selection
+        )
         dependency_wrapper._mesh_original_func = func
 
         # Register this wrapper for dependency updates

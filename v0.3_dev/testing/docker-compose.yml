@@ -1,0 +1,316 @@
+version: "3.8"
+
+services:
+  # Registry service
+  registry:
+    build:
+      context: ../../
+      dockerfile: docker/registry/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Redis for session storage (Phase 5+)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  # Agent A - Session-required capabilities
+  agent-a:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/session-agent &&
+        python session_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=agent-a
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=session-agent-a
+    ports:
+      - "8090:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Agent B - Session-required capabilities (same as A for testing affinity)
+  agent-b:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/session-agent &&
+        python session_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=agent-b
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=session-agent-b
+    ports:
+      - "8091:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Agent C - Full MCP access capabilities
+  agent-c:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/introspection-agent &&
+        python introspection_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=agent-c
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=introspection-agent-c
+    ports:
+      - "8092:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Agent D - Metadata cache testing capabilities (Phase 3)
+  agent-d:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/metadata-cache-test &&
+        python metadata_cache_test.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=agent-d
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=metadata-cache-test-d
+    ports:
+      - "8093:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Agent E - Routing test capabilities (Phase 3)
+  agent-e:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/routing-test &&
+        python routing_test_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=agent-e
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=routing-test-e
+      - MCP_MESH_LOG_LEVEL=DEBUG
+    ports:
+      - "8094:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Cache agent (Phase 7)
+  cache-agent:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/cache-agent &&
+        python cache_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=cache-agent
+      - POD_PORT=8080
+      - AGENT_ID=cache-agent
+    ports:
+      - "8083:8080"
+    depends_on:
+      - registry
+      - redis
+    profiles: ["phase7"] # Only start for Phase 7 testing
+
+  # Session tracking agent (Phase 7)
+  session-tracker:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - ../agents:/agents # Mount v0.3_dev agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /agents/session-tracker &&
+        python session_tracker.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=session-tracker
+      - POD_PORT=8080
+      - AGENT_ID=session-tracker
+    ports:
+      - "8084:8080"
+    depends_on:
+      - registry
+      - redis
+    profiles: ["phase7"]
+
+  # FastMCP agent - basic capabilities with McpMeshAgent (regression test)
+  fastmcp-agent:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - .:/testing # Mount testing directory with copied agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /testing &&
+        python fastmcp_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - POD_IP=fastmcp-agent
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=fastmcp-service
+      - MCP_MESH_LOG_LEVEL=DEBUG
+    ports:
+      - "8095:8080"
+    depends_on:
+      - registry
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Dependent agent - depends on time_service from FastMCP agent (regression test)
+  dependent-agent:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - .:/testing # Mount testing directory with copied agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /testing &&
+        python dependent_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - POD_IP=dependent-agent
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=dependent-service
+      - MCP_MESH_LOG_LEVEL=DEBUG
+    ports:
+      - "8096:8080"
+    depends_on:
+      - registry
+      - fastmcp-agent # Ensure FastMCP agent starts first
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  default:
+    name: mcp-mesh-testing
