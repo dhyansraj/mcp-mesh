@@ -96,7 +96,8 @@ class TestKwargsEndToEndUnit:
 
     def test_proxy_constructor_kwargs_support(self):
         """Test that proxy constructors accept and store kwargs_config."""
-        from _mcp_mesh.engine.mcp_client_proxy import FullMCPProxy, MCPClientProxy
+        from _mcp_mesh.engine.mcp_client_proxy import MCPClientProxy
+        from _mcp_mesh.engine.full_mcp_proxy import FullMCPProxy
 
         # Test MCPClientProxy with kwargs
         kwargs_config = {
