@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import httpx
 from fastmcp import FastMCP
@@ -138,7 +138,10 @@ class HttpMcpWrapper:
         # Phase 5: Session storage and pod info
         self.session_storage = SessionStorage()
         self.pod_ip = os.getenv("POD_IP", "localhost")
-        self.pod_port = os.getenv("POD_PORT", "8080")
+
+        # Use resolved HTTP port: env var > decorator param > default (same resolution as FastAPI server)
+        # This ensures session forwarding uses the same port as the FastAPI server
+        self.pod_port = os.getenv("MCP_MESH_HTTP_PORT", "8080")
 
         # Get FastMCP's lifespan if available (for new FastMCP integration)
         if hasattr(mcp_server, "http_app") and callable(mcp_server.http_app):
