@@ -90,27 +90,76 @@ class RegistryClientWrapper:
 
     def parse_tool_dependencies(self, response: dict[str, Any]) -> dict[str, Any]:
         """
-        Parse dependency resolution from registry response.
+        Parse dependency resolution from registry response with kwargs support.
 
         Args:
             response: Registry response containing dependencies_resolved
 
         Returns:
-            Dict mapping tool names to their resolved dependencies
+            Dict mapping tool names to their resolved dependencies (including kwargs)
         """
         try:
             # Extract dependencies_resolved from response
+            dependencies_resolved = None
             if "dependencies_resolved" in response:
-                return response["dependencies_resolved"]
-
-            # Handle legacy format if needed
-            if (
+                dependencies_resolved = response["dependencies_resolved"]
+            elif (
                 "metadata" in response
                 and "dependencies_resolved" in response["metadata"]
             ):
-                return response["metadata"]["dependencies_resolved"]
+                dependencies_resolved = response["metadata"]["dependencies_resolved"]
+            else:
+                return {}
 
-            return {}
+            # Process each dependency to extract kwargs if present
+            parsed_dependencies = {}
+
+            for function_name, dependency_list in dependencies_resolved.items():
+                if not isinstance(dependency_list, list):
+                    continue
+
+                parsed_dependencies[function_name] = []
+
+                for dep_resolution in dependency_list:
+                    if not isinstance(dep_resolution, dict):
+                        continue
+
+                    # Standard dependency fields
+                    parsed_dep = {
+                        "capability": dep_resolution.get("capability", ""),
+                        "endpoint": dep_resolution.get("endpoint", ""),
+                        "function_name": dep_resolution.get("function_name", ""),
+                        "status": dep_resolution.get("status", ""),
+                        "agent_id": dep_resolution.get("agent_id", ""),
+                    }
+
+                    # NEW: Extract kwargs if present (from database JSON field)
+                    if "kwargs" in dep_resolution:
+                        try:
+                            # kwargs might be JSON string from database
+                            kwargs_data = dep_resolution["kwargs"]
+                            if isinstance(kwargs_data, str):
+                                import json
+
+                                kwargs_data = (
+                                    json.loads(kwargs_data) if kwargs_data else {}
+                                )
+
+                            parsed_dep["kwargs"] = kwargs_data
+                            self.logger.debug(
+                                f"🔧 Parsed kwargs for {dep_resolution.get('capability')}: {kwargs_data}"
+                            )
+                        except (json.JSONDecodeError, TypeError) as e:
+                            self.logger.warning(
+                                f"Failed to parse kwargs for {dep_resolution.get('capability')}: {e}"
+                            )
+                            parsed_dep["kwargs"] = {}
+                    else:
+                        parsed_dep["kwargs"] = {}
+
+                    parsed_dependencies[function_name].append(parsed_dep)
+
+            return parsed_dependencies
 
         except Exception as e:
             self.logger.error(f"Failed to parse tool dependencies: {e}")
@@ -238,7 +287,20 @@ class RegistryClientWrapper:
                     )
                     dep_registrations.append(dep_reg)
 
-            # Create tool registration
+            # Extract kwargs from tool_data (non-standard fields)
+            standard_fields = {
+                "capability",
+                "function_name",
+                "tags",
+                "version",
+                "dependencies",
+                "description",
+            }
+            kwargs_data = {
+                k: v for k, v in tool_data.items() if k not in standard_fields
+            }
+
+            # Create tool registration with kwargs support
             tool_reg = MeshToolRegistration(
                 function_name=tool_data["function_name"],
                 capability=tool_data.get("capability"),
@@ -246,6 +308,7 @@ class RegistryClientWrapper:
                 version=tool_data.get("version", "1.0.0"),
                 dependencies=dep_registrations,
                 description=tool_data.get("description"),
+                kwargs=kwargs_data if kwargs_data else None,
             )
             tools.append(tool_reg)
 
@@ -298,7 +361,20 @@ class RegistryClientWrapper:
                     )
                     dep_registrations.append(dep_reg)
 
-            # Create tool registration
+            # Extract kwargs from metadata (non-standard fields)
+            standard_fields = {
+                "capability",
+                "function_name",
+                "tags",
+                "version",
+                "dependencies",
+                "description",
+            }
+            kwargs_data = {
+                k: v for k, v in metadata.items() if k not in standard_fields
+            }
+
+            # Create tool registration with kwargs support
             tool_reg = MeshToolRegistration(
                 function_name=func_name,
                 capability=metadata.get("capability"),
@@ -306,6 +382,7 @@ class RegistryClientWrapper:
                 version=metadata.get("version", "1.0.0"),
                 dependencies=dep_registrations,
                 description=metadata.get("description"),
+                kwargs=kwargs_data if kwargs_data else None,
             )
             tools.append(tool_reg)
 

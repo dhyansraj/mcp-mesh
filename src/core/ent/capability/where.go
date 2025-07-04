@@ -355,6 +355,16 @@ func DescriptionContainsFold(v string) predicate.Capability {
 	return predicate.Capability(sql.FieldContainsFold(FieldDescription, v))
 }
 
+// KwargsIsNil applies the IsNil predicate on the "kwargs" field.
+func KwargsIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldKwargs))
+}
+
+// KwargsNotNil applies the NotNil predicate on the "kwargs" field.
+func KwargsNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldKwargs))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Capability {
 	return predicate.Capability(sql.FieldEQ(FieldCreatedAt, v))

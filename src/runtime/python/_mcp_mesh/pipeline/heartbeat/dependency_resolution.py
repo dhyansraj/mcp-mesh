@@ -190,7 +190,11 @@ class DependencyResolutionStep(PipelineStep):
 
             # Import here to avoid circular imports
             from ...engine.dependency_injector import get_global_injector
-            from ...engine.mcp_client_proxy import FullMCPProxy, MCPClientProxy
+            from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
+            from ...engine.mcp_client_proxy import (
+                EnhancedMCPClientProxy,
+                MCPClientProxy,
+            )
 
             injector = get_global_injector()
 
@@ -224,14 +228,19 @@ class DependencyResolutionStep(PipelineStep):
                     status = dep_info["status"]
                     endpoint = dep_info["endpoint"]
                     dep_function_name = dep_info["function_name"]
+                    kwargs_config = dep_info.get("kwargs", {})  # NEW: Extract kwargs
 
                     if status == "available" and endpoint and dep_function_name:
                         # Import here to avoid circular imports
                         # Get current agent ID for self-dependency detection
                         import os
 
-                        from ...engine.mcp_client_proxy import (
+                        from ...engine.full_mcp_proxy import (
+                            EnhancedFullMCPProxy,
                             FullMCPProxy,
+                        )
+                        from ...engine.mcp_client_proxy import (
+                            EnhancedMCPClientProxy,
                             MCPClientProxy,
                         )
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
@@ -298,13 +307,45 @@ class DependencyResolutionStep(PipelineStep):
                                     capability, injector
                                 )
                                 if proxy_type == "FullMCPProxy":
-                                    new_proxy = FullMCPProxy(
-                                        endpoint, dep_function_name
-                                    )
+                                    # Use enhanced proxy if kwargs available
+                                    if kwargs_config:
+                                        new_proxy = EnhancedFullMCPProxy(
+                                            endpoint,
+                                            dep_function_name,
+                                            kwargs_config=kwargs_config,
+                                        )
+                                        self.logger.debug(
+                                            f"🔧 Created EnhancedFullMCPProxy with kwargs: {kwargs_config}"
+                                        )
+                                    else:
+                                        new_proxy = FullMCPProxy(
+                                            endpoint,
+                                            dep_function_name,
+                                            kwargs_config=kwargs_config,
+                                        )
+                                        self.logger.debug(
+                                            "🔧 Created FullMCPProxy (no kwargs)"
+                                        )
                                 else:
-                                    new_proxy = MCPClientProxy(
-                                        endpoint, dep_function_name
-                                    )
+                                    # Use enhanced proxy if kwargs available
+                                    if kwargs_config:
+                                        new_proxy = EnhancedMCPClientProxy(
+                                            endpoint,
+                                            dep_function_name,
+                                            kwargs_config=kwargs_config,
+                                        )
+                                        self.logger.debug(
+                                            f"🔧 Created EnhancedMCPClientProxy with kwargs: {kwargs_config}"
+                                        )
+                                    else:
+                                        new_proxy = MCPClientProxy(
+                                            endpoint,
+                                            dep_function_name,
+                                            kwargs_config=kwargs_config,
+                                        )
+                                        self.logger.debug(
+                                            "🔧 Created MCPClientProxy (no kwargs)"
+                                        )
                         else:
                             # Create cross-service proxy based on parameter types that use this capability
                             proxy_type = self._determine_proxy_type_for_capability(
@@ -312,15 +353,47 @@ class DependencyResolutionStep(PipelineStep):
                             )
 
                             if proxy_type == "FullMCPProxy":
-                                new_proxy = FullMCPProxy(endpoint, dep_function_name)
-                                self.logger.debug(
-                                    f"🔄 Updated to FullMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}"
-                                )
+                                # Use enhanced proxy if kwargs available
+                                if kwargs_config:
+                                    new_proxy = EnhancedFullMCPProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
+                                    self.logger.info(
+                                        f"🔄 Updated to EnhancedFullMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
+                                        f"timeout={kwargs_config.get('timeout', 30)}s, streaming={kwargs_config.get('streaming', False)}"
+                                    )
+                                else:
+                                    new_proxy = FullMCPProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
+                                    self.logger.debug(
+                                        f"🔄 Updated to FullMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}"
+                                    )
                             else:
-                                new_proxy = MCPClientProxy(endpoint, dep_function_name)
-                                self.logger.debug(
-                                    f"🔄 Updated to MCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}"
-                                )
+                                # Use enhanced proxy if kwargs available
+                                if kwargs_config:
+                                    new_proxy = EnhancedMCPClientProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
+                                    self.logger.info(
+                                        f"🔄 Updated to EnhancedMCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
+                                        f"timeout={kwargs_config.get('timeout', 30)}s, retries={kwargs_config.get('retry_count', 1)}"
+                                    )
+                                else:
+                                    new_proxy = MCPClientProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
+                                    self.logger.debug(
+                                        f"🔄 Updated to MCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}"
+                                    )
 
                         # Update in injector (this will update ALL functions that depend on this capability)
                         await injector.register_dependency(capability, new_proxy)

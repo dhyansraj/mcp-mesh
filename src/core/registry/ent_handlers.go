@@ -249,6 +249,9 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 			}
 			toolData["dependencies"] = deps
 		}
+		if tool.Kwargs != nil {
+			toolData["kwargs"] = *tool.Kwargs
+		}
 		toolsData[i] = toolData
 	}
 	result["tools"] = toolsData

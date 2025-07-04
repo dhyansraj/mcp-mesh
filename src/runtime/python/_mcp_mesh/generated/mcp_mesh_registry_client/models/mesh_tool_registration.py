@@ -35,7 +35,8 @@ class MeshToolRegistration(BaseModel):
     tags: Optional[List[StrictStr]] = Field(default=None, description="Tags for this capability")
     dependencies: Optional[List[MeshToolDependencyRegistration]] = Field(default=None, description="Dependencies required by this function")
     description: Optional[StrictStr] = Field(default=None, description="Function description")
-    __properties: ClassVar[List[str]] = ["function_name", "capability", "version", "tags", "dependencies", "description"]
+    kwargs: Optional[Dict[str, Any]] = Field(default=None, description="Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration. Supports timeout, retry_count, custom_headers, streaming, auth_required, etc. ")
+    __properties: ClassVar[List[str]] = ["function_name", "capability", "version", "tags", "dependencies", "description", "kwargs"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -100,7 +101,8 @@ class MeshToolRegistration(BaseModel):
             "version": obj.get("version") if obj.get("version") is not None else '1.0.0',
             "tags": obj.get("tags"),
             "dependencies": [MeshToolDependencyRegistration.from_dict(_item) for _item in obj["dependencies"]] if obj.get("dependencies") is not None else None,
-            "description": obj.get("description")
+            "description": obj.get("description"),
+            "kwargs": obj.get("kwargs")
         })
         return _obj
 

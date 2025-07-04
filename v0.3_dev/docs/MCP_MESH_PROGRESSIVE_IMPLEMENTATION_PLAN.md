@@ -132,19 +132,276 @@ This environment eliminates the complexity of running multiple agents locally an
 
 ---
 
-## Phase 1: Foundation - Add Metadata Endpoint
+## Phase 1: OpenAPI Schema and Client Generation for kwargs Support
 
-**Goal**: Add `/metadata` endpoint to expose capability routing information
-**Risk**: Low - Purely additive, no breaking changes
+**Goal**: Update OpenAPI specification and regenerate Python clients to support kwargs in heartbeat registration
+**Risk**: Low - Schema-only changes, backward compatible (new optional fields)
 **Timeline**: 1-2 days
-**Files**: `src/runtime/python/_mcp_mesh/pipeline/startup/fastapiserver_setup.py`
+**Files**: OpenAPI spec, Python generated models, Go generated types
 
-### Precise Changes Required:
+### Current State Analysis:
 
-#### 1. Add metadata endpoint to FastAPI app
+- ✅ `@mesh.tool` decorator already supports kwargs in Python
+- ✅ kwargs stored in local metadata during tool registration
+- ❌ OpenAPI schema doesn't include kwargs/additional_properties fields
+- ❌ Python client models can't send kwargs in heartbeat
+- ❌ Go registry can't receive kwargs in heartbeat
+
+### TDD Approach - Update Schema First:
+
+#### 1. Update OpenAPI specification to support kwargs
+
+**File**: `src/core/registry/docs/openapi.yaml`
+**Location**: Update MeshToolRegistration model
+
+```yaml
+MeshToolRegistration:
+  type: object
+  required:
+    - function_name
+    - capability
+  properties:
+    function_name:
+      type: string
+      minLength: 1
+      description: Name of the decorated function
+    capability:
+      type: string
+      minLength: 1
+      description: Capability provided by this function
+    version:
+      type: string
+      default: "1.0.0"
+      description: Function/capability version
+    tags:
+      type: array
+      items:
+        type: string
+      description: Tags for this capability
+    dependencies:
+      type: array
+      items:
+        $ref: "#/components/schemas/MeshToolDependencyRegistration"
+      description: Dependencies required by this function
+    description:
+      type: string
+      description: Function description
+  # NEW: Enable additional properties for kwargs
+  additionalProperties: true
+  example:
+    function_name: "enhanced_tool"
+    capability: "data_processing"
+    version: "1.0.0"
+    description: "Process data with enhanced features"
+    timeout: 45
+    retry_count: 3
+    streaming: true
+    custom_headers:
+      X-API-Version: "v2"
+
+# Also update dependency resolution response to include kwargs
+DependencyResolution:
+  type: object
+  properties:
+    capability:
+      type: string
+    endpoint:
+      type: string
+    function_name:
+      type: string
+    status:
+      type: string
+    agent_id:
+      type: string
+  # NEW: Enable additional properties for kwargs in responses
+  additionalProperties: true
+  description: |
+    Dependency resolution information including any custom kwargs
+    from the original tool registration
+  example:
+    capability: "data_processing"
+    endpoint: "http://service:8080"
+    function_name: "enhanced_tool"
+    status: "available"
+    agent_id: "data-service-123"
+    timeout: 45
+    retry_count: 3
+    streaming: true
+```
+
+#### 2. Regenerate Python client models
+
+**Command**: Generate updated Python models with kwargs support
+
+```bash
+# Regenerate Python models from updated OpenAPI spec
+cd src/core/registry
+openapi-generator generate \
+  -i docs/openapi.yaml \
+  -g python \
+  -o ../../runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client/ \
+  --additional-properties=packageName=mcp_mesh_registry_client \
+  --enable-post-process-file
+```
+
+#### 3. Verify generated models support kwargs
+
+**File**: `src/runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client/models/mesh_tool_registration.py`
+**Expected**: Model should now accept additional properties
+
+```python
+# Generated model should now support:
+tool_reg = MeshToolRegistration(
+    function_name="test_function",
+    capability="test_capability",
+    # Standard fields
+    version="1.0.0",
+    tags=["tag1"],
+    description="Test tool",
+    # NEW: kwargs as additional properties
+    timeout=45,
+    retry_count=3,
+    streaming=True,
+    custom_headers={"X-Version": "v2"}
+)
+```
+
+#### 4. Write test to verify kwargs support in models
+
+**File**: `src/runtime/python/tests/unit/test_01_openapi_kwargs_support.py`
+
+```python
+import pytest
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import MeshToolRegistration
+
+class TestOpenAPIKwargsSupport:
+    """Test that generated models support kwargs via additionalProperties."""
+
+    def test_mesh_tool_registration_accepts_kwargs(self):
+        """Test MeshToolRegistration accepts additional properties."""
+        # Standard required fields
+        tool_reg = MeshToolRegistration(
+            function_name="test_function",
+            capability="test_capability"
+        )
+
+        # Should be able to set additional properties (kwargs)
+        tool_reg.timeout = 45
+        tool_reg.retry_count = 3
+        tool_reg.streaming = True
+        tool_reg.custom_headers = {"X-API-Version": "v2"}
+
+        # Convert to dict to verify additional properties are preserved
+        tool_dict = tool_reg.to_dict()
+
+        assert tool_dict["function_name"] == "test_function"
+        assert tool_dict["capability"] == "test_capability"
+        assert tool_dict["timeout"] == 45
+        assert tool_dict["retry_count"] == 3
+        assert tool_dict["streaming"] is True
+        assert tool_dict["custom_headers"]["X-API-Version"] == "v2"
+
+    def test_mesh_tool_registration_from_dict_with_kwargs(self):
+        """Test creating MeshToolRegistration from dict with kwargs."""
+        tool_data = {
+            "function_name": "enhanced_function",
+            "capability": "enhanced_capability",
+            "version": "1.0.0",
+            "description": "Enhanced tool with kwargs",
+            # Additional properties (kwargs)
+            "timeout": 60,
+            "retry_count": 5,
+            "auth_required": True,
+            "custom_config": {"setting1": "value1", "setting2": "value2"}
+        }
+
+        tool_reg = MeshToolRegistration.from_dict(tool_data)
+
+        # Standard fields
+        assert tool_reg.function_name == "enhanced_function"
+        assert tool_reg.capability == "enhanced_capability"
+
+        # Additional properties should be accessible
+        assert hasattr(tool_reg, 'timeout') or 'timeout' in tool_reg.to_dict()
+        assert hasattr(tool_reg, 'auth_required') or 'auth_required' in tool_reg.to_dict()
+
+    def test_backwards_compatibility_without_kwargs(self):
+        """Test that tools without kwargs continue to work."""
+        tool_reg = MeshToolRegistration(
+            function_name="simple_function",
+            capability="simple_capability",
+            version="1.0.0"
+        )
+
+        tool_dict = tool_reg.to_dict()
+
+        assert tool_dict["function_name"] == "simple_function"
+        assert tool_dict["capability"] == "simple_capability"
+        assert tool_dict["version"] == "1.0.0"
+
+        # Should not have any additional properties
+        expected_keys = {"function_name", "capability", "version"}
+        extra_keys = set(tool_dict.keys()) - expected_keys
+        # Only expected additional keys are None/empty values
+        assert all(tool_dict[key] in [None, [], {}] for key in extra_keys)
+```
+
+### What Phase 1 Accomplishes:
+
+- ✅ **OpenAPI schema updated**: MeshToolRegistration supports additionalProperties
+- ✅ **Python models regenerated**: Generated classes can handle kwargs
+- ✅ **Backward compatibility**: Tools without kwargs continue working
+- ✅ **Foundation for Phase 2**: Python can now send kwargs in heartbeat
+- ✅ **TDD validation**: Tests verify kwargs support in generated models
+
+### What Doesn't Work Yet:
+
+- ❌ Python heartbeat doesn't use kwargs yet (Phase 2)
+- ❌ Go registry doesn't handle kwargs (Phase 2)
+- ❌ Registry doesn't store kwargs (Phase 7)
+- ❌ Enhanced client proxies don't exist (Phase 9)
+
+### Testing Phase 1:
+
+```bash
+# Test 1: Validate OpenAPI spec
+cd src/core/registry
+swagger-codegen validate -i docs/openapi.yaml
+
+# Test 2: Regenerate Python models
+openapi-generator generate -i docs/openapi.yaml -g python -o generated/
+
+# Test 3: Test generated models
+python -m pytest src/runtime/python/tests/unit/test_01_openapi_kwargs_support.py
+
+# Test 4: Verify additionalProperties support
+python3 -c "
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import MeshToolRegistration
+tool = MeshToolRegistration(function_name='test', capability='test')
+tool.timeout = 45  # This should work with additionalProperties
+print('✅ additionalProperties supported')
+"
+```
+
+### Phase 1 → Phase 2 Connection:
+
+**Phase 1** creates the OpenAPI foundation for kwargs. **Phase 2** can then use the updated models:
+
+```python
+# Phase 2 will be able to do this:
+tool_reg = MeshToolRegistration(
+    function_name="enhanced_tool",
+    capability="data_processing",
+    timeout=45,           # ✅ Now supported via additionalProperties
+    retry_count=3,        # ✅ Now supported
+    streaming=True        # ✅ Now supported
+)
+```
+
+#### 2. Add metadata endpoint for local introspection (optional but helpful)
 
 **File**: `src/runtime/python/_mcp_mesh/pipeline/startup/fastapiserver_setup.py`
-**Location**: After line 69 (after health endpoints)
+**Location**: Add after health endpoints
 
 ```python
 @app.get("/metadata")
@@ -155,111 +412,495 @@ async def get_routing_metadata():
 
     capabilities_metadata = {}
 
-    # Get all registered mesh tools from existing DecoratorRegistry
     try:
         registered_tools = DecoratorRegistry.get_all_mesh_tools()
 
-        for func_name, (func, metadata) in registered_tools.items():
+        for func_name, decorated_func in registered_tools.items():
+            metadata = decorated_func.metadata
             capability_name = metadata.get('capability', func_name)
+
+            # Extract kwargs for metadata endpoint
+            standard_fields = {
+                'capability', 'function_name', 'version', 'tags',
+                'description', 'dependencies'
+            }
+            kwargs_dict = {
+                k: v for k, v in metadata.items()
+                if k not in standard_fields and not k.startswith('_')
+            }
+
             capabilities_metadata[capability_name] = {
                 "function_name": func_name,
                 "capability": capability_name,
                 "version": metadata.get('version', '1.0.0'),
                 "tags": metadata.get('tags', []),
                 "description": metadata.get('description', ''),
-                # Extract routing flags from **kwargs (already supported)
-                "session_required": metadata.get('session_required', False),
-                "stateful": metadata.get('stateful', False),
-                "streaming": metadata.get('streaming', False),
-                "full_mcp_access": metadata.get('full_mcp_access', False),
-                # Include any custom metadata from **kwargs
-                "custom_metadata": {k: v for k, v in metadata.items()
-                                 if k not in ['capability', 'function_name', 'version',
-                                            'tags', 'description', 'dependencies']}
+                # Include kwargs for routing intelligence
+                **kwargs_dict
             }
     except Exception as e:
         logger.warning(f"Failed to get mesh tools metadata: {e}")
         capabilities_metadata = {}
 
-    # Get agent configuration from context
-    agent_config = context.get('agent_config', {})
-
     return {
-        "agent_id": agent_config.get('agent_id', 'unknown'),
+        "agent_id": context.get('agent_config', {}).get('agent_id', 'unknown'),
         "capabilities": capabilities_metadata,
         "timestamp": datetime.now().isoformat(),
         "status": "healthy"
     }
 ```
 
-#### 2. No changes needed to decorators (already support \*\*kwargs)
+### What Phase 1 Accomplishes:
 
-**Current `@mesh.tool` decorator already supports**:
+- ✅ **Heartbeat kwargs flow**: Python agents send kwargs to registry during heartbeat
+- ✅ **Registry receives kwargs**: Foundation for storing tool configuration metadata
+- ✅ **Metadata endpoint**: Local introspection of tool kwargs configuration
+- ✅ **Backward compatibility**: Tools without kwargs continue working normally
+- ✅ **Foundation for DI**: Sets up kwargs to flow to other agents' dependency injection
 
-```python
-@mesh.tool(
-    capability="test_capability",
-    session_required=True,      # ✅ Already stored in metadata
-    stateful=True,             # ✅ Already stored in metadata
-    full_mcp_access=False,     # ✅ Already stored in metadata
-    custom_priority="high"     # ✅ Already stored in metadata
-)
-def test_function():
-    pass
-```
+### What Doesn't Work Yet (waiting for Phase 7-8):
 
-### What Works After Phase 1:
-
-- ✅ All existing functionality unchanged
-- ✅ New `/metadata` endpoint exposes capability routing information
-- ✅ Routing flags from `@mesh.tool(**kwargs)` are exposed
-- ✅ Foundation for intelligent routing decisions
-
-### What Doesn't Work Yet:
-
-- ❌ HTTP wrapper doesn't use metadata for routing decisions
-- ❌ No session affinity implementation
-- ❌ No full MCP protocol support (still only tools/call)
+- ❌ Registry doesn't store kwargs (needs database schema changes)
+- ❌ Dependency resolution responses don't include kwargs
+- ❌ Enhanced client proxies don't exist
 
 ### Testing Phase 1:
 
-```bash
-# Test basic metadata endpoint
+```python
+# Test 1: Verify kwargs in heartbeat registration
+@mesh.tool(
+    capability="test_capability",
+    timeout=30,
+    retry_count=3,
+    streaming=True,
+    custom_priority="high"
+)
+def test_function():
+    return "test"
+
+# Check that kwargs are included in heartbeat
+# (Will be visible in registry logs when Phase 7 is implemented)
+
+# Test 2: Verify metadata endpoint shows kwargs
 curl http://localhost:8080/metadata
 
 # Expected response:
 {
   "agent_id": "agent-123",
   "capabilities": {
-    "my_capability": {
-      "function_name": "my_function",
-      "capability": "my_capability",
-      "session_required": true,
-      "stateful": false,
-      "full_mcp_access": false,
-      "custom_metadata": {"priority": "high"}
+    "test_capability": {
+      "function_name": "test_function",
+      "capability": "test_capability",
+      "timeout": 30,
+      "retry_count": 3,
+      "streaming": true,
+      "custom_priority": "high"
     }
   },
-  "timestamp": "2025-07-03T12:00:00.000Z",
+  "timestamp": "2025-07-04T12:00:00.000Z",
   "status": "healthy"
 }
 
-# Test with routing flags
-@mesh.tool(
-    capability="session_test",
-    session_required=True,
-    stateful=True,
-    priority="high"
-)
-def session_test():
-    return {"test": "value"}
+# Test 3: Verify backward compatibility
+@mesh.tool(capability="simple_capability")  # No kwargs
+def simple_function():
+    return "simple"
 
-curl http://localhost:8080/metadata | jq '.capabilities.session_test'
+# Should work without any kwargs
+curl http://localhost:8080/metadata | jq '.capabilities.simple_capability'
+```
+
+### Phase 1 → Phase 7-9 Connection:
+
+**Phase 1** establishes the flow of kwargs from tools to heartbeat registration. **Phases 7-9** complete the cycle:
+
+1. **Phase 7**: Registry stores kwargs in database
+2. **Phase 8**: Registry returns kwargs in dependency resolution responses
+3. **Phase 9**: Client proxies auto-configure from received kwargs
+
+This creates the complete **declarative configuration loop**:
+
+```
+@mesh.tool(timeout=45) → Heartbeat → Registry Storage → Dependency Resolution → Enhanced Proxy
 ```
 
 ---
 
-## Phase 2: Full MCP Protocol Support
+## Phase 2: Heartbeat Enhancement for kwargs Registration
+
+**Goal**: Enhance `/heartbeat` endpoint to register and distribute kwargs information using updated OpenAPI models
+**Risk**: Low - Extends existing heartbeat flow, uses Phase 1 foundation
+**Timeline**: 2-3 days
+**Files**: `src/runtime/python/_mcp_mesh/shared/registry_client_wrapper.py`, Go registry heartbeat handler
+
+### Current State Analysis (Post-Phase 1):
+
+- ✅ OpenAPI schema supports additionalProperties for kwargs
+- ✅ Python models regenerated to handle kwargs
+- ✅ `@mesh.tool` decorator already supports kwargs in Python
+- ✅ kwargs stored in local metadata during tool registration
+- ❌ Heartbeat doesn't send kwargs to registry
+- ❌ Go registry doesn't handle kwargs in heartbeat
+- ❌ Dependency resolution responses don't include kwargs
+
+### Precise Changes Required:
+
+#### 1. Update Python heartbeat registration to include kwargs
+
+**File**: `src/runtime/python/_mcp_mesh/shared/registry_client_wrapper.py`
+**Location**: Update `create_mesh_agent_registration` method (around line 280)
+
+```python
+def create_mesh_agent_registration(self, health_status) -> MeshAgentRegistration:
+    """Create mesh agent registration with kwargs for heartbeat."""
+
+    tools = []
+    decorators = DecoratorRegistry.get_all_mesh_tools()
+
+    for func_name, decorated_func in decorators.items():
+        metadata = decorated_func.metadata
+
+        # Extract standard MCP fields
+        standard_fields = {
+            'capability', 'function_name', 'version', 'tags',
+            'description', 'dependencies'
+        }
+
+        # NEW: Extract kwargs (everything else) for registry storage
+        kwargs_dict = {
+            k: v for k, v in metadata.items()
+            if k not in standard_fields and not k.startswith('_')
+        }
+
+        # Convert dependencies to registry format
+        dep_registrations = []
+        for dep in metadata.get("dependencies", []):
+            dep_reg = MeshToolDependencyRegistration(
+                capability=dep["capability"],
+                tags=dep.get("tags", []),
+                version=dep.get("version"),
+                namespace=dep.get("namespace", "default"),
+            )
+            dep_registrations.append(dep_reg)
+
+        # Create tool registration with kwargs for heartbeat
+        # Now possible thanks to Phase 1 additionalProperties support
+        tool_reg = MeshToolRegistration(
+            function_name=func_name,
+            capability=metadata.get("capability"),
+            tags=metadata.get("tags", []),
+            version=metadata.get("version", "1.0.0"),
+            dependencies=dep_registrations,
+            description=metadata.get("description"),
+        )
+
+        # NEW: Set kwargs as additional properties (Phase 1 made this possible)
+        for key, value in kwargs_dict.items():
+            setattr(tool_reg, key, value)
+
+        tools.append(tool_reg)
+
+        self.logger.debug(f"🔧 Tool '{func_name}' heartbeat includes kwargs: {kwargs_dict}")
+
+    # Rest of method unchanged...
+    return MeshAgentRegistration(...)
+```
+
+#### 2. Add metadata endpoint for local introspection
+
+**File**: `src/runtime/python/_mcp_mesh/pipeline/startup/fastapiserver_setup.py`
+**Location**: Add after health endpoints
+
+```python
+@app.get("/metadata")
+async def get_routing_metadata():
+    """Get routing metadata for all capabilities on this agent."""
+    from ...engine.decorator_registry import DecoratorRegistry
+    from datetime import datetime
+
+    capabilities_metadata = {}
+
+    try:
+        registered_tools = DecoratorRegistry.get_all_mesh_tools()
+
+        for func_name, decorated_func in registered_tools.items():
+            metadata = decorated_func.metadata
+            capability_name = metadata.get('capability', func_name)
+
+            # Extract kwargs for metadata endpoint
+            standard_fields = {
+                'capability', 'function_name', 'version', 'tags',
+                'description', 'dependencies'
+            }
+            kwargs_dict = {
+                k: v for k, v in metadata.items()
+                if k not in standard_fields and not k.startswith('_')
+            }
+
+            capabilities_metadata[capability_name] = {
+                "function_name": func_name,
+                "capability": capability_name,
+                "version": metadata.get('version', '1.0.0'),
+                "tags": metadata.get('tags', []),
+                "description": metadata.get('description', ''),
+                # Include kwargs for routing intelligence
+                **kwargs_dict
+            }
+    except Exception as e:
+        logger.warning(f"Failed to get mesh tools metadata: {e}")
+        capabilities_metadata = {}
+
+    return {
+        "agent_id": context.get('agent_config', {}).get('agent_id', 'unknown'),
+        "capabilities": capabilities_metadata,
+        "timestamp": datetime.now().isoformat(),
+        "status": "healthy"
+    }
+```
+
+#### 3. Write test for heartbeat kwargs integration
+
+**File**: `src/runtime/python/tests/unit/test_02_heartbeat_kwargs_integration.py`
+
+```python
+import pytest
+from unittest.mock import patch, MagicMock
+
+from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.mesh_tool_registration import MeshToolRegistration
+
+class TestHeartbeatKwargsIntegration:
+    """Test kwargs integration in heartbeat registration."""
+
+    def test_heartbeat_includes_kwargs_from_decorator(self):
+        """Test that heartbeat registration includes kwargs from @mesh.tool."""
+
+        # Mock decorator registry with tool that has kwargs
+        mock_decorated_func = MagicMock()
+        mock_decorated_func.metadata = {
+            "capability": "enhanced_service",
+            "function_name": "enhanced_function",
+            "version": "1.0.0",
+            "description": "Enhanced function with kwargs",
+            # kwargs that should be included
+            "timeout": 45,
+            "retry_count": 3,
+            "streaming": True,
+            "custom_headers": {"X-API-Version": "v2"}
+        }
+
+        with patch.object(DecoratorRegistry, 'get_all_mesh_tools') as mock_get_tools:
+            mock_get_tools.return_value = {
+                "enhanced_function": mock_decorated_func
+            }
+
+            wrapper = RegistryClientWrapper("http://registry:8080")
+
+            # Mock health status
+            mock_health_status = MagicMock()
+            mock_health_status.agent_name = "test-agent"
+            mock_health_status.version = "1.0.0"
+            mock_health_status.timestamp = "2025-07-04T12:00:00Z"
+            mock_health_status.metadata = {
+                "http_host": "localhost",
+                "http_port": 8080,
+                "namespace": "default"
+            }
+
+            # Create registration
+            registration = wrapper.create_mesh_agent_registration(mock_health_status)
+
+            # Verify tool includes kwargs
+            assert len(registration.tools) == 1
+            tool_reg = registration.tools[0]
+
+            # Standard fields
+            assert tool_reg.function_name == "enhanced_function"
+            assert tool_reg.capability == "enhanced_service"
+
+            # Kwargs should be set as additional properties
+            tool_dict = tool_reg.to_dict()
+            assert tool_dict["timeout"] == 45
+            assert tool_dict["retry_count"] == 3
+            assert tool_dict["streaming"] is True
+            assert tool_dict["custom_headers"]["X-API-Version"] == "v2"
+
+    def test_heartbeat_backward_compatibility_no_kwargs(self):
+        """Test that heartbeat works for tools without kwargs."""
+
+        # Mock decorator registry with simple tool (no kwargs)
+        mock_decorated_func = MagicMock()
+        mock_decorated_func.metadata = {
+            "capability": "simple_service",
+            "function_name": "simple_function",
+            "version": "1.0.0",
+            "description": "Simple function without kwargs"
+        }
+
+        with patch.object(DecoratorRegistry, 'get_all_mesh_tools') as mock_get_tools:
+            mock_get_tools.return_value = {
+                "simple_function": mock_decorated_func
+            }
+
+            wrapper = RegistryClientWrapper("http://registry:8080")
+            mock_health_status = MagicMock()
+            mock_health_status.agent_name = "test-agent"
+            mock_health_status.version = "1.0.0"
+            mock_health_status.timestamp = "2025-07-04T12:00:00Z"
+            mock_health_status.metadata = {"http_host": "localhost", "http_port": 8080}
+
+            # Should work without kwargs
+            registration = wrapper.create_mesh_agent_registration(mock_health_status)
+
+            assert len(registration.tools) == 1
+            tool_reg = registration.tools[0]
+            assert tool_reg.function_name == "simple_function"
+            assert tool_reg.capability == "simple_service"
+
+            # Should not have additional properties beyond standard fields
+            tool_dict = tool_reg.to_dict()
+            # Remove None/empty values that might be added by model
+            tool_dict = {k: v for k, v in tool_dict.items() if v not in [None, [], {}]}
+
+            expected_keys = {
+                "function_name", "capability", "version", "description"
+            }
+            assert set(tool_dict.keys()).issubset(expected_keys)
+
+    def test_mixed_tools_some_with_kwargs_some_without(self):
+        """Test heartbeat with mix of tools (some with kwargs, some without)."""
+
+        # Tool with kwargs
+        enhanced_func = MagicMock()
+        enhanced_func.metadata = {
+            "capability": "enhanced_service",
+            "function_name": "enhanced_function",
+            "timeout": 60,
+            "streaming": True
+        }
+
+        # Tool without kwargs
+        simple_func = MagicMock()
+        simple_func.metadata = {
+            "capability": "simple_service",
+            "function_name": "simple_function"
+        }
+
+        with patch.object(DecoratorRegistry, 'get_all_mesh_tools') as mock_get_tools:
+            mock_get_tools.return_value = {
+                "enhanced_function": enhanced_func,
+                "simple_function": simple_func
+            }
+
+            wrapper = RegistryClientWrapper("http://registry:8080")
+            mock_health_status = MagicMock()
+            mock_health_status.agent_name = "test-agent"
+            mock_health_status.version = "1.0.0"
+            mock_health_status.timestamp = "2025-07-04T12:00:00Z"
+            mock_health_status.metadata = {"http_host": "localhost", "http_port": 8080}
+
+            registration = wrapper.create_mesh_agent_registration(mock_health_status)
+
+            assert len(registration.tools) == 2
+
+            # Find tools by capability
+            tools_by_capability = {
+                tool.capability: tool for tool in registration.tools
+            }
+
+            # Enhanced tool should have kwargs
+            enhanced_tool = tools_by_capability["enhanced_service"]
+            enhanced_dict = enhanced_tool.to_dict()
+            assert enhanced_dict["timeout"] == 60
+            assert enhanced_dict["streaming"] is True
+
+            # Simple tool should not have additional properties
+            simple_tool = tools_by_capability["simple_service"]
+            simple_dict = simple_tool.to_dict()
+            assert "timeout" not in simple_dict
+            assert "streaming" not in simple_dict
+```
+
+### What Phase 2 Accomplishes:
+
+- ✅ **Heartbeat kwargs flow**: Python agents send kwargs to registry during heartbeat
+- ✅ **Uses Phase 1 foundation**: Leverages additionalProperties from updated OpenAPI models
+- ✅ **Registry receives kwargs**: Foundation for storing tool configuration metadata
+- ✅ **Metadata endpoint**: Local introspection of tool kwargs configuration
+- ✅ **Backward compatibility**: Tools without kwargs continue working normally
+- ✅ **Mixed tool support**: Agents can have both kwargs and non-kwargs tools
+- ✅ **TDD validation**: Comprehensive tests verify kwargs flow
+
+### What Doesn't Work Yet (waiting for Phase 7-8):
+
+- ❌ Go registry doesn't store kwargs (needs database schema changes in Phase 7)
+- ❌ Dependency resolution responses don't include kwargs (Phase 8)
+- ❌ Enhanced client proxies don't exist (Phase 9)
+
+### Testing Phase 2:
+
+```python
+# Test 1: Verify kwargs in heartbeat registration
+@mesh.tool(
+    capability="test_capability",
+    timeout=30,
+    retry_count=3,
+    streaming=True,
+    custom_priority="high"
+)
+def test_function():
+    return "test"
+
+# Test 2: Verify metadata endpoint shows kwargs
+curl http://localhost:8080/metadata
+
+# Expected response:
+{
+  "agent_id": "agent-123",
+  "capabilities": {
+    "test_capability": {
+      "function_name": "test_function",
+      "capability": "test_capability",
+      "timeout": 30,
+      "retry_count": 3,
+      "streaming": true,
+      "custom_priority": "high"
+    }
+  },
+  "timestamp": "2025-07-04T12:00:00.000Z",
+  "status": "healthy"
+}
+
+# Test 3: Run kwargs integration tests
+python -m pytest src/runtime/python/tests/unit/test_02_heartbeat_kwargs_integration.py
+
+# Test 4: Verify backward compatibility
+@mesh.tool(capability="simple_capability")  # No kwargs
+def simple_function():
+    return "simple"
+
+# Should work without any kwargs
+curl http://localhost:8080/metadata | jq '.capabilities.simple_capability'
+```
+
+### Phase 2 → Phase 7-9 Connection:
+
+**Phase 2** establishes the flow of kwargs from tools to heartbeat registration. **Phases 7-9** complete the cycle:
+
+1. **Phase 7**: Go registry stores kwargs in database
+2. **Phase 8**: Registry returns kwargs in dependency resolution responses
+3. **Phase 9**: Client proxies auto-configure from received kwargs
+
+This creates the complete **declarative configuration loop**:
+
+```
+@mesh.tool(timeout=45) → Heartbeat (Phase 2) → Registry Storage (Phase 7) → Dependency Resolution (Phase 8) → Enhanced Proxy (Phase 9)
+```
+
+---
+
+## Phase 3: Full MCP Protocol Support
 
 **Goal**: Add full MCP protocol methods to existing `MCPClientProxy`
 **Risk**: Low - Extends existing proxy without breaking current functionality
@@ -1596,334 +2237,1271 @@ async for chunk in agent.call_tool_streaming("chat", {"message": "Hello"}):
 
 ---
 
-## Phase 7: Auto-Dependency Injection for System Components
+## Phase 7: Registry Schema Enhancement - kwargs Support Foundation
 
-**Goal**: Use MCP Mesh's own dependency injection to auto-discover cache and session agents
-**Risk**: Low - Uses existing DI system, graceful fallback to local implementations
-**Timeline**: 2-3 days
-**Files**: `src/runtime/python/_mcp_mesh/engine/http_wrapper.py`
+**Goal**: Extend registry database schema and OpenAPI models to support kwargs storage and retrieval
+**Risk**: Medium - Database schema changes require migration
+**Timeline**: 3-4 days
+**Files**: Go registry service, OpenAPI spec, Python generated models
 
 ### Current State Analysis:
 
-- ✅ Phase 5 implemented Redis session storage with fallback
-- ✅ Existing DependencyInjector is sophisticated and battle-tested
-- ❌ Redis is still manual configuration, not auto-discovered
-- ❌ No auto-discovery of distributed cache agents
+- ✅ `mesh.tool` decorator already supports kwargs in Python
+- ✅ kwargs stored in local metadata during tool registration
+- ❌ Registry database doesn't have kwargs column
+- ❌ OpenAPI schema doesn't include additional_properties field
+- ❌ kwargs lost during heartbeat registration process
 
-### Precise Changes Required:
+### TDD Approach - Tests First:
 
-#### 1. Add auto-dependency injection for system components
+#### 1. Write Go registry tests for kwargs storage
 
-**File**: `src/runtime/python/_mcp_mesh/engine/http_wrapper.py`
-**Location**: Replace SessionStorage with auto-injected system
+**File**: `src/core/registry/internal/storage/tools_test.go`
+**Location**: Add new test cases
 
-```python
-class SystemComponentInjector:
-    """Auto-inject system components using MCP Mesh's dependency injection."""
-
-    def __init__(self, context: dict):
-        self.context = context
-        self.cache_agent = None
-        self.session_agent = None
-        self.redis_client = None
-        self.memory_store = {}  # Fallback
-        self._inject_system_components()
-
-    def _inject_system_components(self):
-        """Auto-inject cache and session tracking using existing DI."""
-        from ...engine.dependency_injector import DependencyInjector
-
-        # Try to resolve distributed cache agent
-        try:
-            self.cache_agent = DependencyInjector.resolve_dependency(
-                "redis_cache",
-                context=self.context
-            )
-            if self.cache_agent:
-                logger.info("✅ Auto-injected distributed cache agent")
-        except Exception as e:
-            logger.debug(f"ℹ️ Cache agent not available: {e}")
-
-        # Try to resolve session tracking agent
-        try:
-            self.session_agent = DependencyInjector.resolve_dependency(
-                "session_tracker",
-                context=self.context
-            )
-            if self.session_agent:
-                logger.info("✅ Auto-injected session tracking agent")
-        except Exception as e:
-            logger.debug(f"ℹ️ Session tracking agent not available: {e}")
-
-        # Fallback to Redis client if available
-        if not self.cache_agent:
-            self._init_redis_fallback()
-
-    def _init_redis_fallback(self):
-        """Initialize Redis client as fallback when no cache agent available."""
-        try:
-            import redis
-            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
-            self.redis_client.ping()
-            logger.info(f"✅ Redis fallback connected: {redis_url}")
-        except Exception as e:
-            logger.info(f"ℹ️ Redis unavailable, using in-memory: {e}")
-            self.redis_client = None
-
-    async def get_session_pod(self, session_id: str, capability: str) -> str:
-        """Get assigned pod for session using auto-injected components."""
-        session_key = f"session:{session_id}:{capability}"
-
-        # Try session tracking agent first
-        if self.session_agent:
-            try:
-                result = await self.session_agent.get_session_assignment(
-                    session_id=session_id,
-                    capability=capability
-                )
-                if result and result.get('pod_ip'):
-                    logger.debug(f"📍 Session agent: {session_key} -> {result['pod_ip']}")
-                    return result['pod_ip']
-            except Exception as e:
-                logger.warning(f"Session agent failed, falling back: {e}")
-
-        # Try cache agent
-        if self.cache_agent:
-            try:
-                result = await self.cache_agent.get(key=session_key)
-                if result:
-                    logger.debug(f"📍 Cache agent: {session_key} -> {result}")
-                    return result
-            except Exception as e:
-                logger.warning(f"Cache agent failed, falling back: {e}")
-
-        # Try Redis client
-        if self.redis_client:
-            try:
-                assigned_pod = self.redis_client.get(session_key)
-                if assigned_pod:
-                    logger.debug(f"📍 Redis: {session_key} -> {assigned_pod}")
-                    return assigned_pod
-            except Exception as e:
-                logger.warning(f"Redis failed, falling back to memory: {e}")
-
-        # Fallback to memory
-        return self.memory_store.get(session_key)
-
-    async def assign_session_pod(self, session_id: str, capability: str, pod_ip: str) -> str:
-        """Assign pod to session using auto-injected components."""
-        session_key = f"session:{session_id}:{capability}"
-        ttl = 3600  # 1 hour
-
-        # Try session tracking agent first
-        if self.session_agent:
-            try:
-                await self.session_agent.assign_session(
-                    session_id=session_id,
-                    capability=capability,
-                    pod_ip=pod_ip,
-                    ttl=ttl
-                )
-                logger.info(f"📍 Session agent: Assigned {session_key} -> {pod_ip}")
-                return pod_ip
-            except Exception as e:
-                logger.warning(f"Session agent assignment failed: {e}")
-
-        # Try cache agent
-        if self.cache_agent:
-            try:
-                await self.cache_agent.set(
-                    key=session_key,
-                    value=pod_ip,
-                    ttl=ttl
-                )
-                logger.info(f"📍 Cache agent: Assigned {session_key} -> {pod_ip}")
-                return pod_ip
-            except Exception as e:
-                logger.warning(f"Cache agent assignment failed: {e}")
-
-        # Try Redis client
-        if self.redis_client:
-            try:
-                self.redis_client.setex(session_key, ttl, pod_ip)
-                logger.info(f"📍 Redis: Assigned {session_key} -> {pod_ip}")
-                return pod_ip
-            except Exception as e:
-                logger.warning(f"Redis assignment failed: {e}")
-
-        # Fallback to memory
-        self.memory_store[session_key] = pod_ip
-        logger.info(f"📍 Memory: Assigned {session_key} -> {pod_ip}")
-        return pod_ip
-
-    def get_stats(self) -> dict:
-        """Get system component statistics."""
-        return {
-            "cache_agent": "available" if self.cache_agent else "unavailable",
-            "session_agent": "available" if self.session_agent else "unavailable",
-            "redis_client": "available" if self.redis_client else "unavailable",
-            "fallback_sessions": len(self.memory_store),
-            "storage_hierarchy": [
-                "session_agent" if self.session_agent else None,
-                "cache_agent" if self.cache_agent else None,
-                "redis_client" if self.redis_client else None,
-                "memory_store"
-            ]
+```go
+func TestToolsStorage_KwargsSupport(t *testing.T) {
+    // Test 1: Basic kwargs storage and retrieval
+    t.Run("store_and_retrieve_basic_kwargs", func(t *testing.T) {
+        tool := &ent.Tool{
+            FunctionName: "test_function",
+            Capability:   "test_capability",
+            Kwargs:       `{"timeout": 30, "retry_count": 3}`,
         }
+
+        // Store tool with kwargs
+        stored, err := toolsStorage.Create(ctx, tool)
+        assert.NoError(t, err)
+        assert.JSONEq(t, `{"timeout": 30, "retry_count": 3}`, stored.Kwargs)
+
+        // Retrieve and verify kwargs
+        retrieved, err := toolsStorage.GetByCapability(ctx, "test_capability")
+        assert.NoError(t, err)
+        assert.JSONEq(t, `{"timeout": 30, "retry_count": 3}`, retrieved.Kwargs)
+    })
+
+    // Test 2: Complex kwargs with nested objects
+    t.Run("store_complex_kwargs", func(t *testing.T) {
+        complexKwargs := `{
+            "auth_config": {"type": "bearer", "required": true},
+            "rate_limits": [{"requests": 100, "window": "1m"}],
+            "custom_headers": {"X-API-Version": "v2"}
+        }`
+
+        tool := &ent.Tool{
+            FunctionName: "complex_function",
+            Capability:   "complex_capability",
+            Kwargs:       complexKwargs,
+        }
+
+        stored, err := toolsStorage.Create(ctx, tool)
+        assert.NoError(t, err)
+        assert.JSONEq(t, complexKwargs, stored.Kwargs)
+    })
+
+    // Test 3: Empty kwargs handling
+    t.Run("handle_empty_kwargs", func(t *testing.T) {
+        tool := &ent.Tool{
+            FunctionName: "simple_function",
+            Capability:   "simple_capability",
+            Kwargs:       "",
+        }
+
+        stored, err := toolsStorage.Create(ctx, tool)
+        assert.NoError(t, err)
+        assert.Equal(t, "", stored.Kwargs)
+    })
+
+    // Test 4: kwargs in dependency resolution response
+    t.Run("kwargs_in_dependency_resolution", func(t *testing.T) {
+        // Register tool with kwargs
+        tool := &ent.Tool{
+            FunctionName: "timeout_tool",
+            Capability:   "time_service",
+            Kwargs:       `{"timeout": 60, "streaming": true}`,
+        }
+        toolsStorage.Create(ctx, tool)
+
+        // Resolve dependencies
+        resolution, err := dependencyResolver.ResolveDependencies(ctx, "dependent_agent")
+        assert.NoError(t, err)
+
+        // Verify kwargs included in resolution
+        timeService := resolution["time_service"]
+        assert.Contains(t, timeService.Kwargs, "timeout")
+        assert.Contains(t, timeService.Kwargs, "streaming")
+    })
+}
 ```
 
-#### 2. Update HttpMcpWrapper to use auto-injection
+#### 2. Write Python client tests for kwargs handling
 
-**File**: `src/runtime/python/_mcp_mesh/engine/http_wrapper.py`
-**Location**: Replace SessionStorage usage in `__init__` method
+**File**: `src/runtime/python/tests/unit/test_17_kwargs_support.py`
 
 ```python
-class HttpMcpWrapper:
-    def __init__(self, mcp_server: FastMCP, context: dict = None):
-        self.mcp_server = mcp_server
-        self.context = context or {}
+import pytest
+from unittest.mock import patch, MagicMock
+from _mcp_mesh.engine.mcp_client_proxy import EnhancedMCPClientProxy
+from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
 
-        # Existing metadata caching...
-        self.metadata_cache = {}
-        self.cache_ttl = 60
-        self.last_cache_update = 0
+class TestKwargsSupport:
+    """Test kwargs support throughout the system."""
 
-        # Replace manual session storage with auto-injected system components
-        self.system_injector = SystemComponentInjector(self.context)
-        self.pod_ip = os.getenv('POD_IP', 'localhost')
-        self.pod_port = os.getenv('POD_PORT', '8080')
+    def test_tool_registration_preserves_kwargs(self):
+        """Test that tool registration preserves kwargs in registry."""
+        # Mock registry response with kwargs
+        mock_response = {
+            "function_name": "enhanced_tool",
+            "capability": "test_capability",
+            "kwargs": '{"timeout": 45, "retry_count": 2, "auth_required": true}'
+        }
+
+        wrapper = RegistryClientWrapper("http://registry:8080")
+
+        with patch.object(wrapper, '_register_tool') as mock_register:
+            mock_register.return_value = mock_response
+
+            # Verify kwargs are preserved during registration
+            result = wrapper.register_tool({
+                "function_name": "enhanced_tool",
+                "capability": "test_capability",
+                "timeout": 45,
+                "retry_count": 2,
+                "auth_required": True
+            })
+
+            assert "kwargs" in result
+            assert "timeout" in result["kwargs"]
+
+    def test_heartbeat_response_includes_kwargs(self):
+        """Test that heartbeat responses include kwargs."""
+        mock_heartbeat_response = {
+            "dependencies_resolved": {
+                "enhanced_tool": [{
+                    "capability": "test_capability",
+                    "endpoint": "http://service:8080",
+                    "function_name": "enhanced_tool",
+                    "kwargs": {
+                        "timeout": 45,
+                        "retry_count": 2,
+                        "streaming": True
+                    }
+                }]
+            }
+        }
+
+        # Verify kwargs parsing from heartbeat
+        wrapper = RegistryClientWrapper("http://registry:8080")
+        parsed = wrapper.parse_tool_dependencies(mock_heartbeat_response)
+
+        assert "enhanced_tool" in parsed
+        tool_info = parsed["enhanced_tool"][0]
+        assert tool_info["kwargs"]["timeout"] == 45
+        assert tool_info["kwargs"]["streaming"] is True
+
+    def test_enhanced_proxy_creation_with_kwargs(self):
+        """Test creating enhanced proxy with kwargs configuration."""
+        kwargs_config = {
+            "timeout": 60,
+            "retry_count": 3,
+            "custom_headers": {"X-API-Version": "v2"},
+            "streaming": True
+        }
+
+        proxy = EnhancedMCPClientProxy(
+            "http://service:8080",
+            "enhanced_tool",
+            **kwargs_config
+        )
+
+        assert proxy.timeout == 60
+        assert proxy.retry_count == 3
+        assert proxy.custom_headers["X-API-Version"] == "v2"
+        assert proxy.streaming_capable is True
 ```
 
-#### 3. Update session management to use auto-injected components
+### Database Schema Changes (TDD Implementation):
 
-**File**: `src/runtime/python/_mcp_mesh/engine/http_wrapper.py`
-**Location**: Update session methods
+#### 1. Create Ent migration for kwargs column
 
-```python
-async def _get_session_pod(self, session_id: str, capability: str) -> str:
-    """Get or assign pod for session using auto-injected components."""
+**File**: `src/core/registry/ent/migrate/migrations/20250704_add_kwargs_column.go`
 
-    # Check if session already assigned using auto-injected system
-    assigned_pod = await self.system_injector.get_session_pod(session_id, capability)
-    if assigned_pod:
-        return assigned_pod
+```go
+package migrations
 
-    # New session - assign using auto-injected system
-    target_pod = await self._assign_session_pod(session_id, capability)
-    return target_pod
+import (
+    "context"
+    "fmt"
 
-async def _assign_session_pod(self, session_id: str, capability: str) -> str:
-    """Assign session to pod using auto-injected components."""
+    "entgo.io/ent/dialect/sql"
+    "entgo.io/ent/dialect/sql/schema"
+)
 
-    # For Phase 7, still assign to current pod
-    # TODO: Future phases could implement pod discovery and consistent hashing
-    target_pod = self.pod_ip
-
-    await self.system_injector.assign_session_pod(session_id, capability, target_pod)
-    return target_pod
-
-def get_session_stats(self) -> dict:
-    """Get session statistics including auto-injected components."""
-    system_stats = self.system_injector.get_stats()
-
-    return {
-        "pod_ip": self.pod_ip,
-        "system_components": system_stats,
-        "auto_injection": {
-            "cache_agent": system_stats["cache_agent"],
-            "session_agent": system_stats["session_agent"],
-            "redis_fallback": system_stats["redis_client"],
-            "storage_hierarchy": system_stats["storage_hierarchy"]
-        }
+// AddKwargsColumn adds kwargs JSON column to tools table
+func AddKwargsColumn(ctx context.Context, tx *sql.Tx) error {
+    // Add kwargs column as TEXT (JSON) with default empty object
+    _, err := tx.ExecContext(ctx, `
+        ALTER TABLE tools
+        ADD COLUMN kwargs TEXT DEFAULT '{}' NOT NULL
+    `)
+    if err != nil {
+        return fmt.Errorf("failed to add kwargs column: %w", err)
     }
+
+    // Add index on kwargs for better query performance
+    _, err = tx.ExecContext(ctx, `
+        CREATE INDEX idx_tools_kwargs ON tools USING GIN ((kwargs::jsonb))
+    `)
+    if err != nil {
+        return fmt.Errorf("failed to create kwargs index: %w", err)
+    }
+
+    return nil
+}
 ```
 
-#### 4. Update context passing in pipeline
+#### 2. Update Ent schema definition
 
-**File**: `src/runtime/python/_mcp_mesh/pipeline/startup/fastapiserver_setup.py`
-**Location**: Pass context to HttpMcpWrapper
+**File**: `src/core/registry/ent/schema/tool.go`
+**Location**: Add kwargs field to Tool schema
 
-```python
-# In setup_fastapi_server function, when creating HttpMcpWrapper
-if http_wrapper:
-    # Pass context for auto-dependency injection
-    http_wrapper_instance = HttpMcpWrapper(server, context)
-    await http_wrapper_instance.setup()
+```go
+func (Tool) Fields() []ent.Field {
+    return []ent.Field{
+        field.String("function_name").NotEmpty(),
+        field.String("capability").NotEmpty(),
+        field.String("version").Default("1.0.0"),
+        field.Strings("tags").Optional(),
+        field.String("description").Optional(),
 
-    # Store in context for metadata endpoint access
-    context['http_wrapper'] = http_wrapper_instance
+        // NEW: Add kwargs field for custom metadata
+        field.Text("kwargs").
+            Default("{}").
+            Comment("JSON object containing custom tool metadata from **kwargs"),
+
+        field.Time("created_at").Default(time.Now),
+        field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now),
+    }
+}
+
+// Add helper methods for kwargs handling
+func (Tool) Mixin() []ent.Mixin {
+    return []ent.Mixin{
+        KwargsMixin{},
+    }
+}
+
+type KwargsMixin struct{}
+
+func (KwargsMixin) Fields() []ent.Field {
+    return []ent.Field{}
+}
+
+func (KwargsMixin) Hooks() []ent.Hook {
+    return []ent.Hook{
+        // Validate kwargs is valid JSON before saving
+        hook.On(
+            func(next ent.Mutator) ent.Mutator {
+                return hook.ToolFunc(func(ctx context.Context, m *gen.ToolMutation) (ent.Value, error) {
+                    if kwargs, exists := m.Kwargs(); exists {
+                        if !isValidJSON(kwargs) {
+                            return nil, fmt.Errorf("kwargs must be valid JSON: %s", kwargs)
+                        }
+                    }
+                    return next.Mutate(ctx, m)
+                })
+            },
+            ent.OpCreate|ent.OpUpdate,
+        ),
+    }
+}
+
+func isValidJSON(s string) bool {
+    var js interface{}
+    return json.Unmarshal([]byte(s), &js) == nil
+}
+```
+
+### OpenAPI Schema Updates:
+
+#### 3. Update OpenAPI specification
+
+**File**: `src/core/registry/docs/openapi.yaml`
+**Location**: Update MeshToolRegistration model
+
+```yaml
+MeshToolRegistration:
+  type: object
+  required:
+    - function_name
+    - capability
+  properties:
+    function_name:
+      type: string
+      minLength: 1
+      description: Name of the decorated function
+    capability:
+      type: string
+      minLength: 1
+      description: Capability provided by this function
+    version:
+      type: string
+      default: "1.0.0"
+      description: Function/capability version
+    tags:
+      type: array
+      items:
+        type: string
+      description: Tags for this capability
+    dependencies:
+      type: array
+      items:
+        $ref: "#/components/schemas/MeshToolDependencyRegistration"
+      description: Dependencies required by this function
+    description:
+      type: string
+      description: Function description
+    # NEW: Add kwargs for custom metadata
+    kwargs:
+      type: object
+      additionalProperties: true
+      description: Custom metadata from **kwargs in @mesh.tool decorator
+      example:
+        timeout: 30
+        retry_count: 3
+        auth_required: true
+        custom_headers:
+          X-API-Version: "v2"
+
+# Also update dependency resolution response
+DependencyResolution:
+  type: object
+  properties:
+    capability:
+      type: string
+    endpoint:
+      type: string
+    function_name:
+      type: string
+    status:
+      type: string
+    agent_id:
+      type: string
+    # NEW: Include kwargs in dependency resolution
+    kwargs:
+      type: object
+      additionalProperties: true
+      description: Custom tool metadata for client configuration
 ```
 
 ### What Works After Phase 7:
 
-- ✅ All previous functionality maintained
-- ✅ Auto-discovery of distributed cache agents using MCP Mesh DI
-- ✅ Auto-discovery of session tracking agents using MCP Mesh DI
-- ✅ Graceful fallback hierarchy: session_agent → cache_agent → redis → memory
-- ✅ Uses MCP Mesh's own dependency injection system
-- ✅ Visible system component status in metadata endpoint
+- ✅ **Database kwargs storage**: Registry stores kwargs as JSON in PostgreSQL
+- ✅ **Schema validation**: Ent validates kwargs as proper JSON before storage
+- ✅ **OpenAPI specification**: Updated models support additional_properties
+- ✅ **TDD foundation**: Comprehensive tests for kwargs storage and retrieval
+- ✅ **Migration ready**: Database migration script for production deployment
+- ✅ **Query optimization**: GIN index on kwargs JSON column for performance
 
 ### What Doesn't Work Yet:
 
-- ❌ No actual cache or session tracking agent implementations (need to be deployed)
-- ❌ No pod discovery for optimal session assignment
-- ❌ No consistent hashing across multiple pods
+- ❌ Python client doesn't send kwargs during registration
+- ❌ Heartbeat responses don't include kwargs
+- ❌ Enhanced client proxies don't exist yet
 
 ### Testing Phase 7:
 
 ```bash
-# Test with no system components (should use memory fallback)
-curl http://localhost:8080/metadata | jq '.session_affinity.auto_injection'
+# Test 1: Database migration
+cd src/core/registry
+go run cmd/migrate/main.go up
 
-# Deploy a cache agent and test auto-discovery
-# (This would require implementing actual cache agent)
+# Test 2: Run kwargs storage tests
+go test ./internal/storage -run TestToolsStorage_KwargsSupport
 
-# Test session assignment with auto-injection
-curl -H "X-Capability: session_test" -H "X-Session-ID: user-123" \
-     -X POST http://localhost:8080/mcp/ \
-     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_test","arguments":{}}}'
+# Test 3: Verify schema generation
+go generate ./ent
 
-# Check logs for auto-injection hierarchy
-tail -f logs/mcp-mesh.log | grep "Auto-injected\|Cache agent\|Session agent"
+# Test 4: Test OpenAPI spec validation
+swagger-codegen validate -i docs/openapi.yaml
+
+# Test 5: Generate Python models
+openapi-generator generate -i docs/openapi.yaml -g python -o generated/
 ```
 
 ---
 
-## Risk Mitigation Strategy
+## Phase 8: Python Client Integration - kwargs Preservation
 
-### Each Phase:
+**Goal**: Update Python runtime to preserve kwargs during registration and parse them from heartbeat responses
+**Risk**: Low - Additive changes to existing registration flow
+**Timeline**: 2-3 days
+**Files**: `registry_client_wrapper.py`, `dependency_resolution.py`, Python generated models
 
-1. **Feature Flags**: Enable/disable new features via environment variables
-2. **Backward Compatibility**: Always maintain existing behavior as default
-3. **Comprehensive Testing**: Each phase has specific test suite
-4. **Rollback Plan**: Can disable any phase features instantly
+### Current State Analysis (Post-Phase 7):
 
-### Example Feature Flags:
+- ✅ Registry database stores kwargs as JSON
+- ✅ OpenAPI models support kwargs field
+- ❌ Python client strips kwargs during tool registration
+- ❌ Heartbeat response parsing ignores kwargs
+- ❌ Dependency injection doesn't receive kwargs
+
+### TDD Approach - Python Integration Tests:
+
+#### 1. Write integration tests for kwargs flow
+
+**File**: `src/runtime/python/tests/integration/test_kwargs_end_to_end.py`
+
+```python
+import pytest
+import asyncio
+from unittest.mock import patch, MagicMock
+
+from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
+from _mcp_mesh.pipeline.heartbeat.dependency_resolution import DependencyResolutionStep
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+class TestKwargsEndToEnd:
+    """Test kwargs preservation from decorator to client proxy."""
+
+    @pytest.mark.asyncio
+    async def test_full_kwargs_flow(self):
+        """Test complete kwargs flow: decorator -> registry -> heartbeat -> proxy."""
+
+        # Step 1: Mock tool with kwargs
+        test_metadata = {
+            "capability": "enhanced_service",
+            "function_name": "enhanced_function",
+            "timeout": 45,
+            "retry_count": 3,
+            "streaming": True,
+            "custom_headers": {"X-Version": "v2"}
+        }
+
+        # Step 2: Test registry registration preserves kwargs
+        wrapper = RegistryClientWrapper("http://localhost:8080")
+
+        with patch.object(wrapper, '_make_request') as mock_request:
+            # Mock registry accepting kwargs
+            mock_request.return_value = {
+                "status": "success",
+                "tool": {
+                    "function_name": "enhanced_function",
+                    "capability": "enhanced_service",
+                    "kwargs": {
+                        "timeout": 45,
+                        "retry_count": 3,
+                        "streaming": True,
+                        "custom_headers": {"X-Version": "v2"}
+                    }
+                }
+            }
+
+            registration_result = await wrapper.register_mesh_tool(test_metadata)
+
+            # Verify kwargs were sent to registry
+            sent_data = mock_request.call_args[1]['json']
+            assert sent_data['tools'][0]['kwargs']['timeout'] == 45
+            assert sent_data['tools'][0]['kwargs']['streaming'] is True
+
+        # Step 3: Test heartbeat response includes kwargs
+        mock_heartbeat_response = {
+            "dependencies_resolved": {
+                "enhanced_function": [{
+                    "capability": "enhanced_service",
+                    "endpoint": "http://remote:8080",
+                    "function_name": "enhanced_function",
+                    "kwargs": {
+                        "timeout": 45,
+                        "retry_count": 3,
+                        "streaming": True,
+                        "custom_headers": {"X-Version": "v2"}
+                    }
+                }]
+            }
+        }
+
+        # Step 4: Test dependency resolution processes kwargs
+        resolution_step = DependencyResolutionStep()
+
+        with patch('_mcp_mesh.engine.dependency_injector.get_global_injector') as mock_injector:
+            mock_injector_instance = MagicMock()
+            mock_injector.return_value = mock_injector_instance
+
+            # Mock the hash comparison to trigger update
+            with patch.object(resolution_step, '_hash_dependency_state', side_effect=['hash1', 'hash2']):
+                await resolution_step.process_heartbeat_response_for_rewiring(mock_heartbeat_response)
+
+                # Verify enhanced proxy creation with kwargs
+                mock_injector_instance.register_dependency.assert_called()
+                call_args = mock_injector_instance.register_dependency.call_args
+                capability, proxy = call_args[0]
+
+                assert capability == "enhanced_service"
+                assert hasattr(proxy, 'kwargs_config')
+                assert proxy.kwargs_config['timeout'] == 45
+                assert proxy.kwargs_config['streaming'] is True
+
+    def test_kwargs_backward_compatibility(self):
+        """Test that tools without kwargs continue to work."""
+        simple_metadata = {
+            "capability": "simple_service",
+            "function_name": "simple_function"
+        }
+
+        wrapper = RegistryClientWrapper("http://localhost:8080")
+
+        with patch.object(wrapper, '_make_request') as mock_request:
+            mock_request.return_value = {"status": "success"}
+
+            # Should work without kwargs
+            result = wrapper.register_mesh_tool(simple_metadata)
+
+            sent_data = mock_request.call_args[1]['json']
+            # kwargs should be empty dict, not cause errors
+            assert sent_data['tools'][0].get('kwargs', {}) == {}
+```
+
+### Implementation - Update Python Client:
+
+#### 2. Update registry client wrapper to preserve kwargs
+
+**File**: `src/runtime/python/_mcp_mesh/shared/registry_client_wrapper.py`
+**Location**: Update `create_mesh_agent_registration` method (around line 280)
+
+```python
+def create_mesh_agent_registration(self, health_status) -> MeshAgentRegistration:
+    """Create mesh agent registration with kwargs preservation."""
+
+    tools = []
+    decorators = DecoratorRegistry.get_all_mesh_tools()
+
+    for func_name, decorated_func in decorators.items():
+        metadata = decorated_func.metadata
+
+        # Extract standard MCP fields
+        standard_fields = {
+            'capability', 'function_name', 'version', 'tags',
+            'description', 'dependencies'
+        }
+
+        # NEW: Extract kwargs (everything else)
+        kwargs_dict = {
+            k: v for k, v in metadata.items()
+            if k not in standard_fields and not k.startswith('_')
+        }
+
+        # Convert dependencies to registry format
+        dep_registrations = []
+        for dep in metadata.get("dependencies", []):
+            dep_reg = MeshToolDependencyRegistration(
+                capability=dep["capability"],
+                tags=dep.get("tags", []),
+                version=dep.get("version"),
+                namespace=dep.get("namespace", "default"),
+            )
+            dep_registrations.append(dep_reg)
+
+        # Create tool registration with kwargs
+        tool_reg = MeshToolRegistration(
+            function_name=func_name,
+            capability=metadata.get("capability"),
+            tags=metadata.get("tags", []),
+            version=metadata.get("version", "1.0.0"),
+            dependencies=dep_registrations,
+            description=metadata.get("description"),
+            kwargs=kwargs_dict  # NEW: Include kwargs
+        )
+        tools.append(tool_reg)
+
+        self.logger.debug(f"🔧 Tool '{func_name}' registered with kwargs: {kwargs_dict}")
+
+    # Rest of method unchanged...
+    return MeshAgentRegistration(...)
+```
+
+#### 3. Update heartbeat response parsing to extract kwargs
+
+**File**: `src/runtime/python/_mcp_mesh/shared/registry_client_wrapper.py`
+**Location**: Update `parse_tool_dependencies` method (around line 400)
+
+```python
+def parse_tool_dependencies(self, heartbeat_response: dict) -> dict:
+    """Parse tool dependencies from heartbeat response with kwargs support."""
+
+    dependencies_resolved = heartbeat_response.get("dependencies_resolved", {})
+    parsed_dependencies = {}
+
+    for function_name, dependency_list in dependencies_resolved.items():
+        if not isinstance(dependency_list, list):
+            continue
+
+        parsed_dependencies[function_name] = []
+
+        for dep_resolution in dependency_list:
+            if not isinstance(dep_resolution, dict):
+                continue
+
+            # Standard dependency fields
+            parsed_dep = {
+                "capability": dep_resolution.get("capability", ""),
+                "endpoint": dep_resolution.get("endpoint", ""),
+                "function_name": dep_resolution.get("function_name", ""),
+                "status": dep_resolution.get("status", ""),
+                "agent_id": dep_resolution.get("agent_id", ""),
+            }
+
+            # NEW: Extract kwargs if present
+            if "kwargs" in dep_resolution:
+                parsed_dep["kwargs"] = dep_resolution["kwargs"]
+                self.logger.debug(f"🔧 Parsed kwargs for {dep_resolution.get('capability')}: {dep_resolution['kwargs']}")
+
+            parsed_dependencies[function_name].append(parsed_dep)
+
+    return parsed_dependencies
+```
+
+#### 4. Update dependency resolution to pass kwargs to proxy creation
+
+**File**: `src/runtime/python/_mcp_mesh/pipeline/heartbeat/dependency_resolution.py`
+**Location**: Update proxy creation logic (around line 320)
+
+```python
+# In process_heartbeat_response_for_rewiring method
+for function_name, dependencies in current_state.items():
+    for capability, dep_info in dependencies.items():
+        status = dep_info["status"]
+        endpoint = dep_info["endpoint"]
+        dep_function_name = dep_info["function_name"]
+        kwargs_config = dep_info.get("kwargs", {})  # NEW: Extract kwargs
+
+        if status == "available" and endpoint and dep_function_name:
+            # ... existing self-dependency logic ...
+
+            if is_self_dependency:
+                # ... existing self-dependency creation ...
+            else:
+                # NEW: Create cross-service proxy with kwargs configuration
+                proxy_type = self._determine_proxy_type_for_capability(capability, injector)
+
+                if proxy_type == "FullMCPProxy":
+                    new_proxy = FullMCPProxy(
+                        endpoint,
+                        dep_function_name,
+                        kwargs_config=kwargs_config  # NEW: Pass kwargs
+                    )
+                    self.logger.debug(
+                        f"🔧 Created FullMCPProxy with kwargs: {kwargs_config}"
+                    )
+                else:
+                    new_proxy = MCPClientProxy(
+                        endpoint,
+                        dep_function_name,
+                        kwargs_config=kwargs_config  # NEW: Pass kwargs
+                    )
+                    self.logger.debug(
+                        f"🔧 Created MCPClientProxy with kwargs: {kwargs_config}"
+                    )
+
+            # Update in injector
+            await injector.register_dependency(capability, new_proxy)
+            updated_count += 1
+```
+
+### Regenerate Python Models:
+
+#### 5. Update generated Python models to include kwargs
+
+**File**: `src/runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client/models/mesh_tool_registration.py`
+**Action**: Regenerate from updated OpenAPI spec
 
 ```bash
-# Phase 1
-MCP_MESH_METADATA_ENDPOINT=true
-
-# Phase 2
-MCP_MESH_UNIVERSAL_PROXY=true
-
-# Phase 3
-MCP_MESH_HTTP_WRAPPER_INTELLIGENCE=true
-
-# Phase 4
-MCP_MESH_SESSION_AFFINITY=true
-
-# Phase 5
-MCP_MESH_REDIS_SESSIONS=true
-MCP_MESH_REDIS_URL=redis://...
-
-# Phase 6
-MCP_MESH_FULL_MCP_PROTOCOL=true
-
-# Phase 7
-MCP_MESH_AUTO_DEPENDENCY_INJECTION=true
+# Regenerate Python models from updated OpenAPI spec
+cd src/core/registry
+openapi-generator generate \
+  -i docs/openapi.yaml \
+  -g python \
+  -o ../../runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client/ \
+  --additional-properties=packageName=mcp_mesh_registry_client
 ```
+
+### What Works After Phase 8:
+
+- ✅ **Kwargs registration**: Python client preserves kwargs during tool registration
+- ✅ **Heartbeat kwargs**: Dependency resolution responses include kwargs
+- ✅ **Kwargs parsing**: Python client extracts kwargs from heartbeat responses
+- ✅ **Proxy configuration**: kwargs passed to proxy constructors for configuration
+- ✅ **Backward compatibility**: Tools without kwargs continue working normally
+- ✅ **End-to-end flow**: kwargs flow from decorator through registry to client proxy
+
+### What Doesn't Work Yet:
+
+- ❌ Client proxies don't use kwargs for auto-configuration
+- ❌ No enhanced proxy classes that leverage kwargs
+- ❌ No automatic timeout/retry/header configuration
+
+### Testing Phase 8:
+
+```python
+# Test 1: Verify kwargs registration
+@mesh.tool(
+    capability="enhanced_test",
+    timeout=60,
+    retry_count=5,
+    custom_headers={"X-Test": "true"}
+)
+def enhanced_test_function():
+    return "test"
+
+# Check that kwargs are preserved in registry
+curl http://localhost:8080/api/tools/enhanced_test
+# Expected: kwargs field contains timeout, retry_count, custom_headers
+
+# Test 2: Verify heartbeat includes kwargs
+curl http://localhost:8080/api/agents/test-agent/heartbeat
+# Expected: dependencies_resolved includes kwargs for each tool
+
+# Test 3: Verify dependency resolution receives kwargs
+# (Check logs for "Created [proxy type] with kwargs: {...}")
+
+# Test 4: Integration test
+python -m pytest src/runtime/python/tests/integration/test_kwargs_end_to_end.py
+```
+
+---
+
+## Phase 9: Enhanced Client Proxies - Auto-Configuration
+
+**Goal**: Create enhanced client proxy classes that auto-configure based on kwargs from registry
+**Risk**: Low - New proxy classes, existing proxies unchanged
+**Timeline**: 3-4 days
+**Files**: `mcp_client_proxy.py`, new enhanced proxy classes
+
+### Current State Analysis (Post-Phase 8):
+
+- ✅ kwargs flow end-to-end from decorator to dependency resolution
+- ✅ Registry stores and returns kwargs in heartbeat responses
+- ✅ Python client passes kwargs to proxy constructors
+- ❌ Proxy classes don't use kwargs for auto-configuration
+- ❌ No enhanced timeout, retry, headers, or streaming configuration
+
+### TDD Approach - Enhanced Proxy Tests:
+
+#### 1. Write tests for enhanced proxy auto-configuration
+
+**File**: `src/runtime/python/tests/unit/test_18_enhanced_proxy_configuration.py`
+
+```python
+import pytest
+import asyncio
+from unittest.mock import patch, MagicMock
+import httpx
+
+from _mcp_mesh.engine.mcp_client_proxy import EnhancedMCPClientProxy, EnhancedFullMCPProxy
+
+class TestEnhancedProxyConfiguration:
+    """Test enhanced proxy auto-configuration from kwargs."""
+
+    def test_enhanced_proxy_timeout_configuration(self):
+        """Test automatic timeout configuration from kwargs."""
+        kwargs_config = {
+            "timeout": 45,
+            "retry_count": 3
+        }
+
+        proxy = EnhancedMCPClientProxy(
+            "http://service:8080",
+            "timeout_function",
+            kwargs_config=kwargs_config
+        )
+
+        assert proxy.timeout == 45
+        assert proxy.retry_count == 3
+        assert proxy.max_retries == 3
+
+    def test_enhanced_proxy_custom_headers(self):
+        """Test automatic header configuration from kwargs."""
+        kwargs_config = {
+            "custom_headers": {
+                "X-API-Version": "v2",
+                "X-Client-ID": "mcp-mesh"
+            },
+            "auth_required": True
+        }
+
+        proxy = EnhancedMCPClientProxy(
+            "http://service:8080",
+            "header_function",
+            kwargs_config=kwargs_config
+        )
+
+        assert proxy.custom_headers["X-API-Version"] == "v2"
+        assert proxy.custom_headers["X-Client-ID"] == "mcp-mesh"
+        assert proxy.auth_required is True
+
+    @pytest.mark.asyncio
+    async def test_enhanced_proxy_retry_logic(self):
+        """Test automatic retry logic from kwargs."""
+        kwargs_config = {
+            "retry_count": 3,
+            "retry_delay": 1.0,
+            "retry_backoff": 2.0
+        }
+
+        proxy = EnhancedMCPClientProxy(
+            "http://unreliable:8080",
+            "flaky_function",
+            kwargs_config=kwargs_config
+        )
+
+        # Mock httpx to fail twice, then succeed
+        call_count = 0
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise httpx.ConnectError("Connection failed")
+            else:
+                response = MagicMock()
+                response.json.return_value = {
+                    "jsonrpc": "2.0",
+                    "id": "test",
+                    "result": {"content": "success after retries"}
+                }
+                response.raise_for_status.return_value = None
+                return response
+
+        with patch('httpx.AsyncClient.post', side_effect=mock_post):
+            result = await proxy(test_param="value")
+
+        # Should have retried 2 times before success
+        assert call_count == 3
+        assert "success after retries" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_enhanced_proxy_streaming_configuration(self):
+        """Test automatic streaming configuration from kwargs."""
+        kwargs_config = {
+            "streaming": True,
+            "stream_timeout": 120,
+            "buffer_size": 8192
+        }
+
+        proxy = EnhancedFullMCPProxy(
+            "http://streaming:8080",
+            "stream_function",
+            kwargs_config=kwargs_config
+        )
+
+        assert proxy.streaming_capable is True
+        assert proxy.stream_timeout == 120
+        assert proxy.buffer_size == 8192
+
+        # Test streaming call auto-selection
+        with patch.object(proxy, '_make_streaming_request') as mock_stream:
+            mock_stream.return_value = async_generator_mock()
+
+            # Should automatically use streaming for this proxy
+            result = await proxy.call_tool_auto("stream_test", {"input": "data"})
+
+            mock_stream.assert_called_once()
+
+    def test_enhanced_proxy_content_type_handling(self):
+        """Test automatic content type configuration from kwargs."""
+        kwargs_config = {
+            "accepts": ["application/json", "text/plain"],
+            "content_type": "application/json",
+            "max_response_size": 1024 * 1024  # 1MB
+        }
+
+        proxy = EnhancedMCPClientProxy(
+            "http://service:8080",
+            "content_function",
+            kwargs_config=kwargs_config
+        )
+
+        assert "application/json" in proxy.accepted_content_types
+        assert "text/plain" in proxy.accepted_content_types
+        assert proxy.default_content_type == "application/json"
+        assert proxy.max_response_size == 1024 * 1024
+
+    def test_enhanced_proxy_fallback_to_basic(self):
+        """Test fallback to basic proxy when no kwargs provided."""
+        # No kwargs_config provided
+        proxy = EnhancedMCPClientProxy(
+            "http://service:8080",
+            "basic_function"
+        )
+
+        # Should use default values
+        assert proxy.timeout == 30  # Default
+        assert proxy.retry_count == 1  # Default (no retries)
+        assert proxy.custom_headers == {}
+        assert proxy.streaming_capable is False
+
+async def async_generator_mock():
+    """Mock async generator for streaming tests."""
+    yield {"chunk": 1, "data": "first"}
+    yield {"chunk": 2, "data": "second"}
+    yield {"chunk": 3, "data": "final", "done": True}
+```
+
+### Implementation - Enhanced Proxy Classes:
+
+#### 2. Create EnhancedMCPClientProxy with auto-configuration
+
+**File**: `src/runtime/python/_mcp_mesh/engine/mcp_client_proxy.py`
+**Location**: Add new enhanced proxy classes
+
+```python
+class EnhancedMCPClientProxy(MCPClientProxy):
+    """Enhanced MCP client proxy with kwargs-based auto-configuration.
+
+    Auto-configures based on kwargs from @mesh.tool decorator:
+    - timeout: Request timeout in seconds
+    - retry_count: Number of retries for failed requests
+    - retry_delay: Base delay between retries (seconds)
+    - retry_backoff: Backoff multiplier for retry delays
+    - custom_headers: Dict of additional headers to send
+    - auth_required: Whether authentication is required
+    - accepts: List of accepted content types
+    - content_type: Default content type for requests
+    - max_response_size: Maximum allowed response size
+    """
+
+    def __init__(self, endpoint: str, function_name: str, kwargs_config: dict = None):
+        super().__init__(endpoint, function_name)
+
+        self.kwargs_config = kwargs_config or {}
+
+        # Auto-configure from kwargs
+        self._configure_from_kwargs()
+
+    def _configure_from_kwargs(self):
+        """Auto-configure proxy settings from kwargs."""
+        # Timeout configuration
+        self.timeout = self.kwargs_config.get("timeout", 30)
+
+        # Retry configuration
+        self.retry_count = self.kwargs_config.get("retry_count", 1)
+        self.max_retries = self.retry_count
+        self.retry_delay = self.kwargs_config.get("retry_delay", 1.0)
+        self.retry_backoff = self.kwargs_config.get("retry_backoff", 2.0)
+
+        # Header configuration
+        self.custom_headers = self.kwargs_config.get("custom_headers", {})
+        self.auth_required = self.kwargs_config.get("auth_required", False)
+
+        # Content type configuration
+        self.accepted_content_types = self.kwargs_config.get("accepts", ["application/json"])
+        self.default_content_type = self.kwargs_config.get("content_type", "application/json")
+        self.max_response_size = self.kwargs_config.get("max_response_size", 10 * 1024 * 1024)  # 10MB default
+
+        # Streaming configuration
+        self.streaming_capable = self.kwargs_config.get("streaming", False)
+
+        self.logger.info(
+            f"🔧 Enhanced proxy configured - timeout: {self.timeout}s, "
+            f"retries: {self.retry_count}, streaming: {self.streaming_capable}"
+        )
+
+    async def __call__(self, **kwargs) -> Any:
+        """Enhanced callable with retry logic and custom configuration."""
+        return await self._make_request_with_retries("tools/call", {
+            "name": self.function_name,
+            "arguments": kwargs
+        })
+
+    async def _make_request_with_retries(self, method: str, params: dict) -> Any:
+        """Make MCP request with automatic retry logic."""
+        last_exception = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self._make_enhanced_request(method, params)
+
+            except Exception as e:
+                last_exception = e
+
+                if attempt < self.max_retries:
+                    # Calculate retry delay with backoff
+                    delay = self.retry_delay * (self.retry_backoff ** attempt)
+
+                    self.logger.warning(
+                        f"🔄 Request failed (attempt {attempt + 1}/{self.max_retries + 1}), "
+                        f"retrying in {delay:.1f}s: {str(e)}"
+                    )
+
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(
+                        f"❌ All {self.max_retries + 1} attempts failed for {self.function_name}"
+                    )
+
+        raise last_exception
+
+    async def _make_enhanced_request(self, method: str, params: dict) -> Any:
+        """Make enhanced MCP request with custom headers and configuration."""
+        request_id = str(uuid.uuid4())
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params
+        }
+
+        # Build headers with custom configuration
+        headers = {
+            "Content-Type": self.default_content_type,
+            "Accept": ", ".join(self.accepted_content_types)
+        }
+
+        # Add custom headers
+        headers.update(self.custom_headers)
+
+        # Add authentication headers if required
+        if self.auth_required:
+            # In production, get auth token from config/env
+            auth_token = os.getenv("MCP_MESH_AUTH_TOKEN")
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+            else:
+                self.logger.warning("⚠️ Authentication required but no token available")
+
+        url = f"{self.endpoint}/mcp/"
+
+        try:
+            # Use configured timeout
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(url, json=payload, headers=headers)
+
+                # Check response size
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > self.max_response_size:
+                    raise ValueError(f"Response too large: {content_length} bytes > {self.max_response_size}")
+
+                response.raise_for_status()
+
+                result = response.json()
+                if "error" in result:
+                    raise Exception(f"MCP request failed: {result['error']}")
+
+                # Apply existing content extraction
+                from ..shared.content_extractor import ContentExtractor
+                return ContentExtractor.extract_content(result.get("result"))
+
+        except httpx.TimeoutException:
+            raise Exception(f"Request timeout after {self.timeout}s")
+        except httpx.ConnectError as e:
+            raise Exception(f"Connection failed: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Enhanced request failed: {e}")
+            raise
+
+
+class EnhancedFullMCPProxy(FullMCPProxy):
+    """Enhanced Full MCP proxy with streaming auto-configuration."""
+
+    def __init__(self, endpoint: str, function_name: str, kwargs_config: dict = None):
+        super().__init__(endpoint, function_name)
+
+        self.kwargs_config = kwargs_config or {}
+        self._configure_streaming_from_kwargs()
+
+    def _configure_streaming_from_kwargs(self):
+        """Configure streaming capabilities from kwargs."""
+        self.streaming_capable = self.kwargs_config.get("streaming", False)
+        self.stream_timeout = self.kwargs_config.get("stream_timeout", 300)  # 5 minutes
+        self.buffer_size = self.kwargs_config.get("buffer_size", 4096)
+
+        # Inherit all EnhancedMCPClientProxy configuration
+        enhanced_proxy = EnhancedMCPClientProxy.__new__(EnhancedMCPClientProxy)
+        enhanced_proxy.__init__(self.endpoint, self.function_name, self.kwargs_config)
+
+        # Copy enhanced configuration
+        self.timeout = enhanced_proxy.timeout
+        self.retry_count = enhanced_proxy.retry_count
+        self.custom_headers = enhanced_proxy.custom_headers
+        self.auth_required = enhanced_proxy.auth_required
+
+        self.logger.info(
+            f"🌊 Enhanced Full MCP proxy configured - streaming: {self.streaming_capable}, "
+            f"stream_timeout: {self.stream_timeout}s"
+        )
+
+    async def call_tool_auto(self, name: str, arguments: dict = None) -> Any:
+        """Automatically choose streaming vs non-streaming based on configuration."""
+        if self.streaming_capable:
+            # Return async generator for streaming
+            return self.call_tool_streaming(name, arguments)
+        else:
+            # Return regular result
+            return await self.call_tool(name, arguments)
+
+    async def call_tool_streaming(self, name: str, arguments: dict = None) -> AsyncIterator[dict]:
+        """Enhanced streaming with auto-configuration."""
+        if not self.streaming_capable:
+            raise ValueError(f"Tool {name} not configured for streaming (streaming=False in kwargs)")
+
+        async for chunk in self._make_streaming_request_enhanced("tools/call", {
+            "name": name,
+            "arguments": arguments or {}
+        }):
+            yield chunk
+
+    async def _make_streaming_request_enhanced(self, method: str, params: dict) -> AsyncIterator[dict]:
+        """Make enhanced streaming request with kwargs configuration."""
+        request_id = str(uuid.uuid4())
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream"
+        }
+
+        # Add custom headers
+        headers.update(self.custom_headers)
+
+        url = f"{self.endpoint}/mcp/"
+
+        try:
+            # Use stream-specific timeout
+            async with httpx.AsyncClient(timeout=self.stream_timeout) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as response:
+                    response.raise_for_status()
+
+                    buffer = ""
+                    async for chunk in response.aiter_bytes(self.buffer_size):
+                        buffer += chunk.decode('utf-8')
+
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+
+                            if line.startswith("data: "):
+                                try:
+                                    data = json.loads(line[6:])
+                                    yield data
+                                except json.JSONDecodeError:
+                                    continue
+
+        except httpx.TimeoutException:
+            raise Exception(f"Streaming timeout after {self.stream_timeout}s")
+        except Exception as e:
+            self.logger.error(f"Enhanced streaming request failed: {e}")
+            raise
+```
+
+#### 3. Update dependency injection to use enhanced proxies
+
+**File**: `src/runtime/python/_mcp_mesh/pipeline/heartbeat/dependency_resolution.py`
+**Location**: Update proxy creation logic (around line 314)
+
+```python
+# In process_heartbeat_response_for_rewiring method
+else:
+    # Create cross-service proxy based on parameter types and kwargs
+    proxy_type = self._determine_proxy_type_for_capability(capability, injector)
+
+    if proxy_type == "FullMCPProxy":
+        # Use enhanced proxy if kwargs available
+        if kwargs_config:
+            new_proxy = EnhancedFullMCPProxy(
+                endpoint,
+                dep_function_name,
+                kwargs_config=kwargs_config
+            )
+            self.logger.info(
+                f"🔧 Created EnhancedFullMCPProxy for '{capability}' with "
+                f"timeout={kwargs_config.get('timeout', 30)}s, "
+                f"streaming={kwargs_config.get('streaming', False)}"
+            )
+        else:
+            new_proxy = FullMCPProxy(endpoint, dep_function_name)
+            self.logger.debug(
+                f"🔄 Created standard FullMCPProxy for '{capability}'"
+            )
+    else:
+        # Use enhanced proxy if kwargs available
+        if kwargs_config:
+            new_proxy = EnhancedMCPClientProxy(
+                endpoint,
+                dep_function_name,
+                kwargs_config=kwargs_config
+            )
+            self.logger.info(
+                f"🔧 Created EnhancedMCPClientProxy for '{capability}' with "
+                f"retries={kwargs_config.get('retry_count', 1)}, "
+                f"timeout={kwargs_config.get('timeout', 30)}s"
+            )
+        else:
+            new_proxy = MCPClientProxy(endpoint, dep_function_name)
+            self.logger.debug(
+                f"🔄 Created standard MCPClientProxy for '{capability}'"
+            )
+```
+
+### What Works After Phase 9:
+
+- ✅ **Auto-configuration**: Proxies auto-configure from kwargs (timeout, retries, headers)
+- ✅ **Enhanced reliability**: Automatic retry logic with exponential backoff
+- ✅ **Custom headers**: Authentication and API versioning headers automatically added
+- ✅ **Content type handling**: Configurable accepted types and response size limits
+- ✅ **Streaming optimization**: Auto-selection between streaming and non-streaming calls
+- ✅ **Backward compatibility**: Standard proxies still work for tools without kwargs
+- ✅ **Production ready**: Timeout, auth, and error handling for real deployments
+
+### What Doesn't Work Yet:
+
+- ❌ No circuit breaker integration with kwargs
+- ❌ No advanced authentication methods (OAuth, mTLS)
+- ❌ No parameter validation from kwargs schemas
+
+### Testing Phase 9:
+
+```python
+# Test 1: Tool with comprehensive kwargs
+@mesh.tool(
+    capability="enhanced_api",
+    timeout=45,
+    retry_count=3,
+    retry_delay=2.0,
+    custom_headers={"X-API-Key": "secret", "X-Version": "v2"},
+    auth_required=True,
+    streaming=True,
+    max_response_size=5*1024*1024  # 5MB
+)
+def enhanced_api_call(query: str):
+    return f"Enhanced API result for: {query}"
+
+# Test 2: Verify auto-configuration in logs
+# Expected: "Enhanced proxy configured - timeout: 45s, retries: 3, streaming: True"
+
+# Test 3: Test retry logic
+# Simulate network failures, verify retries with backoff
+
+# Test 4: Test streaming auto-selection
+async def test_streaming():
+    from _mcp_mesh.engine.dependency_injector import get_global_injector
+
+    injector = get_global_injector()
+    enhanced_api = injector.resolve_dependency("enhanced_api")
+
+    # Should automatically use streaming for configured tool
+    async for chunk in enhanced_api.call_tool_auto("enhanced_api_call", {"query": "test"}):
+        print(f"Streaming chunk: {chunk}")
+
+# Test 5: Integration test
+python -m pytest src/runtime/python/tests/unit/test_18_enhanced_proxy_configuration.py
+```
+
+---
 
 ### Progressive Rollout:
 
@@ -1937,3 +3515,5 @@ MCP_MESH_AUTO_DEPENDENCY_INJECTION=true
 Each phase builds on the previous one while maintaining full backward compatibility. The system works end-to-end at every phase, with clearly defined capabilities and limitations. This approach minimizes risk while delivering incremental value.
 
 The key insight is that we're not breaking anything - we're **adding intelligence layer by layer** while preserving existing functionality at each step.
+
+**Phase 7-9 Summary**: The kwargs enhancement creates a powerful declarative configuration system where tool behavior is specified at decoration time and automatically applied throughout the distributed system. This enables sophisticated client auto-configuration while maintaining the simplicity of the current @mesh.tool API.

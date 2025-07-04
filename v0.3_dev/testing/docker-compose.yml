@@ -246,8 +246,8 @@ services:
       - redis
     profiles: ["phase7"]
 
-  # FastMCP agent - basic capabilities with McpMeshAgent (regression test)
-  fastmcp-agent:
+  # FastMCP agent instance 1 - for session affinity testing
+  fastmcp-agent-1:
     image: python:3.11-slim
     volumes:
       - ../../src/runtime/python:/app # Mount actual source code
@@ -263,15 +263,51 @@ services:
       - MCP_MESH_ENABLED=true
       - MCP_MESH_AUTO_RUN=true
       - MCP_MESH_REGISTRY_URL=http://registry:8000
-      - POD_IP=fastmcp-agent
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=fastmcp-agent-1
       - POD_PORT=8080
       - MCP_MESH_HTTP_PORT=8080
-      - AGENT_ID=fastmcp-service
+      - AGENT_ID=fastmcp-service-1
       - MCP_MESH_LOG_LEVEL=DEBUG
     ports:
       - "8095:8080"
     depends_on:
       - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # FastMCP agent instance 2 - for session affinity testing
+  fastmcp-agent-2:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - .:/testing # Mount testing directory with copied agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /testing &&
+        python fastmcp_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=fastmcp-agent-2
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=fastmcp-service-2
+      - MCP_MESH_LOG_LEVEL=DEBUG
+    ports:
+      - "8097:8080"
+    depends_on:
+      - registry
+      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -295,6 +331,7 @@ services:
       - MCP_MESH_ENABLED=true
       - MCP_MESH_AUTO_RUN=true
       - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
       - POD_IP=dependent-agent
       - POD_PORT=8080
       - MCP_MESH_HTTP_PORT=8080
@@ -304,7 +341,80 @@ services:
       - "8096:8080"
     depends_on:
       - registry
-      - fastmcp-agent # Ensure FastMCP agent starts first
+      - redis
+      - fastmcp-agent-1 # Ensure FastMCP agents start first
+      - fastmcp-agent-2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Chat agent - AI-powered software engineering assistant with streaming
+  chat-agent:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - .:/testing # Mount testing directory with copied agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        pip install openai &&
+        cd /testing &&
+        python chat_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=chat-agent
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=software-chat-assistant
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - OPENAI_API_KEY=${OPENAI_API_KEY} # Set via environment variable
+    ports:
+      - "8098:8080"
+    depends_on:
+      - registry
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Chat test agent - Tests chat agent functionality
+  chat-test-agent:
+    image: python:3.11-slim
+    volumes:
+      - ../../src/runtime/python:/app # Mount actual source code
+      - .:/testing # Mount testing directory with copied agents
+    working_dir: /app
+    command: >
+      bash -c "
+        pip install -e .[dev] &&
+        cd /testing &&
+        python chat_test_agent.py
+      "
+    environment:
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - REDIS_URL=redis://redis:6379
+      - POD_IP=chat-test-agent
+      - POD_PORT=8080
+      - MCP_MESH_HTTP_PORT=8080
+      - AGENT_ID=chat-test-service
+      - MCP_MESH_LOG_LEVEL=DEBUG
+    ports:
+      - "8099:8080"
+    depends_on:
+      - registry
+      - redis
+      - chat-agent
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s

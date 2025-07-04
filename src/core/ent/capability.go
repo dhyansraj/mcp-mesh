@@ -29,6 +29,8 @@ type Capability struct {
 	Description string `json:"description,omitempty"`
 	// Tags for this capability (e.g., ['prod', 'ml', 'gpu'])
 	Tags []string `json:"tags,omitempty"`
+	// Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)
+	Kwargs map[string]interface{} `json:"kwargs,omitempty"`
 	// Creation timestamp
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Last update timestamp
@@ -65,7 +67,7 @@ func (*Capability) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case capability.FieldTags:
+		case capability.FieldTags, capability.FieldKwargs:
 			values[i] = new([]byte)
 		case capability.FieldID:
 			values[i] = new(sql.NullInt64)
@@ -126,6 +128,14 @@ func (c *Capability) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &c.Tags); err != nil {
 					return fmt.Errorf("unmarshal field tags: %w", err)
+				}
+			}
+		case capability.FieldKwargs:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field kwargs", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.Kwargs); err != nil {
+					return fmt.Errorf("unmarshal field kwargs: %w", err)
 				}
 			}
 		case capability.FieldCreatedAt:
@@ -202,6 +212,9 @@ func (c *Capability) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("tags=")
 	builder.WriteString(fmt.Sprintf("%v", c.Tags))
+	builder.WriteString(", ")
+	builder.WriteString("kwargs=")
+	builder.WriteString(fmt.Sprintf("%v", c.Kwargs))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(c.CreatedAt.Format(time.ANSIC))

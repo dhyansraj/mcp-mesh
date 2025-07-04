@@ -1,0 +1,59 @@
+{
+  "agent_id": "enhanced-kwargs-agent",
+  "agent_type": "mcp_agent",
+  "name": "enhanced-kwargs-agent",
+  "version": "1.0.0",
+  "http_host": "localhost",
+  "http_port": 8080,
+  "timestamp": "2025-07-04T15:24:50.123456Z",
+  "namespace": "default",
+  "tools": [
+    {
+      "function_name": "enhanced_api_call",
+      "capability": "enhanced_api",
+      "version": "2.0.0",
+      "tags": ["api", "enhanced", "production"],
+      "dependencies": [
+        {
+          "capability": "auth_service",
+          "tags": ["security", "oauth"],
+          "version": ">=2.0.0",
+          "namespace": "default"
+        }
+      ],
+      "description": "Enhanced API call with custom configuration",
+      "kwargs": {
+        "timeout": 45,
+        "retry_count": 3,
+        "custom_headers": {
+          "X-API-Version": "v2",
+          "X-Client-ID": "enhanced-agent"
+        },
+        "streaming": true,
+        "auth_required": true,
+        "max_payload_size": 1048576,
+        "enable_compression": false
+      }
+    },
+    {
+      "function_name": "quick_operation",
+      "capability": "quick_ops",
+      "version": "1.0.0",
+      "tags": ["fast", "lightweight"],
+      "dependencies": [],
+      "description": "Quick operation with minimal kwargs",
+      "kwargs": {
+        "timeout": 5,
+        "cache_enabled": true
+      }
+    },
+    {
+      "function_name": "no_kwargs_function",
+      "capability": "standard_capability",
+      "version": "1.0.0",
+      "tags": ["standard"],
+      "dependencies": [],
+      "description": "Standard function without kwargs"
+    }
+  ]
+}

@@ -3,12 +3,14 @@
 import asyncio
 import json
 import logging
+import os
 import urllib.error
-import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Optional
 
 from ..shared.content_extractor import ContentExtractor
+from .async_mcp_client import AsyncMCPClient
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +24,26 @@ class MCPClientProxy:
     NO CONNECTION POOLING - Creates new connection per request for K8s load balancing.
     """
 
-    def __init__(self, endpoint: str, function_name: str):
+    def __init__(
+        self, endpoint: str, function_name: str, kwargs_config: Optional[dict] = None
+    ):
         """Initialize MCP client proxy.
 
         Args:
             endpoint: Base URL of the remote MCP service
             function_name: Specific tool function to call
+            kwargs_config: Optional kwargs configuration from @mesh.tool decorator
         """
         self.endpoint = endpoint.rstrip("/")
         self.function_name = function_name
+        self.kwargs_config = kwargs_config or {}
         self.logger = logger.getChild(f"proxy.{function_name}")
+
+        # Log kwargs configuration if provided
+        if self.kwargs_config:
+            self.logger.debug(
+                f"🔧 MCPClientProxy initialized with kwargs: {self.kwargs_config}"
+            )
 
     def _run_async(self, coro):
         """Convert async coroutine to sync call."""
@@ -131,92 +143,6 @@ class MCPClientProxy:
             self.logger.error(f"Failed to call {self.function_name}: {e}")
             raise RuntimeError(f"Error calling {self.function_name}: {e}")
 
-    # Phase 2: Full MCP Protocol Support
-    def list_tools(self) -> list:
-        """List available tools from remote agent."""
-        self.logger.debug(f"🔍 Listing tools from {self.endpoint}")
-        try:
-            return self._run_async(self._async_list_tools())
-        except Exception as e:
-            self.logger.error(f"❌ Failed to list tools: {e}")
-            raise RuntimeError(f"Error listing tools: {e}")
-
-    async def _async_list_tools(self) -> list:
-        """Async implementation that delegates to AsyncMCPClient."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_tools()
-        finally:
-            await client.close()
-
-    def list_resources(self) -> list:
-        """List available resources from remote agent."""
-        self.logger.debug(f"🔍 Listing resources from {self.endpoint}")
-        try:
-            return self._run_async(self._async_list_resources())
-        except Exception as e:
-            self.logger.error(f"❌ Failed to list resources: {e}")
-            raise RuntimeError(f"Error listing resources: {e}")
-
-    async def _async_list_resources(self) -> list:
-        """Async implementation that delegates to AsyncMCPClient."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_resources()
-        finally:
-            await client.close()
-
-    def read_resource(self, uri: str) -> Any:
-        """Read resource contents from remote agent."""
-        self.logger.debug(f"📖 Reading resource '{uri}' from {self.endpoint}")
-        try:
-            return self._run_async(self._async_read_resource(uri))
-        except Exception as e:
-            self.logger.error(f"❌ Failed to read resource '{uri}': {e}")
-            raise RuntimeError(f"Error reading resource '{uri}': {e}")
-
-    async def _async_read_resource(self, uri: str) -> Any:
-        """Async implementation that delegates to AsyncMCPClient."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.read_resource(uri)
-        finally:
-            await client.close()
-
-    def list_prompts(self) -> list:
-        """List available prompts from remote agent."""
-        self.logger.debug(f"🔍 Listing prompts from {self.endpoint}")
-        try:
-            return self._run_async(self._async_list_prompts())
-        except Exception as e:
-            self.logger.error(f"❌ Failed to list prompts: {e}")
-            raise RuntimeError(f"Error listing prompts: {e}")
-
-    async def _async_list_prompts(self) -> list:
-        """Async implementation that delegates to AsyncMCPClient."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_prompts()
-        finally:
-            await client.close()
-
-    def get_prompt(self, name: str, arguments: dict = None) -> Any:
-        """Get prompt template from remote agent."""
-        self.logger.debug(f"📝 Getting prompt '{name}' from {self.endpoint}")
-        try:
-            return self._run_async(self._async_get_prompt(name, arguments))
-        except Exception as e:
-            self.logger.error(f"❌ Failed to get prompt '{name}': {e}")
-            raise RuntimeError(f"Error getting prompt '{name}': {e}")
-
-    async def _async_get_prompt(self, name: str, arguments: dict = None) -> Any:
-        """Async implementation that delegates to AsyncMCPClient."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.get_prompt(name, arguments)
-        finally:
-            await client.close()
-
     async def _async_call(self, **kwargs) -> Any:
         """Make async MCP tool call with fresh connection."""
         client = None
@@ -234,64 +160,170 @@ class MCPClientProxy:
                 await client.close()
 
 
-class AsyncMCPClient:
-    """Async HTTP client for MCP JSON-RPC protocol."""
+class EnhancedMCPClientProxy(MCPClientProxy):
+    """Enhanced MCP client proxy with kwargs-based auto-configuration.
 
-    def __init__(self, endpoint: str, timeout: float = 30.0):
-        self.endpoint = endpoint
-        self.timeout = timeout
-        self.logger = logger.getChild(f"client.{endpoint}")
+    Auto-configures based on kwargs from @mesh.tool decorator:
+    - timeout: Request timeout in seconds
+    - retry_count: Number of retries for failed requests
+    - retry_delay: Base delay between retries (seconds)
+    - retry_backoff: Backoff multiplier for retry delays
+    - custom_headers: Dict of additional headers to send
+    - auth_required: Whether authentication is required
+    - accepts: List of accepted content types
+    - content_type: Default content type for requests
+    - max_response_size: Maximum allowed response size
+    """
 
-    async def call_tool(self, tool_name: str, arguments: dict) -> Any:
-        """Call remote tool using MCP JSON-RPC protocol."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
+    def __init__(
+        self, endpoint: str, function_name: str, kwargs_config: Optional[dict] = None
+    ):
+        """Initialize Enhanced MCP Client Proxy.
+
+        Args:
+            endpoint: Base URL of the remote MCP service
+            function_name: Specific tool function to call
+            kwargs_config: Optional kwargs configuration from @mesh.tool decorator
+        """
+        super().__init__(endpoint, function_name, kwargs_config)
+
+        # Auto-configure from kwargs
+        self._configure_from_kwargs()
+
+        self.logger = logger.getChild(f"enhanced_proxy.{function_name}")
+
+    def _configure_from_kwargs(self):
+        """Auto-configure proxy settings from kwargs."""
+        # Timeout configuration
+        self.timeout = self.kwargs_config.get("timeout", 30)
+
+        # Retry configuration
+        self.retry_count = self.kwargs_config.get("retry_count", 1)
+        self.max_retries = self.retry_count
+        self.retry_delay = self.kwargs_config.get("retry_delay", 1.0)
+        self.retry_backoff = self.kwargs_config.get("retry_backoff", 2.0)
+
+        # Header configuration
+        self.custom_headers = self.kwargs_config.get("custom_headers", {})
+        self.auth_required = self.kwargs_config.get("auth_required", False)
+
+        # Content type configuration
+        self.accepted_content_types = self.kwargs_config.get(
+            "accepts", ["application/json"]
+        )
+        self.default_content_type = self.kwargs_config.get(
+            "content_type", "application/json"
+        )
+        self.max_response_size = self.kwargs_config.get(
+            "max_response_size", 10 * 1024 * 1024
+        )  # 10MB default
+
+        # Streaming configuration
+        self.streaming_capable = self.kwargs_config.get("streaming", False)
+
+        self.logger.info(
+            f"🔧 Enhanced proxy configured - timeout: {self.timeout}s, "
+            f"retries: {self.retry_count}, streaming: {self.streaming_capable}"
+        )
+
+    def __call__(self, **kwargs) -> Any:
+        """Enhanced callable interface with retry logic and custom configuration."""
+        self.logger.debug(
+            f"🔌 Enhanced MCP call to '{self.function_name}' with args: {kwargs}"
+        )
 
         try:
-            # Make async HTTP request
-            result = await self._make_request(payload)
-            self.logger.debug(f"Tool call successful: {tool_name}")
+            result = self._sync_call_with_retries(**kwargs)
+            self.logger.debug(
+                f"✅ Enhanced MCP call to '{self.function_name}' succeeded"
+            )
             return result
         except Exception as e:
-            self.logger.error(f"Tool call failed: {tool_name} - {e}")
+            self.logger.error(
+                f"❌ Enhanced MCP call to '{self.function_name}' failed: {e}"
+            )
             raise
 
-    async def _make_request(self, payload: dict) -> dict:
-        """Make async HTTP request to MCP endpoint."""
-        url = f"{self.endpoint}/mcp/"
+    def _sync_call_with_retries(self, **kwargs) -> Any:
+        """Make synchronous MCP request with automatic retry logic."""
+        last_exception = None
 
-        try:
-            # Use httpx for proper async HTTP requests (better threading support than aiohttp)
-            import httpx
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._enhanced_sync_call(**kwargs)
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream",
-                    },
-                )
+            except Exception as e:
+                last_exception = e
 
-                if response.status_code == 404:
-                    raise RuntimeError(f"MCP endpoint not found at {url}")
-                elif response.status_code >= 400:
-                    raise RuntimeError(
-                        f"HTTP error {response.status_code}: {response.reason_phrase}"
+                if attempt < self.max_retries:
+                    # Calculate retry delay with backoff
+                    delay = self.retry_delay * (self.retry_backoff**attempt)
+
+                    self.logger.warning(
+                        f"🔄 Request failed (attempt {attempt + 1}/{self.max_retries + 1}), "
+                        f"retrying in {delay:.1f}s: {str(e)}"
                     )
 
-                response_text = response.text
+                    import time
+
+                    time.sleep(delay)
+                else:
+                    self.logger.error(
+                        f"❌ All {self.max_retries + 1} attempts failed for {self.function_name}"
+                    )
+
+        raise last_exception
+
+    def _enhanced_sync_call(self, **kwargs) -> Any:
+        """Make enhanced synchronous MCP request with custom headers and configuration."""
+        try:
+            # Prepare JSON-RPC payload
+            payload = {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "tools/call",
+                "params": {"name": self.function_name, "arguments": kwargs},
+            }
+
+            url = f"{self.endpoint}/mcp/"
+            data = json.dumps(payload).encode("utf-8")
+
+            # Build headers with custom configuration
+            headers = {
+                "Content-Type": self.default_content_type,
+                "Accept": ", ".join(self.accepted_content_types),
+            }
+
+            # Add custom headers
+            headers.update(self.custom_headers)
+
+            # Add authentication headers if required
+            if self.auth_required:
+                auth_token = os.getenv("MCP_MESH_AUTH_TOKEN")
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+                else:
+                    self.logger.warning(
+                        "⚠️ Authentication required but no token available"
+                    )
+
+            req = urllib.request.Request(url, data=data, headers=headers)
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                # Check response size
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > self.max_response_size:
+                    raise ValueError(
+                        f"Response too large: {content_length} bytes > {self.max_response_size}"
+                    )
+
+                response_data = response.read().decode("utf-8")
 
                 # Handle Server-Sent Events format from FastMCP
-                if response_text.startswith("event:"):
+                if response_data.startswith("event:"):
                     # Parse SSE format: extract JSON from "data:" lines
                     json_data = None
-                    for line in response_text.split("\n"):
+                    for line in response_data.split("\n"):
                         if line.startswith("data:"):
                             json_str = line[5:].strip()  # Remove 'data:' prefix
                             try:
@@ -305,7 +337,7 @@ class AsyncMCPClient:
                     data = json_data
                 else:
                     # Plain JSON response
-                    data = response.json()
+                    data = json.loads(response_data)
 
             # Check for JSON-RPC error
             if "error" in data:
@@ -315,49 +347,9 @@ class AsyncMCPClient:
 
             # Return the result
             if "result" in data:
-                return data["result"]
-            return data
-
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Connection error to {url}: {e}")
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {e}")
-        except ImportError:
-            # Fallback to sync urllib if httpx not available
-            self.logger.warning("httpx not available, falling back to sync urllib")
-            return await self._make_request_sync(payload)
-
-    async def _make_request_sync(self, payload: dict) -> dict:
-        """Fallback sync HTTP request using urllib."""
-        url = f"{self.endpoint}/mcp/"
-        data = json.dumps(payload).encode("utf-8")
-
-        # Create request
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-            },
-        )
-
-        try:
-            # Make synchronous request (will run in thread pool)
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                response_data = response.read().decode("utf-8")
-                data = json.loads(response_data)
-
-            # Check for JSON-RPC error
-            if "error" in data:
-                error = data["error"]
-                error_msg = error.get("message", "Unknown error")
-                raise RuntimeError(f"Tool call error: {error_msg}")
-
-            # Return the result
-            if "result" in data:
-                return data["result"]
-            return data
+                result = data["result"]
+                return ContentExtractor.extract_content(result)
+            return None
 
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -365,334 +357,95 @@ class AsyncMCPClient:
             raise RuntimeError(f"HTTP error {e.code}: {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Connection error to {url}: {e.reason}")
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {e}")
-
-    async def list_tools(self) -> list:
-        """List available tools."""
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-        result = await self._make_request(payload)
-        return result.get("tools", [])
-
-    async def list_resources(self) -> list:
-        """List available resources."""
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
-        result = await self._make_request(payload)
-        return result.get("resources", [])
-
-    async def read_resource(self, uri: str) -> Any:
-        """Read resource contents."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "resources/read",
-            "params": {"uri": uri},
-        }
-        result = await self._make_request(payload)
-        return result.get("contents", [])
-
-    async def list_prompts(self) -> list:
-        """List available prompts."""
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "prompts/list", "params": {}}
-        result = await self._make_request(payload)
-        return result.get("prompts", [])
-
-    async def get_prompt(self, name: str, arguments: dict = None) -> Any:
-        """Get prompt template."""
-        params = {"name": name}
-        if arguments:
-            params["arguments"] = arguments
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "prompts/get", "params": params}
-        result = await self._make_request(payload)
-        return result
-
-    async def close(self):
-        """Close client (no persistent connection to close)."""
-        pass
-
-
-class FullMCPProxy(MCPClientProxy):
-    """Full MCP Protocol Proxy with streaming support and complete MCP method access.
-
-    This proxy extends MCPClientProxy to provide:
-    1. Full MCP protocol support (tools, resources, prompts)
-    2. Streaming tool calls using FastMCP's text/event-stream
-    3. Direct method access for developers (not just __call__)
-    4. Multihop streaming capabilities (A→B→C chains)
-
-    Designed to replace the prototype McpMeshAgent with proper dependency injection.
-    """
-
-    def __init__(self, endpoint: str, function_name: str):
-        """Initialize Full MCP Proxy.
-
-        Args:
-            endpoint: Base URL of the remote MCP service
-            function_name: Specific tool function to call (for __call__ compatibility)
-        """
-        super().__init__(endpoint, function_name)
-        self.logger = logger.getChild(f"full_proxy.{function_name}")
-
-    # Phase 6: Streaming Support - THE BREAKTHROUGH METHOD!
-    async def call_tool_streaming(
-        self, name: str, arguments: dict = None
-    ) -> "AsyncIterator[dict]":
-        """Call a tool with streaming response using FastMCP's text/event-stream.
-
-        This is the breakthrough method that enables multihop streaming (A→B→C chains)
-        by leveraging FastMCP's built-in streaming support.
-
-        Args:
-            name: Tool name to call
-            arguments: Tool arguments
-
-        Yields:
-            Streaming response chunks as dictionaries
-        """
-        self.logger.debug(f"🌊 Streaming call to tool '{name}' with args: {arguments}")
-
-        try:
-            # Import here to avoid circular imports
-            import asyncio
-            import json
-
-            # Prepare JSON-RPC payload
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments or {}},
-            }
-
-            # Use httpx for streaming support
-            try:
-                import httpx
-
-                url = f"{self.endpoint}/mcp/"
-
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "Accept": "text/event-stream",  # THIS IS THE KEY!
-                        },
-                    ) as response:
-                        if response.status_code >= 400:
-                            raise RuntimeError(f"HTTP error {response.status_code}")
-
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                try:
-                                    data_str = line[6:]  # Remove "data: " prefix
-                                    if data_str.strip():
-                                        chunk = json.loads(data_str)
-                                        yield chunk
-                                except json.JSONDecodeError:
-                                    continue
-
-            except ImportError:
-                # Fallback: if httpx not available, use sync call
-                self.logger.warning(
-                    "httpx not available for streaming, falling back to sync call"
-                )
-                result = await self._async_call_tool(name, arguments)
-                yield result
-
         except Exception as e:
-            self.logger.error(f"❌ Streaming call to '{name}' failed: {e}")
-            raise RuntimeError(f"Streaming call to '{name}' failed: {e}")
+            self.logger.error(f"Enhanced sync call failed: {e}")
+            raise RuntimeError(f"Error calling {self.function_name}: {e}")
 
-    async def _async_call_tool(self, name: str, arguments: dict = None) -> dict:
-        """Async version of tool call (non-streaming fallback)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            result = await client.call_tool(name, arguments or {})
-            return result
-        finally:
-            await client.close()
+    async def _enhanced_async_call(self, **kwargs) -> Any:
+        """Make enhanced async MCP tool call with retry logic."""
+        last_exception = None
 
-    # Vanilla MCP Protocol Methods (100% compatibility)
-    async def list_tools(self) -> list:
-        """List available tools from remote agent (vanilla MCP method)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_tools()
-        finally:
-            await client.close()
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self._make_enhanced_async_request(**kwargs)
 
-    async def list_resources(self) -> list:
-        """List available resources from remote agent (vanilla MCP method)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_resources()
-        finally:
-            await client.close()
+            except Exception as e:
+                last_exception = e
 
-    async def read_resource(self, uri: str) -> "Any":
-        """Read resource contents from remote agent (vanilla MCP method)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.read_resource(uri)
-        finally:
-            await client.close()
+                if attempt < self.max_retries:
+                    # Calculate retry delay with backoff
+                    delay = self.retry_delay * (self.retry_backoff**attempt)
 
-    async def list_prompts(self) -> list:
-        """List available prompts from remote agent (vanilla MCP method)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.list_prompts()
-        finally:
-            await client.close()
-
-    async def get_prompt(self, name: str, arguments: dict = None) -> "Any":
-        """Get prompt template from remote agent (vanilla MCP method)."""
-        client = AsyncMCPClient(self.endpoint)
-        try:
-            return await client.get_prompt(name, arguments)
-        finally:
-            await client.close()
-
-    # Phase 6: Explicit Session Management
-    async def create_session(self) -> str:
-        """
-        Create a new session and return session ID.
-
-        For Phase 6 explicit session management. In Phase 8, this will be
-        automated based on @mesh.tool(session_required=True) annotations.
-
-        Returns:
-            New session ID string
-        """
-        import uuid
-
-        # Generate unique session ID
-        session_id = f"session:{uuid.uuid4().hex[:16]}"
-
-        # For Phase 6, we just return the ID. The session routing middleware
-        # will handle the actual session assignment when calls are made with
-        # the session ID in headers.
-        self.logger.debug(f"Created session ID: {session_id}")
-        return session_id
-
-    async def call_with_session(self, session_id: str, **kwargs) -> "Any":
-        """
-        Call tool with explicit session ID for stateful operations.
-
-        This ensures all calls with the same session_id route to the same
-        agent instance for session affinity.
-
-        Args:
-            session_id: Session ID to include in request headers
-            **kwargs: Tool arguments to pass
-
-        Returns:
-            Tool response
-        """
-        try:
-            import json
-
-            import httpx
-
-            # Build MCP tool call request
-            # Add session_id to function arguments if the function expects it
-            function_args = kwargs.copy()
-            function_args["session_id"] = (
-                session_id  # Pass session_id as function parameter
-            )
-
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": self.function_name,
-                    "arguments": function_args,
-                },
-            }
-
-            # URL for MCP protocol endpoint
-            url = f"{self.endpoint.rstrip('/')}/mcp/"
-
-            # Add session ID to headers for session routing
-            headers = {
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",  # Required by FastMCP
-                "X-Session-ID": session_id,  # Key header for session routing
-            }
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, headers=headers)
-
-                if response.status_code == 404:
-                    raise RuntimeError(f"MCP endpoint not found at {url}")
-                elif response.status_code >= 400:
-                    raise RuntimeError(
-                        f"HTTP error {response.status_code}: {response.reason_phrase}"
+                    self.logger.warning(
+                        f"🔄 Async request failed (attempt {attempt + 1}/{self.max_retries + 1}), "
+                        f"retrying in {delay:.1f}s: {str(e)}"
                     )
 
-                response_text = response.text
-
-                # Handle Server-Sent Events format from FastMCP
-                if response_text.startswith("event:"):
-                    # Parse SSE format: extract JSON from "data:" lines
-                    json_data = None
-                    for line in response_text.split("\n"):
-                        if line.startswith("data:"):
-                            json_str = line[5:].strip()  # Remove 'data:' prefix
-                            try:
-                                json_data = json.loads(json_str)
-                                break
-                            except json.JSONDecodeError:
-                                continue
-
-                    if json_data is None:
-                        raise RuntimeError("Could not parse SSE response from FastMCP")
-                    data = json_data
+                    await asyncio.sleep(delay)
                 else:
-                    # Plain JSON response
-                    data = response.json()
+                    self.logger.error(
+                        f"❌ All {self.max_retries + 1} async attempts failed for {self.function_name}"
+                    )
 
-            # Check for JSON-RPC error
-            if "error" in data:
-                error = data["error"]
-                error_msg = error.get("message", "Unknown error")
-                raise RuntimeError(f"Tool call error: {error_msg}")
+        raise last_exception
 
-            # Return the result
-            if "result" in data:
-                return data["result"]
-            return data
+    async def _make_enhanced_async_request(self, **kwargs) -> Any:
+        """Make enhanced async HTTP request with custom configuration."""
+        try:
+            # Try to use httpx for better async support
+            import httpx
 
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Connection error to {url}: {e}")
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {e}")
+            payload = {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "tools/call",
+                "params": {"name": self.function_name, "arguments": kwargs},
+            }
+
+            # Build headers with custom configuration
+            headers = {
+                "Content-Type": self.default_content_type,
+                "Accept": ", ".join(self.accepted_content_types),
+            }
+
+            # Add custom headers
+            headers.update(self.custom_headers)
+
+            # Add authentication headers if required
+            if self.auth_required:
+                auth_token = os.getenv("MCP_MESH_AUTH_TOKEN")
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+
+            url = f"{self.endpoint}/mcp/"
+
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(url, json=payload, headers=headers)
+
+                # Check response size
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > self.max_response_size:
+                    raise ValueError(
+                        f"Response too large: {content_length} bytes > {self.max_response_size}"
+                    )
+
+                response.raise_for_status()
+                result = response.json()
+
+                if "error" in result:
+                    raise Exception(f"MCP request failed: {result['error']}")
+
+                # Apply existing content extraction
+                return ContentExtractor.extract_content(result.get("result"))
+
         except ImportError:
-            # Fallback error - session calls require httpx for header support
-            raise RuntimeError("Session calls require httpx library for header support")
-
-    async def close_session(self, session_id: str) -> bool:
-        """
-        Close session and cleanup session state.
-
-        Args:
-            session_id: Session ID to close
-
-        Returns:
-            True if session was closed successfully
-        """
-        # For Phase 6, session cleanup is handled by the session routing middleware
-        # and Redis TTL. In Phase 8, this might send explicit cleanup requests.
-        self.logger.debug(f"Session close requested for: {session_id}")
-
-        # Always return True for Phase 6 - cleanup is automatic
-        return True
-
-    def __repr__(self) -> str:
-        """String representation for debugging."""
-        return (
-            f"FullMCPProxy(endpoint='{self.endpoint}', function='{self.function_name}')"
-        )
+            # Fallback to using AsyncMCPClient
+            client = AsyncMCPClient(self.endpoint, timeout=self.timeout)
+            try:
+                result = await client.call_tool(self.function_name, kwargs)
+                return ContentExtractor.extract_content(result)
+            finally:
+                await client.close()
+        except Exception as e:
+            self.logger.error(f"Enhanced async request failed: {e}")
+            raise
