@@ -9,10 +9,9 @@ This demonstrates Phase 6 enhanced proxy auto-configuration:
 - Authentication requirements with auth_required=True
 """
 
+import asyncio
 from datetime import datetime
 from typing import AsyncGenerator
-
-import asyncio
 
 import mesh
 from fastmcp import FastMCP
