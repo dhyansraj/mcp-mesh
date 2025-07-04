@@ -488,7 +488,7 @@ Common labels with minimal computation
   "helm.sh/chart" (include "mcp-mesh-agent.chart" .)
   "app.kubernetes.io/name" (include "mcp-mesh-agent.name" .)
   "app.kubernetes.io/instance" .Release.Name
-  "app.kubernetes.io/version" (.Chart.AppVersion | default "0.2" | quote)
+  "app.kubernetes.io/version" (.Chart.AppVersion | default "0.3" | quote)
   "app.kubernetes.io/managed-by" .Release.Service
 ) }}
 {{- end }}

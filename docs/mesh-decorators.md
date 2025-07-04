@@ -201,6 +201,300 @@ def create_report(
     }
 ```
 
+## Advanced @mesh.tool Configuration (v0.3+)
+
+> **New in v0.3+**: Enhanced proxy auto-configuration through decorator kwargs
+
+The `@mesh.tool` decorator now supports advanced configuration kwargs that automatically configure enhanced MCP proxies with timeouts, retries, authentication, streaming, and session management.
+
+### Enhanced Proxy Kwargs
+
+| Parameter                 | Type   | Default | Description                       |
+| ------------------------- | ------ | ------- | --------------------------------- |
+| `timeout`                 | `int`  | `30`    | Request timeout in seconds        |
+| `retry_count`             | `int`  | `1`     | Number of retry attempts          |
+| `custom_headers`          | `dict` | `{}`    | Custom HTTP headers to inject     |
+| `streaming`               | `bool` | `False` | Enable streaming capabilities     |
+| `auth_required`           | `bool` | `False` | Require authentication            |
+| `session_required`        | `bool` | `False` | Enable session affinity           |
+| `stateful`                | `bool` | `False` | Mark as stateful capability       |
+| `auto_session_management` | `bool` | `False` | Enable automatic session handling |
+
+### Timeout Configuration
+
+Configure different timeouts for different types of operations:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="quick_lookup",
+    timeout=5,  # Fast operations: 5 seconds
+    retry_count=2
+)
+def quick_data_lookup(query: str) -> dict:
+    """Fast lookup with 5s timeout, 2 retries."""
+    return {"result": f"Quick result for {query}"}
+
+@app.tool()
+@mesh.tool(
+    capability="heavy_computation",
+    timeout=300,  # Heavy operations: 5 minutes
+    retry_count=1
+)
+def complex_calculation(data: list) -> dict:
+    """Heavy computation with 5-minute timeout."""
+    return {"processed": len(data), "result": "computed"}
+```
+
+### Custom Headers for Service Identification
+
+Add custom headers for debugging, routing, or service identification:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="database_service",
+    timeout=60,
+    custom_headers={
+        "X-Service-Type": "database",
+        "X-Priority": "high",
+        "X-Cache-Control": "no-cache"
+    }
+)
+def query_database(sql: str) -> dict:
+    """Database query with custom headers for routing and debugging."""
+    return {"rows": 42, "query": sql}
+
+@app.tool()
+@mesh.tool(
+    capability="external_api",
+    timeout=30,
+    retry_count=3,
+    custom_headers={
+        "X-External-Service": "weather-api",
+        "X-Rate-Limit": "100/hour"
+    }
+)
+def fetch_weather_data(location: str) -> dict:
+    """External API call with rate limiting headers."""
+    return {"location": location, "temperature": "22°C"}
+```
+
+### Streaming Capabilities
+
+Enable streaming for real-time data processing:
+
+```python
+from typing import AsyncGenerator
+
+@app.tool()
+@mesh.tool(
+    capability="data_stream",
+    streaming=True,          # Enables streaming proxy
+    timeout=600,             # Longer timeout for streams
+    custom_headers={
+        "X-Stream-Type": "data",
+        "X-Content-Type": "application/json"
+    }
+)
+async def stream_processing_results(
+    batch_size: int = 100
+) -> AsyncGenerator[dict, None]:
+    """Stream processing results with enhanced proxy configuration."""
+    for i in range(0, 1000, batch_size):
+        yield {
+            "batch": i // batch_size,
+            "processed_items": batch_size,
+            "timestamp": "2025-01-01T00:00:00Z"
+        }
+        await asyncio.sleep(0.1)  # Simulate processing time
+```
+
+### Authentication Requirements
+
+Mark capabilities that require authentication:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="secure_data",
+    auth_required=True,      # Requires authentication
+    timeout=60,
+    custom_headers={
+        "X-Security-Level": "high",
+        "X-Auth-Required": "bearer"
+    }
+)
+def get_sensitive_data(data_type: str) -> dict:
+    """Access sensitive data - requires authentication."""
+    return {
+        "data_type": data_type,
+        "classified": True,
+        "access_level": "authorized"
+    }
+```
+
+### Session Management & Stickiness
+
+Enable session affinity for stateful operations:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="user_session",
+    session_required=True,           # Enable session affinity
+    stateful=True,                   # Mark as stateful
+    auto_session_management=True,    # Automatic session handling
+    timeout=30,
+    custom_headers={
+        "X-Session-Enabled": "true",
+        "X-Stateful": "true"
+    }
+)
+def manage_user_session(
+    session_id: str,
+    action: str,
+    user_data: dict = None
+) -> dict:
+    """Session-aware operation with automatic session stickiness."""
+    # Session data automatically routed to same pod
+    if not hasattr(manage_user_session, '_sessions'):
+        manage_user_session._sessions = {}
+
+    if action == "create":
+        manage_user_session._sessions[session_id] = user_data or {}
+    elif action == "get":
+        return manage_user_session._sessions.get(session_id, {})
+    elif action == "update":
+        if session_id in manage_user_session._sessions:
+            manage_user_session._sessions[session_id].update(user_data or {})
+
+    return {
+        "session_id": session_id,
+        "action": action,
+        "data": manage_user_session._sessions.get(session_id, {})
+    }
+```
+
+### Complete Enhanced Example
+
+Here's a comprehensive example showing all advanced features:
+
+```python
+import asyncio
+from datetime import datetime
+from typing import AsyncGenerator
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("Enhanced Service")
+
+@app.tool()
+@mesh.tool(
+    capability="enhanced_processor",
+    dependencies=["auth_service", "session_manager"],
+    tags=["processing", "enhanced", "production"],
+    version="2.0.0",
+    # Enhanced proxy configuration
+    timeout=120,                     # 2-minute timeout
+    retry_count=3,                   # 3 retry attempts
+    streaming=True,                  # Enable streaming
+    auth_required=True,              # Require authentication
+    session_required=True,           # Enable session affinity
+    stateful=True,                   # Mark as stateful
+    auto_session_management=True,    # Automatic session handling
+    custom_headers={
+        "X-Service-Type": "enhanced-processor",
+        "X-Processing-Level": "advanced",
+        "X-Stream-Enabled": "true",
+        "X-Auth-Required": "bearer",
+        "X-Session-Managed": "auto"
+    }
+)
+async def enhanced_data_processor(
+    session_id: str,
+    data_batch: list,
+    processing_type: str = "standard",
+    # Injected dependencies
+    auth_service: mesh.McpMeshAgent = None,
+    session_manager: mesh.McpMeshAgent = None
+) -> AsyncGenerator[dict, None]:
+    """
+    Enhanced data processor with full advanced configuration.
+
+    Features:
+    - 120s timeout with 3 retries
+    - Authentication verification
+    - Session affinity for stateful processing
+    - Streaming results with custom headers
+    - Dependency injection for auth and session services
+    """
+
+    # Verify authentication
+    if auth_service:
+        auth_result = auth_service({"session_id": session_id})
+        if not auth_result.get("authenticated"):
+            yield {"error": "Authentication failed"}
+            return
+
+    # Initialize session data
+    if session_manager:
+        session_manager({
+            "action": "initialize",
+            "session_id": session_id,
+            "processing_type": processing_type
+        })
+
+    # Stream processing results
+    total_items = len(data_batch)
+    for i, item in enumerate(data_batch):
+        # Simulate processing time
+        await asyncio.sleep(0.1)
+
+        yield {
+            "session_id": session_id,
+            "item_index": i,
+            "item_data": item,
+            "processing_type": processing_type,
+            "progress": (i + 1) / total_items,
+            "timestamp": datetime.now().isoformat(),
+            "enhanced": True,
+            "authenticated": True,
+            "session_managed": True
+        }
+
+    # Final result
+    yield {
+        "session_id": session_id,
+        "status": "completed",
+        "total_processed": total_items,
+        "processing_type": processing_type,
+        "timestamp": datetime.now().isoformat()
+    }
+```
+
+### Automatic Proxy Selection
+
+> **Smart Proxy Selection**: MCP Mesh automatically selects the appropriate proxy based on kwargs:
+
+- **Basic kwargs** (`timeout`, `retry_count`) → `EnhancedMCPClientProxy`
+- **Streaming enabled** (`streaming=True`) → `EnhancedFullMCPProxy`
+- **No special kwargs** → Standard `MCPClientProxy` (backward compatible)
+
+```python
+# Gets EnhancedMCPClientProxy
+@mesh.tool(capability="basic", timeout=60)
+def basic_operation(): pass
+
+# Gets EnhancedFullMCPProxy
+@mesh.tool(capability="streaming", streaming=True)
+async def streaming_operation(): pass
+
+# Gets standard MCPClientProxy
+@mesh.tool(capability="simple")
+def simple_operation(): pass
+```
+
 ## @mesh.agent - Agent-Level Configuration
 
 The `@mesh.agent` decorator configures the entire agent with server settings and lifecycle management.
@@ -404,7 +698,11 @@ def process_business_logic(
 
 ## Dependency Injection Types
 
-### Option 1: McpMeshAgent (Recommended)
+MCP Mesh provides two different proxy types for dependency injection, each designed for specific use cases:
+
+### McpMeshAgent - Simple Tool Calls
+
+Use `mesh.McpMeshAgent` when you need **simple tool execution** - calling remote functions with arguments:
 
 ```python
 @app.tool()
@@ -413,31 +711,233 @@ def process_business_logic(
     dependencies=["service1", "service2"]
 )
 def process_data(
-    service1: mesh.McpMeshAgent = None,  # Type-safe
-    service2: mesh.McpMeshAgent = None   # IDE support
+    service1: mesh.McpMeshAgent = None,  # For simple tool calls
+    service2: mesh.McpMeshAgent = None   # Type-safe, IDE support
 ):
-    # Direct function call
+    # Direct function call - proxy knows which remote function to invoke
     result1 = service1() if service1 else {}
 
-    # Explicit invoke with parameters
-    result2 = service2.invoke({"param": "value"}) if service2 else {}
+    # With arguments
+    result2 = service1({"format": "JSON"}) if service1 else {}
 
-    return {"result1": result1, "result2": result2}
+    # Explicit invoke (same as call)
+    result3 = service2.invoke({"param": "value"}) if service2 else {}
+
+    return {"result1": result1, "result2": result2, "result3": result3}
 ```
 
-### Option 2: Any Type (Flexible)
+**Key Features of McpMeshAgent:**
+
+- ✅ Function-to-function binding (no need to specify function names)
+- ✅ Simple `()` and `.invoke()` methods
+- ✅ Optimized for basic tool execution
+- ✅ Lightweight proxy with minimal overhead
+
+### McpAgent - Full MCP Protocol Access
+
+Use `mesh.McpAgent` when you need **advanced MCP capabilities** like listing tools, managing resources, prompts, streaming, or session management:
 
 ```python
-from typing import Any
-
 @app.tool()
 @mesh.tool(
-    capability="flexible_processor",
-    dependencies=["any_service"]
+    capability="advanced_processor",
+    dependencies=["file_service", "api_service"]
 )
-def process_flexible(any_service: Any = None):
-    # Maximum flexibility
-    return any_service() if any_service else "no_service"
+async def advanced_processing(
+    file_service: mesh.McpAgent = None,     # Full MCP protocol access
+    api_service: mesh.McpAgent = None       # Advanced capabilities
+) -> dict:
+    """Advanced processing with full MCP protocol support."""
+
+    if not file_service or not api_service:
+        return {"error": "Services unavailable"}
+
+    # === VANILLA MCP PROTOCOL METHODS (100% compatible) ===
+
+    # Discovery - List available capabilities
+    tools = await file_service.list_tools()
+    resources = await file_service.list_resources()
+    prompts = await file_service.list_prompts()
+
+    # Resource Management
+    config = await file_service.read_resource("file://config.json")
+
+    # Prompt Templates
+    analysis_prompt = await file_service.get_prompt(
+        "data_analysis",
+        {"dataset": "sales", "period": "Q4"}
+    )
+
+    # === BACKWARD COMPATIBILITY ===
+
+    # Simple calls (McpMeshAgent compatibility)
+    basic_result = file_service({"action": "scan"})
+    api_result = api_service.invoke({"method": "GET", "endpoint": "/status"})
+
+    # === STREAMING CAPABILITIES (BREAKTHROUGH FEATURE) ===
+
+    # Stream large file processing
+    processed_chunks = []
+    async for chunk in file_service.call_tool_streaming(
+        "process_large_file",
+        {"file": "massive_dataset.csv", "batch_size": 1000}
+    ):
+        processed_chunks.append(chunk)
+        # Real-time processing progress
+        if chunk.get("type") == "progress":
+            print(f"Progress: {chunk['percent']}%")
+
+    # === EXPLICIT SESSION MANAGEMENT (Phase 6) ===
+
+    # Create persistent session for stateful operations
+    session_id = await api_service.create_session()
+
+    # All calls with same session_id route to same agent instance
+    login_result = await api_service.call_with_session(
+        session_id,
+        tool="authenticate",
+        credentials={"user": "admin"}
+    )
+
+    user_data = await api_service.call_with_session(
+        session_id,
+        tool="get_user_profile"
+        # Session maintains authentication state
+    )
+
+    # Cleanup session when done
+    await api_service.close_session(session_id)
+
+    return {
+        "discovered": {
+            "tools": len(tools),
+            "resources": len(resources),
+            "prompts": len(prompts)
+        },
+        "config": config,
+        "basic_results": [basic_result, api_result],
+        "streaming_chunks": len(processed_chunks),
+        "session_results": [login_result, user_data],
+        "analysis_template": analysis_prompt
+    }
+```
+
+**Key Features of McpAgent:**
+
+- ✅ **Complete MCP Protocol**: `list_tools()`, `list_resources()`, `read_resource()`, `list_prompts()`, `get_prompt()`
+- ✅ **Streaming Support**: `call_tool_streaming()` for real-time data processing
+- ✅ **Session Management**: `create_session()`, `call_with_session()`, `close_session()`
+- ✅ **Backward Compatibility**: Supports `()` and `.invoke()` from McpMeshAgent
+- ✅ **Discovery**: Dynamic capability exploration at runtime
+
+### When to Use Which Type?
+
+| Use Case                | Recommended Type | Reason                                                |
+| ----------------------- | ---------------- | ----------------------------------------------------- |
+| Simple tool calls       | `McpMeshAgent`   | Lightweight, optimized for function-to-function calls |
+| Resource management     | `McpAgent`       | Need `read_resource()`, `list_resources()`            |
+| Dynamic discovery       | `McpAgent`       | Need `list_tools()`, `list_prompts()`                 |
+| Streaming operations    | `McpAgent`       | Need `call_tool_streaming()`                          |
+| Session-based workflows | `McpAgent`       | Need session management methods                       |
+| Multi-step protocols    | `McpAgent`       | Need full MCP protocol access                         |
+| Performance-critical    | `McpMeshAgent`   | Minimal overhead for simple calls                     |
+
+### Proxy Selection Example
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="hybrid_processor",
+    dependencies=[
+        "simple_math",      # For basic calculations
+        "file_manager",     # For advanced file operations
+        "stream_processor"  # For streaming data
+    ]
+)
+async def hybrid_processing(
+    # Simple tool calls - use McpMeshAgent
+    simple_math: mesh.McpMeshAgent = None,
+
+    # Advanced capabilities - use McpAgent
+    file_manager: mesh.McpAgent = None,
+    stream_processor: mesh.McpAgent = None
+) -> dict:
+    # Simple calculation
+    result = simple_math({"a": 10, "b": 20, "op": "add"}) if simple_math else 0
+
+    # Advanced file operations
+    if file_manager:
+        files = await file_manager.list_resources()
+        config = await file_manager.read_resource("file://settings.json")
+
+    # Streaming processing
+    chunks = []
+    if stream_processor:
+        async for chunk in stream_processor.call_tool_streaming("process", {"data": result}):
+            chunks.append(chunk)
+
+    return {
+        "calculation": result,
+        "files_found": len(files) if file_manager else 0,
+        "stream_chunks": len(chunks)
+    }
+```
+
+### Mixed Type Dependencies
+
+You can mix both types in the same function based on your specific needs:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="data_pipeline",
+    dependencies=[
+        "validator",        # Simple validation calls
+        "transformer",      # Simple data transformation
+        "storage_service",  # Advanced resource management
+        "notification_api"  # Advanced streaming notifications
+    ]
+)
+async def process_data_pipeline(
+    data: dict,
+    # Simple operations
+    validator: mesh.McpMeshAgent = None,
+    transformer: mesh.McpMeshAgent = None,
+
+    # Advanced operations
+    storage_service: mesh.McpAgent = None,
+    notification_api: mesh.McpAgent = None
+) -> dict:
+    # Step 1: Simple validation
+    is_valid = validator({"data": data}) if validator else True
+    if not is_valid:
+        return {"error": "Validation failed"}
+
+    # Step 2: Simple transformation
+    transformed = transformer({"data": data, "format": "normalized"}) if transformer else data
+
+    # Step 3: Advanced storage with resource discovery
+    if storage_service:
+        # Discover available storage options
+        resources = await storage_service.list_resources()
+
+        # Use appropriate storage method
+        if "database://primary" in [r["uri"] for r in resources]:
+            storage_result = await storage_service.call_with_session(
+                session_id="pipeline-session",
+                tool="store_data",
+                data=transformed
+            )
+
+    # Step 4: Stream real-time notifications
+    if notification_api:
+        async for notification in notification_api.call_tool_streaming(
+            "send_progress",
+            {"pipeline_id": "data-pipeline", "status": "completed"}
+        ):
+            print(f"Notification: {notification}")
+
+    return {"status": "completed", "records_processed": len(transformed)}
 ```
 
 ## Testing Your Decorators

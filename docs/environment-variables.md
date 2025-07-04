@@ -357,14 +357,14 @@ export UVICORN_LIFESPAN=on
 
 ### Fast Heartbeat Optimization
 
-> **New in v0.2+**: Ultra-fast topology change detection
+> **New in v0.3+**: Ultra-fast topology change detection
 
 ```bash
 # Ultra-aggressive (sub-5 second detection)
 export DEFAULT_TIMEOUT_THRESHOLD=5   # Mark unhealthy after 5s
 export HEALTH_CHECK_INTERVAL=2       # Scan every 2 seconds
 
-# Balanced (default - sub-20 second detection)  
+# Balanced (default - sub-20 second detection)
 export DEFAULT_TIMEOUT_THRESHOLD=20  # Mark unhealthy after 20s (4 missed 5s heartbeats)
 export HEALTH_CHECK_INTERVAL=10      # Scan every 10 seconds
 
@@ -378,6 +378,7 @@ export HEALTH_CHECK_INTERVAL=10
 ```
 
 **How it works:**
+
 - Agents send lightweight HEAD requests every ~5 seconds
 - Registry responds with topology change status (200/202/410)
 - Background monitor detects unhealthy agents and creates events
@@ -435,7 +436,7 @@ mcp-mesh-registry &
 
 # Backup registry (port 8001) - read-only mode for failover
 export HOST=0.0.0.0
-export PORT=8001  
+export PORT=8001
 export DATABASE_URL=postgresql://user:pass@replica-db:5432/mcp_mesh
 export DEFAULT_TIMEOUT_THRESHOLD=30
 export HEALTH_CHECK_INTERVAL=15
@@ -634,9 +635,11 @@ Now that you understand environment configuration:
 ## Summary
 
 ### Agent Configuration (Python)
+
 Focus on `MCP_MESH_*` variables for agent behavior, heartbeat intervals, and service discovery.
 
 ### Registry Configuration (Go)
+
 Focus on `DEFAULT_TIMEOUT_THRESHOLD` and `HEALTH_CHECK_INTERVAL` for fast topology detection.
 
 ---

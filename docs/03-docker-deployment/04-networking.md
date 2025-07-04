@@ -85,7 +85,7 @@ services:
       MCP_MESH_PUBLIC_URL: http://registry:8000
 
   weather-agent:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - mesh-net
     environment:
@@ -95,7 +95,7 @@ services:
       - registry
 
   database-agent:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - mesh-net
     environment:
@@ -150,7 +150,7 @@ networks:
 services:
   # DMZ Zone - Public facing
   api-gateway:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - dmz
       - app # Can talk to app tier
@@ -161,7 +161,7 @@ services:
 
   # Application Zone - Business logic
   order-agent:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - app
       - data # Can talk to data tier
@@ -170,7 +170,7 @@ services:
 
   # Data Zone - Sensitive data
   database-agent:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - data # Only in data network
     environment:
@@ -297,7 +297,7 @@ services:
       PEER_REGISTRIES: registry-west.global
 
   agents-east:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     deploy:
       replicas: 5
     networks:
@@ -317,7 +317,7 @@ services:
       PEER_REGISTRIES: registry-east.global
 
   agents-west:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     deploy:
       replicas: 5
     networks:
@@ -336,7 +336,7 @@ version: "3.8"
 services:
   # Envoy proxy sidecar for each agent
   weather-agent:
-    image: mcp-mesh/agent:0.2
+    image: mcp-mesh/agent:0.3
     networks:
       - mesh-net
     environment:

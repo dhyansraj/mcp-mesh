@@ -97,10 +97,10 @@ That's it! You now have a working distributed MCP service mesh! 🎉
 
 ```bash
 # 1. Install MCP Mesh with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.2.0,<0.3.0"
+pip install "mcp-mesh>=0.3.0,<0.4.0"
 
 # 2. Download and start registry (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.2
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.3
 registry --host 0.0.0.0 --port 8000 &
 
 # 3. Download example agents

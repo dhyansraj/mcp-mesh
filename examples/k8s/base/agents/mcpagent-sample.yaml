@@ -16,7 +16,7 @@ spec:
 
   # Deployment configuration
   replicas: 2
-  image: mcp-mesh-agent:latest
+  image: mcpmesh/python-runtime:0.3
   imagePullPolicy: IfNotPresent
 
   # Registry configuration

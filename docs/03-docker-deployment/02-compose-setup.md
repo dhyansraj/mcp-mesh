@@ -188,7 +188,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
 
   registry:
-    image: mcp-mesh/registry:${MCP_MESH_VERSION:-0.2}
+    image: mcp-mesh/registry:${MCP_MESH_VERSION:-0.3}
     ports:
       - "${REGISTRY_PORT:-8000}:8000"
     environment:
@@ -268,7 +268,7 @@ services:
           memory: 256M
 
   registry:
-    image: mcp-mesh/registry:${VERSION:-0.2}
+    image: mcp-mesh/registry:${VERSION:-0.3}
     environment:
       <<: *common-variables
       MCP_MESH_DB_PASSWORD_FILE: /run/secrets/db_password

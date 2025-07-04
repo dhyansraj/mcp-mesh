@@ -19,7 +19,7 @@ This installs the latest stable version of MCP Mesh and all dependencies.
 
 ```bash
 # Download and start the registry service (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.3
 registry --host 0.0.0.0 --port 8000
 ```
 
@@ -53,7 +53,7 @@ Both agents will:
 
 ```bash
 # Install meshctl CLI tool first (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.3
 
 # List all registered agents
 meshctl list agents

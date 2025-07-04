@@ -38,44 +38,63 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        MCP Mesh Architecture                    │
+│                        MCP Mesh Ecosystem                       │
+├─────────────────────────────────────────────────────────────────┤
+│              ┌───────────────────────────────────┐              │
+│              │           Redis                   │              │
+│              │      (Session Storage)            │              │
+│              │   session:* keys for stickiness   │              │
+│              └─────────────┬─────────────────────┘              │
+│                            │                                    │
+│         ┌──────────────────┼──────────────────┐                 │
+│         │                  │                  │                 │
+│         ▼                  ▼                  ▼                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │   Agent A   │  │   Agent B   │  │   Agent C   │              │
+│  │             │◄─┼─────────────┼─►│             │              │
+│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │              │
+│  │ │FastMCP  │◄┼──┼►│FastMCP  │◄┼──┼►│FastMCP  │ │              │
+│  │ │Server   │ │  │ │Server   │ │  │ │Server   │ │              │
+│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │              │
+│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │              │
+│  │ │Mesh     │ │  │ │Mesh     │ │  │ │Mesh     │ │              │
+│  │ │Runtime  │ │  │ │Runtime  │ │  │ │Runtime  │ │              │
+│  │ │(Inject) │ │  │ │(Inject) │ │  │ │(Inject) │ │              │
+│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │              │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
+│         │                │                │                     │
+│         │ Heartbeat      │ Heartbeat      │ Heartbeat           │
+│         │ + Discovery    │ + Discovery    │ + Discovery         │
+│         │                │                │                     │
+│         └────────────────┼────────────────┘                     │
+│                          ▼                                      │
+│                  ┌─────────────┐                                │
+│                  │   Registry  │                                │
+│                  │ (Background)│                                │
+│                  │ ┌─────────┐ │                                │
+│                  │ │Service  │ │                                │
+│                  │ │Discovery│ │                                │
+│                  │ │         │ │                                │
+│                  │ │SQLite DB│ │                                │
+│                  │ └─────────┘ │                                │
+│                  │ ┌─────────┐ │                                │
+│                  │ │Health   │ │                                │
+│                  │ │Monitor  │ │                                │
+│                  │ └─────────┘ │                                │
+│                  └─────────────┘                                │
 │                                                                 │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐  │
-│  │   Agent A       │    │   Agent B       │    │   Agent C   │  │
-│  │   @mesh.tool    │    │   @mesh.tool    │    │ @mesh.tool  │  │
-│  │   ┌───────────┐ │    │   ┌───────────┐ │    │ ┌─────────┐ │  │
-│  │   │FastMCP    │◄┼────┼──►│FastMCP    │◄┼─────►│FastMCP  │ │  │
-│  │   │Server     │ │    │   │Server     │ │    │ │Server   │ │  │
-│  │   └───────────┘ │    │   └───────────┘ │    │ └─────────┘ │  │
-│  └─────────┬───────┘    └─────────┬───────┘    └─────┬───────┘  │
-│            │                      │                  │          │
-│            │                      │                  │          │
-│            │    Heartbeat +       │    Heartbeat +   │          │
-│            │    Discovery         │    Discovery     │          │
-│            │                      │                  │          │
-│            └──────────────────────┼──────────────────┘          │
-│                                   ▼                             │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │             Registry Service (Background)                  │ │
-│  │                                                            │ │
-│  │  ┌─────────────────┐    ┌────────────────────────────────┐ │ │
-│  │  │   Capability    │    │     Dependency Resolution      │ │ │
-│  │  │   Discovery     │    │     & Proxy Coordination       │ │ │
-│  │  └─────────────────┘    └────────────────────────────────┘ │ │
-│  │                                                            │ │
-│  │  ┌─────────────────┐    ┌────────────────────────────────┐ │ │
-│  │  │   Health        │    │     Agent Lifecycle            │ │ │
-│  │  │   Monitoring    │    │     Management                 │ │ │
-│  │  └─────────────────┘    └────────────────────────────────┘ │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                 │
-│  Direct MCP JSON-RPC calls between FastMCP servers ◄──────────► │
-│  Registry provides coordination, not data path mediation        │
+│  Direct MCP JSON-RPC calls between FastMCP servers              │
+│  ◄──────────────────────────────────────────────────────────►   │
+│  Registry for discovery, Redis for session stickiness           │
 └─────────────────────────────────────────────────────────────────┘
-
-Flow: Agents heartbeat with capabilities → Registry resolves dependencies →
-      Lightweight proxies injected → Direct MCP calls between agents
 ```
+
+**Key Architecture Features:**
+
+- **Redis Session Storage**: Distributed session affinity across agent pods
+- **Direct MCP Communication**: Agents communicate directly via FastMCP protocol
+- **Registry Coordination**: Background service discovery and dependency resolution
+- **Mesh Runtime Injection**: Automatic proxy creation and dependency injection
 
 ### How Dynamic Injection Works
 
@@ -197,7 +216,7 @@ The implementation maintains MCP protocol compatibility while adding distributed
 
 ```bash
 # Install with semantic versioning (allows patches, not minor versions)
-pip install "mcp-mesh>=0.2.0,<0.3.0"
+pip install "mcp-mesh>=0.3.0,<0.4.0"
 ```
 
 ### CLI Tools
@@ -210,14 +229,14 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 ### Docker Images
 
 ```bash
-# Registry service (gets latest patches for 0.2.x)
-docker pull mcpmesh/registry:0.2
+# Registry service (gets latest patches for 0.3.x)
+docker pull mcpmesh/registry:0.3
 
-# Python runtime for agents (gets latest patches for 0.2.x)
-docker pull mcpmesh/python-runtime:0.2
+# Python runtime for agents (gets latest patches for 0.3.x)
+docker pull mcpmesh/python-runtime:0.3
 
-# CLI tools (gets latest patches for 0.2.x)
-docker pull mcpmesh/cli:0.2
+# CLI tools (gets latest patches for 0.3.x)
+docker pull mcpmesh/cli:0.3
 ```
 
 ### Quick Setup Options
@@ -225,7 +244,7 @@ docker pull mcpmesh/cli:0.2
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.2.0,<0.3.0"`             |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.3.0,<0.4.0"`             |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
@@ -327,22 +346,22 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ```bash
 # Install everything with one command (requires curl and Python 3.11+)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.2
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.3
 ```
 
 ### Package Manager Installation
 
 ```bash
 # Python package from PyPI (allows patch updates)
-pip install "mcp-mesh>=0.2.0,<0.3.0"
+pip install "mcp-mesh>=0.3.0,<0.4.0"
 
 # Docker images (use minor version tag for latest patches)
-docker pull mcpmesh/registry:0.2
-docker pull mcpmesh/python-runtime:0.2
-docker pull mcpmesh/cli:0.2
+docker pull mcpmesh/registry:0.3
+docker pull mcpmesh/python-runtime:0.3
+docker pull mcpmesh/cli:0.3
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.2.1/mcp-mesh_v0.2.1_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.3.0/mcp-mesh_v0.3.0_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 

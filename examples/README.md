@@ -110,7 +110,7 @@ Once you have any example running, test the core functionality:
 
 ```bash
 # 1. Install meshctl CLI (optional, use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.1
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.3
 
 # 2. Check agent registration
 meshctl list agents

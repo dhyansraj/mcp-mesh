@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v0.1.1)"
+        description: "Version (e.g., v0.3.0)"
         required: true
-        default: "v0.1.1"
+        default: "v0.3.0"
       environment:
         description: "Environment"
         type: choice
@@ -133,7 +133,7 @@ jobs:
           # For install script in Dockerfiles, we need the v prefix
           VERSION_WITH_V="v${VERSION}"
 
-          # Create semantic version tags (e.g., 0.1.6 -> 0.1.6, 0.1, 0)
+          # Create semantic version tags (e.g., 0.3.0 -> 0.3.0, 0.3, 0)
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f1-2)
