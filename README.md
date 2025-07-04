@@ -21,7 +21,9 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 - **Dynamic Dependency Injection**: Pull-based discovery with runtime function injection - no networking code required
 - **Resilient Architecture**: Registry as facilitator, agents communicate directly with fault tolerance and self-healing
 - **Automatic Discovery**: Agents find each other without configuration
-- **MCP Compatible**: Works with existing MCP tools and clients
+- **Near-Complete MCP Support**: Comprehensive MCP protocol implementation for distributed networks
+- **Advanced Session Management**: Redis-backed session stickiness with automatic routing across pod replicas
+- **Enhanced Proxy System**: Kwargs-driven auto-configuration for timeouts, retries, streaming, and authentication
 - **Smart Dependencies**: Version constraints, tags, and graceful degradation
 - **Kubernetes Native**: Production-ready with scaling, health checks, and observability
 
@@ -140,6 +142,54 @@ curl http://localhost:9090/mcp/ -X POST \
 ```
 
 **The magic**: Agents automatically discover and connect to each other without any configuration!
+
+## Advanced Features for Production
+
+MCP Mesh extends the MCP protocol with enterprise-grade capabilities for distributed environments:
+
+### **Session Stickiness & Stateful Operations**
+
+```python
+@mesh.tool(
+    session_required=True,     # Enable session routing
+    stateful=True,            # Mark as stateful
+    auto_session_management=True  # Automatic lifecycle
+)
+def user_counter(session_id: str, increment: int = 1):
+    # Automatically routed to same pod for session consistency
+    return update_user_state(session_id, increment)
+```
+
+**Features**: Redis-backed session storage, automatic pod assignment, graceful fallback to in-memory storage.
+
+### **Enhanced Proxy Auto-Configuration**
+
+```python
+@mesh.tool(
+    capability="data_processor",
+    timeout=120,                  # 2-minute timeout
+    retry_count=3,               # Exponential backoff retries
+    auth_required=True,          # Bearer token authentication
+    streaming=True,              # Auto-select streaming proxy
+    custom_headers={"X-Version": "v2"}  # Service identification
+)
+async def process_dataset(data_url: str):
+    # Auto-configured with production-ready settings
+```
+
+**Features**: Timeout management, retry policies, authentication, streaming auto-selection, custom headers.
+
+### **Comprehensive MCP Protocol Support**
+
+MCP Mesh provides extensive MCP protocol coverage in distributed environments:
+
+- **Complete Tool Calling**: Full MCP JSON-RPC implementation with enhanced error handling
+- **Streaming Support**: Native async generators with automatic proxy selection
+- **Authentication Integration**: Bearer tokens, custom headers, and security controls
+- **Session Management**: Stateful operations with distributed session affinity
+- **Error Resilience**: Graceful degradation and automatic retry mechanisms
+
+The implementation maintains MCP protocol compatibility while adding distributed system capabilities that scale from local development to enterprise deployments.
 
 ## 📦 Installation
 
