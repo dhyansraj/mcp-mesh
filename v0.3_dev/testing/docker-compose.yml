@@ -24,8 +24,8 @@ services:
       - "6379:6379"
     command: redis-server --appendonly yes
 
-  # FastMCP agent instance 1 - for session affinity testing
-  fastmcp-agent-1:
+  # FastMCP agent - scalable service for session affinity testing
+  fastmcp-agent:
     image: python:3.11-slim
     volumes:
       - ../../src/runtime/python:/app # Mount actual source code
@@ -42,13 +42,9 @@ services:
       - MCP_MESH_AUTO_RUN=true
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - REDIS_URL=redis://redis:6379
-      - POD_IP=fastmcp-agent-1
       - POD_PORT=8080
       - MCP_MESH_HTTP_PORT=8080
-      - AGENT_ID=fastmcp-service-1
       - MCP_MESH_LOG_LEVEL=DEBUG
-    ports:
-      - "8095:8080"
     depends_on:
       - registry
       - redis
@@ -58,8 +54,8 @@ services:
       timeout: 5s
       retries: 3
 
-  # FastMCP agent instance 2 - for session affinity testing
-  fastmcp-agent-2:
+  # Enhanced FastMCP agent - kwargs-configured capabilities
+  enhanced-fastmcp-agent:
     image: python:3.11-slim
     volumes:
       - ../../src/runtime/python:/app # Mount actual source code
@@ -69,20 +65,19 @@ services:
       bash -c "
         pip install -e .[dev] &&
         cd /testing &&
-        python fastmcp_agent.py
+        python enhanced_fastmcp_agent.py
       "
     environment:
       - MCP_MESH_ENABLED=true
       - MCP_MESH_AUTO_RUN=true
       - MCP_MESH_REGISTRY_URL=http://registry:8000
       - REDIS_URL=redis://redis:6379
-      - POD_IP=fastmcp-agent-2
       - POD_PORT=8080
       - MCP_MESH_HTTP_PORT=8080
-      - AGENT_ID=fastmcp-service-2
+      - AGENT_ID=enhanced-fastmcp-service
       - MCP_MESH_LOG_LEVEL=DEBUG
     ports:
-      - "8097:8080"
+      - "8094:8080"
     depends_on:
       - registry
       - redis
@@ -120,8 +115,8 @@ services:
     depends_on:
       - registry
       - redis
-      - fastmcp-agent-1 # Ensure FastMCP agents start first
-      - fastmcp-agent-2
+      - fastmcp-agent # Ensure FastMCP agents start first
+      - enhanced-fastmcp-agent # Include enhanced agent
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s

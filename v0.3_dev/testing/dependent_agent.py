@@ -236,6 +236,145 @@ async def test_session_affinity(
         }
 
 
+# NEW ENHANCED FUNCTIONS - Less verbose thanks to enhanced proxy auto-configuration
+
+@app.tool()
+@mesh.tool(capability="enhanced_math_report", dependencies=["enhanced_math_service"])
+def create_math_report(operations: list, enhanced_math: mesh.McpMeshAgent = None) -> dict:
+    """Create math report - enhanced proxy handles timeouts/retries automatically."""
+    if not enhanced_math:
+        return {"error": "Enhanced math service not available"}
+    
+    results = []
+    for op in operations:
+        # No timeout/retry logic needed - enhanced proxy handles it!
+        result = enhanced_math(
+            a=op.get("a", 0), 
+            b=op.get("b", 0), 
+            operation=op.get("operation", "add")
+        )
+        results.append(result)
+    
+    return {
+        "report_type": "math_operations",
+        "total_operations": len(operations),
+        "results": results,
+        "generated_at": datetime.now().isoformat(),
+        "enhanced": True
+    }
+
+
+@app.tool()
+@mesh.tool(capability="enhanced_time_report", dependencies=["enhanced_time_service"])
+def create_time_report(enhanced_time: mesh.McpMeshAgent = None) -> dict:
+    """Create time report - enhanced proxy auto-configured with custom headers."""
+    if not enhanced_time:
+        return {"error": "Enhanced time service not available"}
+    
+    # Simple call - enhanced proxy adds headers and handles retries
+    time_data = enhanced_time()
+    
+    return {
+        "report_type": "time_status",
+        "time_data": time_data,
+        "report_generated_at": datetime.now().isoformat(),
+        "enhanced": True,
+        "note": "Enhanced proxy automatically added X-Service-Type and X-Enhanced headers"
+    }
+
+
+@app.tool()
+@mesh.tool(capability="secure_config_report", dependencies=["secure_config_service"])
+def get_secure_config_report(config_type: str = "production", secure_config: mesh.McpMeshAgent = None) -> dict:
+    """Get secure config report - enhanced proxy handles auth automatically."""
+    if not secure_config:
+        return {"error": "Secure config service not available"}
+    
+    # Simple call - enhanced proxy handles auth_required automatically
+    config_data = secure_config(config_type=config_type)
+    
+    return {
+        "report_type": "secure_configuration",
+        "config_type": config_type,
+        "config_data": config_data,
+        "retrieved_at": datetime.now().isoformat(),
+        "enhanced": True,
+        "note": "Enhanced proxy automatically handled authentication requirements"
+    }
+
+
+@app.tool()
+@mesh.tool(capability="enhanced_session_test", dependencies=["enhanced_session_counter"])
+async def test_enhanced_session_management(
+    test_rounds: int = 3,
+    enhanced_session: McpAgent = None  # McpAgent for full session support
+) -> dict:
+    """Test enhanced session management - auto-session handling."""
+    if not enhanced_session:
+        return {"error": "Enhanced session service not available"}
+    
+    try:
+        # Enhanced proxy handles session creation automatically!
+        # No manual session management needed
+        results = []
+        
+        for round_num in range(1, test_rounds + 1):
+            # Enhanced proxy auto-manages sessions
+            result = await enhanced_session.call_tool_auto(
+                session_id=f"auto-session-{round_num}",
+                increment=round_num,
+                metadata={"test_round": round_num, "enhanced": True}
+            )
+            results.append({"round": round_num, "result": result})
+        
+        return {
+            "test_type": "enhanced_session_management", 
+            "test_rounds": test_rounds,
+            "results": results,
+            "tested_at": datetime.now().isoformat(),
+            "enhanced": True,
+            "note": "Enhanced proxy automatically managed session lifecycle"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Enhanced session test failed: {str(e)}",
+            "enhanced": True
+        }
+
+
+@app.tool()
+@mesh.tool(capability="streaming_data_consumer", dependencies=["streaming_data_service"])
+async def consume_streaming_data(
+    data_size: int = 5,
+    streaming_service: McpAgent = None  # McpAgent for streaming support
+) -> dict:
+    """Consume streaming data - enhanced proxy auto-selects streaming."""
+    if not streaming_service:
+        return {"error": "Streaming service not available"}
+    
+    try:
+        # Enhanced proxy automatically detects streaming=True and uses async generator
+        chunks = []
+        async for chunk in streaming_service.call_tool_streaming(data_size=data_size):
+            chunks.append(chunk)
+        
+        return {
+            "consumption_type": "streaming_data",
+            "total_chunks": len(chunks),
+            "chunks": chunks,
+            "consumed_at": datetime.now().isoformat(),
+            "enhanced": True,
+            "note": "Enhanced proxy automatically selected streaming mode"
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Streaming consumption failed: {str(e)}",
+            "enhanced": True
+        }
+
+
 # AGENT configuration - depends on time_service from the FastMCP agent
 @mesh.agent(
     name="dependent-service",
