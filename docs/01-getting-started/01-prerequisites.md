@@ -1,8 +1,8 @@
 # Prerequisites
 
-> Quick checklist before installing MCP Mesh 0.2.x with dual decorator pattern
+> Quick checklist before installing MCP Mesh 0.3.x with dual decorator pattern
 
-## Essential Requirements for MCP Mesh 0.2.x
+## Essential Requirements for MCP Mesh 0.3.x
 
 You need Python 3.9+ and understanding of the new dual decorator pattern:
 
@@ -33,7 +33,7 @@ python -m ensurepip --upgrade
 
 ### 3. Understanding the Dual Decorator Pattern
 
-MCP Mesh 0.2.x introduces the **dual decorator pattern** combining:
+MCP Mesh 0.3.x introduces the **dual decorator pattern** combining:
 
 - **FastMCP decorators** (`@app.tool`, `@app.prompt`, `@app.resource`) - Familiar MCP development
 - **Mesh decorators** (`@mesh.tool`, `@mesh.agent`) - Orchestration and dependency injection
@@ -53,7 +53,7 @@ def hello(time_service: mesh.McpMeshAgent = None):
     return f"Hello! Time: {time_service()}"
 ```
 
-That's it! You're ready to install MCP Mesh 0.2.x.
+That's it! You're ready to install MCP Mesh 0.3.x.
 
 ## Recommended Setup
 

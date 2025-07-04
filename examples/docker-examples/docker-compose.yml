@@ -1,15 +1,15 @@
 # MCP Mesh Docker Compose Example
-# Demonstrates Go registry + Python agents architecture using local builds
+# Demonstrates Go registry + Python agents architecture using published Docker images
 #
 # Services:
-# - registry: Go-based registry with SQLite storage (local build)
-# - hello-world-agent: Python agent with greeting capabilities (local build)
-# - system-agent: Python agent with system monitoring capabilities (local build)
-# - fastmcp-agent: FastMCP service with mesh integration (local build)
-# - dependent-agent: Service that depends on fastmcp-agent (local build)
+# - registry: Go-based registry with SQLite storage (mcpmesh/registry:0.3)
+# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:0.3)
+# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:0.3)
+# - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:0.3)
+# - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:0.3)
 #
 # Usage:
-#   docker-compose up --build
+#   docker-compose up
 #
 # Access points:
 #   - Registry API: http://localhost:8000
@@ -43,19 +43,9 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Build the base MCP Mesh Python image
-  mcp-mesh-base:
-    build:
-      context: ../..
-      dockerfile: docker/agent/Dockerfile.base
-    image: mcp-mesh-base:0.2
-    # This service only builds the base image, doesn't run
-
-  # Go-based registry service (local build)
+  # Go-based registry service (from Docker Hub)
   registry:
-    build:
-      context: ../..
-      dockerfile: docker/registry/Dockerfile
+    image: mcpmesh/registry:0.3
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -88,9 +78,9 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Hello World Python agent - uses local build
+  # Hello World Python agent - uses Docker Hub image
   hello-world-agent:
-    image: mcp-mesh-base:0.2
+    image: mcpmesh/python-runtime:0.3
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -121,8 +111,6 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      mcp-mesh-base:
-        condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
@@ -142,9 +130,9 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # System Agent Python service - uses local build
+  # System Agent Python service - uses Docker Hub image
   system-agent:
-    image: mcp-mesh-base:0.2
+    image: mcpmesh/python-runtime:0.3
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
@@ -175,8 +163,6 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      mcp-mesh-base:
-        condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
@@ -198,7 +184,7 @@ services:
 
   # FastMCP Agent with mesh integration
   fastmcp-agent:
-    image: mcp-mesh-base:0.2
+    image: mcpmesh/python-runtime:0.3
     container_name: mcp-mesh-fastmcp-agent
     hostname: fastmcp-agent
     ports:
@@ -229,8 +215,6 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      mcp-mesh-base:
-        condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
@@ -252,7 +236,7 @@ services:
 
   # Dependent Agent that uses FastMCP agent's time service
   dependent-agent:
-    image: mcp-mesh-base:0.2
+    image: mcpmesh/python-runtime:0.3
     container_name: mcp-mesh-dependent-agent
     hostname: dependent-agent
     ports:
@@ -283,8 +267,6 @@ services:
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
     depends_on:
-      mcp-mesh-base:
-        condition: service_completed_successfully
       # Agents are resilient - no registry dependency needed
       # Depends on fastmcp-agent for time service - wait for it to be healthy
       fastmcp-agent:

@@ -4,7 +4,7 @@
 
 ## Overview
 
-MCP Mesh 0.2.x introduces the **dual decorator pattern** that combines the familiar FastMCP development experience with powerful mesh orchestration. No main methods, no manual server setup - just add decorators and go!
+MCP Mesh 0.3.x introduces the **dual decorator pattern** that combines the familiar FastMCP development experience with powerful mesh orchestration. No main methods, no manual server setup - just add decorators and go!
 
 ## Quick Start (2 Commands!)
 

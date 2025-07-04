@@ -8,7 +8,7 @@ Install MCP Mesh using published packages:
 
 ```bash
 # Install MCP Mesh from PyPI with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.2.0,<0.3.0"
+pip install "mcp-mesh>=0.3.0,<0.4.0"
 
 # Download the CLI tools
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash

@@ -4,7 +4,7 @@
 
 ## What is Dependency Injection in 0.2.x?
 
-MCP Mesh 0.2.x revolutionizes dependency injection with the **dual decorator pattern**:
+MCP Mesh 0.3.x revolutionizes dependency injection with the **dual decorator pattern**:
 
 - 🔗 **Smart capability matching** using tags and metadata
 - 🎯 **Type-safe injection** with `mesh.McpMeshAgent` or flexible `Any` types
