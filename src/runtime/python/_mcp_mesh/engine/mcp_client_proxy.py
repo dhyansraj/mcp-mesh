@@ -559,18 +559,18 @@ class FullMCPProxy(MCPClientProxy):
     async def create_session(self) -> str:
         """
         Create a new session and return session ID.
-        
+
         For Phase 6 explicit session management. In Phase 8, this will be
         automated based on @mesh.tool(session_required=True) annotations.
-        
+
         Returns:
             New session ID string
         """
         import uuid
-        
+
         # Generate unique session ID
         session_id = f"session:{uuid.uuid4().hex[:16]}"
-        
+
         # For Phase 6, we just return the ID. The session routing middleware
         # will handle the actual session assignment when calls are made with
         # the session ID in headers.
@@ -580,26 +580,29 @@ class FullMCPProxy(MCPClientProxy):
     async def call_with_session(self, session_id: str, **kwargs) -> "Any":
         """
         Call tool with explicit session ID for stateful operations.
-        
+
         This ensures all calls with the same session_id route to the same
         agent instance for session affinity.
-        
+
         Args:
             session_id: Session ID to include in request headers
             **kwargs: Tool arguments to pass
-            
+
         Returns:
             Tool response
         """
         try:
-            import httpx
             import json
-            
+
+            import httpx
+
             # Build MCP tool call request
             # Add session_id to function arguments if the function expects it
             function_args = kwargs.copy()
-            function_args["session_id"] = session_id  # Pass session_id as function parameter
-            
+            function_args["session_id"] = (
+                session_id  # Pass session_id as function parameter
+            )
+
             payload = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -674,17 +677,17 @@ class FullMCPProxy(MCPClientProxy):
     async def close_session(self, session_id: str) -> bool:
         """
         Close session and cleanup session state.
-        
+
         Args:
             session_id: Session ID to close
-            
+
         Returns:
             True if session was closed successfully
         """
         # For Phase 6, session cleanup is handled by the session routing middleware
         # and Redis TTL. In Phase 8, this might send explicit cleanup requests.
         self.logger.debug(f"Session close requested for: {session_id}")
-        
+
         # Always return True for Phase 6 - cleanup is automatic
         return True
 

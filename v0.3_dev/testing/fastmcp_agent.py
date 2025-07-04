@@ -89,28 +89,28 @@ def process_data(data: str, format_type: str = "json") -> dict:
 
 @app.tool()
 @mesh.tool(
-    capability="session_counter", 
+    capability="session_counter",
     tags=["session", "stateful"],
     session_required=True,
-    stateful=True
+    stateful=True,
 )
 def increment_session_counter(session_id: str, increment: int = 1) -> dict:
     """Increment a counter for a specific session - demonstrates session affinity."""
     import os
-    
+
     # Use agent ID to identify which instance is handling this
     agent_id = os.getenv("AGENT_ID", "unknown")
     pod_ip = os.getenv("POD_IP", "localhost")
-    
+
     # Simple in-memory storage (in real apps you'd use Redis/database)
-    if not hasattr(increment_session_counter, '_counters'):
+    if not hasattr(increment_session_counter, "_counters"):
         increment_session_counter._counters = {}
-    
+
     # Get or initialize counter for this session
     current_count = increment_session_counter._counters.get(session_id, 0)
     new_count = current_count + increment
     increment_session_counter._counters[session_id] = new_count
-    
+
     return {
         "session_id": session_id,
         "previous_count": current_count,

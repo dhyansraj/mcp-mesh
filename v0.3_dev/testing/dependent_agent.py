@@ -166,55 +166,54 @@ async def inspect_remote_agent(
 @mesh.tool(capability="session_test", dependencies=["session_counter"])
 async def test_session_affinity(
     test_rounds: int = 3,
-    session_counter: McpAgent = None  # ✅ Using McpAgent for session support
+    session_counter: McpAgent = None,  # ✅ Using McpAgent for session support
 ) -> dict:
     """Test session affinity using explicit session management (Phase 6)."""
     if not session_counter:
-        return {"error": "No session_counter service available", "agent": "dependent-service"}
-    
+        return {
+            "error": "No session_counter service available",
+            "agent": "dependent-service",
+        }
+
     try:
         # Phase 6: Create session explicitly
         session_id = await session_counter.create_session()
-        
+
         results = []
         handled_by_agents = set()
-        
+
         for round_num in range(1, test_rounds + 1):
             try:
                 # Call with explicit session ID for session affinity
                 result = await session_counter.call_with_session(
-                    session_id=session_id,
-                    increment=round_num
+                    session_id=session_id, increment=round_num
                 )
-                
+
                 # Extract agent info from the response
                 agent_id = "unknown"
                 if isinstance(result, dict) and "structuredContent" in result:
-                    agent_id = result["structuredContent"].get("handled_by_agent", "unknown")
+                    agent_id = result["structuredContent"].get(
+                        "handled_by_agent", "unknown"
+                    )
                 elif isinstance(result, dict):
                     agent_id = result.get("handled_by_agent", "unknown")
-                
-                results.append({
-                    "round": round_num,
-                    "response": result,
-                    "handled_by": agent_id
-                })
-                
+
+                results.append(
+                    {"round": round_num, "response": result, "handled_by": agent_id}
+                )
+
                 handled_by_agents.add(agent_id)
-                
+
             except Exception as e:
-                results.append({
-                    "round": round_num,
-                    "error": str(e)
-                })
-        
+                results.append({"round": round_num, "error": str(e)})
+
         # Clean up session
         await session_counter.close_session(session_id)
-        
+
         # Analyze session affinity
         unique_agents = len(handled_by_agents)
         session_affinity_working = unique_agents == 1
-        
+
         return {
             "session_id": session_id,
             "test_rounds": test_rounds,
@@ -227,7 +226,7 @@ async def test_session_affinity(
             "phase": "Phase 6 - Explicit session management",
             "tested_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         return {
             "error": f"Session affinity test failed: {str(e)}",
