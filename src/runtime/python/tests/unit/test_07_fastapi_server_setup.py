@@ -299,8 +299,8 @@ class TestK8sEndpoints:
         """Test _add_k8s_endpoints adds all required endpoints."""
         step._add_k8s_endpoints(mock_app, mock_agent_config, {})
 
-        # Verify get decorator was called for each endpoint
-        assert mock_app.get.call_count == 4
+        # Verify get decorator was called for each endpoint (including /metadata from Phase 1)
+        assert mock_app.get.call_count == 5
 
         # Check endpoint paths
         call_args = [args[0][0] for args in mock_app.get.call_args_list]
@@ -308,6 +308,7 @@ class TestK8sEndpoints:
         assert "/ready" in call_args
         assert "/livez" in call_args
         assert "/metrics" in call_args
+        assert "/metadata" in call_args
 
     @pytest.mark.asyncio
     async def test_health_endpoint_response(self, step, mock_app, mock_agent_config):

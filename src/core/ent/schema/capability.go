@@ -30,6 +30,9 @@ func (Capability) Fields() []ent.Field {
 		field.JSON("tags", []string{}).
 			Default([]string{}).
 			Comment("Tags for this capability (e.g., ['prod', 'ml', 'gpu'])"),
+		field.JSON("kwargs", map[string]interface{}{}).
+			Optional().
+			Comment("Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)"),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable().

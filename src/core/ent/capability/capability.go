@@ -24,6 +24,8 @@ const (
 	FieldDescription = "description"
 	// FieldTags holds the string denoting the tags field in the database.
 	FieldTags = "tags"
+	// FieldKwargs holds the string denoting the kwargs field in the database.
+	FieldKwargs = "kwargs"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -51,6 +53,7 @@ var Columns = []string{
 	FieldVersion,
 	FieldDescription,
 	FieldTags,
+	FieldKwargs,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }

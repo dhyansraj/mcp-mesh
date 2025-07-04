@@ -1308,6 +1308,7 @@ type CapabilityMutation struct {
 	description   *string
 	tags          *[]string
 	appendtags    []string
+	kwargs        *map[string]interface{}
 	created_at    *time.Time
 	updated_at    *time.Time
 	clearedFields map[string]struct{}
@@ -1624,6 +1625,55 @@ func (m *CapabilityMutation) ResetTags() {
 	m.appendtags = nil
 }
 
+// SetKwargs sets the "kwargs" field.
+func (m *CapabilityMutation) SetKwargs(value map[string]interface{}) {
+	m.kwargs = &value
+}
+
+// Kwargs returns the value of the "kwargs" field in the mutation.
+func (m *CapabilityMutation) Kwargs() (r map[string]interface{}, exists bool) {
+	v := m.kwargs
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKwargs returns the old "kwargs" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldKwargs(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKwargs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKwargs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKwargs: %w", err)
+	}
+	return oldValue.Kwargs, nil
+}
+
+// ClearKwargs clears the value of the "kwargs" field.
+func (m *CapabilityMutation) ClearKwargs() {
+	m.kwargs = nil
+	m.clearedFields[capability.FieldKwargs] = struct{}{}
+}
+
+// KwargsCleared returns if the "kwargs" field was cleared in this mutation.
+func (m *CapabilityMutation) KwargsCleared() bool {
+	_, ok := m.clearedFields[capability.FieldKwargs]
+	return ok
+}
+
+// ResetKwargs resets all changes to the "kwargs" field.
+func (m *CapabilityMutation) ResetKwargs() {
+	m.kwargs = nil
+	delete(m.clearedFields, capability.FieldKwargs)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *CapabilityMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -1769,7 +1819,7 @@ func (m *CapabilityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CapabilityMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 8)
 	if m.function_name != nil {
 		fields = append(fields, capability.FieldFunctionName)
 	}
@@ -1784,6 +1834,9 @@ func (m *CapabilityMutation) Fields() []string {
 	}
 	if m.tags != nil {
 		fields = append(fields, capability.FieldTags)
+	}
+	if m.kwargs != nil {
+		fields = append(fields, capability.FieldKwargs)
 	}
 	if m.created_at != nil {
 		fields = append(fields, capability.FieldCreatedAt)
@@ -1809,6 +1862,8 @@ func (m *CapabilityMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case capability.FieldTags:
 		return m.Tags()
+	case capability.FieldKwargs:
+		return m.Kwargs()
 	case capability.FieldCreatedAt:
 		return m.CreatedAt()
 	case capability.FieldUpdatedAt:
@@ -1832,6 +1887,8 @@ func (m *CapabilityMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldDescription(ctx)
 	case capability.FieldTags:
 		return m.OldTags(ctx)
+	case capability.FieldKwargs:
+		return m.OldKwargs(ctx)
 	case capability.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case capability.FieldUpdatedAt:
@@ -1880,6 +1937,13 @@ func (m *CapabilityMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetTags(v)
 		return nil
+	case capability.FieldKwargs:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKwargs(v)
+		return nil
 	case capability.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -1927,6 +1991,9 @@ func (m *CapabilityMutation) ClearedFields() []string {
 	if m.FieldCleared(capability.FieldDescription) {
 		fields = append(fields, capability.FieldDescription)
 	}
+	if m.FieldCleared(capability.FieldKwargs) {
+		fields = append(fields, capability.FieldKwargs)
+	}
 	return fields
 }
 
@@ -1943,6 +2010,9 @@ func (m *CapabilityMutation) ClearField(name string) error {
 	switch name {
 	case capability.FieldDescription:
 		m.ClearDescription()
+		return nil
+	case capability.FieldKwargs:
+		m.ClearKwargs()
 		return nil
 	}
 	return fmt.Errorf("unknown Capability nullable field %s", name)
@@ -1966,6 +2036,9 @@ func (m *CapabilityMutation) ResetField(name string) error {
 		return nil
 	case capability.FieldTags:
 		m.ResetTags()
+		return nil
+	case capability.FieldKwargs:
+		m.ResetKwargs()
 		return nil
 	case capability.FieldCreatedAt:
 		m.ResetCreatedAt()

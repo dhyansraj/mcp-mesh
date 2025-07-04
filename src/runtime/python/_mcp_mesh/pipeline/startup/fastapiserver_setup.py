@@ -100,6 +100,16 @@ class FastAPIServerSetupStep(PipelineStep):
             # Store context for graceful shutdown access
             self._store_context_for_shutdown(context)
 
+            # Store agent_id for metadata endpoint access
+            agent_id = context.get("agent_id")
+            if agent_id:
+                self._current_context = self._current_context or {}
+                self._current_context["agent_id"] = agent_id
+
+            # Store mcp_wrappers for session stats access
+            self._current_context = self._current_context or {}
+            self._current_context["mcp_wrappers"] = mcp_wrappers
+
             # Store results in context (app prepared, but server not started yet)
             result.add_context("fastapi_app", fastapi_app)
             result.add_context("mcp_wrappers", mcp_wrappers)
@@ -501,8 +511,94 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
 
             return PlainTextResponse(content=metrics_text, media_type="text/plain")
 
+        # Add metadata endpoint for capability routing information
+        @app.get("/metadata")
+        async def get_routing_metadata():
+            """Get routing metadata for all capabilities on this agent."""
+            from datetime import datetime
+
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            capabilities_metadata = {}
+
+            # Get all registered mesh tools from existing DecoratorRegistry
+            try:
+                registered_tools = DecoratorRegistry.get_mesh_tools()
+
+                for func_name, decorated_func in registered_tools.items():
+                    metadata = decorated_func.metadata
+                    capability_name = metadata.get("capability", func_name)
+                    capabilities_metadata[capability_name] = {
+                        "function_name": func_name,
+                        "capability": capability_name,
+                        "version": metadata.get("version", "1.0.0"),
+                        "tags": metadata.get("tags", []),
+                        "description": metadata.get("description", ""),
+                        # Extract routing flags from **kwargs (already supported)
+                        "session_required": metadata.get("session_required", False),
+                        "stateful": metadata.get("stateful", False),
+                        "streaming": metadata.get("streaming", False),
+                        "full_mcp_access": metadata.get("full_mcp_access", False),
+                        # Include any custom metadata from **kwargs
+                        "custom_metadata": {
+                            k: v
+                            for k, v in metadata.items()
+                            if k
+                            not in [
+                                "capability",
+                                "function_name",
+                                "version",
+                                "tags",
+                                "description",
+                                "dependencies",
+                            ]
+                        },
+                    }
+            except Exception as e:
+                self.logger.warning(f"Failed to get mesh tools metadata: {e}")
+                capabilities_metadata = {}
+
+            # Get agent ID from stored context (set during startup)
+            stored_context = getattr(self, "_current_context", {})
+            agent_id = stored_context.get("agent_id")
+
+            # Fallback to agent config name if agent_id not available
+            if not agent_id:
+                current_agent_config = agent_config or {}
+                agent_id = current_agent_config.get("name", "unknown")
+
+            # Phase 5: Add session affinity statistics
+            session_affinity_stats = {}
+            try:
+                mcp_wrappers = stored_context.get("mcp_wrappers", {})
+                if mcp_wrappers:
+                    # Get session stats from first wrapper (they should all be similar)
+                    first_wrapper = next(iter(mcp_wrappers.values()))
+                    if first_wrapper and hasattr(
+                        first_wrapper.get("wrapper"), "get_session_stats"
+                    ):
+                        session_affinity_stats = first_wrapper[
+                            "wrapper"
+                        ].get_session_stats()
+            except Exception as e:
+                self.logger.debug(f"Failed to get session stats: {e}")
+                session_affinity_stats = {"error": "session stats unavailable"}
+
+            metadata_response = {
+                "agent_id": agent_id,
+                "capabilities": capabilities_metadata,
+                "timestamp": datetime.now().isoformat(),
+                "status": "healthy",
+            }
+
+            # Add session affinity stats if available
+            if session_affinity_stats:
+                metadata_response["session_affinity"] = session_affinity_stats
+
+            return metadata_response
+
         self.logger.debug(
-            "Added K8s health endpoints: /health, /ready, /livez, /metrics"
+            "Added K8s health endpoints: /health, /ready, /livez, /metrics, /metadata"
         )
 
     def _integrate_mcp_wrapper(
@@ -514,11 +610,14 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             fastmcp_app = mcp_wrapper._mcp_app
 
             if fastmcp_app is not None:
+                # Phase 5: Session routing now handled by HttpMcpWrapper middleware
+                # No need to add FastAPI-level middleware
+
                 # Mount the FastMCP app at root since it already provides /mcp routes
                 # FastMCP creates routes like /mcp/, so mounting at root gives us the correct paths
                 app.mount("", fastmcp_app)
                 self.logger.debug(
-                    f"Mounted FastMCP app from wrapper '{server_key}' at root (provides /mcp routes)"
+                    f"Mounted FastMCP app with HttpMcpWrapper session routing from '{server_key}'"
                 )
             else:
                 self.logger.warning(

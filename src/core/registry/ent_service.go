@@ -280,14 +280,22 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 						}
 
 						if functionName != "" && capabilityName != "" {
-							_, err := tx.Capability.Create().
+							capCreate := tx.Capability.Create().
 								SetAgentID(req.AgentID).
 								SetFunctionName(functionName).
 								SetCapability(capabilityName).
 								SetVersion(capVersion).
 								SetNillableDescription(&description).
-								SetTags(tags).
-								Save(ctx)
+								SetTags(tags)
+
+							// Add kwargs if present
+							if kwargsInterface, ok := toolMap["kwargs"]; ok {
+								if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
+									capCreate = capCreate.SetKwargs(kwargs)
+								}
+							}
+
+							_, err := capCreate.Save(ctx)
 							if err != nil {
 								return fmt.Errorf("failed to create capability %s: %w", functionName, err)
 							}
@@ -532,14 +540,22 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 								}
 
 								if functionName != "" && capabilityName != "" {
-									_, err := tx.Capability.Create().
+									capCreate := tx.Capability.Create().
 										SetAgentID(req.AgentID).
 										SetFunctionName(functionName).
 										SetCapability(capabilityName).
 										SetVersion(capVersion).
 										SetNillableDescription(&description).
-										SetTags(tags).
-										Save(ctx)
+										SetTags(tags)
+
+									// Add kwargs if present
+									if kwargsInterface, ok := toolMap["kwargs"]; ok {
+										if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
+											capCreate = capCreate.SetKwargs(kwargs)
+										}
+									}
+
+									_, err := capCreate.Save(ctx)
 									if err != nil {
 										return fmt.Errorf("failed to create capability %s: %w", functionName, err)
 									}
@@ -922,6 +938,7 @@ func (s *EntService) GetAgentWithCapabilities(agentID string) (map[string]interf
 			"version":       cap.Version,
 			"description":   cap.Description,
 			"tags":          cap.Tags,
+			"kwargs":        cap.Kwargs,
 		}
 	}
 	result["capabilities"] = capabilities

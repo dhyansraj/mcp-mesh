@@ -67,6 +67,12 @@ func (cc *CapabilityCreate) SetTags(s []string) *CapabilityCreate {
 	return cc
 }
 
+// SetKwargs sets the "kwargs" field.
+func (cc *CapabilityCreate) SetKwargs(m map[string]interface{}) *CapabilityCreate {
+	cc.mutation.SetKwargs(m)
+	return cc
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (cc *CapabilityCreate) SetCreatedAt(t time.Time) *CapabilityCreate {
 	cc.mutation.SetCreatedAt(t)
@@ -227,6 +233,10 @@ func (cc *CapabilityCreate) createSpec() (*Capability, *sqlgraph.CreateSpec) {
 	if value, ok := cc.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)
 		_node.Tags = value
+	}
+	if value, ok := cc.mutation.Kwargs(); ok {
+		_spec.SetField(capability.FieldKwargs, field.TypeJSON, value)
+		_node.Kwargs = value
 	}
 	if value, ok := cc.mutation.CreatedAt(); ok {
 		_spec.SetField(capability.FieldCreatedAt, field.TypeTime, value)

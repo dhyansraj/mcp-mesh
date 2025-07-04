@@ -19,6 +19,8 @@ resources:
   - registry/statefulset.yaml
   - registry/pvc.yaml
   - registry/backup-cronjob.yaml
+  # Redis for session storage (Phase 6+)
+  - redis/redis-deployment.yaml
   # Agents
   - agents/configmap.yaml
   - agents/agent-code-configmap.yaml
@@ -26,6 +28,7 @@ resources:
   - agents/hello-world-deployment.yaml
   - agents/system-agent-deployment.yaml
   - agents/fastmcp-agent-deployment.yaml
+  - agents/enhanced-fastmcp-agent-deployment.yaml
   - agents/dependent-agent-deployment.yaml
   # Ingress
   - ingress-hosts.yaml

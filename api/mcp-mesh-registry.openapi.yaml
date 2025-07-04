@@ -112,6 +112,9 @@ paths:
               tools:
                 - function_name: "greet"
                   capability: "greeting"
+                  kwargs:
+                    timeout: 30
+                    retry_count: 2
       responses:
         "200":
           description: Heartbeat received successfully
@@ -315,6 +318,18 @@ components:
           type: string
           example: "Simple greeting function"
           description: Function description
+        kwargs:
+          type: object
+          additionalProperties: true
+          description: |
+            Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration.
+            Supports timeout, retry_count, custom_headers, streaming, auth_required, etc.
+          example:
+            timeout: 45
+            retry_count: 3
+            custom_headers: { "X-API-Version": "v2" }
+            streaming: true
+            auth_required: true
 
     MeshToolDependencyRegistration:
       type: object
@@ -1098,3 +1113,15 @@ components:
           type: string
           example: "Simple greeting function"
           description: Function description
+        kwargs:
+          type: object
+          additionalProperties: true
+          description: |
+            Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration.
+            Supports timeout, retry_count, custom_headers, streaming, auth_required, etc.
+          example:
+            timeout: 45
+            retry_count: 3
+            custom_headers: { "X-API-Version": "v2" }
+            streaming: true
+            auth_required: true

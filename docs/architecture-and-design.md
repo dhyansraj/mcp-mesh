@@ -1,6 +1,6 @@
 # MCP Mesh Architecture and Design
 
-> Understanding the core architecture, design principles, and implementation details of MCP Mesh
+> Understanding the core architecture, design principles, and usage patterns of MCP Mesh
 
 ## Overview
 
@@ -14,6 +14,15 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 ┌─────────────────────────────────────────────────────────────────┐
 │                        MCP Mesh Ecosystem                       │
 ├─────────────────────────────────────────────────────────────────┤
+│              ┌───────────────────────────────────┐              │
+│              │           Redis                   │              │
+│              │      (Session Storage)            │              │
+│              │   session:* keys for stickiness   │              │
+│              └─────────────┬─────────────────────┘              │
+│                            │                                    │
+│         ┌──────────────────┼──────────────────┐                 │
+│         │                  │                  │                 │
+│         ▼                  ▼                  ▼                 │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
 │  │   Agent A   │  │   Agent B   │  │   Agent C   │              │
 │  │             │◄─┼─────────────┼─►│             │              │
@@ -48,9 +57,9 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 │                  │ └─────────┘ │                                │
 │                  └─────────────┘                                │
 │                                                                 │
-│  Direct MCP JSON-RPC calls between FastMCP servers             │
-│  ◄──────────────────────────────────────────────────────────►  │
-│  Registry and Mesh Runtime work in background                  │
+│  Direct MCP JSON-RPC calls between FastMCP servers              │
+│  ◄──────────────────────────────────────────────────────────►   │
+│  Registry for discovery, Redis for session stickiness           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,6 +85,13 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 - **Development Tools**: File watching, auto-restart, debugging
 - **Registry Operations**: Query services, check health, troubleshoot
 
+#### 4. **Redis (Session Storage)**
+
+- **Session Affinity**: Maps session IDs to pod IPs for stateful operations
+- **Distributed State**: Enables session stickiness across multiple pod replicas
+- **Graceful Fallback**: Agents fall back to in-memory storage if Redis unavailable
+- **TTL Management**: Automatic session cleanup and expiration
+
 ### Key Insight: Background Orchestration
 
 **MCP Mesh operates as background infrastructure:**
@@ -88,7 +104,7 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 
 ### 1. **True Resilient Architecture**
 
-MCP Mesh implements a fundamentally resilient architecture where agents operate independently and enhance each other when available, rather than depending on each other:
+MCP Mesh implements a fundamentally resilient architecture where agents operate independently and enhance each other when available:
 
 **Core Resilience Principles:**
 
@@ -110,23 +126,6 @@ Registry Down → Agents Continue Working → Direct MCP Communication Preserved
 Registry Returns → Agents Refresh → Topology Updates Resume
 ```
 
-**Key Behavioral Characteristics:**
-
-1. **Agent Independence**: Agents start and work without waiting for registry or other agents
-2. **Background Wiring**: Registry connects agents in background - no blocking operations
-3. **Communication Persistence**: Once wired, agents communicate directly even if registry fails
-4. **Topology Awareness**: Agents can't react to changes while registry is down, but existing connections persist
-5. **Automatic Recovery**: When registry returns, agents automatically get updated topology
-
-**Practical Benefits:**
-
-- **Zero Downtime**: Individual component failures don't cascade
-- **Development Simplicity**: Test agents individually without infrastructure
-- **Production Reliability**: Partial failures don't affect unrelated functionality
-- **Deployment Flexibility**: Deploy agents incrementally without coordination
-
-This design contrasts with traditional service meshes where services fail when control planes are unavailable. MCP Mesh agents enhance each other's capabilities rather than creating hard dependencies.
-
 ### 2. **Dual Decorator Pattern**
 
 MCP Mesh uses a dual decorator approach that preserves FastMCP familiarity while adding mesh orchestration:
@@ -141,707 +140,425 @@ def get_weather(time_service: Any = None) -> dict:
     # Business logic here
 ```
 
-**Design Benefits:**
+**Benefits:**
 
 - **Familiar Development**: Developers keep using FastMCP patterns
 - **Enhanced Capabilities**: Mesh adds dependency injection seamlessly
 - **Zero Boilerplate**: No manual server management or configuration
 - **Gradual Adoption**: Can add mesh features incrementally
 
-### 3. **Fast Heartbeat Architecture**
+### 3. **Enhanced Proxy System**
 
-MCP Mesh uses an optimized dual-heartbeat system for efficient health monitoring:
-
-```python
-# Fast Heartbeat Pattern
-HEAD /heartbeat    # Lightweight timestamp update (5s intervals)
-POST /heartbeat    # Full registration triggered by HEAD response when needed
-```
-
-**Heartbeat Types:**
-
-- **HEAD Request**: Minimal overhead timestamp update for health signaling
-- **POST Request**: Complete registration with capability updates - triggered when HEAD response indicates need
-- **Agent Status**: Explicit healthy/unhealthy/unknown states in database
-- **Full Refresh Tracking**: LastFullRefresh timestamp for topology change detection
-
-**Design Benefits:**
-
-- **Fast Failure Detection**: 5-second intervals with sub-20s failure detection
-- **Network Efficiency**: HEAD requests minimize bandwidth, POST only when registry signals need
-- **Automatic Recovery**: Unhealthy agents can recover via HEAD requests
-- **On-Demand Registration**: Full capability updates only when topology changes occur
-
-### 4. **Smart Dependency Resolution**
-
-MCP Mesh supports sophisticated dependency matching using tags and metadata:
+MCP Mesh v0.3+ introduces automatic proxy configuration from decorator kwargs:
 
 ```python
-# Simple string dependency
-dependencies=["database_service"]
-
-# Complex tag-based dependency
-dependencies=[{
-    "capability": "storage",
-    "tags": ["database", "postgresql"],
-    "version": ">=2.0.0"
-}]
-```
-
-**Resolution Algorithm:**
-
-1. **Exact Match**: Find capability with exact name
-2. **Tag Filtering**: Apply tag-based filters if specified
-3. **Version Constraints**: Ensure version compatibility
-4. **Load Balancing**: Select from multiple compatible providers
-5. **Fallback**: Graceful degradation if dependency unavailable
-
-### 5. **Zero Configuration Service Discovery**
-
-Services find each other automatically without configuration files:
-
-```python
-# No configuration needed!
 @mesh.tool(
-    capability="user_service",
-    dependencies=["auth_service", "database_service"]
+    capability="enhanced_service",
+    timeout=60,                    # Auto-configures proxy timeout
+    retry_count=3,                 # Auto-configures retry policy
+    streaming=True,                # Auto-selects streaming proxy
+    auth_required=True             # Auto-enables authentication
 )
-def get_user(auth_service=None, database_service=None):
-    # Dependencies automatically injected
+def enhanced_tool():
+    pass
 ```
 
-**Discovery Process:**
+**Proxy Types:**
 
-1. **Agent Startup**: Register capabilities with registry
-2. **Dependency Declaration**: Declare what capabilities are needed
-3. **Automatic Resolution**: Registry finds and connects services
-4. **Dynamic Updates**: New services automatically available
-5. **Health Monitoring**: Unhealthy services automatically removed
+- **EnhancedMCPClientProxy**: Timeout, retry, auth auto-configuration
+- **EnhancedFullMCPProxy**: Streaming auto-selection + session management
+- **Standard Proxies**: Backward compatibility for simple tools
+
+_Implementation: See `src/runtime/python/_mcp_mesh/engine/` for proxy classes_
+
+### 4. **Session Management and Stickiness**
+
+For stateful operations, MCP Mesh provides automatic session affinity:
+
+```python
+@mesh.tool(
+    capability="stateful_counter",
+    session_required=True,         # Enables session stickiness
+    stateful=True,                 # Marks as stateful operation
+    auto_session_management=True   # Automatic session lifecycle
+)
+def increment_counter(session_id: str, increment: int = 1):
+    # Automatically routed to same pod for this session
+```
+
+**Session Features:**
+
+- **Redis-Backed Storage**: Distributed session affinity across pods
+- **Automatic Routing**: Requests with same session_id go to same pod
+- **Graceful Fallback**: In-memory storage when Redis unavailable
+- **TTL Management**: Automatic session cleanup
+
+_Implementation: See `src/runtime/python/_mcp_mesh/engine/http_wrapper.py`_
+
+### 5. **Fast Heartbeat Architecture**
+
+Optimized health monitoring with dual-heartbeat system:
+
+```python
+HEAD /heartbeat    # Lightweight timestamp update (5s intervals)
+POST /heartbeat    # Full registration when triggered by HEAD response
+```
+
+**Benefits:**
+
+- **Fast Failure Detection**: Sub-20s failure detection
+- **Network Efficiency**: Minimal bandwidth usage
+- **On-Demand Registration**: Full updates only when needed
+
+_Implementation: See `cmd/registry/` for heartbeat handling_
 
 ## Implementation Architecture
 
-### Registry as Facilitator, Runtime as Thin Wrapper
+### Two-Pipeline Design
 
-MCP Mesh separates concerns between a coordinating registry and lightweight runtime:
+MCP Mesh uses a sophisticated two-pipeline architecture that separates initialization from runtime operations:
 
-- **Registry (Go)**: Facilitates dependency resolution, topology management, and service discovery
-- **Runtime (Python)**: Thin language wrapper that integrates with FastMCP and provides dependency injection
-- **No Direct Communication**: Registry never makes calls to runtime - runtime polls registry for updates
-- **Event-Driven Architecture**: Registry generates events for audit trails and topology changes
+#### Startup Pipeline (One-time Execution)
 
-**Key Registry Responsibilities:**
-
-- **Agent Status Management**: Track healthy/unhealthy/unknown states with explicit database fields
-- **Event Generation**: Create register/unregister events for audit and monitoring
-- **Fast Heartbeat Processing**: Handle both HEAD (timestamp) and POST (full registration) requests
-- **Health Monitoring**: Background health checks with configurable intervals and timeouts
-
-This design allows multiple language runtimes (future: Go, Rust, Node.js) while keeping the coordination centralized.
-
-### Two-Pipeline Architecture
-
-#### Startup Pipeline (One-time)
-
-```python
-# Startup pipeline steps:
-1. DecoratorCollectionStep    # Collect all @mesh.tool and @mesh.agent decorators
-2. ConfigurationStep          # Resolve agent config from decorators/environment
-3. HeartbeatPreparationStep   # Prepare heartbeat payload structure
-4. FastMCPServerDiscoveryStep # Discover user's FastMCP server instances
-5. HeartbeatLoopStep         # Setup background heartbeat configuration
-6. FastAPIServerSetupStep    # Setup FastAPI app with background heartbeat
+```
+DecoratorCollectionStep → ConfigurationStep → HeartbeatPreparationStep →
+FastMCPServerDiscoveryStep → HeartbeatLoopStep → FastAPIServerSetupStep
 ```
 
-#### Heartbeat Pipeline (Continuous loop)
+**Purpose**: Initialize agent, collect decorators, prepare for mesh integration
+**Trigger**: Agent startup, decorator debounce completion
+**Outcome**: Agent ready with capabilities registered and dependency injection configured
 
-```python
-# Heartbeat pipeline steps:
-1. RegistryConnectionStep    # Establish registry connection
-2. HeartbeatSendStep        # Send heartbeat to registry with capabilities
-3. DependencyResolutionStep # Process registry response and update dependency injection
+_Implementation: See `src/runtime/python/_mcp_mesh/pipeline/startup/`_
+
+#### Heartbeat Pipeline (Continuous Loop)
+
+```
+RegistryConnectionStep → HeartbeatSendStep → DependencyResolutionStep
 ```
 
-### Decorator Processing Flow
+**Purpose**: Maintain mesh connectivity, update dependency topology
+**Trigger**: Periodic execution (30s intervals)
+**Outcome**: Updated dependency proxies, health status maintained
 
-#### Debounce Coordination
+_Implementation: See `src/runtime/python/_mcp_mesh/pipeline/heartbeat/`_
+
+### Decorator Processing and Debounce Coordination
+
+**Challenge**: Decorators are processed as Python imports the module, but we need to wait for all decorators before starting mesh processing.
+
+**Solution**: Debounce coordinator with configurable delay
 
 ```python
-# Decorators trigger debounced processing
-class DebounceCoordinator:
-    def __init__(self, delay=1.0):  # MCP_MESH_DEBOUNCE_DELAY
-        self.delay = delay
-        self.timer = None
+@mesh.tool()  # Triggers debounce timer
+def tool1(): pass
 
-    def trigger_processing(self):
-        # Cancel previous timer, schedule new processing
-        if self.timer:
-            self.timer.cancel()
-        self.timer = Timer(self.delay, self._start_startup_pipeline)
+@mesh.tool()  # Resets debounce timer
+def tool2(): pass
 
-# Each decorator calls this when processed
-def _trigger_debounced_processing():
-    coordinator = get_debounce_coordinator()
-    coordinator.trigger_processing()
+# After MCP_MESH_DEBOUNCE_DELAY (default 1.0s) with no new decorators:
+# → Startup pipeline begins
 ```
 
-**Process**: Decorators notify when processed → Hold pipeline until no more decorations → Start startup pipeline
+**Design Benefits**:
 
-### Environment Variable Control
+- Handles dynamic decorator registration during import
+- Prevents race conditions in multi-decorator modules
+- Configurable timing via `MCP_MESH_DEBOUNCE_DELAY`
+
+_Implementation: See `src/runtime/python/_mcp_mesh/engine/debounce_coordinator.py`_
+
+### Dependency Resolution and Proxy Architecture
+
+#### Function Caching Strategy
+
+**Key Insight**: Mesh decorators must process BEFORE FastMCP decorators to cache original functions.
 
 ```python
-# Key environment variables:
-MCP_MESH_AUTO_RUN=true        # Controls standalone vs heartbeat mode
-MCP_MESH_ENABLED=true         # Controls runtime initialization
-MCP_MESH_DEBOUNCE_DELAY=1.0   # Decorator processing delay
-MCP_MESH_REGISTRY_URL=http://localhost:8000  # Registry connection
+@mesh.tool()  # ← Processes first, caches original function
+@app.tool()   # ← FastMCP processes wrapped function
+def hello(): pass
 ```
 
-**Flow**: Startup pipeline completes → Check `MCP_MESH_AUTO_RUN` → If true, start heartbeat pipeline
+**Implementation**:
 
-### FastMCP Integration Strategy
+1. Mesh decorator caches `func._mesh_original_func = func`
+2. Creates dependency injection wrapper
+3. FastMCP receives wrapper (not original)
+4. Runtime calls cached original with injected dependencies
 
-#### Function Caching and Wrapping
+#### Proxy Selection Logic
 
-```python
-# We process BEFORE FastMCP decorators
-@mesh.tool(capability="greeting", dependencies=["time_service"])
-@app.tool()  # FastMCP processes after us
-def hello(time_service=None):
-    return f"Hello at {time_service()}"
-
-# Implementation:
-def mesh_tool_decorator(func):
-    # 1. Cache original function
-    func._mesh_original_func = func
-
-    # 2. Create dependency injection wrapper
-    wrapped = create_injection_wrapper(func, dependencies)
-
-    # 3. Give wrapper to FastMCP (not original)
-    return wrapped
-
-def create_injection_wrapper(func, dependencies):
-    @functools.wraps(func)
-    def dependency_wrapper(*args, **kwargs):
-        # Inject dependencies as additional kwargs
-        for dep_name, proxy in dependency_wrapper._mesh_injected_deps.items():
-            if dep_name in dependencies and dep_name not in kwargs:
-                kwargs[dep_name] = proxy
-
-        # Call original cached function
-        return func._mesh_original_func(*args, **kwargs)
-
-    # Storage for dependency proxies
-    dependency_wrapper._mesh_injected_deps = {}
-    return dependency_wrapper
-```
-
-### Dependency Resolution and Proxy Creation
-
-#### Registry-Driven Dependency Resolution
+**Registry-Driven**: Heartbeat response determines proxy type based on dependency location and configuration.
 
 ```python
-# Registry does dependency resolution, returns topology
-async def process_heartbeat_response(response):
-    current_state = extract_dependency_state(response)
-    current_hash = hash_dependency_state(current_state)
-
-    # Only update if dependencies changed
-    if current_hash == _last_dependency_hash:
-        return  # No changes
-
-    # Update dependency injection
-    await update_dependency_injection(current_state)
-```
-
-#### Proxy Types
-
-```python
-# Two proxy types based on dependency location:
-
-class SelfDependencyProxy:
-    """For same-agent dependencies - direct local call"""
-    def __init__(self, original_func, function_name):
-        self.original_func = original_func
-        self.function_name = function_name
-
-    def __call__(self, *args, **kwargs):
-        # Direct call to cached original function
-        return self.original_func(*args, **kwargs)
-
-class MCPClientProxy:
-    """For cross-agent dependencies - direct MCP call"""
-    def __init__(self, endpoint, function_name):
-        self.endpoint = endpoint
-        self.function_name = function_name
-
-    def __call__(self, *args, **kwargs):
-        # Direct MCP JSON-RPC call to remote FastMCP server
-        payload = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "tools/call",
-            "params": {
-                "name": self.function_name,
-                "arguments": kwargs
-            }
-        }
-
-        response = requests.post(
-            f"{self.endpoint}/mcp/",
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            }
-        )
-        return response.json().get("result")
-```
-
-#### Dependency Injection Decision
-
-```python
-# Registry response determines proxy type
-for dependency in heartbeat_response.dependencies:
-    current_agent_id = self.agent_id
-    target_agent_id = dependency.agent_id
-
-    if current_agent_id == target_agent_id:
-        # Same agent - use self dependency proxy
-        proxy = SelfDependencyProxy(
-            find_original_function(dependency.function_name),
-            dependency.function_name
-        )
+if current_agent_id == target_agent_id:
+    # Same agent - direct local call
+    proxy = SelfDependencyProxy(original_func, function_name)
+else:
+    # Different agent - MCP JSON-RPC call
+    if has_enhanced_config:
+        proxy = EnhancedMCPClientProxy(endpoint, func_name, kwargs_config)
     else:
-        # Different agent - use MCP client proxy
-        proxy = MCPClientProxy(
-            dependency.endpoint,
-            dependency.function_name
-        )
-
-    # Update wrapper's injected dependencies
-    await injector.update_dependency(dependency.capability, proxy)
+        proxy = MCPClientProxy(endpoint, func_name)
 ```
 
-### Function Execution Flow
+**Enhanced Proxy Auto-Selection**:
 
-#### Runtime Execution
+- `streaming=True` → `EnhancedFullMCPProxy`
+- `session_required=True` → `EnhancedFullMCPProxy` with session management
+- Custom timeout/retry → `EnhancedMCPClientProxy`
+- Simple tools → Standard `MCPClientProxy`
 
-```python
-# When FastMCP calls our wrapper:
-def dependency_wrapper(*args, **kwargs):
-    # 1. Check if dependency proxies are set
-    for dep_name in dependencies:
-        if dep_name not in kwargs:
-            # 2. Inject proxy from _mesh_injected_deps
-            proxy = dependency_wrapper._mesh_injected_deps.get(dep_name)
-            kwargs[dep_name] = proxy
-
-    # 3. Call original cached function with injected dependencies
-    return func._mesh_original_func(*args, **kwargs)
-
-# When user function calls dependency:
-def hello(time_service=None):
-    if time_service:
-        current_time = time_service()  # Proxy.__call__ invoked
-        return f"Hello at {current_time}"
-```
-
-#### Proxy Invocation
-
-```python
-# If self dependency proxy:
-def __call__(self, *args, **kwargs):
-    return self.original_func(*args, **kwargs)  # Local call
-
-# If MCP client proxy:
-def __call__(self, *args, **kwargs):
-    # HTTP call to remote FastMCP server
-    return self._make_mcp_call(*args, **kwargs)
-```
+_Implementation: See `src/runtime/python/_mcp_mesh/pipeline/heartbeat/dependency_resolution.py`_
 
 ### Hash-Based Change Detection
 
+**Performance Optimization**: Only update dependency injection when topology actually changes.
+
 ```python
-# Efficient dependency update detection
 def _hash_dependency_state(dependency_state):
-    """Create hash of current dependency topology"""
     state_str = json.dumps(dependency_state, sort_keys=True)
     return hashlib.sha256(state_str.encode()).hexdigest()
 
-# Global state tracking
-_last_dependency_hash = None
-
-async def process_heartbeat_response(response):
-    current_hash = _hash_dependency_state(response.dependencies)
-
-    if current_hash == _last_dependency_hash:
-        return  # No changes - skip expensive DI update
-
-    # Update dependency injection only when topology changes
-    await update_dependency_injection(response.dependencies)
-    _last_dependency_hash = current_hash
+# In heartbeat pipeline:
+current_hash = _hash_dependency_state(response.dependencies)
+if current_hash == _last_dependency_hash:
+    return  # Skip expensive dependency injection update
 ```
 
-### Agent Lifecycle Management
+**Benefits**:
+
+- Eliminates unnecessary proxy recreation
+- Reduces CPU overhead in stable topologies
+- Enables high-frequency heartbeats without performance penalty
+
+### Registry as Facilitator Pattern
+
+**Design Philosophy**: Registry coordinates but never controls agent execution.
+
+**Registry Responsibilities**:
+
+- Accept agent registrations via heartbeat
+- Store capability metadata in SQLite
+- Resolve dependencies and return topology
+- Monitor health and mark unhealthy agents
+- Generate audit events
+
+**What Registry NEVER Does**:
+
+- Make calls to agents (only agents call registry)
+- Control agent lifecycle
+- Proxy or intercept agent-to-agent communication
+- Store business logic or state
+
+**Agent Autonomy**: Agents poll registry for updates but operate independently. Registry failure doesn't break existing agent-to-agent connections.
+
+_Implementation: See `cmd/registry/` for Go registry service_
+
+## Usage Patterns
+
+### Basic Agent Development
+
+**1. Simple Tool Creation:**
 
 ```python
-class AgentProcessor:
-    async def startup(self):
-        # 1. Wait for decorator debounce completion
-        await self._wait_for_decorators()
+from fastmcp import FastMCP
+import mesh
 
-        # 2. Run startup pipeline
-        await self._run_startup_pipeline()
+app = FastMCP("My Service")
 
-        # 3. Check auto-run environment variable
-        if os.getenv('MCP_MESH_AUTO_RUN', 'true').lower() == 'true':
-            # 4. Start heartbeat pipeline loop
-            asyncio.create_task(self._heartbeat_loop())
+@app.tool()
+@mesh.tool(capability="greeting")
+def say_hello(name: str) -> str:
+    return f"Hello, {name}!"
 
-    async def _heartbeat_loop(self):
-        while True:
-            try:
-                # Run heartbeat pipeline
-                await self._run_heartbeat_pipeline()
-                await asyncio.sleep(30)  # MCP_MESH_AUTO_RUN_INTERVAL
-            except Exception as e:
-                logger.error(f"Heartbeat failed: {e}")
-                await asyncio.sleep(5)  # Retry faster on failure
+@mesh.agent(name="greeting-service")
+class GreetingAgent:
+    pass
 ```
 
-This architecture provides efficient, hash-based dependency updates with minimal overhead, direct MCP communication between agents, and clean separation between registry intelligence and runtime simplicity.
+**2. With Dependencies:**
 
-## Data Flow and Communication
-
-### 1. Agent Registration Flow
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Agent A   │    │  Registry   │    │   Agent B   │
-└─────────────┘    └─────────────┘    └─────────────┘
-        │                  │                  │
-        │  1. Heartbeat   │                  │
-        │  (capabilities) │                  │
-        ├─────────────────►                  │
-        │                 │                  │
-        │  2. Store & Index                  │
-        │                 │                  │
-        │  3. Discovery   │                  │
-        │  Request        │                  │
-        ◄─────────────────┤                  │
-        │                 │                  │
-        │  4. Available   │                  │
-        │  Capabilities   │                  │
-        ├─────────────────►                  │
-        │                 │                  │
-        │                 │  5. Heartbeat   │
-        │                 │  (capabilities) │
-        │                 ◄─────────────────┤
-        │                 │                  │
-        │                 │  6. Store & Index
-        │                 │                  │
+```python
+@app.tool()
+@mesh.tool(
+    capability="time_greeting",
+    dependencies=["time_service"]
+)
+def time_greeting(name: str, time_service=None) -> str:
+    current_time = time_service() if time_service else "unknown time"
+    return f"Hello, {name}! Current time: {current_time}"
 ```
 
-### 2. Dependency Resolution Flow
+### Enhanced Configuration
 
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ Consumer    │    │  Registry   │    │  Provider   │
-│ Agent       │    │(Background) │    │  Agent      │
-└─────────────┘    └─────────────┘    └─────────────┘
-        │                  │                  │
-        │  1. Startup:     │                  │
-        │  Query for deps  │                  │
-        ├─────────────────►                  │
-        │                 │                  │
-        │  2. Find matching                  │
-        │  capabilities    │                  │
-        │                 │                  │
-        │  3. Return       │                  │
-        │  endpoint URLs   │                  │
-        ◄─────────────────┤                  │
-        │                 │                  │
-        │  4. Mesh injects │                  │
-        │  proxy functions │                  │
-        │                 │                  │
-        │                 │                  │
-        │  5. Runtime: Direct MCP JSON-RPC   │
-        │  POST /mcp/ {"method":"tools/call"} │
-        ├────────────────────────────────────►
-        │                 │                  │
-        │  6. FastMCP response               │
-        ◄────────────────────────────────────┤
-        │                 │                  │
-        │                 │                  │
-        │  Registry works in background -    │
-        │  no involvement in actual calls    │
-        │                 │                  │
+**3. Production-Ready Tool:**
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="secure_data_processor",
+    timeout=120,                           # 2 min timeout
+    retry_count=3,                         # Retry on failure
+    auth_required=True,                    # Require authentication
+    custom_headers={"X-Service": "data"},  # Custom headers
+    streaming=True                         # Enable streaming
+)
+async def process_large_dataset(data_url: str):
+    # Auto-configured with enhanced proxy features
 ```
 
-### 3. Fast Heartbeat Flow
+**4. Stateful Operations:**
 
-```
-┌─────────────┐    ┌─────────────┐
-│   Agent     │    │  Registry   │
-└─────────────┘    └─────────────┘
-        │                  │
-        │  HEAD /heartbeat │
-        │  every 5s        │
-        ├─────────────────►
-        │                 │ Update timestamp only
-        │  200 OK         │ Return 200 (healthy) or 410 (need refresh)
-        ◄─────────────────┤
-        │                 │
-        │  (If 410 recv'd)│
-        │  POST /heartbeat│
-        ├─────────────────►
-        │                 │ Full registration + capabilities
-        │                 │ Update LastFullRefresh
-        │                 │ Generate register events
-        │                 │
-        │  (No heartbeat  │
-        │   for 20s)      │
-        │                 │
-        │                 │ Health monitor marks unhealthy
-        │                 │ Remove from discovery
-        │                 │
-        │  HEAD /heartbeat │
-        │  resumed         │
-        ├─────────────────►
-        │                 │ Update timestamp + status recovery
-        │  410 (refresh)  │ Signal need for full registration
-        ◄─────────────────┤
-        │                 │
-        │  POST /heartbeat│
-        ├─────────────────►
-        │                 │ Full registration, re-add to discovery
+```python
+@app.tool()
+@mesh.tool(
+    capability="user_session",
+    session_required=True,        # Enable session stickiness
+    stateful=True,               # Mark as stateful
+    timeout=30
+)
+def update_user_state(session_id: str, updates: dict):
+    # Automatically routed to same pod for session consistency
 ```
 
-### 4. Agent Lifecycle Events
+### Deployment Patterns
 
+**Local Development:**
+
+```bash
+# Terminal 1: Start registry
+meshctl registry start
+
+# Terminal 2: Start your agent
+python my_agent.py
 ```
-┌─────────────┐    ┌─────────────┐
-│   Agent     │    │  Registry   │
-└─────────────┘    └─────────────┘
-        │                  │
-        │  Graceful        │
-        │  Shutdown        │
-        ├─────────────────►
-        │                 │ DELETE /agents/{id}
-        │                 │ Mark unhealthy (preserve audit)
-        │                 │ Generate unregister event
-        │                 │
-        │  Signal Handler  │
-        │  (SIGTERM)       │
-        │                 │
-        │  Cleanup &       │
-        │  Unregister      │
-        │                 │
+
+**Docker Compose:**
+
+```yaml
+version: "3.8"
+services:
+  registry:
+    image: mcpmesh/registry:latest
+    ports: ["8000:8000"]
+
+  my-service:
+    build: .
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+    depends_on: [registry]
+```
+
+**Kubernetes:**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-service
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: agent
+          image: my-service:latest
+          env:
+            - name: MCP_MESH_REGISTRY_URL
+              value: "http://mcp-registry:8000"
+            - name: REDIS_URL
+              value: "redis://redis:6379" # For session storage
 ```
 
 ## Performance Characteristics
 
 ### Scalability Metrics
 
-| Component                 | Metric             | Performance          |
-| ------------------------- | ------------------ | -------------------- |
-| **Registry**              | Agents             | 1000+ agents         |
-| **Registry**              | Capabilities       | 10,000+ capabilities |
-| **Registry**              | Heartbeat Rate     | 100+ heartbeats/sec  |
-| **Agent**                 | Tool Calls         | 1000+ calls/sec      |
-| **Agent**                 | Startup Time       | <2 seconds           |
-| **Dependency Resolution** | Lookup Time        | <10ms                |
-| **Service Discovery**     | Update Propagation | <1 second            |
-
-### Memory Usage
-
-| Component          | Base Memory | Per Agent | Per Capability |
-| ------------------ | ----------- | --------- | -------------- |
-| **Registry**       | 20MB        | +2KB      | +1KB           |
-| **Agent (Python)** | 50MB        | N/A       | +5KB           |
-| **meshctl**        | 10MB        | N/A       | N/A            |
+- **Registry**: 1000+ agents, 10,000+ capabilities, 100+ heartbeats/sec
+- **Agent**: 1000+ tool calls/sec, <2s startup time
+- **Discovery**: <10ms lookup time, <1s update propagation
 
 ### Network Overhead
 
-- **HEAD Heartbeat**: ~200B per agent every 5 seconds (timestamp update only)
-- **POST Heartbeat**: ~2KB per agent when triggered by HEAD 410 response (on-demand registration)
-- **Discovery Query**: ~1KB request, ~5KB response
-- **Tool Call**: Standard MCP JSON-RPC (varies by payload)
+- **HEAD Heartbeat**: ~200B per agent every 5 seconds
+- **POST Heartbeat**: ~2KB per agent when topology changes
+- **Tool Calls**: Standard MCP JSON-RPC (varies by payload)
+
+_See `docs/performance/` for detailed benchmarks_
 
 ## Security Model
 
-### Authentication and Authorization
+### Current Architecture
 
-Currently MCP Mesh operates in a trusted network model:
-
-- **No Built-in Auth**: Assumes secure network environment
-- **HTTP Only**: HTTPS support planned for production
+- **Trusted Network Model**: Assumes secure network environment
 - **Service-to-Service**: Direct HTTP communication between agents
-- **Registry Access**: Open access to all agents in network
+- **No Built-in Auth**: Authentication via proxy configuration
 
-### Security Recommendations
-
-For production deployments:
+### Production Recommendations
 
 1. **Network Segmentation**: Use private networks or VPNs
 2. **Service Mesh**: Deploy with Istio/Linkerd for mTLS
 3. **API Gateway**: Use gateway for external access control
-4. **Container Security**: Use non-root containers and security contexts
+4. **Enhanced Proxies**: Use `auth_required=True` with bearer tokens
 
-### Planned Security Features
+_See `docs/security/` for detailed security guidance_
 
-- **mTLS Support**: Mutual TLS for service-to-service communication
-- **RBAC**: Role-based access control for capabilities
-- **API Keys**: Agent authentication with registry
-- **Network Policies**: Kubernetes network policy integration
+## Recent Enhancements (v0.3.x)
 
-## Deployment Patterns
-
-### 1. Local Development
-
-```
-┌─────────────────────────────────────┐
-│          Developer Machine          │
-│                                     │
-│  ┌─────────────┐  ┌─────────────┐   │
-│  │  Registry   │  │   Agent 1   │   │
-│  │ localhost:  │  │ localhost:  │   │
-│  │    8000     │  │    8080     │   │
-│  └─────────────┘  └─────────────┘   │
-│         │                │          │
-│         └────────────────┘          │
-│                                     │
-│  ┌─────────────┐  ┌─────────────┐   │
-│  │   Agent 2   │  │   Agent 3   │   │
-│  │ localhost:  │  │ localhost:  │   │
-│  │    8081     │  │    8082     │   │
-│  └─────────────┘  └─────────────┘   │
-│         │                │          │
-│         └────────────────┘          │
-└─────────────────────────────────────┘
-```
-
-### 2. Docker Compose
-
-```
-┌─────────────────────────────────────┐
-│           Docker Network            │
-│                                     │
-│  ┌─────────────┐  ┌─────────────┐   │
-│  │  registry   │  │hello-world- │   │
-│  │             │  │   agent     │   │
-│  │   :8000     │  │   :8080     │   │
-│  └─────────────┘  └─────────────┘   │
-│         │                │          │
-│         └────────────────┘          │
-│                                     │
-│  ┌─────────────┐  ┌─────────────┐   │
-│  │ weather-    │  │  system-    │   │
-│  │  agent      │  │   agent     │   │
-│  │   :8081     │  │   :8082     │   │
-│  └─────────────┘  └─────────────┘   │
-│         │                │          │
-│         └────────────────┘          │
-└─────────────────────────────────────┘
-```
-
-### 3. Kubernetes
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Kubernetes Cluster                   │
-│                                                         │
-│  ┌─────────────────┐    ┌─────────────────────────────┐ │
-│  │   mcp-registry  │    │        mcp-agents           │ │
-│  │                 │    │                             │ │
-│  │ ┌─────────────┐ │    │ ┌─────────┐ ┌─────────────┐ │ │
-│  │ │   Service   │ │    │ │ Agent-A │ │  Agent-B    │ │ │
-│  │ │registry:8000│ │    │ │ Pod     │ │  Pod        │ │ │
-│  │ └─────────────┘ │    │ └─────────┘ └─────────────┘ │ │
-│  │ ┌─────────────┐ │    │ ┌─────────┐ ┌─────────────┐ │ │
-│  │ │ StatefulSet │ │    │ │ Agent-C │ │  Agent-D    │ │ │
-│  │ │  (SQLite)   │ │    │ │ Pod     │ │  Pod        │ │ │
-│  │ └─────────────┘ │    │ └─────────┘ └─────────────┘ │ │
-│  └─────────────────┘    └─────────────────────────────┘ │
-│           │                           │                 │
-│           └───────────────────────────┘                 │
-│                     Service Discovery                   │
-└─────────────────────────────────────────────────────────┘
-```
+1. **✅ Redis Session Storage**: Distributed session affinity with Redis backend
+2. **✅ Enhanced Proxy System**: Kwargs-based auto-configuration for proxies
+3. **✅ Automatic Session Management**: Built-in session lifecycle management
+4. **✅ HTTP Wrapper Improvements**: Session routing middleware and port resolution
+5. **✅ Streaming Auto-Selection**: Automatic routing based on tool capabilities
+6. **✅ Authentication Integration**: Bearer token support for enhanced proxies
 
 ## Extension Points
 
-### 1. Custom Dependency Resolvers
+### Custom Dependency Resolvers
 
 ```python
 class CustomDependencyResolver(DependencyResolver):
     async def resolve_capability(self, capability_spec):
         # Custom logic for finding capabilities
-        # e.g., geographic proximity, cost optimization
         candidates = await super().find_candidates(capability_spec)
         return self.apply_custom_selection(candidates)
-
-    def apply_custom_selection(self, candidates):
-        # Custom selection algorithm
-        return min(candidates, key=lambda c: c.latency)
 ```
 
-### 2. Custom Health Checks
+### Custom Health Checks
 
 ```python
-@mesh.tool(
-    capability="database_service",
-    health_check=custom_db_health_check
-)
-def query_database():
+@mesh.tool(health_check=custom_health_check)
+def database_tool():
     pass
 
-async def custom_db_health_check():
-    try:
-        await db.execute("SELECT 1")
-        return {"status": "healthy", "connections": db.pool.size}
-    except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+async def custom_health_check():
+    return {"status": "healthy", "connections": db.pool.size}
 ```
 
-### 3. Custom Load Balancing
+_See `src/runtime/python/_mcp_mesh/` for extension interfaces_
 
-```python
-class WeightedLoadBalancer(LoadBalancer):
-    def select_provider(self, providers, request_context):
-        # Weighted selection based on capacity
-        weights = [p.metadata.get('capacity', 1) for p in providers]
-        return random.choices(providers, weights=weights)[0]
-```
+## Future Roadmap
 
-## Future Architecture Considerations
-
-### Planned Enhancements
+### Planned Features
 
 1. **Multi-Registry Federation**: Cross-cluster service discovery
 2. **Circuit Breakers**: Automatic failure isolation
 3. **Request Tracing**: Distributed tracing integration
 4. **Metrics Collection**: Prometheus/OpenTelemetry integration
 5. **Configuration Management**: Dynamic configuration updates
-6. **Plugin System**: Custom middleware and extensions
-
-### Scalability Roadmap
-
-1. **Registry Clustering**: Multi-node registry for high availability
-2. **Capability Caching**: Local capability caches for faster resolution
-3. **Connection Pooling**: Efficient connection reuse between agents
-4. **Batch Operations**: Bulk capability updates and queries
 
 ### Performance Optimizations
 
 1. **gRPC Support**: Binary protocol for high-throughput scenarios
-2. **Compression**: Message compression for large payloads
-3. **Streaming**: Bidirectional streaming for real-time scenarios
-4. **Edge Caching**: CDN-like caching for static capabilities
+2. **Connection Pooling**: Efficient connection reuse between agents
+3. **Edge Caching**: CDN-like caching for static capabilities
 
 ---
 
 This architecture enables MCP Mesh to provide a seamless, scalable, and developer-friendly service orchestration platform that preserves the simplicity of FastMCP while adding powerful distributed system capabilities.
 
-The design emphasizes **developer experience**, **operational simplicity**, and **runtime performance** - making it easy to build complex distributed systems without sacrificing the rapid development cycle that makes MCP attractive.
+**For Implementation Details**: See source code in `src/runtime/python/_mcp_mesh/` and `cmd/registry/`
+**For Examples**: See `examples/` directory for complete working examples
+**For Performance**: See `docs/performance/` for benchmarks and optimization guides

@@ -52,6 +52,15 @@ spec:
                 port:
                   number: 9092
 
+          # Enhanced FastMCP Agent
+          - path: /enhanced-fastmcp-agent(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mcp-mesh-enhanced-fastmcp-agent
+                port:
+                  number: 9094
+
           # Dependent Agent
           - path: /dependent-agent(/|$)(.*)
             pathType: ImplementationSpecific

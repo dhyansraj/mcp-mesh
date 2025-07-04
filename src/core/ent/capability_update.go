@@ -104,6 +104,18 @@ func (cu *CapabilityUpdate) AppendTags(s []string) *CapabilityUpdate {
 	return cu
 }
 
+// SetKwargs sets the "kwargs" field.
+func (cu *CapabilityUpdate) SetKwargs(m map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.SetKwargs(m)
+	return cu
+}
+
+// ClearKwargs clears the value of the "kwargs" field.
+func (cu *CapabilityUpdate) ClearKwargs() *CapabilityUpdate {
+	cu.mutation.ClearKwargs()
+	return cu
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (cu *CapabilityUpdate) SetUpdatedAt(t time.Time) *CapabilityUpdate {
 	cu.mutation.SetUpdatedAt(t)
@@ -210,6 +222,12 @@ func (cu *CapabilityUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, capability.FieldTags, value)
 		})
+	}
+	if value, ok := cu.mutation.Kwargs(); ok {
+		_spec.SetField(capability.FieldKwargs, field.TypeJSON, value)
+	}
+	if cu.mutation.KwargsCleared() {
+		_spec.ClearField(capability.FieldKwargs, field.TypeJSON)
 	}
 	if value, ok := cu.mutation.UpdatedAt(); ok {
 		_spec.SetField(capability.FieldUpdatedAt, field.TypeTime, value)
@@ -334,6 +352,18 @@ func (cuo *CapabilityUpdateOne) SetTags(s []string) *CapabilityUpdateOne {
 // AppendTags appends s to the "tags" field.
 func (cuo *CapabilityUpdateOne) AppendTags(s []string) *CapabilityUpdateOne {
 	cuo.mutation.AppendTags(s)
+	return cuo
+}
+
+// SetKwargs sets the "kwargs" field.
+func (cuo *CapabilityUpdateOne) SetKwargs(m map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.SetKwargs(m)
+	return cuo
+}
+
+// ClearKwargs clears the value of the "kwargs" field.
+func (cuo *CapabilityUpdateOne) ClearKwargs() *CapabilityUpdateOne {
+	cuo.mutation.ClearKwargs()
 	return cuo
 }
 
@@ -473,6 +503,12 @@ func (cuo *CapabilityUpdateOne) sqlSave(ctx context.Context) (_node *Capability,
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, capability.FieldTags, value)
 		})
+	}
+	if value, ok := cuo.mutation.Kwargs(); ok {
+		_spec.SetField(capability.FieldKwargs, field.TypeJSON, value)
+	}
+	if cuo.mutation.KwargsCleared() {
+		_spec.ClearField(capability.FieldKwargs, field.TypeJSON)
 	}
 	if value, ok := cuo.mutation.UpdatedAt(); ok {
 		_spec.SetField(capability.FieldUpdatedAt, field.TypeTime, value)

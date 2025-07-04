@@ -19,6 +19,9 @@ __all__ = [
     "get_global_injector",
     # MCP client proxies
     "MCPClientProxy",
+    "EnhancedMCPClientProxy",
+    "FullMCPProxy",
+    "EnhancedFullMCPProxy",
     "AsyncMCPClient",
     # Self-dependency proxy
     "SelfDependencyProxy",
@@ -27,6 +30,7 @@ __all__ = [
     # Signature analysis
     "get_mesh_agent_positions",
     "get_mesh_agent_parameter_names",
+    "get_agent_parameter_types",
     "validate_mesh_dependencies",
 ]
 
@@ -56,8 +60,20 @@ def __getattr__(name):
         from .mcp_client_proxy import MCPClientProxy
 
         return MCPClientProxy
+    elif name == "EnhancedMCPClientProxy":
+        from .mcp_client_proxy import EnhancedMCPClientProxy
+
+        return EnhancedMCPClientProxy
+    elif name == "FullMCPProxy":
+        from .full_mcp_proxy import FullMCPProxy
+
+        return FullMCPProxy
+    elif name == "EnhancedFullMCPProxy":
+        from .full_mcp_proxy import EnhancedFullMCPProxy
+
+        return EnhancedFullMCPProxy
     elif name == "AsyncMCPClient":
-        from .mcp_client_proxy import AsyncMCPClient
+        from .async_mcp_client import AsyncMCPClient
 
         return AsyncMCPClient
     # Self-dependency proxy
@@ -79,6 +95,10 @@ def __getattr__(name):
         from .signature_analyzer import get_mesh_agent_parameter_names
 
         return get_mesh_agent_parameter_names
+    elif name == "get_agent_parameter_types":
+        from .signature_analyzer import get_agent_parameter_types
+
+        return get_agent_parameter_types
     elif name == "validate_mesh_dependencies":
         from .signature_analyzer import validate_mesh_dependencies
 

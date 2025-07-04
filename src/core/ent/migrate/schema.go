@@ -65,6 +65,7 @@ var (
 		{Name: "version", Type: field.TypeString, Default: "1.0.0"},
 		{Name: "description", Type: field.TypeString, Nullable: true},
 		{Name: "tags", Type: field.TypeJSON},
+		{Name: "kwargs", Type: field.TypeJSON, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "agent_capabilities", Type: field.TypeString},
@@ -77,7 +78,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "capabilities_agents_capabilities",
-				Columns:    []*schema.Column{CapabilitiesColumns[8]},
+				Columns:    []*schema.Column{CapabilitiesColumns[9]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
