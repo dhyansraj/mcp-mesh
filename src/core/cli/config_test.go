@@ -17,8 +17,8 @@ func TestDefaultConfig(t *testing.T) {
 	if config.RegistryHost != "localhost" {
 		t.Errorf("Expected RegistryHost 'localhost', got '%s'", config.RegistryHost)
 	}
-	if config.DBPath != "./dev_registry.db" {
-		t.Errorf("Expected DBPath './dev_registry.db', got '%s'", config.DBPath)
+	if config.DBPath != "mcp_mesh_registry.db" {
+		t.Errorf("Expected DBPath 'mcp_mesh_registry.db', got '%s'", config.DBPath)
 	}
 	if config.LogLevel != "INFO" {
 		t.Errorf("Expected LogLevel 'INFO', got '%s'", config.LogLevel)
