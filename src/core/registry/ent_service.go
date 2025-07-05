@@ -91,11 +91,12 @@ type HeartbeatResponse struct {
 
 // EntService provides registry operations using Ent ORM instead of raw SQL
 type EntService struct {
-	entDB     *database.EntDatabase
-	config    *RegistryConfig
-	cache     *ResponseCache
-	validator *AgentRegistrationValidator
-	logger    *logger.Logger
+	entDB       *database.EntDatabase
+	config      *RegistryConfig
+	cache       *ResponseCache
+	validator   *AgentRegistrationValidator
+	logger      *logger.Logger
+	hookManager *AgentStatusChangeHookManager
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -105,6 +106,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 			CacheTTL:                 30,
 			DefaultTimeoutThreshold:  60,
 			DefaultEvictionThreshold: 120,
+			HealthCheckInterval:      30, // Health check every 30 seconds
 			EnableResponseCache:      true,
 		}
 	}
@@ -115,13 +117,27 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 		enabled: config.EnableResponseCache,
 	}
 
-	return &EntService{
-		entDB:     entDB,
-		config:    config,
-		cache:     cache,
-		validator: NewAgentRegistrationValidator(),
-		logger:    logger,
+	// Initialize status change hook manager
+	hookManager := NewAgentStatusChangeHookManager(logger, true) // Enable hooks by default
+
+	// Create EntService instance
+	service := &EntService{
+		entDB:       entDB,
+		config:      config,
+		cache:       cache,
+		validator:   NewAgentRegistrationValidator(),
+		logger:      logger,
+		hookManager: hookManager,
 	}
+
+	// Register status change hooks with the database client
+	for _, hook := range hookManager.GetHooks() {
+		entDB.Client.Agent.Use(hook)
+	}
+
+	logger.Info("Status change hooks registered successfully")
+
+	return service
 }
 
 // RegisterAgent handles agent registration using Ent queries
@@ -598,24 +614,9 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				s.logger.Warning("Failed to update dependency counts: %v", err)
 			}
 
-			// Only create register event if agent was unhealthy and is now recovering
+			// Status change recovery events are now handled automatically by hooks
 			if previousStatus == agent.StatusUnhealthy {
-				eventData := map[string]interface{}{
-					"reason": "recovery",
-					"previous_status": previousStatus.String(),
-					"new_status": "healthy",
-				}
-				_, err = s.entDB.RegistryEvent.Create().
-					SetEventType(registryevent.EventTypeRegister).
-					SetAgentID(req.AgentID).
-					SetTimestamp(now).
-					SetData(eventData).
-					Save(ctx)
-				if err != nil {
-					s.logger.Warning("Failed to create recovery register event: %v", err)
-				} else {
-					s.logger.Info("Agent %s recovered from unhealthy status", req.AgentID)
-				}
+				s.logger.Info("Agent %s recovered from unhealthy status - event created by hook", req.AgentID)
 			}
 
 			return &HeartbeatResponse{
@@ -635,20 +636,6 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update agent heartbeat: %w", err)
-	}
-
-	// Create heartbeat event
-	eventData := map[string]interface{}{
-		"status": "healthy",
-	}
-	_, err = s.entDB.RegistryEvent.Create().
-		SetEventType(registryevent.EventTypeHeartbeat).
-		SetAgentID(req.AgentID).
-		SetTimestamp(now).
-		SetData(eventData).
-		Save(ctx)
-	if err != nil {
-		s.logger.Warning("Failed to create heartbeat event: %v", err)
 	}
 
 	s.logger.Info("Heartbeat updated for agent %s", req.AgentID)
@@ -1267,30 +1254,13 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		return nil
 	}
 
-	// Create unregister event (similar to health monitor creating unhealthy events)
-	eventData := map[string]interface{}{
-		"reason":      "graceful_shutdown",
-		"detected_at": time.Now().UTC().Format(time.RFC3339),
-	}
-
-	_, err = tx.RegistryEvent.Create().
-		SetEventType("unregister").
-		SetAgentID(agentID).
-		SetTimestamp(time.Now().UTC()).
-		SetData(eventData).
-		Save(ctx)
-
-	if err != nil {
-		return fmt.Errorf("failed to create unregister event: %w", err)
-	}
-
-	// Commit transaction
+	// Commit transaction - status change hook will create appropriate event
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	s.logger.Info("Marked agent %s as unhealthy and created unregister event (graceful shutdown)", agentID)
+	s.logger.Info("Marked agent %s as unhealthy (graceful shutdown) - event created by hook", agentID)
 	return nil
 }
 
@@ -1316,24 +1286,7 @@ func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID 
 		s.logger.Info("Agent %s recovered: marking healthy (was %v)", agentID, existingAgent.Status)
 		updateBuilder = updateBuilder.SetStatus(agent.StatusHealthy)
 
-		// Create recovery event for audit trail
-		eventData := map[string]interface{}{
-			"reason":          "head_request_recovery",
-			"detected_at":     now.Format(time.RFC3339),
-			"previous_status": "unhealthy",
-			"new_status":      "healthy",
-		}
-
-		_, err := s.entDB.RegistryEvent.Create().
-			SetEventType("register").
-			SetAgentID(agentID).
-			SetTimestamp(now).
-			SetData(eventData).
-			Save(ctx)
-		if err != nil {
-			s.logger.Warning("Failed to create recovery event for agent %s: %v", agentID, err)
-			// Don't fail the timestamp update due to event creation failure
-		}
+		// Recovery event will be created automatically by status change hook
 	}
 
 	_, err = updateBuilder.Save(ctx)
@@ -1343,4 +1296,28 @@ func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID 
 
 	s.logger.Debug("Updated heartbeat timestamp for agent %s", agentID)
 	return nil
+}
+
+// Hook Management Methods
+
+// EnableStatusChangeHooks enables the status change hooks
+func (s *EntService) EnableStatusChangeHooks() {
+	if s.hookManager != nil {
+		s.hookManager.Enable()
+	}
+}
+
+// DisableStatusChangeHooks disables the status change hooks
+func (s *EntService) DisableStatusChangeHooks() {
+	if s.hookManager != nil {
+		s.hookManager.Disable()
+	}
+}
+
+// IsStatusChangeHooksEnabled returns whether status change hooks are enabled
+func (s *EntService) IsStatusChangeHooksEnabled() bool {
+	if s.hookManager != nil {
+		return s.hookManager.IsEnabled()
+	}
+	return false
 }
