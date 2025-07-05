@@ -67,7 +67,7 @@ func DefaultConfig() *CLIConfig {
 	return &CLIConfig{
 		RegistryPort:        8000,
 		RegistryHost:        "localhost",
-		DBPath:              "./dev_registry.db",
+		DBPath:              "mcp_mesh_registry.db",
 		LogLevel:            "INFO",
 		HealthCheckInterval: 10,
 		AutoRestart:         true,
@@ -447,10 +447,10 @@ func GetPlatformDefaults() map[string]interface{} {
 	switch runtime.GOOS {
 	case "windows":
 		defaults["pid_file"] = ".\\mcp_mesh_dev.pid"
-		defaults["db_path"] = ".\\dev_registry.db"
+		defaults["db_path"] = "mcp_mesh_registry.db"
 	default:
 		defaults["pid_file"] = "./mcp_mesh_dev.pid"
-		defaults["db_path"] = "./dev_registry.db"
+		defaults["db_path"] = "mcp_mesh_registry.db"
 	}
 
 	return defaults

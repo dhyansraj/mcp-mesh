@@ -3,8 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -206,12 +204,7 @@ func runConfigResetCommand(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigPathCommand(cmd *cobra.Command, args []string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	configPath := filepath.Join(homeDir, ".mcp_mesh", "cli_config.json")
+	configPath := getConfigFilePath()
 	fmt.Println(configPath)
 	return nil
 }
