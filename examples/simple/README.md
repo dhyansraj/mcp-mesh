@@ -69,15 +69,44 @@ meshctl get agent system-agent
 # Find agent ports (auto-assigned)
 meshctl list agents | grep http_port
 
-# Test system agent directly (replace PORT with actual port)
-curl -s -X POST http://localhost:PORT/mcp \
+# List available tools on an agent (replace PORT with actual port)
+curl -s -X POST http://localhost:PORT/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+
+# Test system agent directly (replace PORT with actual port)
+curl -s -X POST http://localhost:PORT/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_current_time",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Test hello world agent (replace PORT with actual port)
-curl -s -X POST http://localhost:PORT/mcp \
+curl -s -X POST http://localhost:PORT/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_simple",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
 ### 3. Test Dependency Injection
@@ -86,9 +115,18 @@ The hello world agent depends on the system agent for date services. Test this:
 
 ```bash
 # This should show current date from system agent
-curl -s -X POST http://localhost:PORT/mcp \
+curl -s -X POST http://localhost:PORT/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_simple",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Expected response: "Hello from MCP Mesh! Today is [current date]"
 ```
@@ -98,9 +136,18 @@ curl -s -X POST http://localhost:PORT/mcp \
 ```bash
 # Stop system agent (Ctrl+C in its terminal)
 # Test hello world agent - should gracefully degrade
-curl -s -X POST http://localhost:PORT/mcp \
+curl -s -X POST http://localhost:PORT/mcp/ \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "hello_mesh_simple",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Expected response: "Hello from MCP Mesh! (Date service not available yet)"
 

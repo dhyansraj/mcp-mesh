@@ -64,7 +64,7 @@ func (m *MockEntService) UpdateAgentHeartbeatTimestamp(agentID string) error {
 
 	if agent, exists := m.agents[agentID]; exists {
 		// Update the agent's timestamp to current time
-		agent.UpdatedAt = time.Now()
+		agent.UpdatedAt = time.Now().UTC()
 		return nil
 	}
 
@@ -134,9 +134,9 @@ func (m *MockEntService) LoadTestData() {
 		HTTPPort:  9092,
 		Namespace: "default",
 		Status:    agent.StatusHealthy,
-		LastFullRefresh: time.Now().Add(-5 * time.Minute),
-		UpdatedAt:       time.Now().Add(-30 * time.Second),
-		CreatedAt:       time.Now().Add(-10 * time.Minute),
+		LastFullRefresh: time.Now().UTC().Add(-5 * time.Minute),
+		UpdatedAt:       time.Now().UTC().Add(-30 * time.Second),
+		CreatedAt:       time.Now().UTC().Add(-10 * time.Minute),
 	}
 	m.agents[fastmcpAgent.ID] = fastmcpAgent
 
@@ -150,9 +150,9 @@ func (m *MockEntService) LoadTestData() {
 		HTTPPort:  9093,
 		Namespace: "default",
 		Status:    agent.StatusHealthy,
-		LastFullRefresh: time.Now().Add(-3 * time.Minute),
-		UpdatedAt:       time.Now().Add(-15 * time.Second),
-		CreatedAt:       time.Now().Add(-8 * time.Minute),
+		LastFullRefresh: time.Now().UTC().Add(-3 * time.Minute),
+		UpdatedAt:       time.Now().UTC().Add(-15 * time.Second),
+		CreatedAt:       time.Now().UTC().Add(-8 * time.Minute),
 	}
 	m.agents[dependentAgent.ID] = dependentAgent
 
@@ -160,14 +160,14 @@ func (m *MockEntService) LoadTestData() {
 	m.events = append(m.events, &ent.RegistryEvent{
 		ID:        1,
 		EventType: registryevent.EventTypeRegister,
-		Timestamp: time.Now().Add(-10 * time.Minute),
+		Timestamp: time.Now().UTC().Add(-10 * time.Minute),
 		Data:      map[string]interface{}{"reason": "startup"},
 	})
 
 	m.events = append(m.events, &ent.RegistryEvent{
 		ID:        2,
 		EventType: registryevent.EventTypeRegister,
-		Timestamp: time.Now().Add(-8 * time.Minute),
+		Timestamp: time.Now().UTC().Add(-8 * time.Minute),
 		Data:      map[string]interface{}{"reason": "startup"},
 	})
 }
@@ -199,7 +199,7 @@ func (h *HealthMonitor) CheckUnhealthyAgents() {
 	}
 	h.service.mu.RUnlock()
 
-	now := time.Now()
+	now := time.Now().UTC()
 	for _, agent := range agents {
 		// Check if agent is unhealthy based on last update time AND not already unhealthy
 		timeSinceLastSeen := now.Sub(agent.UpdatedAt)
@@ -226,7 +226,7 @@ func (h *HealthMonitor) MarkAgentUnhealthy(agentID string, reason string) {
 	event := &ent.RegistryEvent{
 		ID:        len(h.service.events) + 1,
 		EventType: registryevent.EventTypeUnhealthy,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 		Data:      map[string]interface{}{"reason": reason},
 	}
 	h.service.events = append(h.service.events, event)
@@ -250,9 +250,9 @@ func (m *MockEntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentReg
 		HTTPHost:        "localhost",
 		HTTPPort:        8080,
 		Namespace:       "default",
-		LastFullRefresh: time.Now(),
-		UpdatedAt:       time.Now(),
-		CreatedAt:       time.Now(),
+		LastFullRefresh: time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+		CreatedAt:       time.Now().UTC(),
 	}
 	m.agents[req.AgentID] = agent
 
@@ -260,7 +260,7 @@ func (m *MockEntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentReg
 	event := &ent.RegistryEvent{
 		ID:        len(m.events) + 1,
 		EventType: registryevent.EventTypeRegister,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 		Data:      map[string]interface{}{"reason": "registration"},
 	}
 	m.events = append(m.events, event)
@@ -283,12 +283,12 @@ func (m *MockEntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatRespo
 	if !exists {
 		return &HeartbeatResponse{
 			Status:    "error",
-			Timestamp: time.Now().Format(time.RFC3339),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Message:   "Agent not found",
 		}, nil
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	previousStatus := agentEntity.Status
 
 	// If agent was unhealthy and this is a full heartbeat with metadata, restore to healthy

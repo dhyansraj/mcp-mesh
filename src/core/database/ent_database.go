@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -66,7 +67,20 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 	} else {
 		// SQLite for development (default)
 		driverName = "sqlite3"
-		dataSourceName = config.DatabaseURL
+
+		// Convert relative SQLite paths to absolute paths to ensure consistent database location
+		// regardless of working directory
+		sqlitePath := config.DatabaseURL
+		if !filepath.IsAbs(sqlitePath) && !strings.Contains(sqlitePath, ":memory:") {
+			// Make relative paths absolute, but preserve special SQLite URLs like ":memory:"
+			var err error
+			sqlitePath, err = filepath.Abs(sqlitePath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve absolute path for SQLite database: %w", err)
+			}
+		}
+
+		dataSourceName = sqlitePath
 
 		// Add foreign key support for SQLite if not already present
 		if !strings.Contains(dataSourceName, "_fk=") {

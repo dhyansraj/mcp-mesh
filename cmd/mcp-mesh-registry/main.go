@@ -14,13 +14,16 @@ import (
 	"mcp-mesh/src/core/registry"
 )
 
+// version is injected at build time via ldflags
+var version = "dev"
+
 func main() {
 	// Command line flags
 	var (
-		host    = flag.String("host", "", "Host to bind the server to (overrides HOST env var)")
-		port    = flag.Int("port", 0, "Port to bind the server to (overrides PORT env var)")
-		version = flag.Bool("version", false, "Show version information")
-		help    = flag.Bool("help", false, "Show help information")
+		host        = flag.String("host", "", "Host to bind the server to (overrides HOST env var)")
+		port        = flag.Int("port", 0, "Port to bind the server to (overrides PORT env var)")
+		showVersion = flag.Bool("version", false, "Show version information")
+		help        = flag.Bool("help", false, "Show help information")
 	)
 
 	flag.Usage = func() {
@@ -55,8 +58,8 @@ func main() {
 		return
 	}
 
-	if *version {
-		fmt.Println("MCP Mesh Registry Service v1.0.0")
+	if *showVersion {
+		fmt.Printf("MCP Mesh Registry Service v%s\n", version)
 		fmt.Println("Built with Go and Kubernetes API Server patterns")
 		fmt.Println("Compatible with Python MCP Mesh Registry API")
 		return
