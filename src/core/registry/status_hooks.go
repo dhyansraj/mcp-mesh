@@ -107,6 +107,24 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 		// Log the status transition
 		config.Logger.Info("Agent %s status changing: %s → %s", agentID, oldStatus, newStatus)
 
+		// Check if this is a graceful shutdown scenario (healthy → unhealthy)
+		// and if an explicit unregister event already exists
+		if oldStatus == agent.StatusHealthy && newStatus == agent.StatusUnhealthy {
+			// Check for recent unregister events (within last 5 seconds)
+			recentThreshold := time.Now().UTC().Add(-5 * time.Second)
+			recentUnregisterExists, err := m.Client().RegistryEvent.Query().
+				Where(registryevent.HasAgentWith(agent.IDEQ(agentID))).
+				Where(registryevent.EventTypeEQ(registryevent.EventTypeUnregister)).
+				Where(registryevent.TimestampGT(recentThreshold)).
+				Exist(ctx)
+			if err != nil {
+				config.Logger.Warning("Failed to check for recent unregister events for agent %s: %v", agentID, err)
+			} else if recentUnregisterExists {
+				config.Logger.Debug("Agent %s has recent unregister event, skipping hook-based event creation", agentID)
+				continue
+			}
+		}
+
 		// Create the appropriate registry event in the same transaction
 		eventType := getEventTypeForStatusChange(oldStatus, newStatus)
 		eventData := createEventDataForStatusChange(oldStatus, newStatus)
