@@ -1237,12 +1237,33 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		return fmt.Errorf("failed to query agent: %w", err)
 	}
 
-	// Update agent status to unhealthy while preserving original UpdatedAt timestamp
+	// Create explicit unregister event before updating status
+	now := time.Now().UTC()
+	eventData := map[string]interface{}{
+		"agent_type": currentAgent.AgentType.String(),
+		"name":       currentAgent.Name,
+		"version":    currentAgent.Version,
+		"reason":     "graceful_shutdown",
+		"source":     "delete_endpoint",
+	}
+
+	_, err = tx.RegistryEvent.Create().
+		SetEventType(registryevent.EventTypeUnregister).
+		SetAgentID(agentID).
+		SetTimestamp(now).
+		SetData(eventData).
+		Save(ctx)
+	if err != nil {
+		s.logger.Warning("Failed to create unregister event: %v", err)
+		// Don't fail the unregistration over event creation
+	}
+
+	// Update agent status to unhealthy and update timestamp (like RegisterAgent does)
 	agentUpdated, err := tx.Agent.
 		Update().
 		Where(agent.IDEQ(agentID)).
 		SetStatus(agent.StatusUnhealthy).
-		SetUpdatedAt(currentAgent.UpdatedAt). // Preserve original timestamp like health monitor does
+		SetUpdatedAt(now). // Update timestamp like RegisterAgent does
 		Save(ctx)
 
 	if err != nil {
@@ -1254,13 +1275,13 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		return nil
 	}
 
-	// Commit transaction - status change hook will create appropriate event
+	// Commit transaction
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	s.logger.Info("Marked agent %s as unhealthy (graceful shutdown) - event created by hook", agentID)
+	s.logger.Info("Created unregister event and marked agent %s as unhealthy (graceful shutdown)", agentID)
 	return nil
 }
 

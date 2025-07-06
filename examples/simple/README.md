@@ -107,6 +107,20 @@ curl -s -X POST http://localhost:PORT/mcp/ \
       "arguments": {}
     }
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# Test tools with required arguments (example: generate_report on dependent agent)
+curl -s -X POST http://localhost:9093/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "generate_report",
+      "arguments": {"title": "Test Report"}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
 ### 3. Test Dependency Injection
