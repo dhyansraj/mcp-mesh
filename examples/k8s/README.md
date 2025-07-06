@@ -250,6 +250,88 @@ curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.structuredContent'
 ```
 
+### Testing Advanced MCP Features
+
+Test advanced capabilities like session affinity, streaming, and enhanced proxy features:
+
+```bash
+# Test session affinity and management
+curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "test_session_affinity",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# Test enhanced session management with explicit session ID
+curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "enhanced_session_increment",
+      "arguments": {
+        "session_id": "demo-session-001"
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# Test streaming data processing
+curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "consume_streaming_data",
+      "arguments": {}
+    }
+  }' | head -10
+
+# Test enhanced proxy features with metadata
+curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_enhanced_time",
+      "arguments": {}
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+
+# Test enhanced math with auto-configured retries and timeouts
+curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "calculate_enhanced",
+      "arguments": {
+        "operation": "multiply",
+        "a": 7,
+        "b": 6
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
+```
+
 ### Registry Agents List
 
 Check which agents are registered:
@@ -323,6 +405,15 @@ The deployment includes two ingress configurations for flexible access:
 - No port forwarding required for development
 - Native Kubernetes service discovery and load balancing
 - Support for multiple replicas and high availability
+
+### 7. **Advanced MCP Features**
+
+- **Session Affinity**: Sticky sessions with automatic session management
+- **Streaming Support**: Real-time data streaming with auto-configured proxies
+- **Enhanced Proxy**: Auto-configuration of timeouts, retries, authentication
+- **Session Management**: Both explicit and automatic session handling
+- **Security**: Automatic authentication handling for secure endpoints
+- **Performance**: Auto-tuned timeouts and retry logic based on tool decorators
 
 ## Troubleshooting
 
@@ -454,11 +545,27 @@ After successful deployment, each agent should expose the following tools:
 - `get_current_time` - Get the current system time
 - `calculate_with_timestamp` - Perform math operation with timestamp from time service
 - `process_data` - Process and format data
+- `increment_session_counter` - Session management demonstration
+
+### Enhanced FastMCP Agent Tools
+
+- `get_enhanced_time` - Enhanced time service with metadata and auto-configured timeouts
+- `calculate_enhanced` - Enhanced math with automatic retry logic and timeouts
+- `stream_data_processing` - Streaming data processing with auto-configured streaming
+- `get_secure_config` - Secure configuration with authentication handling
+- `enhanced_session_increment` - Enhanced session management with auto-session handling
 
 ### Dependent Agent Tools
 
 - `generate_report` - Generate a timestamped report using the time service
 - `analyze_data` - Analyze data with timestamp from time service
+- `test_session_affinity` - Test session affinity and sticky sessions
+- `test_enhanced_session_management` - Test enhanced auto-session management
+- `consume_streaming_data` - Consume streaming data with enhanced proxy
+- `create_math_report` - Math report with enhanced proxy auto-configuration
+- `create_time_report` - Time report with enhanced proxy custom headers
+- `get_secure_config_report` - Secure config report with automatic auth handling
+- `inspect_remote_agent` - Full MCP proxy functionality demonstration
 
 ## Technical Implementation Details
 

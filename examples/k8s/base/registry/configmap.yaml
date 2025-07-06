@@ -24,3 +24,11 @@ data:
   DB_MAX_OPEN_CONNECTIONS: "25"
   DB_MAX_IDLE_CONNECTIONS: "5"
   DB_CONN_MAX_LIFETIME: "300"
+
+  # Performance/heartbeat configuration
+  DEFAULT_TIMEOUT_THRESHOLD: "20"
+  HEALTH_CHECK_INTERVAL: "10"
+  DEFAULT_EVICTION_THRESHOLD: "60"
+
+  # Registry identification
+  REGISTRY_NAME: "mcp-mesh-registry"

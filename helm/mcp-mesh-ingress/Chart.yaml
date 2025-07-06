@@ -1,0 +1,25 @@
+apiVersion: v2
+name: mcp-mesh-ingress
+description: Ingress configuration for MCP Mesh services with flexible DNS routing
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - mcp
+  - mesh
+  - ingress
+  - dns
+  - routing
+  - nginx
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Standalone ingress chart for MCP Mesh service routing
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies: []

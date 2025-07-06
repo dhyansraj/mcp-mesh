@@ -1,0 +1,118 @@
+# MCP Mesh Ingress Configuration
+# Standalone ingress chart for flexible DNS routing to MCP Mesh services
+
+# Global configuration
+global:
+  # Base domain for all services
+  domain: "mcp-mesh.local"
+  # Ingress class to use
+  ingressClass: "nginx"
+  # Namespace where services are deployed (if different from release namespace)
+  serviceNamespace: ""
+
+# Ingress routing patterns
+patterns:
+  # Host-based routing: each service gets its own subdomain
+  hostBased:
+    enabled: true
+    # Additional annotations for host-based ingress
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+
+  # Path-based routing: all services under one domain with path prefixes
+  pathBased:
+    enabled: false
+    # Main host for path-based routing
+    host: "mcp-mesh.local"
+    # Additional annotations for path-based ingress
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /$2
+      nginx.ingress.kubernetes.io/use-regex: "true"
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+
+# Core infrastructure services
+core:
+  registry:
+    enabled: true
+    # Subdomain or path segment
+    host: "registry"
+    # Service name pattern (supports templating)
+    service: "{{ .Release.Name }}-mcp-mesh-registry"
+    port: 8000
+    # Custom path for path-based routing
+    path: "/registry(/|$)(.*)"
+
+  # Optional: Expose Redis for debugging/monitoring
+  redis:
+    enabled: false
+    host: "redis"
+    service: "{{ .Release.Name }}-mcp-mesh-redis"
+    port: 6379
+    path: "/redis(/|$)(.*)"
+
+# Agent services (dynamic list)
+agents:
+  # Example agents - users can override this list
+  - name: "hello-world"
+    enabled: true
+    host: "hello-world"
+    service: "hello-world-mcp-mesh-agent"
+    port: 9090
+    path: "/hello-world(/|$)(.*)"
+
+  - name: "system-agent"
+    enabled: true
+    host: "system-agent"
+    service: "system-agent-mcp-mesh-agent"
+    port: 8080
+    path: "/system-agent(/|$)(.*)"
+
+  - name: "fastmcp-agent"
+    enabled: true
+    host: "fastmcp-agent"
+    service: "fastmcp-agent-mcp-mesh-agent"
+    port: 9092
+    path: "/fastmcp-agent(/|$)(.*)"
+
+  - name: "enhanced-fastmcp-agent"
+    enabled: false
+    host: "enhanced-fastmcp-agent"
+    service: "enhanced-fastmcp-agent-mcp-mesh-agent"
+    port: 9094
+    path: "/enhanced-fastmcp-agent(/|$)(.*)"
+
+  - name: "dependent-agent"
+    enabled: false
+    host: "dependent-agent"
+    service: "dependent-agent-mcp-mesh-agent"
+    port: 9093
+    path: "/dependent-agent(/|$)(.*)"
+
+# TLS configuration
+tls:
+  enabled: false
+  # TLS certificate configuration
+  certificates:
+    - secretName: "mcp-mesh-tls"
+      hosts:
+        - "*.mcp-mesh.local"
+        - "mcp-mesh.local"
+
+# Common annotations for all ingress resources
+commonAnnotations: {}
+
+# Common labels for all ingress resources
+commonLabels:
+  app.kubernetes.io/part-of: mcp-mesh-ingress
+
+# Resource limits (optional)
+resources: {}
+
+# Node selector for ingress controller affinity
+nodeSelector: {}
+
+# Tolerations for ingress controller scheduling
+tolerations: []
+
+# Affinity rules for ingress controller placement
+affinity: {}

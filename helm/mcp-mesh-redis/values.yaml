@@ -1,0 +1,90 @@
+# Redis configuration for MCP Mesh
+redis:
+  # Redis configuration
+  appendonly: "yes"
+  maxmemory: "256mb"
+  maxmemoryPolicy: "allkeys-lru"
+
+  # Security
+  runAsUser: 999
+  runAsGroup: 999
+
+image:
+  repository: redis
+  tag: "7-alpine"
+  pullPolicy: IfNotPresent
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 6379
+  targetPort: redis
+
+# Deployment configuration
+replicaCount: 1
+
+# Persistence configuration (using emptyDir for cache)
+persistence:
+  enabled: false
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 8Gi
+  annotations: {}
+
+# Resource limits
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Health check configuration
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Pod security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  runAsUser: 999
+  runAsGroup: 999
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Extra labels
+extraLabels: {}
+
+# Extra environment variables
+extraEnvVars: []
+
+# Custom Redis configuration
+customConfig: ""

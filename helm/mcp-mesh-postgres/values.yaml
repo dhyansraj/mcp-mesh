@@ -1,0 +1,93 @@
+# PostgreSQL configuration for MCP Mesh
+postgres:
+  # Database configuration
+  database: "mcpmesh"
+  username: "mcpmesh"
+  password: "mcpmesh123"
+
+  # PostgreSQL configuration
+  postgresqlDataDir: "/var/lib/postgresql/data/pgdata"
+
+  # Security configuration
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+
+image:
+  repository: postgres
+  tag: "15"
+  pullPolicy: IfNotPresent
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 5432
+  targetPort: postgres
+
+# Persistence configuration
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Health check configuration
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+startupProbe:
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+# Pod security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  runAsUser: 999
+  runAsGroup: 999
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: false
+  fsGroup: 999
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Extra labels
+extraLabels: {}
+
+# Extra environment variables
+extraEnvVars: []

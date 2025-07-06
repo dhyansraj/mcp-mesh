@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: mcp-mesh-registry
   namespace: mcp-mesh
@@ -7,15 +7,17 @@ metadata:
     app.kubernetes.io/name: mcp-mesh-registry
     app.kubernetes.io/component: registry
 spec:
-  serviceName: mcp-mesh-registry-headless
+  # No serviceName needed for Deployment
   replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: mcp-mesh-registry
       app.kubernetes.io/component: registry
-  updateStrategy:
+  strategy:
     type: RollingUpdate
-  podManagementPolicy: OrderedReady
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
@@ -83,8 +85,6 @@ spec:
             - secretRef:
                 name: mcp-registry-secret
           volumeMounts:
-            - name: data
-              mountPath: /data
             - name: config
               mountPath: /etc/mcp-mesh
 
@@ -100,7 +100,7 @@ spec:
               containerPort: 9090
               protocol: TCP
           env:
-            # Pod information for leader election
+            # Pod information
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -113,16 +113,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            # Registry instance ID (for multi-replica setup)
+            # Registry instance ID for identification
             - name: REGISTRY_INSTANCE_ID
               value: "$(POD_NAME)"
-            # Leader election configuration
-            - name: ENABLE_LEADER_ELECTION
-              value: "true"
-            - name: LEADER_ELECTION_NAMESPACE
-              value: "$(POD_NAMESPACE)"
-            - name: LEADER_ELECTION_NAME
-              value: "mcp-mesh-registry-leader"
           envFrom:
             - configMapRef:
                 name: mcp-registry-config
@@ -175,8 +168,6 @@ spec:
               cpu: 100m
               memory: 128Mi
           volumeMounts:
-            - name: data
-              mountPath: /data
             - name: config
               mountPath: /etc/mcp-mesh
               readOnly: true
@@ -210,18 +201,4 @@ spec:
                     app.kubernetes.io/name: mcp-mesh-registry
                     app.kubernetes.io/component: registry
                 topologyKey: kubernetes.io/hostname
-
-  # Volume claim templates for persistent storage
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-        labels:
-          app.kubernetes.io/name: mcp-mesh-registry
-          app.kubernetes.io/component: registry
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 10Gi
-        # Uncomment to use a specific storage class
-        # storageClassName: fast-ssd
+# No persistent storage needed - registry is stateless and uses external database

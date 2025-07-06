@@ -1,0 +1,24 @@
+apiVersion: v2
+name: mcp-mesh-redis
+description: Redis cache for MCP Mesh session storage
+type: application
+version: 0.3.0
+appVersion: "7"
+keywords:
+  - mcp
+  - mesh
+  - redis
+  - cache
+  - session
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Redis chart for MCP Mesh core infrastructure
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies: []

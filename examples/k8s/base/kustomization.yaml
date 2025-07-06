@@ -15,9 +15,7 @@ resources:
   - registry/serviceaccount.yaml
   - registry/rbac.yaml
   - registry/service.yaml
-  - registry/service-headless.yaml
-  - registry/statefulset.yaml
-  - registry/pvc.yaml
+  - registry/deployment.yaml
   - registry/backup-cronjob.yaml
   # Redis for session storage (Phase 6+)
   - redis/redis-deployment.yaml
