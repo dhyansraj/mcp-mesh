@@ -1,0 +1,206 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-mesh-data-processor-agent"
+version = "1.0.0"
+description = "Advanced multi-file MCP Mesh agent for comprehensive data processing operations"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "MCP Mesh Team", email = "team@mcpmesh.com"}
+]
+keywords = [
+    "mcp", "mesh", "agent", "data-processing", 
+    "analytics", "statistics", "data-transformation"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Office/Business :: Office Suites"
+]
+requires-python = ">=3.8"
+dependencies = [
+    # Core MCP Mesh requirements
+    # For production: "mcp-mesh>=0.1.0,<0.2.0",
+    # For development: install mcp-mesh in editable mode from project root
+    "fastmcp>=0.9.0",
+    
+    # Data processing core
+    "pandas>=1.5.0,<3.0.0",
+    "numpy>=1.21.0,<2.0.0",
+    
+    # Statistical analysis
+    "scipy>=1.9.0,<2.0.0",
+    
+    # File format support
+    "openpyxl>=3.0.0,<4.0.0",      # Excel files
+    "pyarrow>=10.0.0,<15.0.0",     # Parquet files
+    "xlsxwriter>=3.0.0,<4.0.0",    # Excel writing
+    
+    # Development and utility
+    "python-dateutil>=2.8.0,<3.0.0",
+    "pytz>=2022.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=7.0.0,<8.0.0",
+    "pytest-cov>=4.0.0,<5.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    
+    # Code quality
+    "black>=23.0.0,<24.0.0",
+    "isort>=5.12.0,<6.0.0",
+    "flake8>=6.0.0,<7.0.0",
+    "mypy>=1.0.0,<2.0.0",
+    
+    # Documentation
+    "sphinx>=5.0.0,<7.0.0",
+    "sphinx-rtd-theme>=1.2.0,<2.0.0",
+]
+
+# Development with mcp-mesh from source
+framework-dev = [
+    # Include all dev dependencies
+    "mcp-mesh-data-processor-agent[dev]",
+    # Note: Install mcp-mesh separately with: pip install -e ../../../
+]
+
+performance = [
+    # Performance optimizations
+    "numba>=0.57.0,<1.0.0",        # JIT compilation
+    "polars>=0.19.0,<1.0.0",       # Fast DataFrame library alternative
+    "pyarrow>=10.0.0,<15.0.0",     # Arrow memory format
+]
+
+ml = [
+    # Machine learning extensions
+    "scikit-learn>=1.3.0,<2.0.0",
+    "matplotlib>=3.6.0,<4.0.0",
+    "seaborn>=0.12.0,<1.0.0",
+]
+
+all = [
+    "mcp-mesh-data-processor-agent[dev,performance,ml]"
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/mcp-mesh"
+Documentation = "https://docs.mcpmesh.com"
+Repository = "https://github.com/your-org/mcp-mesh"
+Issues = "https://github.com/your-org/mcp-mesh/issues"
+Changelog = "https://github.com/your-org/mcp-mesh/blob/main/CHANGELOG.md"
+
+[project.scripts]
+data-processor-agent = "data_processor_agent.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["data_processor_agent*"]
+exclude = ["tests*", "docs*", "examples*"]
+
+[tool.setuptools.package-data]
+data_processor_agent = ["py.typed", "*.json", "*.yaml", "*.yml"]
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pandas.*",
+    "numpy.*",
+    "scipy.*",
+    "openpyxl.*",
+    "pyarrow.*",
+]
+ignore_missing_imports = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["data_processor_agent"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]

@@ -1,0 +1,82 @@
+# Docker Compose configuration for Data Processor Agent
+# Demonstrates local development and testing with multi-file agents
+
+version: '3.8'
+
+services:
+  # Data Processor Agent
+  data-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: data-processor-agent:latest
+    container_name: data-processor-agent
+    ports:
+      - "9090:9090"
+    environment:
+      # Agent configuration
+      AGENT_NAME: data-processor
+      HTTP_PORT: 9090
+      LOG_LEVEL: INFO
+      
+      # Feature flags
+      CACHE_ENABLED: "true"
+      METRICS_ENABLED: "true"
+      
+      # Storage configuration
+      TEMP_DIR: /app/cache
+      
+      # Dependency configuration (if using external services)
+      # WAIT_FOR_REGISTRY: http://mcp-registry:8000
+      # WAIT_FOR_DATABASE: postgres:5432
+    volumes:
+      # Mount cache directory for persistence
+      - cache_data:/app/cache
+      # Mount logs for debugging
+      - ./logs:/app/logs
+      # Mount data directory for file processing
+      - ./data:/app/data:ro
+    networks:
+      - mcp-mesh
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "docker-entrypoint.sh", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: MCP Registry for dependency resolution
+  # Uncomment if you want to test with full MCP Mesh infrastructure
+  # mcp-registry:
+  #   image: mcpmesh/registry:0.3
+  #   container_name: mcp-registry
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     DATABASE_TYPE: sqlite
+  #     LOG_LEVEL: INFO
+  #   networks:
+  #     - mcp-mesh
+  #   restart: unless-stopped
+
+  # Optional: Redis for session storage
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: mcp-redis
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - mcp-mesh
+  #   restart: unless-stopped
+  #   command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+networks:
+  mcp-mesh:
+    driver: bridge
+    name: mcp-mesh
+
+volumes:
+  cache_data:
+    driver: local
+    name: data-processor-cache

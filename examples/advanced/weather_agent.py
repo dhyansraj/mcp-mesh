@@ -19,9 +19,13 @@ import urllib.request
 from typing import Any
 
 import mesh
+from fastmcp import FastMCP
+
+# Create FastMCP app instance
+app = FastMCP("Weather Service")
 
 
-@mesh.agent(name="weather-agent", http_port=9092)
+@mesh.agent(name="weather-agent", http_port=9094, auto_run=True)
 class WeatherAgent:
     """Weather information agent providing location-based weather capabilities."""
 
@@ -59,8 +63,9 @@ def get_location_from_ip():
 # Tool: "get_local_weather" | Capability: "weather_service"
 
 
+@app.tool()
 @mesh.tool(
-    capability="weather_service",  # Capability name (what others depend on)
+    capability="weather-service",  # Matches data processor dependency
     description="Get current weather information for the local system location",
     version="1.0.0",
     tags=["weather", "temperature", "location", "local", "auto-detect"],

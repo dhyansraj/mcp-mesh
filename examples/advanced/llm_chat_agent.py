@@ -16,9 +16,13 @@ from datetime import datetime
 from typing import Any
 
 import mesh
+from fastmcp import FastMCP
+
+# Create FastMCP app instance
+app = FastMCP("LLM Service")
 
 
-@mesh.agent(name="llm-chat-agent", http_port=9093)
+@mesh.agent(name="llm-chat-agent", http_port=9093, auto_run=True)
 class LLMChatAgent:
     """LLM Chat agent providing conversational AI capabilities."""
 
@@ -29,50 +33,56 @@ class LLMChatAgent:
 # ===== BASIC CHAT SERVICE =====
 
 
+@app.tool()
 @mesh.tool(
-    capability="llm_chat",
-    description="Basic chat with LLM using system prompts and user messages",
+    capability="llm-service",
+    description="LLM service for text processing and analysis",
     version="1.0.0",
-    tags=["llm", "chat", "ai", "conversation"],
+    tags=["llm", "service", "ai", "processing", "analysis"],
 )
-def chat_with_llm(
-    message: str,
-    system_prompt: str | None = None,
+def process_text_with_llm(
+    text: str,
+    task: str = "analyze",
+    context: str | None = None,
     model: str = "claude-3-sonnet-20240229",
-    conversation_id: str | None = None,
     max_tokens: int = 1000,
     temperature: float = 0.7,
 ) -> dict[str, Any]:
     """
-    Chat with an LLM using MCP-style messaging.
-
-    This follows the MCP conversation pattern with system prompts and user messages.
+    Process text with LLM for various tasks like analysis, summarization, etc.
 
     Args:
-        message: The user's message to send to the LLM
-        system_prompt: Optional system prompt to set context
-        model: LLM model to use (claude-3-sonnet, gpt-4, etc.)
-        conversation_id: Optional ID to maintain conversation history
+        text: The text to process
+        task: Processing task (analyze, summarize, interpret, classify, extract)
+        context: Optional context for the processing task
+        model: LLM model to use
         max_tokens: Maximum tokens in response
         temperature: Creativity level (0.0-1.0)
 
     Returns:
-        Dictionary with LLM response and metadata
+        Dictionary with LLM processing results and metadata
     """
 
-    # Build MCP-style message structure
-    messages = []
-
-    # Add system message if provided
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-
-    # Add conversation history if maintaining a conversation
-    if conversation_id and conversation_id in LLMChatAgent().conversations:
-        messages.extend(LLMChatAgent().conversations[conversation_id])
-
-    # Add current user message
-    messages.append({"role": "user", "content": message})
+    # Build task-specific system prompt
+    task_prompts = {
+        "analyze": "Analyze the provided text and provide insights about its content, structure, and meaning.",
+        "summarize": "Provide a concise summary of the key points in the text.",
+        "interpret": "Interpret the meaning and implications of the text.",
+        "classify": "Classify the text into appropriate categories.",
+        "extract": "Extract key information and entities from the text.",
+        "sentiment": "Analyze the sentiment and emotional tone of the text.",
+        "keywords": "Extract important keywords and phrases from the text."
+    }
+    
+    system_prompt = task_prompts.get(task, "Process the provided text as requested.")
+    if context:
+        system_prompt += f" Context: {context}"
+    
+    # Build message structure
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Please {task} this text:\n\n{text}"}
+    ]
 
     # Simulate LLM API call (in real implementation, this would call Anthropic/OpenAI API)
     try:
@@ -84,52 +94,117 @@ def chat_with_llm(
         #     "temperature": temperature
         # })
 
-        # Simulated response for example
-        llm_response = f"[Simulated {model} response to: '{message[:50]}...']"
+        # Simulated task-specific response
+        task_responses = {
+            "analyze": f"Analysis of text (length: {len(text)} chars): This text appears to contain structured data with various elements that could be processed for insights.",
+            "summarize": f"Summary: The text contains {len(text.split())} words and covers topics that would benefit from summarization.",
+            "interpret": f"Interpretation: This text can be interpreted as containing meaningful information suitable for further processing.",
+            "classify": f"Classification: Based on content analysis, this text falls into data processing categories.",
+            "extract": f"Extracted entities: Found {len(text.split())} words that could contain extractable information.",
+            "sentiment": "Sentiment: The text appears to have a neutral to positive sentiment based on language patterns.",
+            "keywords": f"Keywords: {', '.join(text.split()[:5])}..."
+        }
+        
+        llm_response = task_responses.get(task, f"[Simulated {model} {task} response for text: '{text[:50]}...']")
 
-        # Store conversation history
-        if conversation_id:
-            if conversation_id not in LLMChatAgent().conversations:
-                LLMChatAgent().conversations[conversation_id] = []
-
-            # Add user message and assistant response to history
-            LLMChatAgent().conversations[conversation_id].extend(
-                [
-                    {"role": "user", "content": message},
-                    {"role": "assistant", "content": llm_response},
-                ]
-            )
+        # No conversation history for service calls - each call is independent
 
         return {
-            "response": llm_response,
+            "result": llm_response,
+            "task": task,
             "model": model,
-            "conversation_id": conversation_id,
-            "message_count": len(messages),
+            "input_length": len(text),
+            "context": context,
             "timestamp": datetime.now().isoformat(),
             "usage": {
-                "prompt_tokens": len(" ".join(msg["content"] for msg in messages))
-                // 4,  # Rough estimate
+                "prompt_tokens": len(" ".join(msg["content"] for msg in messages)) // 4,
                 "completion_tokens": len(llm_response) // 4,
-                "total_tokens": (
-                    len(" ".join(msg["content"] for msg in messages))
-                    + len(llm_response)
-                )
-                // 4,
+                "total_tokens": (len(" ".join(msg["content"] for msg in messages)) + len(llm_response)) // 4,
             },
         }
 
     except Exception as e:
         return {
-            "error": f"LLM chat failed: {str(e)}",
+            "error": f"LLM processing failed: {str(e)}",
+            "task": task,
             "model": model,
-            "conversation_id": conversation_id,
             "timestamp": datetime.now().isoformat(),
+        }
+
+
+# ===== DATA PROCESSING ASSISTANCE =====
+
+@app.tool()
+@mesh.tool(
+    capability="data_interpretation",
+    description="Interpret and provide insights about data processing results",
+    version="1.0.0",
+    tags=["llm", "data", "interpretation", "insights"],
+)
+def interpret_data_results(
+    data_summary: dict[str, Any],
+    analysis_type: str = "general",
+    focus_areas: list[str] = None,
+) -> dict[str, Any]:
+    """
+    Interpret data processing results and provide insights.
+    
+    Args:
+        data_summary: Summary of processed data
+        analysis_type: Type of analysis needed (general, statistical, quality, trends)
+        focus_areas: Specific areas to focus on
+        
+    Returns:
+        Dictionary with interpretation and insights
+    """
+    focus_areas = focus_areas or []
+    
+    try:
+        # Simulate LLM interpretation of data results
+        interpretation_prompts = {
+            "general": "Provide general insights about this data processing result",
+            "statistical": "Focus on statistical patterns and anomalies in the data",
+            "quality": "Assess data quality and identify potential issues",
+            "trends": "Identify trends and patterns in the processed data"
+        }
+        
+        # Build context for interpretation
+        context = f"Data processing results: {data_summary}"
+        if focus_areas:
+            context += f" Focus on: {', '.join(focus_areas)}"
+        
+        # Simulated LLM interpretation
+        insights = f"Based on the {analysis_type} analysis, the data shows characteristics typical of {data_summary.get('format', 'unknown')} format. "
+        if 'validation_report' in data_summary:
+            insights += "Data validation appears successful. "
+        if 'metadata' in data_summary:
+            insights += f"Metadata indicates {data_summary['metadata']} structure. "
+        
+        return {
+            "interpretation": insights,
+            "analysis_type": analysis_type,
+            "focus_areas": focus_areas,
+            "confidence": 0.85,
+            "recommendations": [
+                "Consider additional validation steps",
+                "Monitor data quality metrics",
+                "Review processing pipeline efficiency"
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "error": f"Data interpretation failed: {str(e)}",
+            "analysis_type": analysis_type,
+            "timestamp": datetime.now().isoformat()
         }
 
 
 # ===== SYSTEM PROMPT MANAGEMENT =====
 
 
+@app.tool()
 @mesh.tool(
     capability="llm_system_prompt",
     description="Manage system prompts for different use cases",
@@ -190,6 +265,7 @@ def create_system_prompt(
 # ===== CONVERSATION MANAGEMENT =====
 
 
+@app.tool()
 @mesh.tool(
     capability="conversation_management",
     description="Manage conversation state and history",
@@ -260,6 +336,7 @@ def manage_conversation(
 # ===== MULTI-TURN DIALOGUE =====
 
 
+@app.tool()
 @mesh.tool(
     capability="multi_turn_dialogue",
     description="Conduct multi-turn dialogue with context awareness",
