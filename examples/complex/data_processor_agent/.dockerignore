@@ -1,0 +1,87 @@
+# Docker ignore file for Data Processor Agent
+# Excludes development and testing files from Docker build context
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+test_env/
+.env
+.venv
+ENV/
+env.bak/
+venv.bak/
+
+# Development and testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test files
+test_*.py
+*_test.py
+tests/
+test_structure.py
+
+# Docker
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Logs and data
+logs/
+data/
+cache/
+*.log
+
+# Virtual environments
+test_env/
+.env.*
+
+# Requirements
+requirements*.txt
+!requirements.txt
