@@ -1,0 +1,23 @@
+apiVersion: v2
+name: mcp-mesh-postgres
+description: PostgreSQL database for MCP Mesh Registry
+type: application
+version: 0.3.0
+appVersion: "15"
+keywords:
+  - mcp
+  - mesh
+  - postgres
+  - database
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: PostgreSQL chart for MCP Mesh core infrastructure
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies: []

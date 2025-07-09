@@ -1,0 +1,25 @@
+MCP Mesh Core Infrastructure has been deployed!
+
+Components deployed:
+{{- if .Values.postgres.enabled }}
+- PostgreSQL Database: {{ .Release.Name }}-mcp-mesh-postgres
+{{- end }}
+{{- if .Values.redis.enabled }}
+- Redis Cache: {{ .Release.Name }}-mcp-mesh-redis
+{{- end }}
+{{- if .Values.registry.enabled }}
+- MCP Mesh Registry: {{ .Release.Name }}-mcp-mesh-registry
+{{- end }}
+
+To check the status of your deployment:
+  kubectl get pods -n {{ .Values.global.namespace }}
+
+To access the registry:
+  kubectl port-forward -n {{ .Values.global.namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8000:8000
+
+Then visit: http://localhost:8000/health
+
+To deploy MCP agents, use the mcp-mesh-agent chart:
+  helm install my-agent ../mcp-mesh-agent --set agent.script=my_script.py
+
+For more information, visit: https://github.com/dhyansraj/mcp-mesh

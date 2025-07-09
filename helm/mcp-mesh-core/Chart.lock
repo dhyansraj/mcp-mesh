@@ -1,0 +1,12 @@
+dependencies:
+- name: mcp-mesh-postgres
+  repository: file://../mcp-mesh-postgres
+  version: 0.3.0
+- name: mcp-mesh-redis
+  repository: file://../mcp-mesh-redis
+  version: 0.3.0
+- name: mcp-mesh-registry
+  repository: file://../mcp-mesh-registry
+  version: 0.3.0
+digest: sha256:ba751a7a33e19a95f5c00dfdeb652bc0cc7d430e3c18b26c8c2d7199266758e6
+generated: "2025-07-05T22:36:10.76426491-04:00"

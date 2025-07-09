@@ -1,0 +1,143 @@
+# MCP Mesh Core Infrastructure Configuration
+# This umbrella chart deploys the core components: Registry, PostgreSQL, and Redis
+
+# Global configuration
+global:
+  # Namespace for all components
+  namespace: mcp-mesh
+
+# Component enablement
+postgres:
+  enabled: true
+
+redis:
+  enabled: true
+
+registry:
+  enabled: true
+
+# PostgreSQL configuration
+mcp-mesh-postgres:
+  postgres:
+    database: "mcpmesh"
+    username: "mcpmesh"
+    password: "mcpmesh123"
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# Redis configuration
+mcp-mesh-redis:
+  redis:
+    maxmemory: "256mb"
+    maxmemoryPolicy: "allkeys-lru"
+
+  persistence:
+    enabled: false # Use emptyDir for cache
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Registry configuration
+mcp-mesh-registry:
+  image:
+    repository: mcpmesh/registry
+    tag: "0.3"
+  registry:
+    # Database configuration (connects to PostgreSQL)
+    database:
+      type: "postgres"
+      host: "mcp-mesh-core-mcp-mesh-postgres" # Service name when deployed as mcp-mesh-core
+      port: 5432
+      name: "mcpmesh"
+      username: "mcpmesh"
+      password: "mcpmesh123"
+      waitForDatabase: false # Disable problematic init container
+
+    # Logging configuration (matches K8s examples)
+    logging:
+      level: "DEBUG"
+      format: "json"
+      debug: "true"
+
+    # Redis configuration (optional session storage)
+    redis:
+      enabled: true
+      host: "mcp-mesh-core-mcp-mesh-redis" # Service name when deployed as mcp-mesh-core
+      port: 6379
+
+    # Health check configuration
+    healthCheck:
+      enabled: true
+      interval: 30
+      timeout: 10
+
+  # Use Deployment for stateless registry
+  workloadType: "Deployment"
+
+  # Persistence disabled for stateless registry
+  persistence:
+    enabled: false # Registry is stateless
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+
+  # Ingress configuration (disabled by default)
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: mcp-registry.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# Namespace creation
+namespaceCreate: true
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/part-of: mcp-mesh-core
+
+# Common annotations for all resources
+commonAnnotations: {}
+
+# Network policies (disabled by default)
+networkPolicies:
+  enabled: false
+
+# Pod disruption budgets (disabled by default)
+podDisruptionBudgets:
+  enabled: false
+
+# Service monitors for Prometheus (disabled by default)
+serviceMonitors:
+  enabled: false

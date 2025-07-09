@@ -1,0 +1,60 @@
+{{- if .Values.patterns.pathBased.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mcp-mesh-ingress.fullname" . }}-paths
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mcp-mesh-ingress.labels" . | nindent 4 }}
+    ingress-pattern: path-based
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "mcp-mesh-ingress.annotations" . | nindent 4 }}
+    {{- with .Values.patterns.pathBased.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.global.ingressClass }}
+  ingressClassName: {{ .Values.global.ingressClass }}
+  {{- end }}
+  {{- include "mcp-mesh-ingress.tls" . | nindent 2 }}
+  rules:
+    - host: {{ .Values.patterns.pathBased.host }}
+      http:
+        paths:
+          {{- /* Core services */ -}}
+          {{- if .Values.core.registry.enabled }}
+          - path: {{ .Values.core.registry.path }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.registry.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .Values.core.registry.port }}
+          {{- end }}
+
+          {{- if .Values.core.redis.enabled }}
+          - path: {{ .Values.core.redis.path }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.redis.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .Values.core.redis.port }}
+          {{- end }}
+
+          {{- /* Agent services */ -}}
+          {{- range .Values.agents }}
+          {{- if .enabled }}
+          - path: {{ .path }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .service "serviceNamespace" $.Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .port }}
+          {{- end }}
+          {{- end }}
+{{- end }}

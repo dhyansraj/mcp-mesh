@@ -1,0 +1,67 @@
+{{- include "mcp-mesh-ingress.validate" . -}}
+{{- if .Values.patterns.hostBased.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mcp-mesh-ingress.fullname" . }}-hosts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mcp-mesh-ingress.labels" . | nindent 4 }}
+    ingress-pattern: host-based
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "mcp-mesh-ingress.annotations" . | nindent 4 }}
+    {{- with .Values.patterns.hostBased.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.global.ingressClass }}
+  ingressClassName: {{ .Values.global.ingressClass }}
+  {{- end }}
+  {{- include "mcp-mesh-ingress.tls" . | nindent 2 }}
+  rules:
+    {{- /* Core services */ -}}
+    {{- if .Values.core.registry.enabled }}
+    - host: {{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.registry.host "domain" .Values.global.domain) }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.registry.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .Values.core.registry.port }}
+    {{- end }}
+
+    {{- if .Values.core.redis.enabled }}
+    - host: {{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.redis.host "domain" .Values.global.domain) }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.redis.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .Values.core.redis.port }}
+    {{- end }}
+
+    {{- /* Agent services */ -}}
+    {{- range .Values.agents }}
+    {{- if .enabled }}
+    - host: {{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .service "serviceNamespace" $.Values.global.serviceNamespace) }}
+                port:
+                  number: {{ .port }}
+    {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,38 @@
+apiVersion: v2
+name: mcp-mesh-core
+description: MCP Mesh Core Infrastructure - Registry, PostgreSQL, and Redis
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - mcp
+  - mesh
+  - core
+  - infrastructure
+  - registry
+  - postgres
+  - redis
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Umbrella chart for MCP Mesh core infrastructure components
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies:
+  - name: mcp-mesh-postgres
+    version: "0.3.0"
+    repository: "file://../mcp-mesh-postgres"
+    condition: postgres.enabled
+  - name: mcp-mesh-redis
+    version: "0.3.0"
+    repository: "file://../mcp-mesh-redis"
+    condition: redis.enabled
+  - name: mcp-mesh-registry
+    version: "0.3.0"
+    repository: "file://../mcp-mesh-registry"
+    condition: registry.enabled

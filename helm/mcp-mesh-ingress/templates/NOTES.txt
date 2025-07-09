@@ -1,0 +1,68 @@
+MCP Mesh Ingress has been deployed!
+
+{{- if .Values.patterns.hostBased.enabled }}
+
+Host-based routing is enabled:
+{{- if .Values.core.registry.enabled }}
+- Registry: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.registry.host "domain" .Values.global.domain) }}
+{{- end }}
+{{- if .Values.core.redis.enabled }}
+- Redis: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.redis.host "domain" .Values.global.domain) }}
+{{- end }}
+{{- range .Values.agents }}
+{{- if .enabled }}
+- {{ .name | title }}: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}
+{{- end }}
+{{- end }}
+
+Add these entries to your /etc/hosts file (for local development):
+  echo "$(minikube ip) {{ .Values.global.domain }}" | sudo tee -a /etc/hosts
+{{- if .Values.core.registry.enabled }}
+  echo "$(minikube ip) {{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.registry.host "domain" .Values.global.domain) }}" | sudo tee -a /etc/hosts
+{{- end }}
+{{- range .Values.agents }}
+{{- if .enabled }}
+  echo "$(minikube ip) {{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}" | sudo tee -a /etc/hosts
+{{- end }}
+{{- end }}
+
+{{- end }}
+
+{{- if .Values.patterns.pathBased.enabled }}
+
+Path-based routing is enabled on {{ .Values.patterns.pathBased.host }}:
+{{- if .Values.core.registry.enabled }}
+- Registry: http://{{ .Values.patterns.pathBased.host }}/registry/
+{{- end }}
+{{- if .Values.core.redis.enabled }}
+- Redis: http://{{ .Values.patterns.pathBased.host }}/redis/
+{{- end }}
+{{- range .Values.agents }}
+{{- if .enabled }}
+- {{ .name | title }}: http://{{ .Values.patterns.pathBased.host }}/{{ .name }}/
+{{- end }}
+{{- end }}
+
+Add this entry to your /etc/hosts file (for local development):
+  echo "$(minikube ip) {{ .Values.patterns.pathBased.host }}" | sudo tee -a /etc/hosts
+
+{{- end }}
+
+To check ingress status:
+  kubectl get ingress -n {{ .Release.Namespace }}
+
+To test registry health:
+{{- if .Values.patterns.hostBased.enabled }}
+  curl http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.registry.host "domain" .Values.global.domain) }}/health
+{{- else if .Values.patterns.pathBased.enabled }}
+  curl http://{{ .Values.patterns.pathBased.host }}/registry/health
+{{- end }}
+
+To list registered agents:
+{{- if .Values.patterns.hostBased.enabled }}
+  curl http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.registry.host "domain" .Values.global.domain) }}/agents
+{{- else if .Values.patterns.pathBased.enabled }}
+  curl http://{{ .Values.patterns.pathBased.host }}/registry/agents
+{{- end }}
+
+For more information, visit: https://github.com/dhyansraj/mcp-mesh
