@@ -17,7 +17,7 @@ data:
   REGISTRY_PORT: {{ .Values.registry.port | default "8000" | quote }}
 
   # Complete registry URL (primary variable used by runtime)
-  MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000") | quote }}
+  MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
 
   # Environment defaults (can be overridden) - matches working examples
   MCP_MESH_HTTP_ENABLED: {{ .Values.agent.http.enabled | default true | quote }}
@@ -26,8 +26,8 @@ data:
   MCP_MESH_DEBUG_MODE: {{ .Values.mesh.debug | default false | quote }}
   MCP_MESH_ENABLED: {{ .Values.mesh.enabled | default true | quote }}
   MCP_MESH_AUTO_RUN: "true"
-  MCP_MESH_AUTO_RUN_INTERVAL: "30"
-  MCP_MESH_HEALTH_INTERVAL: "30"
+  MCP_MESH_AUTO_RUN_INTERVAL: "5"
+  MCP_MESH_HEALTH_INTERVAL: "5"
   MCP_MESH_DYNAMIC_UPDATES: "true"
   MCP_MESH_UPDATE_STRATEGY: "immediate"
   MCP_MESH_NAMESPACE: "default"

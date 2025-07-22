@@ -71,7 +71,7 @@ agents:
     enabled: true
     host: "fastmcp-agent"
     service: "fastmcp-agent-mcp-mesh-agent"
-    port: 9092
+    port: 8080
     path: "/fastmcp-agent(/|$)(.*)"
 
   - name: "enhanced-fastmcp-agent"
@@ -82,10 +82,10 @@ agents:
     path: "/enhanced-fastmcp-agent(/|$)(.*)"
 
   - name: "dependent-agent"
-    enabled: false
+    enabled: true
     host: "dependent-agent"
     service: "dependent-agent-mcp-mesh-agent"
-    port: 9093
+    port: 8080
     path: "/dependent-agent(/|$)(.*)"
 
 # TLS configuration
