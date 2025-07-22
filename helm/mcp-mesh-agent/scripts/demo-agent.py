@@ -21,7 +21,7 @@ def demo_function(message: str = "Hello from auto-generated ConfigMap!") -> dict
         "message": message,
         "source": "auto-generated-configmap",
         "agent": "demo-agent",
-        "method": "helm-file-templating"
+        "method": "helm-file-templating",
     }
 
 
@@ -37,8 +37,8 @@ def get_config_info() -> dict:
             "No manual ConfigMap creation needed",
             "Version controlled with chart",
             "Simplified deployment workflow",
-            "Automatic ConfigMap naming"
-        ]
+            "Automatic ConfigMap naming",
+        ],
     }
 
 
@@ -55,11 +55,12 @@ def get_config_info() -> dict:
 class DemoAgent:
     """
     Demo agent that shows the enhanced Helm chart functionality.
-    
+
     This agent demonstrates:
     1. Auto-generated ConfigMap from scriptPath
     2. Simplified deployment workflow
     3. Version-controlled agent scripts
     4. No manual ConfigMap management required
     """
+
     pass

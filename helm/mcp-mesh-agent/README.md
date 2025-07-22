@@ -12,6 +12,7 @@ This Helm chart deploys MCP Mesh agents with Python runtime on Kubernetes.
 ## Installing the Chart
 
 ### Method 1: Built-in Script (Container Image)
+
 To install with a script built into the container image:
 
 ```bash
@@ -21,6 +22,7 @@ helm install my-agent ./helm/mcp-mesh-agent \
 ```
 
 ### Method 2: External ConfigMap
+
 To install with an externally managed ConfigMap:
 
 ```bash
@@ -32,6 +34,7 @@ helm install my-agent ./helm/mcp-mesh-agent \
 ```
 
 ### Method 3: Auto-Generated ConfigMap (Recommended)
+
 To install with automatic ConfigMap generation from a script file:
 
 ```bash
@@ -68,28 +71,28 @@ The following table lists the configurable parameters of the MCP Mesh Agent char
 
 ### Agent Configuration
 
-| Parameter                        | Description                                        | Default   |
-| -------------------------------- | -------------------------------------------------- | --------- |
-| `agent.name`                     | Agent name override (empty = use from @mesh.agent) | `""`      |
-| `agent.version`                  | Agent version                                      | `"1.0.0"` |
-| `agent.description`              | Agent description                                  | `""`      |
-| `agent.capabilities`             | List of capabilities provided       | `[]`      |
-| `agent.dependencies`             | List of required dependencies       | `[]`      |
-| `agent.healthCheck.enabled`      | Enable health checks                | `true`    |
+| Parameter                   | Description                                        | Default   |
+| --------------------------- | -------------------------------------------------- | --------- |
+| `agent.name`                | Agent name override (empty = use from @mesh.agent) | `""`      |
+| `agent.version`             | Agent version                                      | `"1.0.0"` |
+| `agent.description`         | Agent description                                  | `""`      |
+| `agent.capabilities`        | List of capabilities provided                      | `[]`      |
+| `agent.dependencies`        | List of required dependencies                      | `[]`      |
+| `agent.healthCheck.enabled` | Enable health checks                               | `true`    |
 
 ### Agent Code Configuration
 
-| Parameter                        | Description                                           | Default     |
-| -------------------------------- | ----------------------------------------------------- | ----------- |
-| `agentCode.enabled`              | Enable mounting agent code from ConfigMap            | `false`     |
-| `agentCode.configMapName`        | External ConfigMap name (for Method 2)              | `""`        |
-| `agentCode.scriptPath`           | Script path for auto-generated ConfigMap (Method 3) | `""`        |
+| Parameter                        | Description                                         | Default        |
+| -------------------------------- | --------------------------------------------------- | -------------- |
+| `agentCode.enabled`              | Enable mounting agent code from ConfigMap           | `false`        |
+| `agentCode.configMapName`        | External ConfigMap name (for Method 2)              | `""`           |
+| `agentCode.scriptPath`           | Script path for auto-generated ConfigMap (Method 3) | `""`           |
 | `agentCode.mountPath`            | Mount path for agent code                           | `"/app/agent"` |
-| `agent.healthCheck.interval`     | Health check interval (seconds)     | `30`      |
-| `agent.retry.attempts`           | Retry attempts                      | `3`       |
-| `agent.retry.delay`              | Retry delay (seconds)               | `5`       |
-| `agent.performance.timeout`      | Operation timeout (seconds)         | `30`      |
-| `agent.performance.cacheEnabled` | Enable caching                      | `true`    |
+| `agent.healthCheck.interval`     | Health check interval (seconds)                     | `30`           |
+| `agent.retry.attempts`           | Retry attempts                                      | `3`            |
+| `agent.retry.delay`              | Retry delay (seconds)                               | `5`            |
+| `agent.performance.timeout`      | Operation timeout (seconds)                         | `30`           |
+| `agent.performance.cacheEnabled` | Enable caching                                      | `true`         |
 
 ### HTTP Configuration
 
