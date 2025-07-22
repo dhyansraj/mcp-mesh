@@ -36,72 +36,23 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MCP Mesh Ecosystem                       │
-├─────────────────────────────────────────────────────────────────┤
-│              ┌───────────────────────────────────┐              │
-│              │           Redis                   │              │
-│              │      (Session Storage)            │              │
-│              │   session:* keys for stickiness   │              │
-│              └─────────────┬─────────────────────┘              │
-│                            │                                    │
-│         ┌──────────────────┼──────────────────┐                 │
-│         │                  │                  │                 │
-│         ▼                  ▼                  ▼                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │   Agent A   │  │   Agent B   │  │   Agent C   │              │
-│  │             │◄─┼─────────────┼─►│             │              │
-│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │              │
-│  │ │FastMCP  │◄┼──┼►│FastMCP  │◄┼──┼►│FastMCP  │ │              │
-│  │ │Server   │ │  │ │Server   │ │  │ │Server   │ │              │
-│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │              │
-│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │              │
-│  │ │Mesh     │ │  │ │Mesh     │ │  │ │Mesh     │ │              │
-│  │ │Runtime  │ │  │ │Runtime  │ │  │ │Runtime  │ │              │
-│  │ │(Inject) │ │  │ │(Inject) │ │  │ │(Inject) │ │              │
-│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │              │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
-│         │                │                │                     │
-│         │ Heartbeat      │ Heartbeat      │ Heartbeat           │
-│         │ + Discovery    │ + Discovery    │ + Discovery         │
-│         │                │                │                     │
-│         └────────────────┼────────────────┘                     │
-│                          ▼                                      │
-│                  ┌─────────────┐                                │
-│                  │   Registry  │                                │
-│                  │ (Background)│                                │
-│                  │ ┌─────────┐ │                                │
-│                  │ │Service  │ │                                │
-│                  │ │Discovery│ │                                │
-│                  │ │         │ │                                │
-│                  │ │SQLite DB│ │                                │
-│                  │ └─────────┘ │                                │
-│                  │ ┌─────────┐ │                                │
-│                  │ │Health   │ │                                │
-│                  │ │Monitor  │ │                                │
-│                  │ └─────────┘ │                                │
-│                  └─────────────┘                                │
-│                                                                 │
-│  Direct MCP JSON-RPC calls between FastMCP servers              │
-│  ◄──────────────────────────────────────────────────────────►   │
-│  Registry for discovery, Redis for session stickiness           │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Traditional MCP Limitations
+![Traditional MCP Architecture](mcp_arch.png)
 
-**Key Architecture Features:**
+**❌ Traditional MCP problems:**
+- Client orchestrates everything
+- No server-to-server communication 
+- Static connections defined at startup
+- Cannot add new servers dynamically
 
-- **Redis Session Storage**: Distributed session affinity across agent pods
-- **Direct MCP Communication**: Agents communicate directly via FastMCP protocol
-- **Registry Coordination**: Background service discovery and dependency resolution
-- **Mesh Runtime Injection**: Automatic proxy creation and dependency injection
+### MCP Mesh Solution
+![MCP Mesh Architecture](mcp-mesh_arch.png)
 
-### How Dynamic Injection Works
-
-1. **Agent Registration**: Agents declare capabilities and dependencies using `@mesh.tool` decorators
-2. **Background Resolution**: Registry resolves dependencies during heartbeat pipeline, not at call time
-3. **Proxy Injection**: Lightweight proxy objects injected as function parameters
-4. **Direct MCP Calls**: Proxies make standard MCP JSON-RPC calls between FastMCP servers
+**✅ MCP Mesh advantages:**
+- **Auto-Discovery**: Agents find each other without configuration
+- **Dynamic Dependencies**: Runtime capability injection
+- **Decentralized**: Direct service-to-service communication
+- **Scalable**: Add/remove services without reconfiguration
 
 **The Magic**: Dependencies pre-resolved in background - zero call-time latency for resolution!
 
@@ -109,9 +60,7 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 
 ### See MCP Mesh in Action
 
-![MCP Mesh Demo](demo.gif)
-
-_MCP Mesh sets the stage, but MCP agents steal the show! Watch as agents dynamically discover dependencies, gracefully degrade when services go down, and seamlessly reconnect when they come back online._
+_MCP Mesh sets the stage, but MCP agents steal the show! Agents dynamically discover dependencies, gracefully degrade when services go down, and seamlessly reconnect when they come back online._
 
 ### Simple Agent Example
 
