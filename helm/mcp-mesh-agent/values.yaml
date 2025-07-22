@@ -102,8 +102,8 @@ agent:
   script: "/app/agent.py" # Matches working examples
   # Example: "/app/agents/hello_world.py"
 
-  # Agent metadata for mesh registration
-  name: "hello-world" # Default agent name
+  # Agent metadata for mesh registration (optional - usually comes from @mesh.agent decorator)
+  name: "" # Override agent name (empty = use from script's @mesh.agent decorator)
   version: "1.0.0"
   description: ""
 
@@ -171,8 +171,10 @@ agent:
 agentCode:
   # Enable mounting agent code from ConfigMap
   enabled: false
-  # ConfigMap name
+  # ConfigMap name (for external ConfigMap)
   configMapName: ""
+  # Script path (for auto-generated ConfigMap from file)
+  scriptPath: ""
   # Mount path
   mountPath: "/app/agent"
 

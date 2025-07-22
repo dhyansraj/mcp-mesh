@@ -1,0 +1,42 @@
+# Example: Auto-Generated ConfigMap from Script Path
+# This example shows how to use agentCode.scriptPath to automatically
+# create ConfigMaps from Python files without manual ConfigMap management
+
+# Agent configuration (name comes from @mesh.agent decorator in script)
+agent:
+  # name: ""  # Optional override - usually comes from script's @mesh.agent decorator
+  version: "1.0.0"
+  description: "Demo agent with auto-generated ConfigMap"
+  http:
+    enabled: true
+    host: "demo-agent"
+    port: 9094
+
+# Auto-generated ConfigMap from script path
+agentCode:
+  enabled: true
+  # Script path relative to chart root - Helm will read this file
+  # and automatically create a ConfigMap with the contents
+  scriptPath: "scripts/demo-agent.py"
+  # configMapName: ""  # Auto-generated: {release-name}-code
+  mountPath: "/app"
+
+# Registry connection
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+  url: "http://mcp-core-mcp-mesh-registry:8000"
+
+# Container image
+image:
+  repository: "mcpmesh/python-runtime"
+  tag: "0.3"
+
+# Resources
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi

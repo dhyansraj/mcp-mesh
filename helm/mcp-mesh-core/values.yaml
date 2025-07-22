@@ -62,12 +62,12 @@ mcp-mesh-registry:
     # Database configuration (connects to PostgreSQL)
     database:
       type: "postgres"
-      host: "mcp-mesh-core-mcp-mesh-postgres" # Service name when deployed as mcp-mesh-core
+      host: "mcp-core-mcp-mesh-postgres.mcp-mesh.svc.cluster.local" # Full DNS name for reliable resolution
       port: 5432
       name: "mcpmesh"
       username: "mcpmesh"
       password: "mcpmesh123"
-      waitForDatabase: false # Disable problematic init container
+      waitForDatabase: true # Wait for database to be ready before starting registry
 
     # Logging configuration (matches K8s examples)
     logging:
@@ -78,7 +78,7 @@ mcp-mesh-registry:
     # Redis configuration (optional session storage)
     redis:
       enabled: true
-      host: "mcp-mesh-core-mcp-mesh-redis" # Service name when deployed as mcp-mesh-core
+      host: "mcp-core-mcp-mesh-redis.mcp-mesh.svc.cluster.local" # Full DNS name for reliable resolution
       port: 6379
 
     # Health check configuration

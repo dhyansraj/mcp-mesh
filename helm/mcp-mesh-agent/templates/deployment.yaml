@@ -131,8 +131,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            {{- if .Values.agent.name }}
             - name: MCP_MESH_AGENT_NAME
               value: {{ .Values.agent.name | quote }}
+            {{- end }}
             # Python environment variables
             - name: PYTHONUNBUFFERED
               value: "1"
@@ -171,7 +173,7 @@ spec:
         {{- if .Values.agentCode.enabled }}
         - name: agent-code
           configMap:
-            name: {{ .Values.agentCode.configMapName }}
+            name: {{ .Values.agentCode.configMapName | default (printf "%s-code" (include "mcp-mesh-agent.fullname" .)) }}
             defaultMode: 0755
         {{- end }}
         {{- with .Values.extraVolumes }}
