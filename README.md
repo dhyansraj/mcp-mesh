@@ -36,25 +36,25 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 
 ## Architecture Overview
 
-### Traditional MCP Limitations
+### Traditional MCP: Complex Systems = Nightmare
 ![Traditional MCP Architecture](mcp_arch.png)
 
-**❌ Traditional MCP problems:**
-- Client orchestrates everything
-- No server-to-server communication 
-- Static connections defined at startup
-- Cannot add new servers dynamically
+**❌ Building complex agentic apps with traditional MCP:**
+- Client handles all orchestration, networking, and state
+- Adding new services requires reconfiguring everything
+- No dynamic upgrades - must restart entire system
+- Complex boilerplate for every service interaction
 
-### MCP Mesh Solution
+### MCP Mesh: Complex Systems = Simple Code
 ![MCP Mesh Architecture](mcp-mesh_arch.png)
 
-**✅ MCP Mesh advantages:**
-- **Auto-Discovery**: Agents find each other without configuration
-- **Dynamic Dependencies**: Runtime capability injection
-- **Decentralized**: Direct service-to-service communication
-- **Scalable**: Add/remove services without reconfiguration
+**✅ MCP Mesh handles the complexity so you don't have to:**
+- **Zero Boilerplate**: Just add `@mesh.tool()` - networking handled automatically
+- **Dynamic Everything**: Add/remove/upgrade services without touching other code
+- **Complex Apps Made Simple**: Financial services example shows 6+ interconnected agents
+- **Production Ready**: Built-in resilience, health monitoring, and scaling
 
-**The Magic**: Dependencies pre-resolved in background - zero call-time latency for resolution!
+**The Magic**: Write simple Python functions, get enterprise-grade distributed systems.
 
 ## Quick Start
 
