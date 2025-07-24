@@ -87,6 +87,27 @@ def process_data(data: str, format_type: str = "json") -> dict:
     }
 
 
+@app.tool()
+@mesh.tool(capability="system_info_service", dependencies=["info"])
+def get_enriched_system_info(
+    include_timestamp: bool = True, info_service: mesh.McpMeshAgent = None
+) -> dict:
+    """Get enriched system information by calling system agent."""
+    # Get system info from system agent
+    system_info = info_service() if info_service else {"error": "system info unavailable"}
+    
+    # Enrich with FastMCP service information
+    enriched_data = {
+        "fastmcp_service_name": "FastMCP Service",
+        "enriched_at": datetime.now().isoformat() if include_timestamp else None,
+        "system_data": system_info,
+        "enrichment_level": "detailed",
+        "processed_by": "fastmcp-service"
+    }
+    
+    return enriched_data
+
+
 @app.prompt()
 @mesh.tool(capability="template_service")
 def report_template(title: str, sections: list | None = None) -> str:

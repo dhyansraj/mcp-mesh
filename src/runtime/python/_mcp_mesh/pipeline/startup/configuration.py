@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Any
 
 from ...engine.decorator_registry import DecoratorRegistry
@@ -48,6 +49,14 @@ class ConfigurationStep(PipelineStep):
             result.add_context("agent_id", config["agent_id"])
             result.add_context("has_explicit_agent", has_explicit_agent)
             result.add_context("registry_url", registry_url)
+
+            # Log tracing configuration status
+            tracing_enabled = os.getenv(
+                "MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false"
+            ).lower() in ("true", "1", "yes", "on")
+            self.logger.info(
+                f"Distributed tracing: {'enabled' if tracing_enabled else 'disabled'}"
+            )
 
             result.message = f"Configuration resolved for agent '{config['agent_id']}'"
             self.logger.info(

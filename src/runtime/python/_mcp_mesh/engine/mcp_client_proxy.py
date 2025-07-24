@@ -95,14 +95,20 @@ class MCPClientProxy:
             url = f"{self.endpoint}/mcp/"  # Use trailing slash to avoid 307 redirect
             data = json.dumps(payload).encode("utf-8")
 
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",  # FastMCP requires both
-                },
+            # Build headers with trace context injection
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",  # FastMCP requires both
+            }
+
+            # Inject trace headers for distributed tracing
+            from ..tracing.trace_context_helper import TraceContextHelper
+
+            TraceContextHelper.inject_trace_headers_to_request(
+                headers, url, self.logger
             )
+
+            req = urllib.request.Request(url, data=data, headers=headers)
 
             with urllib.request.urlopen(req, timeout=30.0) as response:
                 response_data = response.read().decode("utf-8")
@@ -297,6 +303,13 @@ class EnhancedMCPClientProxy(MCPClientProxy):
             # Add custom headers
             headers.update(self.custom_headers)
 
+            # Inject trace headers for distributed tracing
+            from ..tracing.trace_context_helper import TraceContextHelper
+
+            TraceContextHelper.inject_trace_headers_to_request(
+                headers, url, self.logger
+            )
+
             # Add authentication headers if required
             if self.auth_required:
                 auth_token = os.getenv("MCP_MESH_AUTH_TOKEN")
@@ -410,6 +423,13 @@ class EnhancedMCPClientProxy(MCPClientProxy):
 
             # Add custom headers
             headers.update(self.custom_headers)
+
+            # Inject trace headers for distributed tracing
+            from ..tracing.trace_context_helper import TraceContextHelper
+
+            TraceContextHelper.inject_trace_headers_to_request(
+                headers, url, self.logger
+            )
 
             # Add authentication headers if required
             if self.auth_required:

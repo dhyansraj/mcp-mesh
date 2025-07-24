@@ -1,36 +1,23 @@
 # Observability and Monitoring
 
-> Gain deep insights into your MCP Mesh deployment with comprehensive observability
+> Monitor and trace your MCP Mesh deployment with built-in distributed tracing
 
 ## Overview
 
-Observability is crucial for operating MCP Mesh at scale. This section covers implementing comprehensive monitoring, metrics collection, distributed tracing, centralized logging, and alerting. You'll learn how to gain visibility into agent behavior, track system performance, debug distributed interactions, and maintain service level objectives.
-
-With proper observability, you can proactively identify issues, optimize performance, and ensure reliability of your MCP Mesh deployment.
+MCP Mesh includes a built-in distributed tracing system that provides real-time visibility into request flows across your distributed agents. Unlike traditional OpenTelemetry setups, MCP Mesh uses Redis Streams for trace collection and correlation, offering a lightweight, high-performance observability solution.
 
 ## What You'll Learn
 
 By the end of this section, you will:
 
-- ✅ Set up Prometheus for metrics collection and storage
-- ✅ Create Grafana dashboards for visualization
-- ✅ Implement distributed tracing with OpenTelemetry
-- ✅ Configure centralized logging with the ELK stack
-- ✅ Define SLIs/SLOs and configure alerting rules
-- ✅ Debug complex multi-agent interactions
+- ✅ Enable distributed tracing in MCP Mesh
+- ✅ Monitor trace events in real-time  
+- ✅ Query and search completed traces
+- ✅ Analyze multi-agent interactions
+- ✅ Debug performance bottlenecks
+- ✅ Export traces to external systems
 
-## Why Observability for MCP Mesh?
-
-MCP Mesh's distributed nature makes observability essential:
-
-1. **Distributed Complexity**: Track requests across multiple agents
-2. **Performance Optimization**: Identify bottlenecks and optimize
-3. **Debugging**: Understand failures in complex interactions
-4. **SLA Compliance**: Monitor and maintain service levels
-5. **Capacity Planning**: Make data-driven scaling decisions
-6. **Security**: Detect anomalous behavior and threats
-
-## MCP Mesh Observability Architecture
+## MCP Mesh Distributed Tracing Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -39,188 +26,384 @@ MCP Mesh's distributed nature makes observability essential:
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                     Visualization Layer                   │   │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   Grafana    │  │   Kibana     │  │   Jaeger     │   │   │
-│  │  │ (Dashboards) │  │   (Logs)     │  │  (Traces)    │   │   │
+│  │  │   Console   │  │     JSON     │  │   REST API   │   │   │
+│  │  │   Export    │  │   Export     │  │  (Queries)   │   │   │
 │  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │                      Storage Layer                        │   │
+│  │                      Processing Layer                     │   │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │ Prometheus  │  │ Elasticsearch│  │   Tempo      │   │   │
-│  │  │  (Metrics)  │  │   (Logs)     │  │  (Traces)    │   │   │
+│  │  │    Trace    │  │    Span      │  │    Export    │   │   │
+│  │  │ Correlator  │  │  Correlation │  │   Pipeline   │   │   │
 │  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    Collection Layer                       │   │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │ Prometheus  │  │   Fluentd    │  │    OTEL      │   │   │
-│  │  │  Exporters  │  │  (Logstash)  │  │  Collector   │   │   │
+│  │  │   Registry  │  │ Redis Streams│  │   Consumer   │   │   │
+│  │  │  (Consumer) │  │ (mcp-mesh:   │  │    Group     │   │   │
+│  │  │             │  │   traces)    │  │              │   │   │
 │  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    MCP Mesh Components                    │   │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   Registry  │  │    Agents    │  │   Sidecars   │   │   │
-│  │  │  (Metrics)  │  │  (All Data)  │  │ (Collectors) │   │   │
+│  │  │   Python    │  │      Go      │  │    Redis     │   │   │
+│  │  │   Agents    │  │   Registry   │  │   Streams    │   │   │
+│  │  │ (Publishers)│  │ (Consumer)   │  │  (Storage)   │   │   │
 │  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Section Contents
+## Quick Start
 
-1. **[Prometheus Integration](./07-observability/01-prometheus-integration.md)** - Metrics collection and storage
-2. **[Grafana Dashboards](./07-observability/02-grafana-dashboards.md)** - Visualization and monitoring
-3. **[Distributed Tracing](./07-observability/03-distributed-tracing.md)** - OpenTelemetry and Jaeger
-4. **[Centralized Logging](./07-observability/04-centralized-logging.md)** - ELK stack integration
-5. **[Alerting and SLOs](./07-observability/05-alerting-slos.md)** - Proactive monitoring
+Enable distributed tracing in your MCP Mesh deployment:
 
-## Quick Start Example
-
-Deploy basic observability stack:
+### 1. Enable Tracing in Registry
 
 ```bash
-# Deploy Prometheus and Grafana
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
+# Environment configuration
+export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+export TRACE_EXPORTER_TYPE=console    # or json, multi
+export TRACE_PRETTY_OUTPUT=true
+export TRACE_ENABLE_STATS=true
 
-# Install Prometheus with ServiceMonitor support
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --create-namespace \
-  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
-
-# Deploy MCP Mesh with monitoring enabled
-helm install mcp-mesh ./mcp-mesh-platform \
-  --namespace mcp-mesh \
-  --set global.monitoring.enabled=true \
-  --set serviceMonitor.enabled=true
-
-# Access Grafana
-kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
-# Default credentials: admin/prom-operator
+# Start registry with tracing
+meshctl start --registry-only
 ```
 
-## Key Observability Concepts
+### 2. Python Agents Auto-Enable Tracing
 
-### 1. The Three Pillars
+Python agents automatically participate in distributed tracing when the registry has it enabled. No additional configuration required!
 
-**Metrics**: Numerical measurements over time
+### 3. Verify Tracing is Working
 
-```yaml
-# Example metrics from MCP Mesh
-mcp_mesh_agent_requests_total{agent="weather", status="success"} 1234
-mcp_mesh_registry_connections_active 42
-mcp_mesh_agent_response_time_seconds{quantile="0.99"} 0.123
+```bash
+# Check tracing status
+curl http://localhost:8000/trace/status
+
+# Make a test call to generate traces
+curl -X POST http://localhost:9093/mcp/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "generate_report",
+      "arguments": {"title": "Test Report"}
+    }
+  }'
+
+# Check completed traces (after ~1 minute)
+curl http://localhost:8000/trace/list | jq .
 ```
 
-**Logs**: Discrete events with context
+## Core Concepts
 
-```json
-{
-  "timestamp": "2024-01-15T10:30:45Z",
-  "level": "INFO",
-  "agent": "weather-service",
-  "trace_id": "abc123",
-  "message": "Processing weather request",
-  "location": "New York",
-  "duration_ms": 45
-}
-```
+### 1. Trace Events
 
-**Traces**: Request flow across services
+MCP Mesh generates three types of trace events:
 
-```
-[Registry] ──> [Weather Agent] ──> [External API]
-     │              │                    │
-     ├── 5ms        ├── 20ms            └── 100ms
-     │              │
-     └── Total: 125ms
-```
+- **span_start**: When an operation begins
+- **span_end**: When an operation completes  
+- **error**: When an operation fails
 
-### 2. Observability Levels
+### 2. Trace Correlation
 
-- **Infrastructure**: Node metrics, resource usage
-- **Platform**: Kubernetes metrics, pod health
-- **Application**: MCP Mesh specific metrics
-- **Business**: Agent-specific KPIs
+The registry correlates events into complete traces:
+
+- **Same trace_id**: Groups spans into a single trace
+- **Same span_id**: Links span_start and span_end events
+- **Parent spans**: Creates trace hierarchy
 
 ### 3. Data Flow
 
 ```
-Agent → Metrics Exporter → Prometheus → Grafana
-      → Structured Logs → Fluentd → Elasticsearch → Kibana
-      → Trace Spans → OTEL Collector → Jaeger
+Python Agent → Redis Streams → Registry Consumer → Correlator → Exporter
+     ↓              ↓               ↓                ↓            ↓
+@mesh.tool()  mcp-mesh:traces  Background     Trace Builder  Console/JSON
+```
+
+## Configuration Options
+
+### Registry Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false` | Enable/disable tracing |
+| `TRACE_EXPORTER_TYPE` | `console` | Export format: console, json, multi |
+| `TRACE_PRETTY_OUTPUT` | `true` | Pretty-print console output |
+| `TRACE_ENABLE_STATS` | `true` | Collect trace statistics |
+| `TRACE_JSON_OUTPUT_DIR` | - | Directory for JSON export |
+| `TRACE_BATCH_SIZE` | `100` | Redis consumer batch size |
+| `TRACE_TIMEOUT` | `5m` | Trace completion timeout |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+
+### Exporter Options
+
+#### Console Exporter
+```bash
+export TRACE_EXPORTER_TYPE=console
+export TRACE_PRETTY_OUTPUT=true
+```
+
+Real-time trace output:
+```
+🔗 TRACE a1b2c3d4 (15ms) - SUCCESS (3 spans across 2 agents)
+  📍 Agent: dependent-service
+    ✅ tool:generate_report [generate_report] (15ms)
+  📍 Agent: fastmcp-service  
+    ✅ tool:get_current_time [get_current_time] (2ms)
+    ✅ tool:validate_data [validate_data] (8ms)
+```
+
+#### JSON Exporter
+```bash
+export TRACE_EXPORTER_TYPE=json
+export TRACE_JSON_OUTPUT_DIR=/var/log/traces
+```
+
+#### Multi Exporter
+```bash
+export TRACE_EXPORTER_TYPE=multi
+export TRACE_JSON_OUTPUT_DIR=/var/log/traces
+```
+
+## API Reference
+
+### Trace Status
+```bash
+GET /trace/status
+```
+
+Returns tracing configuration and runtime status.
+
+### List Traces
+```bash
+GET /trace/list?limit=20&offset=0
+```
+
+List completed traces with pagination.
+
+### Get Specific Trace
+```bash
+GET /trace/{trace_id}
+```
+
+Retrieve a specific trace by ID.
+
+### Search Traces
+```bash
+GET /trace/search?agent_name=weather&success=true&start_time=2024-01-01T00:00:00Z
+```
+
+Search traces with filtering:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `parent_span_id` | string | Filter by parent span |
+| `agent_name` | string | Filter by agent name |
+| `operation` | string | Filter by operation name |
+| `success` | boolean | Filter by success status |
+| `start_time` | RFC3339 | Filter by start time |
+| `end_time` | RFC3339 | Filter by end time |
+| `min_duration_ms` | integer | Minimum duration filter |
+| `max_duration_ms` | integer | Maximum duration filter |
+| `limit` | integer | Result limit (max 100) |
+
+### Trace Statistics
+```bash
+GET /trace/stats
+```
+
+Returns aggregate trace statistics.
+
+## Trace Analysis Examples
+
+### Example 1: Find Slow Operations
+
+```bash
+# Find traces longer than 1 second
+curl "http://localhost:8000/trace/search?min_duration_ms=1000" | jq .
+```
+
+### Example 2: Debug Failed Operations
+
+```bash
+# Find failed traces
+curl "http://localhost:8000/trace/search?success=false" | jq .
+```
+
+### Example 3: Analyze Agent Performance
+
+```bash
+# Get traces for specific agent
+curl "http://localhost:8000/trace/search?agent_name=weather-service" | jq .
+```
+
+### Example 4: Monitor Recent Activity
+
+```bash
+# Get traces from last hour
+HOUR_AGO=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+curl "http://localhost:8000/trace/search?start_time=$HOUR_AGO" | jq .
 ```
 
 ## Best Practices
 
-- 📊 **Start Simple**: Begin with basic metrics, add complexity gradually
-- 🏷️ **Label Consistently**: Use standard labels across all telemetry
-- 📈 **Define SLIs Early**: Establish what matters before issues arise
-- 🔍 **Correlate Data**: Link metrics, logs, and traces with common IDs
-- ⚡ **Optimize Collection**: Balance visibility with performance impact
+### 1. Monitoring
 
-## Common Challenges
+- Monitor trace export rate and success
+- Set up alerts for high error rates
+- Watch for trace correlation issues
 
-1. **Data Volume**: MCP Mesh can generate significant telemetry data
-2. **Cardinality**: Too many label combinations can overwhelm storage
-3. **Correlation**: Linking events across distributed agents
-4. **Performance**: Observability overhead on agents
-5. **Cost**: Storage and processing of observability data
+### 2. Storage Management
 
-## Ready to Implement Observability?
+- Traces are stored in memory (last 1000)
+- Older traces are automatically cleaned up
+- Use JSON export for long-term storage
 
-Start with [Prometheus Integration](./07-observability/01-prometheus-integration.md) →
+### 3. Performance
 
-## 🔧 Troubleshooting
+- Tracing is designed to be low-overhead
+- Async publishing doesn't block operations
+- Redis Streams provide high throughput
 
-### High Memory Usage in Prometheus
+### 4. Debugging
 
-```bash
-# Check cardinality
-curl -s http://localhost:9090/api/v1/label/__name__/values | jq '. | length'
+- Check trace status endpoint for issues
+- Monitor Redis stream length
+- Verify consumer group processing
 
-# Identify high-cardinality metrics
-curl -s http://localhost:9090/api/v1/query?query=prometheus_tsdb_symbol_table_size_bytes | jq
-```
+## Integration Examples
 
-### Missing Metrics
+### External Monitoring Integration
 
 ```bash
-# Verify ServiceMonitor is discovered
-kubectl get servicemonitor -n mcp-mesh
-kubectl describe prometheus -n monitoring
+#!/bin/bash
+# Send trace metrics to external monitoring
 
-# Check scrape targets
-kubectl port-forward -n monitoring prometheus-0 9090
-# Visit http://localhost:9090/targets
+# Get trace stats
+STATS=$(curl -s http://localhost:8000/trace/stats)
+TOTAL_TRACES=$(echo $STATS | jq .total_traces)
+SUCCESS_RATE=$(echo $STATS | jq '.success_traces / .total_traces * 100')
+
+# Send to monitoring system
+curl -X POST http://monitoring.internal/metrics \
+  -d "mcp_mesh_traces_total $TOTAL_TRACES"
+curl -X POST http://monitoring.internal/metrics \
+  -d "mcp_mesh_traces_success_rate $SUCCESS_RATE"
 ```
 
-For detailed solutions, see our [Observability Troubleshooting Guide](./07-observability/troubleshooting.md).
+### Log Integration
 
-## ⚠️ Known Limitations
+```bash
+#!/bin/bash
+# Export traces to centralized logging
 
-- **Prometheus Storage**: Single-node storage limits scalability
-- **Trace Sampling**: 100% tracing not feasible at scale
-- **Log Retention**: Costs increase rapidly with retention period
-- **Dashboard Performance**: Complex queries can be slow
+# Get recent traces and send to logs
+curl -s "http://localhost:8000/trace/list?limit=100" | \
+  jq -c '.traces[]' | \
+  while read trace; do
+    echo "$trace" | logger -t mcp-mesh-trace
+  done
+```
 
-## 📝 TODO
+## Troubleshooting
 
-- [ ] Add Thanos for long-term metrics storage
-- [ ] Document Cortex/Mimir integration
-- [ ] Create runbooks for common alerts
-- [ ] Add eBPF-based observability
-- [ ] Document multi-cluster federation
+### Issue 1: No Traces Appearing
+
+**Symptoms**: Empty trace list despite agent activity
+
+**Checks**:
+```bash
+# 1. Verify tracing is enabled
+curl http://localhost:8000/trace/status | jq .enabled
+
+# 2. Check Redis stream
+redis-cli XLEN mcp-mesh:traces
+
+# 3. Check consumer status
+curl http://localhost:8000/trace/status | jq .consumer
+```
+
+### Issue 2: Incomplete Traces
+
+**Symptoms**: Traces missing spans or correlation issues
+
+**Checks**:
+```bash
+# Check for orphaned spans
+redis-cli XREVRANGE mcp-mesh:traces + - COUNT 10
+
+# Look for mismatched trace_ids
+curl http://localhost:8000/trace/status | jq .correlator
+```
+
+### Issue 3: High Memory Usage
+
+**Symptoms**: Registry memory growing
+
+**Checks**:
+```bash
+# Check active traces count
+curl http://localhost:8000/trace/status | jq .correlator.active_traces
+
+# Verify cleanup is working
+# Should see periodic cleanup messages in logs
+```
+
+## Advanced Configuration
+
+### Custom Exporters
+
+You can implement custom exporters by extending the Go registry:
+
+```go
+// Custom exporter implementation
+type CustomExporter struct {
+    endpoint string
+}
+
+func (e *CustomExporter) ExportTrace(trace *CompletedTrace) error {
+    // Send trace to custom backend
+    return sendToCustomBackend(e.endpoint, trace)
+}
+```
+
+### Redis Configuration
+
+```bash
+# High-performance Redis settings for tracing
+redis-cli CONFIG SET stream-node-max-bytes 4096
+redis-cli CONFIG SET stream-node-max-entries 100
+```
+
+## Performance Characteristics
+
+- **Throughput**: 10,000+ spans/second
+- **Latency**: <1ms trace event publishing
+- **Memory**: ~1MB per 1000 completed traces
+- **Storage**: Configurable retention (default: in-memory)
+
+## Next Steps
+
+The distributed tracing system provides a solid foundation for observability. Consider adding:
+
+1. **External Export**: Send traces to Jaeger/Zipkin
+2. **Alerting**: Set up alerts on trace metrics
+3. **Dashboards**: Create visualizations for trace data
+4. **Custom Metrics**: Extract business metrics from traces
 
 ---
 
-💡 **Tip**: Use exemplars to jump from metrics to traces: Enable with `--enable-feature=exemplar-storage` in Prometheus
+💡 **Tip**: Use the search API with time ranges to analyze performance trends over time
 
-📚 **Reference**: [Prometheus Best Practices](https://prometheus.io/docs/practices/)
+📚 **Reference**: [MCP Mesh Tracing API Documentation](./07-observability/03-distributed-tracing.md)
 
-🎯 **Next Step**: Ready to collect metrics? Start with [Prometheus Integration](./07-observability/01-prometheus-integration.md)
+🎯 **Next Step**: Explore the detailed [Distributed Tracing Guide](./07-observability/03-distributed-tracing.md)

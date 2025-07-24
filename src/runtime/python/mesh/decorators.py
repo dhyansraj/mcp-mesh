@@ -207,75 +207,77 @@ def tool(
         # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
 
-        # Create dependency injection wrapper if needed
+        # Always create dependency injection wrapper for consistent execution logging
+        # This ensures ALL @mesh.tool functions get execution logging, even without dependencies
         logger.debug(
             f"🔍 Function '{target.__name__}' has {len(validated_dependencies)} validated dependencies: {validated_dependencies}"
         )
-        if validated_dependencies:
-            try:
-                # Import here to avoid circular imports
-                from _mcp_mesh.engine.dependency_injector import get_global_injector
 
-                # Extract dependency names for injector
-                dependency_names = [dep["capability"] for dep in validated_dependencies]
+        try:
+            # Import here to avoid circular imports
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
 
-                # Log the original function pointer
-                logger.debug(
-                    f"🔸 ORIGINAL function pointer: {target} at {hex(id(target))}"
-                )
+            # Extract dependency names for injector (empty list for functions without dependencies)
+            dependency_names = [dep["capability"] for dep in validated_dependencies]
 
-                injector = get_global_injector()
-                wrapped = injector.create_injection_wrapper(target, dependency_names)
+            # Log the original function pointer
+            logger.debug(f"🔸 ORIGINAL function pointer: {target} at {hex(id(target))}")
 
-                # Log the wrapper function pointer
-                logger.debug(
-                    f"🔹 WRAPPER function pointer: {wrapped} at {hex(id(wrapped))}"
-                )
+            injector = get_global_injector()
+            wrapped = injector.create_injection_wrapper(target, dependency_names)
 
-                # Preserve metadata on wrapper
-                wrapped._mesh_tool_metadata = metadata
+            # Log the wrapper function pointer
+            logger.debug(
+                f"🔹 WRAPPER function pointer: {wrapped} at {hex(id(wrapped))}"
+            )
 
-                # Store the wrapper on the original function for reference
-                target._mesh_injection_wrapper = wrapped
+            # Preserve metadata on wrapper
+            wrapped._mesh_tool_metadata = metadata
 
-                # CRITICAL: Update DecoratorRegistry to use the wrapper instead of the original
-                DecoratorRegistry.update_mesh_tool_function(target.__name__, wrapped)
-                logger.debug(
-                    f"🔄 Updated DecoratorRegistry to use wrapper for '{target.__name__}'"
-                )
+            # Store the wrapper on the original function for reference
+            target._mesh_injection_wrapper = wrapped
 
-                # If runtime processor is available, register with it
-                if _runtime_processor is not None:
-                    try:
-                        _runtime_processor.register_function(wrapped, metadata)
-                    except Exception as e:
-                        logger.error(
-                            f"Runtime registration failed for {target.__name__}: {e}"
-                        )
+            # CRITICAL: Update DecoratorRegistry to use the wrapper instead of the original
+            DecoratorRegistry.update_mesh_tool_function(target.__name__, wrapped)
+            logger.debug(
+                f"🔄 Updated DecoratorRegistry to use wrapper for '{target.__name__}'"
+            )
 
-                # Return the wrapped function - FastMCP will cache this wrapper when it runs
-                logger.debug(f"✅ Returning injection wrapper for '{target.__name__}'")
-                logger.debug(f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}")
+            # If runtime processor is available, register with it
+            if _runtime_processor is not None:
+                try:
+                    _runtime_processor.register_function(wrapped, metadata)
+                except Exception as e:
+                    logger.error(
+                        f"Runtime registration failed for {target.__name__}: {e}"
+                    )
 
-                # Trigger debounced processing before returning
-                _trigger_debounced_processing()
-                return wrapped
-            except Exception as e:
-                # Log but don't fail - graceful degradation
-                logger.error(
-                    f"Dependency injection setup failed for {target.__name__}: {e}"
-                )
+            # Return the wrapped function - FastMCP will cache this wrapper when it runs
+            logger.debug(f"✅ Returning injection wrapper for '{target.__name__}'")
+            logger.debug(f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}")
 
-        # No dependencies - just register with runtime if available
-        if _runtime_processor is not None:
-            try:
-                _runtime_processor.register_function(target, metadata)
-            except Exception as e:
-                logger.error(f"Runtime registration failed for {target.__name__}: {e}")
+            # Trigger debounced processing before returning
+            _trigger_debounced_processing()
+            return wrapped
 
-        # Trigger debounced processing before returning
-        _trigger_debounced_processing()
-        return target
+        except Exception as e:
+            # Log but don't fail - graceful degradation
+            logger.error(
+                f"Dependency injection setup failed for {target.__name__}: {e}"
+            )
+
+            # Fallback: register with runtime if available
+            if _runtime_processor is not None:
+                try:
+                    _runtime_processor.register_function(target, metadata)
+                except Exception as e:
+                    logger.error(
+                        f"Runtime registration failed for {target.__name__}: {e}"
+                    )
+
+            # Trigger debounced processing before returning
+            _trigger_debounced_processing()
+            return target
 
     return decorator
 

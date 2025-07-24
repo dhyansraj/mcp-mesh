@@ -290,12 +290,16 @@ class DependencyInjector:
             )
             wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}")
 
-            # If no mesh positions to inject into, call original function
+            # If no mesh positions to inject into, still do execution logging but call original function
             if not mesh_positions:
                 wrapper_logger.debug(
-                    "🔧 DEPENDENCY_WRAPPER: No mesh positions, calling original"
+                    "🔧 DEPENDENCY_WRAPPER: No mesh positions, calling original with execution logging"
                 )
-                return func._mesh_original_func(*args, **kwargs)
+                from ..tracing.execution_tracer import ExecutionTracer
+
+                return ExecutionTracer.trace_original_function(
+                    func._mesh_original_func, args, kwargs, wrapper_logger
+                )
 
             # Get function signature
             sig = inspect.signature(func)
@@ -350,7 +354,20 @@ class DependencyInjector:
             )
             wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}")
 
-            result = func._mesh_original_func(*args, **final_kwargs)
+            # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
+            from ..tracing.execution_tracer import ExecutionTracer
+
+            # Use helper class for clean execution tracing
+            result = ExecutionTracer.trace_function_execution(
+                func._mesh_original_func,
+                args,
+                final_kwargs,
+                dependencies,
+                mesh_positions,
+                injected_count,
+                wrapper_logger,
+            )
+
             wrapper_logger.debug(
                 f"🔧 DEPENDENCY_WRAPPER: Original returned: {type(result)}"
             )

@@ -31,6 +31,7 @@ type RegistryConfig struct {
 	DefaultEvictionThreshold int
 	HealthCheckInterval      int
 	EnableResponseCache      bool
+	TracingEnabled           bool // Enable distributed tracing
 }
 
 // ResponseCache provides caching functionality matching Python implementation

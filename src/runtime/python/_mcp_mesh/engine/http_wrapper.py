@@ -402,6 +402,27 @@ class HttpMcpWrapper:
 
             async def dispatch(self, request: Request, call_next):
                 # Only handle MCP requests (FastMCP app already only handles /mcp)
+
+                # Extract and set trace context from headers for distributed tracing
+                try:
+                    from ..tracing.trace_context_helper import TraceContextHelper
+
+                    # Use helper class for trace context extraction and setup
+                    trace_context = (
+                        await TraceContextHelper.extract_trace_context_from_request(
+                            request
+                        )
+                    )
+                    TraceContextHelper.setup_request_trace_context(
+                        trace_context, self.logger
+                    )
+                except Exception as e:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to set trace context: {e}")
+                    pass
+
                 # Extract session ID from request
                 session_id = await self.http_wrapper._extract_session_id(request)
 
