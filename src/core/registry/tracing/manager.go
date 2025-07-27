@@ -117,7 +117,6 @@ func (tm *TracingManager) Start() error {
 		return nil
 	}
 
-
 	if err := tm.consumer.Start(); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}

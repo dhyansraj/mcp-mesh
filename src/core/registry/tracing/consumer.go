@@ -266,14 +266,14 @@ func (sc *StreamConsumer) processNextBatch() error {
 	for _, stream := range result {
 		for _, message := range stream.Messages {
 			if err := sc.processMessage(message); err != nil {
-
 				// Continue processing other messages even if one fails
+				sc.logger.Printf("ERROR: Failed to process message %s: %v", message.ID, err)
 				continue
 			}
 
 			// Acknowledge successful processing
 			if err := sc.client.XAck(sc.ctx, sc.streamName, sc.consumerGroup, message.ID).Err(); err != nil {
-
+				sc.logger.Printf("WARN: Failed to acknowledge message %s: %v", message.ID, err)
 			}
 		}
 	}
