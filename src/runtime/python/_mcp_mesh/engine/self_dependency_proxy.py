@@ -49,14 +49,30 @@ class SelfDependencyProxy:
         )
         self.logger.debug(f"🔄 Direct call args: {kwargs}")
 
+        # ===== EXECUTE WITH SELF-DEPENDENCY TRACING =====
+        from ..tracing.execution_tracer import ExecutionTracer
+
         try:
+            # Use helper class for clean execution tracing with self-dependency marker
+            tracer = ExecutionTracer(self.function_name, self.logger)
+            tracer.start_execution(
+                (), kwargs, dependencies=[], mesh_positions=[], injected_count=0
+            )
+
+            # Add self-dependency marker to metadata
+            tracer.execution_metadata["call_type"] = "self_dependency"
+
             result = self.original_func(**kwargs)
+            tracer.end_execution(result, success=True)
+
             self.logger.info(
                 f"✅ SELF-CALL: Direct call to '{self.function_name}' succeeded"
             )
             self.logger.debug(f"✅ Direct call result: {type(result)} {result}")
             return result
+
         except Exception as e:
+            tracer.end_execution(error=str(e), success=False)
             self.logger.error(
                 f"❌ SELF-CALL: Direct call to '{self.function_name}' failed: {e}"
             )

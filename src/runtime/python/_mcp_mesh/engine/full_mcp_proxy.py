@@ -44,6 +44,15 @@ class FullMCPProxy(MCPClientProxy):
                 f"🔧 FullMCPProxy initialized with kwargs: {self.kwargs_config}"
             )
 
+    def _inject_trace_headers(self, headers: dict) -> dict:
+        """Inject trace context headers for distributed tracing."""
+        from ..tracing.trace_context_helper import TraceContextHelper
+
+        TraceContextHelper.inject_trace_headers_to_request(
+            headers, self.endpoint, self.logger
+        )
+        return headers
+
     # Phase 6: Streaming Support - THE BREAKTHROUGH METHOD!
     async def call_tool_streaming(
         self, name: str, arguments: dict = None
@@ -77,15 +86,19 @@ class FullMCPProxy(MCPClientProxy):
 
                 url = f"{self.endpoint}/mcp/"
 
+                # Build headers with trace context
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",  # THIS IS THE KEY!
+                }
+                headers = self._inject_trace_headers(headers)
+
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     async with client.stream(
                         "POST",
                         url,
                         json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "Accept": "text/event-stream",  # THIS IS THE KEY!
-                        },
+                        headers=headers,
                     ) as response:
                         if response.status_code >= 400:
                             raise RuntimeError(f"HTTP error {response.status_code}")
@@ -225,6 +238,7 @@ class FullMCPProxy(MCPClientProxy):
                 "Accept": "application/json, text/event-stream",  # Required by FastMCP
                 "X-Session-ID": session_id,  # Key header for session routing
             }
+            headers = self._inject_trace_headers(headers)
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, headers=headers)
@@ -479,6 +493,9 @@ class EnhancedFullMCPProxy(FullMCPProxy):
             else:
                 self.logger.warning("⚠️ Authentication required but no token available")
 
+        # Inject trace context headers
+        headers = self._inject_trace_headers(headers)
+
         url = f"{self.endpoint}/mcp/"
 
         try:
@@ -555,6 +572,9 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Add session ID header if provided
         if session_id:
             headers["X-Session-ID"] = session_id
+
+        # Inject trace context headers
+        headers = self._inject_trace_headers(headers)
 
         url = f"{self.endpoint}/mcp/"
 

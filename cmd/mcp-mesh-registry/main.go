@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"mcp-mesh/src/core/config"
@@ -43,6 +44,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  HEALTH_CHECK_INTERVAL    - Health check interval in seconds (default: 10)\n")
 		fmt.Fprintf(os.Stderr, "  DEFAULT_TIMEOUT_THRESHOLD - Agent heartbeat timeout in seconds (default: 20)\n")
 		fmt.Fprintf(os.Stderr, "  CACHE_TTL                - Response cache TTL in seconds (default: 30)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_DISTRIBUTED_TRACING_ENABLED - Enable distributed tracing (true/false, default: false)\n")
+		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for distributed tracing (default: redis://localhost:6379)\n")
 		fmt.Fprintf(os.Stderr, "\nThe registry service provides:\n")
 		fmt.Fprintf(os.Stderr, "  - Agent registration and discovery\n")
 		fmt.Fprintf(os.Stderr, "  - Capability-based service matching\n")
@@ -110,6 +113,7 @@ func main() {
 		DefaultEvictionThreshold: cfg.DefaultEvictionThreshold,
 		HealthCheckInterval:      cfg.HealthCheckInterval,
 		EnableResponseCache:      cfg.EnableResponseCache,
+		TracingEnabled:           strings.ToLower(os.Getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED")) == "true",
 	}
 
 	// Create and configure server using Ent

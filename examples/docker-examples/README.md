@@ -50,9 +50,12 @@ The deployment includes:
 | Registry          | 8000 | Registry API and health endpoint        |
 | Hello World Agent | 8081 | MCP agent with greeting tools           |
 | System Agent      | 8082 | System information tools (when running) |
-| FastMCP Agent     | 8091 | Time and calculation services           |
-| Dependent Agent   | 8092 | Tools using dependency injection        |
+| FastMCP Agent     | 8083 | Time and calculation services           |
+| Dependent Agent   | 8084 | Tools using dependency injection        |
 | PostgreSQL        | 5432 | Database (internal)                     |
+| Redis             | 6379 | Session storage and distributed tracing |
+| Grafana           | 3000 | Observability dashboard (admin/admin)   |
+| Tempo             | 3200 | Distributed tracing backend             |
 
 ## Testing Services
 
@@ -72,11 +75,11 @@ curl -s http://localhost:8081/health | jq
 curl -X HEAD -I http://localhost:8082/health
 curl -s http://localhost:8082/health | jq
 
-curl -X HEAD -I http://localhost:8091/health
-curl -s http://localhost:8091/health | jq
+curl -X HEAD -I http://localhost:8083/health
+curl -s http://localhost:8083/health | jq
 
-curl -X HEAD -I http://localhost:8092/health
-curl -s http://localhost:8092/health | jq
+curl -X HEAD -I http://localhost:8084/health
+curl -s http://localhost:8084/health | jq
 ```
 
 ### Registry Agents List
@@ -104,7 +107,7 @@ curl -s -X POST http://localhost:8081/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # FastMCP Agent Tools
-curl -s -X POST http://localhost:8091/mcp/ \
+curl -s -X POST http://localhost:8083/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -126,7 +129,7 @@ curl -s -X POST http://localhost:8082/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # Dependent Agent Tools
-curl -s -X POST http://localhost:8092/mcp/ \
+curl -s -X POST http://localhost:8084/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -187,7 +190,7 @@ curl -s -X POST http://localhost:8081/mcp/ \
 
 ```bash
 # Get current time
-curl -s -X POST http://localhost:8091/mcp/ \
+curl -s -X POST http://localhost:8083/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -201,7 +204,7 @@ curl -s -X POST http://localhost:8091/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Math calculation with timestamp
-curl -s -X POST http://localhost:8091/mcp/ \
+curl -s -X POST http://localhost:8083/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -219,7 +222,7 @@ curl -s -X POST http://localhost:8091/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
 # Process data
-curl -s -X POST http://localhost:8091/mcp/ \
+curl -s -X POST http://localhost:8083/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -289,16 +292,36 @@ curl -s -X POST http://localhost:8082/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
-### Dependent Agent (Dependency Injection Demo)
+### Dependent Agent (3-Agent Dependency Injection Demo)
 
 **Available Tools:**
 
+- `generate_comprehensive_report` - **3-Agent Chain**: Dependent → FastMCP → System (with distributed tracing)
 - `generate_report` - Generate a timestamped report using the time service
 - `analyze_data` - Analyze data with timestamp from time service
 
 ```bash
+# 🔥 NEW: 3-Agent Dependency Chain with Distributed Tracing
+# This demonstrates the complete dependency injection flow:
+# Dependent Agent → FastMCP Agent → System Agent
+curl -s -X POST http://localhost:8084/mcp/ \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "generate_comprehensive_report",
+      "arguments": {
+        "report_title": "Multi-Agent System Report",
+        "include_system_data": true
+      }
+    }
+  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
+
 # Generate report (uses FastMCP agent's time service)
-curl -s -X POST http://localhost:8092/mcp/ \
+curl -s -X POST http://localhost:8084/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -315,7 +338,7 @@ curl -s -X POST http://localhost:8092/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
 # Analyze data (uses dependency injection for timestamps)
-curl -s -X POST http://localhost:8092/mcp/ \
+curl -s -X POST http://localhost:8084/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -331,36 +354,70 @@ curl -s -X POST http://localhost:8092/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 ```
 
+#### 🔍 **Distributed Tracing Verification**
+
+After calling `generate_comprehensive_report`, you can verify the distributed trace was captured:
+
+```bash
+# Check Redis trace stream for distributed tracing data
+docker exec mcp-mesh-redis redis-cli XREVRANGE mesh:trace + - COUNT 9
+
+# View trace relationships and timing
+docker exec mcp-mesh-redis redis-cli XREVRANGE mesh:trace + - COUNT 9 | grep -E "(function_name|trace_id|duration_ms)" -A1
+```
+
+The trace will show the complete execution flow:
+
+1. **Root**: `generate_comprehensive_report` (dependent-service)
+2. **Child**: `get_enriched_system_info` (fastmcp-service)
+3. **Grandchild**: `fetch_system_overview` (system-agent)
+
 ## Key Features Demonstrated
 
-### 1. **Fast Heartbeat Optimization**
+### 1. **🔥 NEW: Distributed Tracing with Redis Storage**
+
+- Complete trace context propagation across all agent boundaries
+- Parent-child span relationships maintained for complex dependency chains
+- Real-time trace data published to Redis streams (`mesh:trace`)
+- Agent metadata collection (hostname, IP, port, namespace, capabilities)
+- Microsecond-precision timing measurements
+- Trace visualization ready for Grafana/Tempo integration
+
+### 2. **Fast Heartbeat Optimization**
 
 - Agents send heartbeats every 5 seconds via HEAD requests
 - Registry responds in microseconds for healthy agents
 - 20-second timeout threshold prevents false negatives
 - Automatic recovery from unhealthy status
 
-### 2. **Graceful Shutdown**
+### 3. **Complete Observability Stack**
+
+- **Grafana Dashboard**: http://localhost:3000 (admin/admin) - Pre-configured MCP Mesh overview
+- **Tempo Tracing**: http://localhost:3200 - Distributed trace visualization
+- **Redis Streams**: Real-time trace data storage and querying
+- **Prometheus Metrics**: Agent health and performance metrics at `/metrics` endpoints
+
+### 4. **Graceful Shutdown**
 
 - Agents automatically unregister on SIGTERM/SIGINT
 - Clean shutdown prevents stale registry entries
 - Test by stopping containers: `docker compose stop <service>`
 
-### 3. **Service Discovery & Dependency Injection**
+### 5. **Service Discovery & Dependency Injection**
 
 - Automatic agent registration with the central registry
 - Dynamic dependency injection between agents
 - Dependent Agent automatically finds and uses FastMCP Agent's time service
 - No manual service binding required
 
-### 4. **PostgreSQL Backend**
+### 6. **PostgreSQL Backend**
 
 - Persistent storage for registry data
 - Eliminates SQLite transaction locking issues
 - Supports concurrent agent operations
 - Automatic database initialization
 
-### 5. **Hybrid FastMCP + MCP Mesh Architecture**
+### 7. **Hybrid FastMCP + MCP Mesh Architecture**
 
 - FastMCP decorators (`@app.tool`) for familiar MCP development
 - MCP Mesh decorators (`@mesh.tool`) for dependency injection
@@ -537,4 +594,4 @@ data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"..."}]
 }
 ```
 
-This deployment demonstrates a production-ready MCP Mesh setup with optimized heartbeats, graceful shutdown, dependency injection, and persistent storage.
+This deployment demonstrates a production-ready MCP Mesh setup with distributed tracing, optimized heartbeats, graceful shutdown, dependency injection, persistent storage, and complete observability stack. The new 3-agent dependency chain showcases advanced distributed tracing capabilities with microsecond-precision timing and parent-child span relationships.

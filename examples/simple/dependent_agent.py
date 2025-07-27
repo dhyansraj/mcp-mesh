@@ -77,6 +77,48 @@ def analyze_data(
     return analysis
 
 
+@app.tool()
+@mesh.tool(capability="comprehensive_report_service", dependencies=["system_info_service"])
+def generate_comprehensive_report(
+    report_title: str, 
+    include_system_data: bool = True,
+    system_info_service: mesh.McpMeshAgent = None
+) -> dict:
+    """Generate a comprehensive report with system information from FastMCP service."""
+    # Get enriched system info from FastMCP service (which calls system agent)
+    if include_system_data and system_info_service:
+        try:
+            system_data = system_info_service(include_timestamp=True)
+        except Exception as e:
+            system_data = {"error": f"Failed to get system data: {e}"}
+    else:
+        system_data = {"note": "System data not included"}
+    
+    # Create comprehensive report
+    comprehensive_report = {
+        "title": report_title,
+        "report_type": "comprehensive",
+        "generated_by": "dependent-service",
+        "creation_time": "now",  # Will be replaced by actual timestamp when called
+        "system_info": system_data,
+        "report_sections": {
+            "executive_summary": "This report includes system information from multiple services",
+            "system_details": system_data.get("system_data", {}),
+            "service_chain": [
+                "dependent-service (this service)",
+                "fastmcp-service (enriches data)", 
+                "system-agent (provides base system info)"
+            ]
+        },
+        "metadata": {
+            "dependency_chain_length": 3,
+            "services_involved": ["dependent-service", "fastmcp-service", "system-agent"]
+        }
+    }
+    
+    return comprehensive_report
+
+
 # AGENT configuration - depends on time_service from the FastMCP agent
 @mesh.agent(
     name="dependent-service",

@@ -15,11 +15,33 @@
 #   - Registry API: http://localhost:8000
 #   - Hello World Agent: http://localhost:8081
 #   - System Agent: http://localhost:8082
-#   - FastMCP Agent: http://localhost:8091
-#   - Dependent Agent: http://localhost:8092
+#   - FastMCP Agent: http://localhost:8083
+#   - Dependent Agent: http://localhost:8084
+#   - Redis: localhost:6379
+#   - Grafana Dashboard: http://localhost:3000 (admin/admin)
+#   - Tempo Tracing: http://localhost:3200
 #   - Use meshctl to interact with the mesh
 
 services:
+  # Redis service for session storage and distributed tracing
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-mesh-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
   # PostgreSQL database service
   postgres:
     image: postgres:15
@@ -43,9 +65,11 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Go-based registry service (from Docker Hub)
+  # Go-based registry service (built locally)
   registry:
-    image: mcpmesh/registry:0.3
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/registry/Dockerfile
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -57,10 +81,19 @@ services:
       - MCP_MESH_DEBUG_MODE=${MCP_MESH_DEBUG_MODE:-false}
       # PostgreSQL connection
       - DATABASE_URL=postgres://mcpmesh:mcpmesh123@postgres:5432/mcpmesh?sslmode=disable
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+      # Enable distributed tracing for registry to test stream consumption
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - TRACE_EXPORTER_TYPE=otlp
+      - TELEMETRY_ENDPOINT=tempo:4317
+      - TELEMETRY_PROTOCOL=grpc
     networks:
       - mcp-mesh
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:
@@ -78,13 +111,15 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Hello World Python agent - uses Docker Hub image
+  # Hello World Python agent - built locally
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.3
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
-      - "${HELLO_WORLD_PORT:-8081}:9090"
+      - "8081:8080"
     volumes:
       # Mount agent code from outside
       - ../simple/hello_world.py:/app/agent.py:ro
@@ -97,7 +132,7 @@ services:
       - MCP_MESH_REGISTRY_PORT=8000
       - HOST=0.0.0.0
       - MCP_MESH_HTTP_HOST=hello-world-agent
-      - MCP_MESH_HTTP_PORT=9090
+      - MCP_MESH_HTTP_PORT=8080
       - POD_IP=hello-world-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=hello-world
@@ -109,20 +144,21 @@ services:
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
-    depends_on:
-      # Agents are resilient - no registry dependency needed
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
     healthcheck:
       test:
         [
           "CMD",
-          "wget",
-          "--spider",
-          "--no-verbose",
-          "--tries=1",
-          "http://localhost:9090/health",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
         ]
       interval: 30s
       timeout: 10s
@@ -130,13 +166,15 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # System Agent Python service - uses Docker Hub image
+  # System Agent Python service - built locally
   system-agent:
-    image: mcpmesh/python-runtime:0.3
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
-      - "${SYSTEM_AGENT_PORT:-8082}:8080"
+      - "8082:8080"
     volumes:
       # Mount agent code from outside
       - ../simple/system_agent.py:/app/agent.py:ro
@@ -161,20 +199,21 @@ services:
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing for system-agent
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
-    depends_on:
-      # Agents are resilient - no registry dependency needed
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
     healthcheck:
       test:
         [
           "CMD",
-          "wget",
-          "--spider",
-          "--no-verbose",
-          "--tries=1",
-          "http://localhost:8080/health",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
         ]
       interval: 30s
       timeout: 10s
@@ -182,13 +221,15 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # FastMCP Agent with mesh integration
+  # FastMCP Agent with mesh integration - built locally
   fastmcp-agent:
-    image: mcpmesh/python-runtime:0.3
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
     container_name: mcp-mesh-fastmcp-agent
     hostname: fastmcp-agent
     ports:
-      - "8091:9092"
+      - "8083:8080"
     volumes:
       # Mount FastMCP agent code
       - ../simple/fastmcp_agent.py:/app/agent.py:ro
@@ -201,7 +242,7 @@ services:
       - MCP_MESH_REGISTRY_PORT=8000
       - HOST=0.0.0.0
       - MCP_MESH_HTTP_HOST=fastmcp-agent
-      - MCP_MESH_HTTP_PORT=9092
+      - MCP_MESH_HTTP_PORT=8080
       - POD_IP=fastmcp-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=fastmcp-service
@@ -213,20 +254,21 @@ services:
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
-    depends_on:
-      # Agents are resilient - no registry dependency needed
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no registry dependency needed
     networks:
       - mcp-mesh
     healthcheck:
       test:
         [
           "CMD",
-          "wget",
-          "--spider",
-          "--no-verbose",
-          "--tries=1",
-          "http://localhost:9092/health",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
         ]
       interval: 30s
       timeout: 10s
@@ -234,13 +276,15 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # Dependent Agent that uses FastMCP agent's time service
+  # Dependent Agent that uses FastMCP agent's time service - built locally
   dependent-agent:
-    image: mcpmesh/python-runtime:0.3
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
     container_name: mcp-mesh-dependent-agent
     hostname: dependent-agent
     ports:
-      - "8092:9093"
+      - "8084:8080"
     volumes:
       # Mount dependent agent code
       - ../simple/dependent_agent.py:/app/agent.py:ro
@@ -253,7 +297,7 @@ services:
       - MCP_MESH_REGISTRY_PORT=8000
       - HOST=0.0.0.0
       - MCP_MESH_HTTP_HOST=dependent-agent
-      - MCP_MESH_HTTP_PORT=9093
+      - MCP_MESH_HTTP_PORT=8080
       - POD_IP=dependent-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=dependent-service
@@ -265,12 +309,40 @@ services:
       - MCP_MESH_LOG_LEVEL=DEBUG
       - MCP_MESH_DEBUG_MODE=true
       - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
       - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
-    depends_on:
-      # Agents are resilient - no registry dependency needed
-      # Depends on fastmcp-agent for time service - wait for it to be healthy
-      fastmcp-agent:
-        condition: service_healthy
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no dependencies needed, can start in any order
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Tempo - Distributed tracing backend
+  tempo:
+    image: grafana/tempo:2.8.1
+    container_name: mcp-mesh-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ../../tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200" # Tempo HTTP
+      - "4327:4317" # OTLP gRPC receiver
+      - "4328:4318" # OTLP HTTP receiver
     networks:
       - mcp-mesh
     healthcheck:
@@ -278,15 +350,67 @@ services:
         [
           "CMD",
           "wget",
-          "--spider",
           "--no-verbose",
           "--tries=1",
-          "http://localhost:9093/health",
+          "--spider",
+          "http://localhost:3200/ready",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
+    restart: unless-stopped
+
+  # Grafana - Observability and visualization
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: mcp-mesh-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+      # Set MCP Mesh Overview as default home dashboard
+      - GF_DEFAULT_PREFERENCES_HOME_DASHBOARD_UID=mcp-mesh-overview
+      - GF_USERS_HOME_PAGE=/d/mcp-mesh-overview/mcp-mesh-overview
+      - GF_USERS_DEFAULT_THEME=dark
+      # Disable welcome screen
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+    volumes:
+      # Custom Grafana configuration
+      - ../../grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      # Configuration and provisioning
+      - ../../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Themes and static files
+      - ../../grafana/themes:/usr/share/grafana/public/css/themes:ro
+      # Persistent data
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - mcp-mesh
+    depends_on:
+      tempo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/api/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 networks:
@@ -297,3 +421,9 @@ networks:
 volumes:
   postgres_data:
     name: mcp-mesh-postgres-data
+  redis_data:
+    name: mcp-mesh-redis-data
+  tempo_data:
+    name: mcp-mesh-tempo-data
+  grafana_data:
+    name: mcp-mesh-grafana-data
