@@ -37,6 +37,8 @@ tags:
     description: Agent registration and management
   - name: dependencies
     description: Dependency resolution and discovery
+  - name: tracing
+    description: Distributed tracing and real-time trace streaming
 
 paths:
   /health:
@@ -214,6 +216,56 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /traces/{trace_id}/stream:
+    get:
+      tags: [tracing]
+      summary: Stream trace events for a specific trace ID
+      description: |
+        Establishes a persistent connection to stream real-time trace events for the specified trace ID.
+        Uses Server-Sent Events (SSE) for streaming trace data from Redis.
+
+        🤖 AI CRITICAL CONTRACT:
+        - Returns real-time trace events as they occur
+        - Enables clients to monitor task progress across agents
+        - Supports multiple registry instances reading from shared Redis
+        - Connection stays open until trace completes or client disconnects
+      operationId: streamTrace
+      parameters:
+        - name: trace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          example: "trace-abc123-def456"
+          description: Trace identifier to stream events for
+      responses:
+        "200":
+          description: Streaming trace events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream of trace data
+              example: |
+                data: {"event_type": "task_started", "agent_id": "worker-1", "timestamp": "2024-01-20T10:30:45Z", "details": {"task": "process_data"}}
+
+                data: {"event_type": "task_progress", "agent_id": "worker-1", "timestamp": "2024-01-20T10:30:47Z", "details": {"progress": 25}}
+
+                data: {"event_type": "task_completed", "agent_id": "worker-1", "timestamp": "2024-01-20T10:31:15Z", "details": {"result": "success"}}
+        "404":
+          description: Trace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Invalid trace ID format
           content:
             application/json:
               schema:
@@ -884,6 +936,55 @@ components:
           type: object
           additionalProperties: true
           description: Additional error details
+
+    # Trace streaming schemas
+    TraceEvent:
+      type: object
+      required: [event_type, trace_id, timestamp, agent_id]
+      description: Individual trace event streamed via SSE
+      properties:
+        event_type:
+          type: string
+          enum:
+            [
+              task_started,
+              task_progress,
+              task_completed,
+              task_failed,
+              agent_called,
+              dependency_resolved,
+            ]
+          example: "task_started"
+          description: Type of trace event
+        trace_id:
+          type: string
+          example: "trace-abc123-def456"
+          description: Trace identifier this event belongs to
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: When this event occurred
+        agent_id:
+          type: string
+          example: "worker-1"
+          description: Agent that generated this event
+        details:
+          type: object
+          additionalProperties: true
+          description: Event-specific details
+          example:
+            task: "process_data"
+            progress: 25
+            result: "success"
+        correlation_id:
+          type: string
+          example: "req-xyz789"
+          description: Optional correlation ID for request tracking
+        parent_span_id:
+          type: string
+          example: "span-parent-123"
+          description: Parent span for distributed tracing hierarchy
 
     # New decorator-based schema for unified request/response
     DecoratorAgentRequest:
