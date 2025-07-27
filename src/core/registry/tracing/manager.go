@@ -380,3 +380,12 @@ func DefaultTracingConfig() *TracingConfig {
 func LoadTracingConfigFromEnv() *TracingConfig {
 	return DefaultTracingConfig()
 }
+
+// GetRedisURLFromEnv returns the Redis URL from environment variables
+func GetRedisURLFromEnv() string {
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
+	return redisURL
+}
