@@ -105,7 +105,7 @@ data:
     tracing:
       enabled: ${MCP_MESH_TRACING_ENABLED}
       provider: "opentelemetry"
-      endpoint: "http://jaeger-collector:14268/api/traces"
+      endpoint: "http://tempo:4317"
       sample_rate: 0.1
 
     # Metrics configuration
@@ -121,30 +121,37 @@ data:
   # Complete registry URL (primary variable used by runtime)
   MCP_MESH_REGISTRY_URL: "http://mcp-mesh-registry:8000"
 
-  # Environment defaults (can be overridden)
-  env.properties: |
-    # Default environment variables - matches Docker setup
-    MCP_MESH_HTTP_ENABLED=true
-    MCP_MESH_HTTP_PORT=8080
-    MCP_MESH_LOG_LEVEL=DEBUG
-    MCP_MESH_DEBUG_MODE=true
-    MCP_MESH_ENABLED=true
-    MCP_MESH_AUTO_RUN=true
-    MCP_MESH_AUTO_RUN_INTERVAL=5
-    MCP_MESH_HEALTH_INTERVAL=5
-    MCP_MESH_DYNAMIC_UPDATES=true
-    MCP_MESH_UPDATE_STRATEGY=immediate
-    MCP_MESH_NAMESPACE=default
-    HOST=0.0.0.0
+  # Environment variables - direct key-value pairs for envFrom
+  MCP_MESH_HTTP_ENABLED: "true"
+  MCP_MESH_HTTP_PORT: "8080"
+  MCP_MESH_LOG_LEVEL: "DEBUG"
+  MCP_MESH_DEBUG_MODE: "true"
+  MCP_MESH_ENABLED: "true"
+  MCP_MESH_AUTO_RUN: "true"
+  MCP_MESH_AUTO_RUN_INTERVAL: "5"
+  MCP_MESH_HEALTH_INTERVAL: "5"
+  MCP_MESH_DYNAMIC_UPDATES: "true"
+  MCP_MESH_UPDATE_STRATEGY: "immediate"
+  MCP_MESH_NAMESPACE: "default"
+  HOST: "0.0.0.0"
 
-    # Python runtime
-    PYTHONUNBUFFERED=1
-    PYTHONPATH=/app/lib:/app/agents
+  # Python runtime
+  PYTHONUNBUFFERED: "1"
+  PYTHONPATH: "/app/lib:/app/agents"
 
-    # Performance tuning
-    UVICORN_WORKERS=1
-    UVICORN_LOOP=auto
-    UVICORN_LIFESPAN=on
+  # Performance tuning
+  UVICORN_WORKERS: "1"
+  UVICORN_LOOP: "auto"
+  UVICORN_LIFESPAN: "on"
+
+  # Observability configuration - matches Docker setup
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+  TELEMETRY_ENDPOINT: "tempo:4317"
+  MCP_MESH_TRACING_ENABLED: "true"
+  MCP_MESH_METRICS_ENABLED: "true"
+
+  # Redis connection for tracing and session storage
+  REDIS_URL: "redis://mcp-mesh-redis:6379"
 
   # Decorator metadata template
   decorator-metadata.json: |

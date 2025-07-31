@@ -91,9 +91,9 @@ registry:
 # Mesh configuration
 mesh:
   enabled: true
-  debug: false
-  logLevel: "INFO"
-  tracingEnabled: false
+  debug: true
+  logLevel: "DEBUG"
+  tracingEnabled: true
   metricsEnabled: true
 
 # Agent-specific configuration
@@ -157,6 +157,25 @@ agent:
     packages: []
     # Example:
     # - numpy==1.24.0
+
+  # Observability configuration - matches k8s examples
+  observability:
+    distributedTracing:
+      enabled: true
+      redisUrl: "redis://mcp-mesh-redis:6379"
+    telemetryEndpoint: "tempo:4317"
+    tracing:
+      enabled: true
+    metrics:
+      enabled: true
+
+  # Additional environment variables for tracing (matches k8s examples)
+  environment:
+    MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+    REDIS_URL: "redis://mcp-mesh-redis:6379"
+    TELEMETRY_ENDPOINT: "tempo:4317"
+    MCP_MESH_TRACING_ENABLED: "true"
+    MCP_MESH_METRICS_ENABLED: "true"
     # - pandas>=1.5.0
 
     # Environment variables for Python

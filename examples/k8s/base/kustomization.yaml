@@ -4,12 +4,20 @@ kind: Kustomization
 namespace: mcp-mesh
 
 resources:
+  # Namespace and CRDs first
   - namespace.yaml
   - crds/mcpagent-crd.yaml
-  # PostgreSQL database
+
+  # Foundation services - PostgreSQL, Redis, Tempo (registry dependencies)
   - postgres/postgres-statefulset.yaml
   - postgres/postgres-service.yaml
-  # Registry
+  - redis/redis-deployment.yaml
+  - observability/tempo/configmap.yaml
+  - observability/tempo/pvc.yaml
+  - observability/tempo/deployment.yaml
+  - observability/tempo/service.yaml
+
+  # Registry (depends on PostgreSQL, Redis, Tempo)
   - registry/configmap.yaml
   - registry/secret.yaml
   - registry/serviceaccount.yaml
@@ -17,9 +25,14 @@ resources:
   - registry/service.yaml
   - registry/deployment.yaml
   - registry/backup-cronjob.yaml
-  # Redis for session storage (Phase 6+)
-  - redis/redis-deployment.yaml
-  # Agents
+
+  # Observability - Grafana (depends on registry for metrics)
+  - observability/grafana/configmap.yaml
+  - observability/grafana/pvc.yaml
+  - observability/grafana/deployment.yaml
+  - observability/grafana/service.yaml
+
+  # Agents (depend on registry for discovery)
   - agents/configmap.yaml
   - agents/agent-code-configmap.yaml
   - agents/secret.yaml
@@ -28,7 +41,8 @@ resources:
   - agents/fastmcp-agent-deployment.yaml
   - agents/enhanced-fastmcp-agent-deployment.yaml
   - agents/dependent-agent-deployment.yaml
-  # Ingress
+
+  # Ingress (last, depends on all services)
   - ingress-hosts.yaml
   - ingress-path.yaml
 

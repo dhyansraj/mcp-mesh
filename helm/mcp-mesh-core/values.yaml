@@ -1,5 +1,5 @@
 # MCP Mesh Core Infrastructure Configuration
-# This umbrella chart deploys the core components: Registry, PostgreSQL, and Redis
+# This umbrella chart deploys the core components: Registry, PostgreSQL, Redis, and Observability
 
 # Global configuration
 global:
@@ -14,6 +14,13 @@ redis:
   enabled: true
 
 registry:
+  enabled: true
+
+# Observability components
+grafana:
+  enabled: true
+
+tempo:
   enabled: true
 
 # PostgreSQL configuration
@@ -81,6 +88,41 @@ mcp-mesh-registry:
       host: "mcp-core-mcp-mesh-redis.mcp-mesh.svc.cluster.local" # Full DNS name for reliable resolution
       port: 6379
 
+    # Observability configuration - matches k8s examples
+    observability:
+      distributedTracing:
+        enabled: true
+        redisUrl: "redis://mcp-core-mcp-mesh-redis.mcp-mesh.svc.cluster.local:6379"
+        exporterType: "otlp"
+        telemetryProtocol: "grpc"
+        batchSize: "100"
+        timeout: "5m"
+        prettyOutput: "false"
+        enableStats: "true"
+        streamName: "mesh:trace"
+        consumerGroup: "mcp-mesh-registry-processors"
+      telemetryEndpoint: "mcp-core-mcp-mesh-tempo.mcp-mesh.svc.cluster.local:4317"
+
+    # Additional environment variables for tracing (matches k8s examples)
+    environment:
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+      TRACE_EXPORTER_TYPE: "otlp"
+      TELEMETRY_PROTOCOL: "grpc"
+      TRACE_BATCH_SIZE: "100"
+      TRACE_TIMEOUT: "5m"
+      TRACE_PRETTY_OUTPUT: "false"
+      TRACE_ENABLE_STATS: "true"
+      STREAM_NAME: "mesh:trace"
+      CONSUMER_GROUP: "mcp-mesh-registry-processors"
+      MCP_MESH_TRACE_DEBUG: "true"
+      ENABLE_RESPONSE_CACHE: "true"
+      ENABLE_CORS: "true"
+      ENABLE_METRICS: "true"
+      ENABLE_PROMETHEUS: "true"
+      ENABLE_EVENTS: "true"
+      ACCESS_LOG: "true"
+      CACHE_TTL: "30"
+
     # Health check configuration
     healthCheck:
       enabled: true
@@ -119,6 +161,57 @@ mcp-mesh-registry:
           - path: /
             pathType: Prefix
     tls: []
+
+# Grafana configuration
+mcp-mesh-grafana:
+  grafana:
+    config:
+      adminPassword: "admin"
+      allowSignUp: false
+      installPlugins: "grafana-piechart-panel"
+
+    datasources:
+      tempo:
+        enabled: true
+        url: "http://mcp-core-mcp-mesh-tempo.mcp-mesh.svc.cluster.local:3200"
+      prometheus:
+        enabled: true
+        url: "http://prometheus:9090"
+
+    persistence:
+      enabled: true
+      size: 2Gi
+
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+# Tempo configuration
+mcp-mesh-tempo:
+  tempo:
+    config:
+      metricsGenerator:
+        enabled: true
+        prometheusUrl: "http://prometheus:9090/api/v1/write"
+
+      retention: "1h"
+      blockDuration: "5m"
+
+    persistence:
+      enabled: true
+      size: 5Gi
+
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
 
 # Namespace creation
 namespaceCreate: true

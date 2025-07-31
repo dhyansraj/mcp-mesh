@@ -1,0 +1,75 @@
+{{- if .Values.tempo.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-mesh-tempo.fullname" . }}
+  labels:
+    {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.tempo.securityContext | nindent 8 }}
+      containers:
+      - name: tempo
+        image: "{{ .Values.tempo.image.repository }}:{{ .Values.tempo.image.tag }}"
+        imagePullPolicy: {{ .Values.tempo.image.pullPolicy }}
+        args:
+          - -config.file=/etc/tempo.yaml
+        ports:
+        - name: http
+          containerPort: {{ .Values.tempo.service.ports.http }}
+          protocol: TCP
+        - name: otlp-grpc
+          containerPort: {{ .Values.tempo.service.ports.otlpGrpc }}
+          protocol: TCP
+        - name: otlp-http
+          containerPort: {{ .Values.tempo.service.ports.otlpHttp }}
+          protocol: TCP
+        - name: grpc
+          containerPort: {{ .Values.tempo.service.ports.grpc }}
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /etc/tempo.yaml
+          subPath: tempo.yaml
+          readOnly: true
+        {{- if .Values.tempo.persistence.enabled }}
+        - name: storage
+          mountPath: /var/tempo
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.tempo.resources | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "mcp-mesh-tempo.fullname" . }}-config
+      {{- if .Values.tempo.persistence.enabled }}
+      - name: storage
+        persistentVolumeClaim:
+          claimName: {{ include "mcp-mesh-tempo.fullname" . }}-pvc
+      {{- end }}
+{{- end }}

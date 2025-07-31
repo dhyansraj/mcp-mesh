@@ -1,0 +1,91 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-mesh-grafana.fullname" . }}
+  labels:
+    {{- include "mcp-mesh-grafana.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.grafana.securityContext | nindent 8 }}
+      containers:
+      - name: grafana
+        image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+        imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: {{ .Values.grafana.config.adminPassword | quote }}
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: {{ .Values.grafana.config.allowSignUp | quote }}
+        {{- if .Values.grafana.config.installPlugins }}
+        - name: GF_INSTALL_PLUGINS
+          value: {{ .Values.grafana.config.installPlugins | quote }}
+        {{- end }}
+        - name: GF_NEWS_NEWS_FEED_ENABLED
+          value: "false"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/grafana/grafana.ini
+          subPath: grafana.ini
+          readOnly: true
+        - name: datasources
+          mountPath: /etc/grafana/provisioning/datasources
+          readOnly: true
+        {{- if .Values.grafana.dashboards.enabled }}
+        - name: dashboards-config
+          mountPath: /etc/grafana/provisioning/dashboards
+          readOnly: true
+        {{- end }}
+        {{- if .Values.grafana.persistence.enabled }}
+        - name: storage
+          mountPath: /var/lib/grafana
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.grafana.resources | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ include "mcp-mesh-grafana.fullname" . }}-config
+      - name: datasources
+        configMap:
+          name: {{ include "mcp-mesh-grafana.fullname" . }}-datasources
+      {{- if .Values.grafana.dashboards.enabled }}
+      - name: dashboards-config
+        configMap:
+          name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboards-config
+      {{- end }}
+      {{- if .Values.grafana.persistence.enabled }}
+      - name: storage
+        persistentVolumeClaim:
+          claimName: {{ include "mcp-mesh-grafana.fullname" . }}-pvc
+      {{- end }}
+{{- end }}

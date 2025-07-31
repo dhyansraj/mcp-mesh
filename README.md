@@ -37,22 +37,26 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 ## Architecture Overview
 
 ### Traditional MCP: Complex Systems = Nightmare
-![Traditional MCP Architecture](mcp_arch.png)
+
+![Traditional MCP Architecture](images/mcp_arch.png)
 
 **❌ Building complex agentic apps with traditional MCP:**
+
 - Client handles all orchestration, networking, and state
 - Adding new services requires reconfiguring everything
 - No dynamic upgrades - must restart entire system
 - Complex boilerplate for every service interaction
 
 ### MCP Mesh: Complex Systems = Simple Code
-![MCP Mesh Architecture](mcp-mesh_arch.png)
+
+![MCP Mesh Architecture](images/mcp-mesh_arch.png)
 
 **✅ MCP Mesh handles the complexity so you don't have to:**
+
 - **Zero Boilerplate**: Just add `@mesh.tool()` - networking handled automatically
 - **Dynamic Everything**: Add/remove/upgrade services without touching other code
 - **Complex Apps Made Simple**: Financial services example shows 6+ interconnected agents
-- **Production Ready**: Built-in resilience, health monitoring, and scaling
+- **Production Ready**: Built-in resilience, distributed observability, and scaling
 
 **The Magic**: Write simple Python functions, get enterprise-grade distributed systems.
 
@@ -488,15 +492,15 @@ We welcome contributions from the community! MCP Mesh is designed to be a collab
 - ✅ Python runtime with decorator-based agent development
 - ✅ Local development environment
 - ✅ Docker Compose deployment
-- ✅ Basic Kubernetes deployment
+- ✅ Kubernetes and Helm charts deployments
 - ✅ MCP protocol compatibility
+- ✅ Enhanced monitoring and observability
+- ✅ Performance optimizations and caching
 
 ### Upcoming Features
 
-- 🔄 Enhanced monitoring and observability
 - 🔄 Multi-cluster registry federation
 - 🔄 Advanced security and RBAC
-- 🔄 Performance optimizations and caching
 - 🔄 Integration with service mesh (Istio/Linkerd)
 - 🔄 Operator for automated Kubernetes deployment
 

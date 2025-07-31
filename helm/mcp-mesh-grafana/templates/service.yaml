@@ -1,0 +1,17 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-mesh-grafana.fullname" . }}
+  labels:
+    {{- include "mcp-mesh-grafana.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.grafana.service.type }}
+  ports:
+  - port: {{ .Values.grafana.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 4 }}
+{{- end }}

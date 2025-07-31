@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mcp-mesh-core
-description: MCP Mesh Core Infrastructure - Registry, PostgreSQL, and Redis
+description: MCP Mesh Core Infrastructure - Registry, PostgreSQL, Redis, and Observability
 type: application
 version: 0.3.0
 appVersion: "0.3.0"
@@ -12,6 +12,9 @@ keywords:
   - registry
   - postgres
   - redis
+  - observability
+  - grafana
+  - tempo
 home: https://github.com/dhyansraj/mcp-mesh
 sources:
   - https://github.com/dhyansraj/mcp-mesh
@@ -36,3 +39,11 @@ dependencies:
     version: "0.3.0"
     repository: "file://../mcp-mesh-registry"
     condition: registry.enabled
+  - name: mcp-mesh-grafana
+    version: "0.3.0"
+    repository: "file://../mcp-mesh-grafana"
+    condition: grafana.enabled
+  - name: mcp-mesh-tempo
+    version: "0.3.0"
+    repository: "file://../mcp-mesh-tempo"
+    condition: tempo.enabled

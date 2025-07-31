@@ -41,3 +41,9 @@ data:
   UVICORN_WORKERS: "1"
   UVICORN_LOOP: "auto"
   UVICORN_LIFESPAN: "on"
+
+  # Observability configuration - matches Docker setup
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.agent.observability.distributedTracing.enabled | default true | quote }}
+  TELEMETRY_ENDPOINT: {{ .Values.agent.observability.telemetryEndpoint | default "tempo:4317" | quote }}
+  MCP_MESH_TRACING_ENABLED: {{ .Values.agent.observability.tracing.enabled | default true | quote }}
+  MCP_MESH_METRICS_ENABLED: {{ .Values.agent.observability.metrics.enabled | default true | quote }}

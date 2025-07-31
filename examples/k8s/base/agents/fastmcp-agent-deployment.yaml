@@ -24,8 +24,8 @@ spec:
         fsGroup: 65534
       containers:
         - name: fastmcp-agent
-          image: mcpmesh/python-runtime:0.3
-          imagePullPolicy: IfNotPresent
+          image: mcp-mesh/python-runtime:latest
+          imagePullPolicy: Never
           command: ["python", "/app/agent.py"]
           ports:
             - name: http

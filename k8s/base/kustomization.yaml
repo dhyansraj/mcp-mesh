@@ -22,6 +22,15 @@ resources:
   # Agents - base configuration only, no specific deployments
   - agents/configmap.yaml
   - agents/secret.yaml
+  # Observability
+  - observability/grafana/configmap.yaml
+  - observability/grafana/pvc.yaml
+  - observability/grafana/deployment.yaml
+  - observability/grafana/service.yaml
+  - observability/tempo/configmap.yaml
+  - observability/tempo/pvc.yaml
+  - observability/tempo/deployment.yaml
+  - observability/tempo/service.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh
