@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v0.3.0)"
+        description: "Version (e.g., v0.4.0)"
         required: true
-        default: "v0.3.0"
+        default: "v0.4.0"
       environment:
         description: "Environment"
         type: choice
@@ -133,7 +133,7 @@ jobs:
           # For install script in Dockerfiles, we need the v prefix
           VERSION_WITH_V="v${VERSION}"
 
-          # Create semantic version tags (e.g., 0.3.0 -> 0.3.0, 0.3, 0)
+          # Create semantic version tags (e.g., 0.4.0 -> 0.4.0, 0.4, 0)
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f1-2)
@@ -462,10 +462,10 @@ jobs:
             • [Docker Images](https://hub.docker.com/u/mcpmesh)
 
             🎉 **What's New:**
-            • Enhanced proxy system with kwargs configuration
-            • Redis-backed session management and stickiness
-            • Advanced agent types (McpMeshAgent vs McpAgent)
-            • Streaming support with call_tool_streaming()
-            • Fast heartbeat optimization (sub-20s detection)
-            • Kubernetes ingress support
+            • Complete Observability Stack - Grafana dashboards, Tempo tracing, Redis streams
+            • Real-Time Trace Streaming - Live workflow monitoring with SSE API
+            • Enhanced Kubernetes Support - Comprehensive observability integration
+            • Distributed Tracing System - OTLP export with cross-agent context propagation
+            • Helm Chart Ecosystem - Full observability stack deployment
+            • Multi-Agent Dependency Injection - Advanced data processor examples
           thread_name: "Release ${{ steps.version.outputs.version }}"

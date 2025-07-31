@@ -1,5 +1,50 @@
 # MCP Mesh Release Notes
 
+## v0.4.0 (2025-07-31)
+
+### 🔍 Observability & Monitoring
+
+**Complete Observability Stack**
+
+- Full Grafana + Tempo integration for Kubernetes and Helm deployments
+- Pre-configured dashboards with MCP Mesh branding and metrics
+- Production-ready monitoring with persistent storage support
+
+**Real-Time Trace Streaming**
+
+- Live trace streaming API (`/traces/{trace_id}/stream`) with Server-Sent Events
+- Watch multi-agent workflows execute in real-time through web dashboards
+- Redis consumer groups for scalable trace data processing
+
+**Distributed Tracing System**
+
+- Redis streams integration for trace data storage (`mesh:trace` stream)
+- OTLP export with direct protobuf generation for Tempo/Jaeger compatibility
+- Cross-agent context propagation maintaining parent-child span relationships
+- Complete observability directory structure with organized assets
+
+### 🏗️ Architecture & Deployment
+
+**Enhanced Kubernetes Support**
+
+- New observability components in `k8s/base/observability/` and `examples/k8s/base/observability/`
+- Distributed tracing environment variables for all agent deployments
+- Complete Helm chart ecosystem with dedicated observability charts
+
+**Multi-Agent Dependency Injection**
+
+- Complex data processor example with modular tools and utilities
+- Advanced agent architecture with parsing, transformation, analysis capabilities
+- Comprehensive Docker containerization and development workflows
+
+### ⚙️ Infrastructure Improvements
+
+**Helm Chart Enhancements**
+
+- New `mcp-mesh-grafana` and `mcp-mesh-tempo` charts
+- Enhanced agent code deployment methods with improved configuration
+- Comprehensive chart ecosystem for full-stack deployments
+
 ## v0.3.0 (2025-07-04)
 
 ### 🚀 Major Features

@@ -24,8 +24,8 @@ spec:
         fsGroup: 0
       containers:
         - name: hello-world-agent
-          image: mcp-mesh/python-runtime:latest
-          imagePullPolicy: Never
+          image: mcpmesh/python-runtime:0.4
+          imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:
             - name: http

@@ -1,7 +1,7 @@
 # Docker Compose configuration for Data Processor Agent
 # Demonstrates local development and testing with multi-file agents
 
-version: '3.8'
+version: "3.8"
 
 services:
   # Data Processor Agent
@@ -18,14 +18,14 @@ services:
       AGENT_NAME: data-processor
       HTTP_PORT: 9090
       LOG_LEVEL: INFO
-      
+
       # Feature flags
       CACHE_ENABLED: "true"
       METRICS_ENABLED: "true"
-      
+
       # Storage configuration
       TEMP_DIR: /app/cache
-      
+
       # Dependency configuration (if using external services)
       # WAIT_FOR_REGISTRY: http://mcp-registry:8000
       # WAIT_FOR_DATABASE: postgres:5432
@@ -49,7 +49,7 @@ services:
   # Optional: MCP Registry for dependency resolution
   # Uncomment if you want to test with full MCP Mesh infrastructure
   # mcp-registry:
-  #   image: mcpmesh/registry:0.3
+  #   image: mcpmesh/registry:0.4
   #   container_name: mcp-registry
   #   ports:
   #     - "8000:8000"
