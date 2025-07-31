@@ -69,3 +69,12 @@ spec:
                 name: mcp-mesh-dependent-agent
                 port:
                   number: 9093
+
+          # Grafana Dashboard
+          - path: /grafana(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000

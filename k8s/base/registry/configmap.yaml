@@ -24,3 +24,7 @@ data:
   DB_MAX_OPEN_CONNECTIONS: "25"
   DB_MAX_IDLE_CONNECTIONS: "5"
   DB_CONN_MAX_LIFETIME: "300"
+
+  # Observability configuration - matches Docker setup
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+  TELEMETRY_ENDPOINT: "tempo:4317"

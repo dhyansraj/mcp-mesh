@@ -1,0 +1,16 @@
+apiVersion: v2
+name: mcp-mesh-tempo
+description: Tempo distributed tracing component for MCP Mesh
+type: application
+version: 0.3.0
+appVersion: "2.8.1"
+keywords:
+  - tempo
+  - tracing
+  - observability
+  - mcp-mesh
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: MCP Mesh Team

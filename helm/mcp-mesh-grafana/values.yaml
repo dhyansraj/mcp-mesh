@@ -1,0 +1,51 @@
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana
+    tag: "11.4.0"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  config:
+    adminPassword: "admin"
+    allowSignUp: false
+    installPlugins: "grafana-piechart-panel"
+
+  datasources:
+    tempo:
+      enabled: true
+      url: 'http://{{ include "mcp-mesh-core.fullname" . }}-tempo:3200'
+    prometheus:
+      enabled: true
+      url: "http://prometheus:9090"
+
+  # Dashboard configuration references observability/grafana/dashboards/
+  dashboards:
+    enabled: true
+    # References to the centralized dashboard configs
+    configMaps:
+      - mcp-mesh-dashboards
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    fsGroup: 472

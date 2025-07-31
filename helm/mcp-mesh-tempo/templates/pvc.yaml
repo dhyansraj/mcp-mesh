@@ -1,0 +1,23 @@
+{{- if and .Values.tempo.enabled .Values.tempo.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mcp-mesh-tempo.fullname" . }}-pvc
+  labels:
+    {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- range .Values.tempo.persistence.accessModes }}
+    - {{ . | quote }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.tempo.persistence.size | quote }}
+  {{- if .Values.tempo.persistence.storageClass }}
+  {{- if (eq "-" .Values.tempo.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.tempo.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}

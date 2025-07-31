@@ -1,0 +1,29 @@
+{{- if .Values.tempo.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-mesh-tempo.fullname" . }}
+  labels:
+    {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.tempo.service.type }}
+  ports:
+  - port: {{ .Values.tempo.service.ports.http }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  - port: {{ .Values.tempo.service.ports.otlpGrpc }}
+    targetPort: otlp-grpc
+    protocol: TCP
+    name: otlp-grpc
+  - port: {{ .Values.tempo.service.ports.otlpHttp }}
+    targetPort: otlp-http
+    protocol: TCP
+    name: otlp-http
+  - port: {{ .Values.tempo.service.ports.grpc }}
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
+  selector:
+    {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 4 }}
+{{- end }}

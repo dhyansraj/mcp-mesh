@@ -1,0 +1,54 @@
+tempo:
+  enabled: true
+  image:
+    repository: grafana/tempo
+    tag: "2.8.1"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  service:
+    type: ClusterIP
+    ports:
+      http: 3200
+      otlpGrpc: 4317
+      otlpHttp: 4318
+      grpc: 9095
+
+  config:
+    # References observability/tempo/tempo.yaml configuration
+    server:
+      httpListenPort: 3200
+      grpcListenPort: 9095
+
+    storage:
+      backend: local
+      walPath: /var/tempo/wal
+      blocksPath: /var/tempo/blocks
+
+    metricsGenerator:
+      enabled: true
+      prometheusUrl: "http://prometheus:9090/api/v1/write"
+
+    # Retention settings
+    retention: "1h"
+    blockDuration: "5m"
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    fsGroup: 10001

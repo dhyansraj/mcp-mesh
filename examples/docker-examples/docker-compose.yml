@@ -337,7 +337,7 @@ services:
     container_name: mcp-mesh-tempo
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
-      - ../../tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - ../../observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
       - tempo_data:/var/tempo
     ports:
       - "3200:3200" # Tempo HTTP
@@ -380,12 +380,12 @@ services:
       - GF_NEWS_NEWS_FEED_ENABLED=false
     volumes:
       # Custom Grafana configuration
-      - ../../grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ../../observability/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
       # Configuration and provisioning
-      - ../../grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       # Themes and static files
-      - ../../grafana/themes:/usr/share/grafana/public/css/themes:ro
+      - ../../observability/grafana/themes:/usr/share/grafana/public/css/themes:ro
       # Persistent data
       - grafana_data:/var/lib/grafana
     ports:

@@ -15,7 +15,7 @@ data:
   HOST: "0.0.0.0"
   PORT: "8000"
 
-  # Logging configuration - matches Docker setup
+  # Logging configuration - enhanced for k8s debugging
   MCP_MESH_LOG_LEVEL: "DEBUG"
   MCP_MESH_DEBUG_MODE: "true"
 
@@ -32,3 +32,36 @@ data:
 
   # Registry identification
   REGISTRY_NAME: "mcp-mesh-registry"
+
+  # Observability configuration - matches Docker setup
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+  TRACE_EXPORTER_TYPE: "otlp"
+  TELEMETRY_ENDPOINT: "tempo:4317"
+  TELEMETRY_PROTOCOL: "grpc"
+
+  # Redis connection for tracing and session storage
+  REDIS_URL: "redis://mcp-mesh-redis:6379"
+
+  # Additional tracing configuration
+  TRACE_BATCH_SIZE: "100"
+  TRACE_TIMEOUT: "5m"
+  TRACE_PRETTY_OUTPUT: "false"
+  TRACE_ENABLE_STATS: "true"
+
+  # Consumer configuration
+  STREAM_NAME: "mesh:trace"
+  CONSUMER_GROUP: "mcp-mesh-registry-processors"
+
+  # Enhanced debugging and additional configuration
+  MCP_MESH_TRACE_DEBUG: "true"
+
+  # Additional environment variables that work in docker compose
+  ENABLE_RESPONSE_CACHE: "true"
+  ENABLE_CORS: "true"
+  ENABLE_METRICS: "true"
+  ENABLE_PROMETHEUS: "true"
+  ENABLE_EVENTS: "true"
+  ACCESS_LOG: "true"
+
+  # Critical tracing configuration
+  CACHE_TTL: "30"

@@ -1,0 +1,64 @@
+{{- if .Values.tempo.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-mesh-tempo.fullname" . }}-config
+  labels:
+    {{- include "mcp-mesh-tempo.labels" . | nindent 4 }}
+data:
+  tempo.yaml: |
+    # Tempo configuration
+    # References observability/tempo/tempo.yaml for base configuration
+    server:
+      http_listen_port: {{ .Values.tempo.config.server.httpListenPort }}
+      grpc_listen_port: {{ .Values.tempo.config.server.grpcListenPort }}
+
+    query_frontend:
+      search:
+        duration_slo: 5s
+        throughput_bytes_slo: 1.073741824e+09
+      trace_by_id:
+        duration_slo: 5s
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:{{ .Values.tempo.service.ports.otlpGrpc }}
+            http:
+              endpoint: 0.0.0.0:{{ .Values.tempo.service.ports.otlpHttp }}
+
+    ingester:
+      max_block_duration: {{ .Values.tempo.config.blockDuration }}
+
+    compactor:
+      compaction:
+        block_retention: {{ .Values.tempo.config.retention }}
+
+    {{- if .Values.tempo.config.metricsGenerator.enabled }}
+    metrics_generator:
+      registry:
+        external_labels:
+          source: tempo
+          cluster: mcp-mesh
+      storage:
+        path: {{ .Values.tempo.config.storage.walPath }}/generator
+        remote_write:
+          - url: {{ .Values.tempo.config.metricsGenerator.prometheusUrl }}
+            send_exemplars: true
+    {{- end }}
+
+    storage:
+      trace:
+        backend: {{ .Values.tempo.config.storage.backend }}
+        wal:
+          path: {{ .Values.tempo.config.storage.walPath }}
+        local:
+          path: {{ .Values.tempo.config.storage.blocksPath }}
+
+    overrides:
+      defaults:
+        metrics_generator:
+          processors: [service-graphs, span-metrics]
+{{- end }}

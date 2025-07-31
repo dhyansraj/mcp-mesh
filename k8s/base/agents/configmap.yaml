@@ -105,7 +105,7 @@ data:
     tracing:
       enabled: ${MCP_MESH_TRACING_ENABLED}
       provider: "opentelemetry"
-      endpoint: "http://jaeger-collector:14268/api/traces"
+      endpoint: "http://tempo:4317"
       sample_rate: 0.1
 
     # Metrics configuration
@@ -140,6 +140,12 @@ data:
     # Python runtime
     PYTHONUNBUFFERED=1
     PYTHONPATH=/app/lib:/app/agents
+
+    # Observability configuration - matches Docker setup
+    MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+    TELEMETRY_ENDPOINT=tempo:4317
+    MCP_MESH_TRACING_ENABLED=true
+    MCP_MESH_METRICS_ENABLED=true
 
     # Performance tuning
     UVICORN_WORKERS=1
