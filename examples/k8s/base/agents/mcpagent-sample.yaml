@@ -16,8 +16,8 @@ spec:
 
   # Deployment configuration
   replicas: 2
-  image: mcp-mesh/python-runtime:latest
-  imagePullPolicy: Never
+  image: mcpmesh/python-runtime:0.4
+  imagePullPolicy: IfNotPresent
 
   # Registry configuration
   registryURL: http://mcp-mesh-registry:8080

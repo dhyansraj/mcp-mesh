@@ -22,10 +22,12 @@ MCP Mesh makes this vision reality by scaling the Model Context Protocol (MCP) t
 - **Resilient Architecture**: Registry as facilitator, agents communicate directly with fault tolerance and self-healing
 - **Automatic Discovery**: Agents find each other without configuration
 - **Near-Complete MCP Support**: Comprehensive MCP protocol implementation for distributed networks
+- **Complete Observability Stack**: Grafana dashboards, Tempo tracing, and real-time trace streaming with Redis
+- **Distributed Tracing**: OTLP export with cross-agent context propagation for multi-agent workflow monitoring
 - **Advanced Session Management**: Redis-backed session stickiness with automatic routing across pod replicas
 - **Enhanced Proxy System**: Kwargs-driven auto-configuration for timeouts, retries, streaming, and authentication
 - **Smart Dependencies**: Version constraints, tags, and graceful degradation
-- **Kubernetes Native**: Production-ready with scaling, health checks, and observability
+- **Kubernetes Native**: Production-ready with scaling, health checks, and comprehensive observability
 
 ### **Core Design Principles**
 
@@ -169,7 +171,7 @@ The implementation maintains MCP protocol compatibility while adding distributed
 
 ```bash
 # Install with semantic versioning (allows patches, not minor versions)
-pip install "mcp-mesh>=0.3.0,<0.4.0"
+pip install "mcp-mesh>=0.4.0,<0.5.0"
 ```
 
 ### CLI Tools
@@ -182,14 +184,14 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 ### Docker Images
 
 ```bash
-# Registry service (gets latest patches for 0.3.x)
-docker pull mcpmesh/registry:0.3
+# Registry service (gets latest patches for 0.4.x)
+docker pull mcpmesh/registry:0.4
 
-# Python runtime for agents (gets latest patches for 0.3.x)
-docker pull mcpmesh/python-runtime:0.3
+# Python runtime for agents (gets latest patches for 0.4.x)
+docker pull mcpmesh/python-runtime:0.4
 
-# CLI tools (gets latest patches for 0.3.x)
-docker pull mcpmesh/cli:0.3
+# CLI tools (gets latest patches for 0.4.x)
+docker pull mcpmesh/cli:0.4
 ```
 
 ### Quick Setup Options
@@ -197,7 +199,7 @@ docker pull mcpmesh/cli:0.3
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.3.0,<0.4.0"`             |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.4.0,<0.5.0"`             |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
@@ -299,22 +301,22 @@ The technology exists; what's needed is community coordination and trust framewo
 
 ```bash
 # Install everything with one command (requires curl and Python 3.11+)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.3
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --version v0.4
 ```
 
 ### Package Manager Installation
 
 ```bash
 # Python package from PyPI (allows patch updates)
-pip install "mcp-mesh>=0.3.0,<0.4.0"
+pip install "mcp-mesh>=0.4.0,<0.5.0"
 
 # Docker images (use minor version tag for latest patches)
-docker pull mcpmesh/registry:0.3
-docker pull mcpmesh/python-runtime:0.3
-docker pull mcpmesh/cli:0.3
+docker pull mcpmesh/registry:0.4
+docker pull mcpmesh/python-runtime:0.4
+docker pull mcpmesh/cli:0.4
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.3.0/mcp-mesh_v0.3.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.4.0/mcp-mesh_v0.4.0_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 
