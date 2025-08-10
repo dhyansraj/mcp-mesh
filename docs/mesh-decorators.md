@@ -154,9 +154,150 @@ def process_data():
     pass
 ```
 
-### Multi-Tag Matching
+### Enhanced Tag Matching with +/- Operators
 
-Use multiple tags for intelligent service selection:
+> **New in v0.4+**: Smart tag matching with preference and exclusion operators
+
+MCP Mesh supports enhanced tag matching with `+` (preferred) and `-` (excluded) operators for intelligent service selection:
+
+#### Tag Operators
+
+- **No prefix**: Required tag (must be present) - `"claude"`
+- **`+` prefix**: Preferred tag (bonus if present, no penalty if missing) - `"+opus"`
+- **`-` prefix**: Excluded tag (must NOT be present, hard failure if found) - `"-experimental"`
+
+#### Smart LLM Provider Selection
+
+```python
+# Register multiple LLM providers with different capabilities
+@app.tool()
+@mesh.tool(capability="llm_service", tags=["claude", "haiku", "fast"])
+def claude_haiku(): return "Fast Claude Haiku response"
+
+@app.tool()
+@mesh.tool(capability="llm_service", tags=["claude", "sonnet", "balanced"])
+def claude_sonnet(): return "Balanced Claude Sonnet response"
+
+@app.tool()
+@mesh.tool(capability="llm_service", tags=["claude", "opus", "premium"])
+def claude_opus(): return "Premium Claude Opus response"
+
+@app.tool()
+@mesh.tool(capability="llm_service", tags=["claude", "experimental", "beta"])
+def claude_experimental(): return "Experimental Claude features"
+
+# Smart consumer with preferences and exclusions
+@app.tool()
+@mesh.tool(
+    capability="smart_chat",
+    dependencies=[{
+        "capability": "llm_service",
+        "tags": [
+            "claude",           # Required: must have claude
+            "+opus",            # Preferred: prefer opus if available
+            "-experimental"     # Excluded: never use experimental services
+        ]
+    }]
+)
+def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
+    """
+    Smart chat that:
+    - Requires Claude models
+    - Prefers Opus quality when available
+    - Never uses experimental/unstable services
+    - Gracefully falls back to Sonnet if Opus unavailable
+    """
+    if not llm_service:
+        return "No suitable LLM service available"
+
+    return f"Response from: {llm_service()}"
+```
+
+#### Enhanced Matching Behavior
+
+```python
+# Available providers:
+# - claude-haiku: ["claude", "haiku", "fast"]
+# - claude-sonnet: ["claude", "sonnet", "balanced"]
+# - claude-opus: ["claude", "opus", "premium"]
+# - claude-experimental: ["claude", "experimental", "beta"]
+
+# Consumer preferences and results:
+"tags": ["claude", "+opus"]                    # → Selects opus (preferred)
+"tags": ["claude", "+balanced"]                # → Selects sonnet (balanced)
+"tags": ["claude", "+fast", "+haiku"]          # → Selects haiku (both preferred)
+"tags": ["claude", "-experimental"]            # → Excludes experimental, selects any other
+"tags": ["claude", "+opus", "-experimental"]   # → Prefers opus, excludes experimental
+```
+
+#### Cost Control and Safety
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="budget_analysis",
+    dependencies=[{
+        "capability": "llm_service",
+        "tags": [
+            "claude",
+            "+balanced",     # Prefer cost-effective options
+            "-premium",      # Exclude expensive premium services
+            "-experimental"  # Exclude potentially unstable services
+        ]
+    }]
+)
+def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
+    """Cost-conscious analysis that avoids premium pricing."""
+    return llm_service() if llm_service else "Budget service unavailable"
+
+@app.tool()
+@mesh.tool(
+    capability="production_service",
+    dependencies=[{
+        "capability": "database_service",
+        "tags": [
+            "postgres",
+            "+primary",      # Prefer primary database
+            "+ssd",          # Prefer SSD storage
+            "-beta",         # Never use beta versions
+            "-experimental"  # Never use experimental features
+        ]
+    }]
+)
+def production_workflow(database_service: mesh.McpMeshAgent = None):
+    """Production workflow with strict service requirements."""
+    return database_service({"query": "SELECT * FROM users"}) if database_service else None
+```
+
+#### Priority Scoring System
+
+Enhanced tag matching uses priority scoring for automatic provider ranking:
+
+- **Required tags**: 5 points each (must be present)
+- **Preferred tags**: 10 bonus points each (bonus if present)
+- **Excluded tags**: Immediate failure (provider eliminated)
+- **Highest scoring provider selected automatically**
+
+```python
+# Example scoring:
+# Provider A: ["claude", "opus", "premium"]
+# Consumer needs: ["claude", "+opus", "-experimental"]
+# Score: claude(5) + opus(10) = 15 points → HIGH PRIORITY
+
+# Provider B: ["claude", "sonnet", "balanced"]
+# Consumer needs: ["claude", "+opus", "-experimental"]
+# Score: claude(5) = 5 points → LOWER PRIORITY
+
+# Provider C: ["claude", "experimental"]
+# Consumer needs: ["claude", "+opus", "-experimental"]
+# Score: ELIMINATED (experimental is excluded)
+
+# Result: Provider A selected (highest score)
+```
+
+### Multi-Tag Matching (Legacy)
+
+Traditional exact tag matching is still supported:
 
 ```python
 # Service provider offers multiple info types
@@ -176,18 +317,18 @@ def get_system_health():
 def get_disk_info():
     return {"usage": "75%", "free": "250GB"}
 
-# Consumer uses tags to get specific info
+# Consumer uses exact tags for specific info
 @app.tool()
 @mesh.tool(
     capability="reporter",
     dependencies=[
         {
             "capability": "info",
-            "tags": ["system", "general"]  # Gets health info
+            "tags": ["system", "general"]  # Exact match: gets health info
         },
         {
             "capability": "info",
-            "tags": ["system", "disk"]     # Gets disk info
+            "tags": ["system", "disk"]     # Exact match: gets disk info
         }
     ]
 )
