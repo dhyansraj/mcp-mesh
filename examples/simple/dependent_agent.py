@@ -17,7 +17,15 @@ app = FastMCP("Dependent Service")
 
 
 @app.tool()
-@mesh.tool(capability="report_service", dependencies=["time_service"])
+@mesh.tool(
+    capability="report_service",
+    dependencies=[
+        {
+            "capability": "time_service",
+            "tags": ["system", "+time"],  # tag time is optional (plus to have)
+        }
+    ],
+)
 def generate_report(
     title: str, content: str = "Sample content", time_service: mesh.McpMeshAgent = None
 ) -> dict:
@@ -78,11 +86,13 @@ def analyze_data(
 
 
 @app.tool()
-@mesh.tool(capability="comprehensive_report_service", dependencies=["system_info_service"])
+@mesh.tool(
+    capability="comprehensive_report_service", dependencies=["system_info_service"]
+)
 def generate_comprehensive_report(
-    report_title: str, 
+    report_title: str,
     include_system_data: bool = True,
-    system_info_service: mesh.McpMeshAgent = None
+    system_info_service: mesh.McpMeshAgent = None,
 ) -> dict:
     """Generate a comprehensive report with system information from FastMCP service."""
     # Get enriched system info from FastMCP service (which calls system agent)
@@ -93,7 +103,7 @@ def generate_comprehensive_report(
             system_data = {"error": f"Failed to get system data: {e}"}
     else:
         system_data = {"note": "System data not included"}
-    
+
     # Create comprehensive report
     comprehensive_report = {
         "title": report_title,
@@ -106,16 +116,20 @@ def generate_comprehensive_report(
             "system_details": system_data.get("system_data", {}),
             "service_chain": [
                 "dependent-service (this service)",
-                "fastmcp-service (enriches data)", 
-                "system-agent (provides base system info)"
-            ]
+                "fastmcp-service (enriches data)",
+                "system-agent (provides base system info)",
+            ],
         },
         "metadata": {
             "dependency_chain_length": 3,
-            "services_involved": ["dependent-service", "fastmcp-service", "system-agent"]
-        }
+            "services_involved": [
+                "dependent-service",
+                "fastmcp-service",
+                "system-agent",
+            ],
+        },
     }
-    
+
     return comprehensive_report
 
 

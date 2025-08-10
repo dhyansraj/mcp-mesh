@@ -1049,9 +1049,9 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		s.logger.Info("After version filtering: %d candidates remain", len(candidates))
 	}
 
-	// Filter by tags if specified (ALL tags must match)
+	// Filter by tags using enhanced tag matching with priority scoring
 	if len(dep.Tags) > 0 && len(candidates) > 0 {
-		filtered := make([]struct {
+		type candidateWithScore struct {
 			AgentID      string
 			FunctionName string
 			Capability   string
@@ -1060,14 +1060,70 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			HttpHost     string
 			HttpPort     int
 			UpdatedAt    time.Time
-		}, 0)
+			Score        int // Priority score from enhanced tag matching
+		}
+
+		scoredCandidates := make([]candidateWithScore, 0)
 
 		for _, c := range candidates {
-			if hasAllTags(c.Tags, dep.Tags) {
-				filtered = append(filtered, c)
+			matches, score := matchesEnhancedTags(c.Tags, dep.Tags)
+			if matches {
+				scoredCandidates = append(scoredCandidates, candidateWithScore{
+					AgentID:      c.AgentID,
+					FunctionName: c.FunctionName,
+					Capability:   c.Capability,
+					Version:      c.Version,
+					Tags:         c.Tags,
+					HttpHost:     c.HttpHost,
+					HttpPort:     c.HttpPort,
+					UpdatedAt:    c.UpdatedAt,
+					Score:        score,
+				})
 			}
 		}
-		candidates = filtered
+
+		// Sort by score descending (highest score = best match first)
+		for i := 0; i < len(scoredCandidates); i++ {
+			for j := i + 1; j < len(scoredCandidates); j++ {
+				if scoredCandidates[j].Score > scoredCandidates[i].Score {
+					scoredCandidates[i], scoredCandidates[j] = scoredCandidates[j], scoredCandidates[i]
+				}
+			}
+		}
+
+		// Convert back to original candidate format
+		candidates = make([]struct {
+			AgentID      string
+			FunctionName string
+			Capability   string
+			Version      string
+			Tags         []string
+			HttpHost     string
+			HttpPort     int
+			UpdatedAt    time.Time
+		}, len(scoredCandidates))
+
+		for i, sc := range scoredCandidates {
+			candidates[i] = struct {
+				AgentID      string
+				FunctionName string
+				Capability   string
+				Version      string
+				Tags         []string
+				HttpHost     string
+				HttpPort     int
+				UpdatedAt    time.Time
+			}{
+				AgentID:      sc.AgentID,
+				FunctionName: sc.FunctionName,
+				Capability:   sc.Capability,
+				Version:      sc.Version,
+				Tags:         sc.Tags,
+				HttpHost:     sc.HttpHost,
+				HttpPort:     sc.HttpPort,
+				UpdatedAt:    sc.UpdatedAt,
+			}
+		}
 	}
 
 	// Return first match (deterministic selection)
@@ -1149,6 +1205,74 @@ func hasAllTags(available, required []string) bool {
 		}
 	}
 	return true
+}
+
+// matchesEnhancedTags implements enhanced tag matching with +/- operators
+// Returns (matches, score) where:
+// - matches: true if the provider satisfies all constraints
+// - score: numeric score for ranking providers (higher = better match)
+//
+// Tag prefixes:
+// - No prefix: Required tag (must be present)
+// - "+": Preferred tag (bonus points if present, no penalty if missing)
+// - "-": Excluded tag (must NOT be present, fails if found)
+//
+// Examples:
+// - "claude" = required
+// - "+opus" = preferred (bonus if present)
+// - "-experimental" = excluded (fail if present)
+func matchesEnhancedTags(providerTags, requiredTags []string) (bool, int) {
+	score := 0
+
+	// Handle empty cases
+	if len(requiredTags) == 0 {
+		return true, 0 // No constraints = always match with zero score
+	}
+
+	// Helper function to check if a tag exists in provider tags
+	containsTag := func(tags []string, tag string) bool {
+		for _, t := range tags {
+			if t == tag {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Process each required tag constraint
+	for _, reqTag := range requiredTags {
+		if len(reqTag) == 0 {
+			continue // Skip empty tags
+		}
+
+		switch reqTag[0] {
+		case '-':
+			// Excluded tag: must NOT be present
+			excludedTag := reqTag[1:]
+			if excludedTag != "" && containsTag(providerTags, excludedTag) {
+				return false, 0 // Hard failure if excluded tag is present
+			}
+			// No score change for excluded tags (they don't add value, just filter)
+
+		case '+':
+			// Preferred tag: bonus points if present, no penalty if missing
+			preferredTag := reqTag[1:]
+			if preferredTag != "" && containsTag(providerTags, preferredTag) {
+				score += 10 // Bonus points for preferred tags
+			}
+			// No penalty if preferred tag is missing
+
+		default:
+			// Required tag: must be present
+			if containsTag(providerTags, reqTag) {
+				score += 5 // Base points for required tags
+			} else {
+				return false, 0 // Hard failure if required tag is missing
+			}
+		}
+	}
+
+	return true, score
 }
 
 // countTotalDependenciesInMetadata counts the total number of dependencies across all tools in metadata
