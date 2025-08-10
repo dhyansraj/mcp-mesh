@@ -1,5 +1,29 @@
 # MCP Mesh Release Notes
 
+## v0.4.1 (2025-08-10)
+
+### 🏷️ Enhanced Tag Matching
+
+**Smart Service Discovery**
+
+- Enhanced tag matching with `+` (preferred) and `-` (excluded) operators
+- Priority scoring system for intelligent provider selection
+- Industry-standard syntax similar to Kubernetes label selectors
+
+**Migration & Compatibility**
+
+- Complete backward compatibility with existing exact tag matching
+- Comprehensive migration guide and documentation updates
+- Test-driven development with extensive unit test coverage
+
+### 📚 Documentation
+
+- Updated mesh decorators documentation with enhanced tag examples
+- Migration guide for upgrading from exact matching to enhanced matching
+- Smart LLM provider selection patterns with cost control examples
+
+---
+
 ## v0.4.0 (2025-07-31)
 
 ### 🔍 Observability & Monitoring
