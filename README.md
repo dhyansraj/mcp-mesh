@@ -171,7 +171,7 @@ The implementation maintains MCP protocol compatibility while adding distributed
 
 ```bash
 # Install with semantic versioning (allows patches, not minor versions)
-pip install "mcp-mesh>=0.4.0,<0.5.0"
+pip install "mcp-mesh>=0.4.1,<0.5.0"
 ```
 
 ### CLI Tools
@@ -199,7 +199,7 @@ docker pull mcpmesh/cli:0.4
 | Method             | Best For                | Command                                            |
 | ------------------ | ----------------------- | -------------------------------------------------- |
 | **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.4.0,<0.5.0"`             |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.4.1,<0.5.0"`             |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
@@ -308,7 +308,7 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 
 ```bash
 # Python package from PyPI (allows patch updates)
-pip install "mcp-mesh>=0.4.0,<0.5.0"
+pip install "mcp-mesh>=0.4.1,<0.5.0"
 
 # Docker images (use minor version tag for latest patches)
 docker pull mcpmesh/registry:0.4
@@ -316,7 +316,7 @@ docker pull mcpmesh/python-runtime:0.4
 docker pull mcpmesh/cli:0.4
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.4.0/mcp-mesh_v0.4.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.4.1/mcp-mesh_v0.4.1_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 
