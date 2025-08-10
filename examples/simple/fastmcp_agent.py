@@ -44,7 +44,7 @@ Focus on delivering {depth} level analysis.
 
 # TOOLS with mesh integration
 @app.tool()
-@mesh.tool(capability="time_service", tags=["system", "time"])
+@mesh.tool(capability="time_service", tags=["system"])
 def get_current_time() -> str:
     """Get the current system time."""
     return datetime.now().isoformat()
@@ -94,17 +94,19 @@ def get_enriched_system_info(
 ) -> dict:
     """Get enriched system information by calling system agent."""
     # Get system info from system agent
-    system_info = info_service() if info_service else {"error": "system info unavailable"}
-    
+    system_info = (
+        info_service() if info_service else {"error": "system info unavailable"}
+    )
+
     # Enrich with FastMCP service information
     enriched_data = {
         "fastmcp_service_name": "FastMCP Service",
         "enriched_at": datetime.now().isoformat() if include_timestamp else None,
         "system_data": system_info,
         "enrichment_level": "detailed",
-        "processed_by": "fastmcp-service"
+        "processed_by": "fastmcp-service",
     }
-    
+
     return enriched_data
 
 
