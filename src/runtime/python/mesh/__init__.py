@@ -19,7 +19,7 @@ Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
 from . import decorators
-from .types import McpMeshAgent, McpAgent
+from .types import McpAgent, McpMeshAgent
 
 __version__ = "1.0.0"
 

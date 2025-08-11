@@ -65,7 +65,9 @@ class AsyncMCPClient:
                 response_text = response.text
 
                 # Use shared SSE parser
-                data = SSEParser.parse_sse_response(response_text, f"AsyncMCPClient.{self.endpoint}")
+                data = SSEParser.parse_sse_response(
+                    response_text, f"AsyncMCPClient.{self.endpoint}"
+                )
 
             # Check for JSON-RPC error
             if "error" in data:

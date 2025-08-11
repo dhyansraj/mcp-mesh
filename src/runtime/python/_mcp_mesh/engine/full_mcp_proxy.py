@@ -54,7 +54,6 @@ class FullMCPProxy(MCPClientProxy):
         )
         return headers
 
-
     # Phase 6: Streaming Support - THE BREAKTHROUGH METHOD!
     async def call_tool_streaming(
         self, name: str, arguments: dict = None
@@ -107,12 +106,12 @@ class FullMCPProxy(MCPClientProxy):
 
                         # Use shared SSE stream processor
                         sse_processor = SSEStreamProcessor(f"FullMCPProxy.{name}")
-                        
+
                         async for chunk_bytes in response.aiter_bytes(8192):
                             chunks = sse_processor.process_chunk(chunk_bytes)
                             for chunk in chunks:
                                 yield chunk
-                        
+
                         # Process any remaining data
                         final_chunks = sse_processor.finalize()
                         for chunk in final_chunks:
@@ -361,7 +360,9 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Streaming-specific configuration
         self.streaming_capable = self.kwargs_config.get("streaming", False)
         self.stream_timeout = self.kwargs_config.get("stream_timeout", 300)  # 5 minutes
-        self.buffer_size = self.kwargs_config.get("buffer_size", 16384)  # Increased from 4KB to 16KB for large responses
+        self.buffer_size = self.kwargs_config.get(
+            "buffer_size", 16384
+        )  # Increased from 4KB to 16KB for large responses
 
         # Session management configuration
         self.session_required = self.kwargs_config.get("session_required", False)
@@ -595,12 +596,14 @@ class EnhancedFullMCPProxy(FullMCPProxy):
 
                     # Use shared SSE stream processor
                     sse_processor = SSEStreamProcessor(f"EnhancedFullMCPProxy.{name}")
-                    
-                    async for chunk_bytes in response.aiter_bytes(max(self.buffer_size, 8192)):
+
+                    async for chunk_bytes in response.aiter_bytes(
+                        max(self.buffer_size, 8192)
+                    ):
                         chunks = sse_processor.process_chunk(chunk_bytes)
                         for chunk in chunks:
                             yield chunk
-                    
+
                     # Process any remaining data
                     final_chunks = sse_processor.finalize()
                     for chunk in final_chunks:

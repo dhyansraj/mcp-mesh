@@ -115,7 +115,9 @@ class MCPClientProxy:
                 response_data = response.read().decode("utf-8")
 
                 # Use shared SSE parser
-                data = SSEParser.parse_sse_response(response_data, f"MCPClientProxy.{self.function_name}")
+                data = SSEParser.parse_sse_response(
+                    response_data, f"MCPClientProxy.{self.function_name}"
+                )
 
             # Check for JSON-RPC error
             if "error" in data:
