@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from ..shared.sse_parser import SSEParser
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,25 +64,10 @@ class AsyncMCPClient:
 
                 response_text = response.text
 
-                # Handle Server-Sent Events format from FastMCP
-                if response_text.startswith("event:"):
-                    # Parse SSE format: extract JSON from "data:" lines
-                    json_data = None
-                    for line in response_text.split("\n"):
-                        if line.startswith("data:"):
-                            json_str = line[5:].strip()  # Remove 'data:' prefix
-                            try:
-                                json_data = json.loads(json_str)
-                                break
-                            except json.JSONDecodeError:
-                                continue
-
-                    if json_data is None:
-                        raise RuntimeError("Could not parse SSE response from FastMCP")
-                    data = json_data
-                else:
-                    # Plain JSON response
-                    data = response.json()
+                # Use shared SSE parser
+                data = SSEParser.parse_sse_response(
+                    response_text, f"AsyncMCPClient.{self.endpoint}"
+                )
 
             # Check for JSON-RPC error
             if "error" in data:

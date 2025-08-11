@@ -12,14 +12,19 @@ Usage:
 - Multi-turn dialogue support
 """
 
+import os
 from datetime import datetime
 from typing import Any
 
+import anthropic
 import mesh
 from fastmcp import FastMCP
 
 # Create FastMCP app instance
 app = FastMCP("LLM Service")
+
+# Initialize Claude client
+claude_client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
 
 
 @mesh.agent(name="llm-chat-agent", http_port=9093, auto_run=True)
@@ -44,9 +49,11 @@ def process_text_with_llm(
     text: str,
     task: str = "analyze",
     context: str | None = None,
-    model: str = "claude-3-sonnet-20240229",
-    max_tokens: int = 1000,
+    model: str = "claude-3-5-sonnet-20241022",
+    max_tokens: int = 4000,
     temperature: float = 0.7,
+    tools: list[dict] = None,
+    force_tool_use: bool = False,
 ) -> dict[str, Any]:
     """
     Process text with LLM for various tasks like analysis, summarization, etc.
@@ -58,6 +65,8 @@ def process_text_with_llm(
         model: LLM model to use
         max_tokens: Maximum tokens in response
         temperature: Creativity level (0.0-1.0)
+        tools: Optional tool definitions for structured output
+        force_tool_use: Force tool usage when tools are provided
 
     Returns:
         Dictionary with LLM processing results and metadata
@@ -71,57 +80,73 @@ def process_text_with_llm(
         "classify": "Classify the text into appropriate categories.",
         "extract": "Extract key information and entities from the text.",
         "sentiment": "Analyze the sentiment and emotional tone of the text.",
-        "keywords": "Extract important keywords and phrases from the text."
+        "keywords": "Extract important keywords and phrases from the text.",
     }
-    
+
     system_prompt = task_prompts.get(task, "Process the provided text as requested.")
     if context:
         system_prompt += f" Context: {context}"
-    
-    # Build message structure
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Please {task} this text:\n\n{text}"}
-    ]
 
-    # Simulate LLM API call (in real implementation, this would call Anthropic/OpenAI API)
+    # Build message structure (Claude API uses separate system parameter)
+    messages = [{"role": "user", "content": f"Please {task} this text:\n\n{text}"}]
+
+    # Real Claude API call
     try:
-        # This would be the actual MCP client call:
-        # response = await llm_client.call_method("messages/create", {
-        #     "model": model,
-        #     "messages": messages,
-        #     "max_tokens": max_tokens,
-        #     "temperature": temperature
-        # })
+        if not claude_client.api_key:
+            raise ValueError("CLAUDE_API_KEY environment variable not set")
 
-        # Simulated task-specific response
-        task_responses = {
-            "analyze": f"Analysis of text (length: {len(text)} chars): This text appears to contain structured data with various elements that could be processed for insights.",
-            "summarize": f"Summary: The text contains {len(text.split())} words and covers topics that would benefit from summarization.",
-            "interpret": f"Interpretation: This text can be interpreted as containing meaningful information suitable for further processing.",
-            "classify": f"Classification: Based on content analysis, this text falls into data processing categories.",
-            "extract": f"Extracted entities: Found {len(text.split())} words that could contain extractable information.",
-            "sentiment": "Sentiment: The text appears to have a neutral to positive sentiment based on language patterns.",
-            "keywords": f"Keywords: {', '.join(text.split()[:5])}..."
+        # Prepare API parameters
+        api_params = {
+            "model": model,
+            "system": system_prompt,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         }
-        
-        llm_response = task_responses.get(task, f"[Simulated {model} {task} response for text: '{text[:50]}...']")
 
-        # No conversation history for service calls - each call is independent
+        # Add tools if provided and force tool use if requested
+        if tools:
+            api_params["tools"] = tools
+            if force_tool_use:
+                api_params["tool_choice"] = {"type": "any"}
 
-        return {
-            "result": llm_response,
+        # Call Claude API with system prompt as separate parameter
+        response = claude_client.messages.create(**api_params)
+
+        # Process response - handle both text and tool calls
+        result = {
+            "success": True,
+            "content": None,
+            "tool_calls": [],
             "task": task,
             "model": model,
+            "provider": "anthropic",
             "input_length": len(text),
             "context": context,
             "timestamp": datetime.now().isoformat(),
             "usage": {
-                "prompt_tokens": len(" ".join(msg["content"] for msg in messages)) // 4,
-                "completion_tokens": len(llm_response) // 4,
-                "total_tokens": (len(" ".join(msg["content"] for msg in messages)) + len(llm_response)) // 4,
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens
+                + response.usage.output_tokens,
             },
+            "stop_reason": response.stop_reason,
         }
+
+        # Extract content and tool calls
+        for content_block in response.content:
+            if content_block.type == "text":
+                result["content"] = content_block.text
+            elif content_block.type == "tool_use":
+                result["tool_calls"].append(
+                    {
+                        "id": content_block.id,
+                        "name": content_block.name,
+                        "parameters": content_block.input,
+                    }
+                )
+
+        return result
 
     except Exception as e:
         return {
@@ -133,6 +158,7 @@ def process_text_with_llm(
 
 
 # ===== DATA PROCESSING ASSISTANCE =====
+
 
 @app.tool()
 @mesh.tool(
@@ -148,38 +174,38 @@ def interpret_data_results(
 ) -> dict[str, Any]:
     """
     Interpret data processing results and provide insights.
-    
+
     Args:
         data_summary: Summary of processed data
         analysis_type: Type of analysis needed (general, statistical, quality, trends)
         focus_areas: Specific areas to focus on
-        
+
     Returns:
         Dictionary with interpretation and insights
     """
     focus_areas = focus_areas or []
-    
+
     try:
         # Simulate LLM interpretation of data results
         interpretation_prompts = {
             "general": "Provide general insights about this data processing result",
             "statistical": "Focus on statistical patterns and anomalies in the data",
             "quality": "Assess data quality and identify potential issues",
-            "trends": "Identify trends and patterns in the processed data"
+            "trends": "Identify trends and patterns in the processed data",
         }
-        
+
         # Build context for interpretation
         context = f"Data processing results: {data_summary}"
         if focus_areas:
             context += f" Focus on: {', '.join(focus_areas)}"
-        
+
         # Simulated LLM interpretation
         insights = f"Based on the {analysis_type} analysis, the data shows characteristics typical of {data_summary.get('format', 'unknown')} format. "
-        if 'validation_report' in data_summary:
+        if "validation_report" in data_summary:
             insights += "Data validation appears successful. "
-        if 'metadata' in data_summary:
+        if "metadata" in data_summary:
             insights += f"Metadata indicates {data_summary['metadata']} structure. "
-        
+
         return {
             "interpretation": insights,
             "analysis_type": analysis_type,
@@ -188,16 +214,16 @@ def interpret_data_results(
             "recommendations": [
                 "Consider additional validation steps",
                 "Monitor data quality metrics",
-                "Review processing pipeline efficiency"
+                "Review processing pipeline efficiency",
             ],
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         return {
             "error": f"Data interpretation failed: {str(e)}",
             "analysis_type": analysis_type,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
 

@@ -41,7 +41,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
             server_info = []
             total_registered_functions = 0
 
-            for server_name, server_instance in discovered_servers.items():
+            for server_name, server_instance in list(discovered_servers.items()):
                 info = self._extract_server_info(server_name, server_instance)
                 server_info.append(info)
                 total_registered_functions += info.get("function_count", 0)
@@ -119,7 +119,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                 "pkgutil",
             }
 
-            for module_name, module in sys.modules.items():
+            for module_name, module in list(sys.modules.items()):
                 if (
                     module
                     and not module_name.startswith("_")
@@ -166,7 +166,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
             module_globals = vars(module)
             # Only log if we find FastMCP instances to reduce noise
 
-            for var_name, var_value in module_globals.items():
+            for var_name, var_value in list(module_globals.items()):
                 if self._is_fastmcp_instance(var_value):
                     instance_key = f"{module_name}.{var_name}"
                     found[instance_key] = var_value
@@ -230,7 +230,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                     info["function_count"] += len(tools)
 
                     self.logger.debug(f"Server '{server_name}' has {len(tools)} tools:")
-                    for tool_name, tool in tools.items():
+                    for tool_name, tool in list(tools.items()):
                         function_ptr = getattr(tool, "fn", None)
                         self.logger.debug(f"  - {tool_name}: {function_ptr}")
 
