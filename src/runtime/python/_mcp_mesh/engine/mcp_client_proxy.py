@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Optional
 
 from ..shared.content_extractor import ContentExtractor
+from ..shared.sse_parser import SSEParser
 from .async_mcp_client import AsyncMCPClient
 
 logger = logging.getLogger(__name__)
@@ -113,25 +114,8 @@ class MCPClientProxy:
             with urllib.request.urlopen(req, timeout=30.0) as response:
                 response_data = response.read().decode("utf-8")
 
-                # Handle Server-Sent Events format from FastMCP
-                if response_data.startswith("event:"):
-                    # Parse SSE format: extract JSON from "data:" lines
-                    json_data = None
-                    for line in response_data.split("\n"):
-                        if line.startswith("data:"):
-                            json_str = line[5:].strip()  # Remove 'data:' prefix
-                            try:
-                                json_data = json.loads(json_str)
-                                break
-                            except json.JSONDecodeError:
-                                continue
-
-                    if json_data is None:
-                        raise RuntimeError("Could not parse SSE response from FastMCP")
-                    data = json_data
-                else:
-                    # Plain JSON response
-                    data = json.loads(response_data)
+                # Use shared SSE parser
+                data = SSEParser.parse_sse_response(response_data, f"MCPClientProxy.{self.function_name}")
 
             # Check for JSON-RPC error
             if "error" in data:

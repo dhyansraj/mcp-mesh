@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
+from ..shared.sse_parser import SSEStreamProcessor
 from .async_mcp_client import AsyncMCPClient
 from .mcp_client_proxy import MCPClientProxy
 
@@ -52,6 +53,7 @@ class FullMCPProxy(MCPClientProxy):
             headers, self.endpoint, self.logger
         )
         return headers
+
 
     # Phase 6: Streaming Support - THE BREAKTHROUGH METHOD!
     async def call_tool_streaming(
@@ -103,15 +105,18 @@ class FullMCPProxy(MCPClientProxy):
                         if response.status_code >= 400:
                             raise RuntimeError(f"HTTP error {response.status_code}")
 
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                try:
-                                    data_str = line[6:]  # Remove "data: " prefix
-                                    if data_str.strip():
-                                        chunk = json.loads(data_str)
-                                        yield chunk
-                                except json.JSONDecodeError:
-                                    continue
+                        # Use shared SSE stream processor
+                        sse_processor = SSEStreamProcessor(f"FullMCPProxy.{name}")
+                        
+                        async for chunk_bytes in response.aiter_bytes(8192):
+                            chunks = sse_processor.process_chunk(chunk_bytes)
+                            for chunk in chunks:
+                                yield chunk
+                        
+                        # Process any remaining data
+                        final_chunks = sse_processor.finalize()
+                        for chunk in final_chunks:
+                            yield chunk
 
             except ImportError:
                 # Fallback: if httpx not available, use sync call
@@ -356,7 +361,7 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Streaming-specific configuration
         self.streaming_capable = self.kwargs_config.get("streaming", False)
         self.stream_timeout = self.kwargs_config.get("stream_timeout", 300)  # 5 minutes
-        self.buffer_size = self.kwargs_config.get("buffer_size", 4096)
+        self.buffer_size = self.kwargs_config.get("buffer_size", 16384)  # Increased from 4KB to 16KB for large responses
 
         # Session management configuration
         self.session_required = self.kwargs_config.get("session_required", False)
@@ -588,19 +593,18 @@ class EnhancedFullMCPProxy(FullMCPProxy):
                 ) as response:
                     response.raise_for_status()
 
-                    buffer = ""
-                    async for chunk in response.aiter_bytes(self.buffer_size):
-                        buffer += chunk.decode("utf-8")
-
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-
-                            if line.startswith("data: "):
-                                try:
-                                    data = json.loads(line[6:])
-                                    yield data
-                                except json.JSONDecodeError:
-                                    continue
+                    # Use shared SSE stream processor
+                    sse_processor = SSEStreamProcessor(f"EnhancedFullMCPProxy.{name}")
+                    
+                    async for chunk_bytes in response.aiter_bytes(max(self.buffer_size, 8192)):
+                        chunks = sse_processor.process_chunk(chunk_bytes)
+                        for chunk in chunks:
+                            yield chunk
+                    
+                    # Process any remaining data
+                    final_chunks = sse_processor.finalize()
+                    for chunk in final_chunks:
+                        yield chunk
 
         except httpx.TimeoutException:
             raise Exception(f"Streaming timeout after {self.stream_timeout}s")
