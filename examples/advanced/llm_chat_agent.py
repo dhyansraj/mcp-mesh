@@ -24,9 +24,8 @@ from fastmcp import FastMCP
 app = FastMCP("LLM Service")
 
 # Initialize Claude client
-claude_client = anthropic.Anthropic(
-    api_key=os.getenv("CLAUDE_API_KEY")
-)
+claude_client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
+
 
 @mesh.agent(name="llm-chat-agent", http_port=9093, auto_run=True)
 class LLMChatAgent:
@@ -81,41 +80,39 @@ def process_text_with_llm(
         "classify": "Classify the text into appropriate categories.",
         "extract": "Extract key information and entities from the text.",
         "sentiment": "Analyze the sentiment and emotional tone of the text.",
-        "keywords": "Extract important keywords and phrases from the text."
+        "keywords": "Extract important keywords and phrases from the text.",
     }
-    
+
     system_prompt = task_prompts.get(task, "Process the provided text as requested.")
     if context:
         system_prompt += f" Context: {context}"
-    
+
     # Build message structure (Claude API uses separate system parameter)
-    messages = [
-        {"role": "user", "content": f"Please {task} this text:\n\n{text}"}
-    ]
+    messages = [{"role": "user", "content": f"Please {task} this text:\n\n{text}"}]
 
     # Real Claude API call
     try:
         if not claude_client.api_key:
             raise ValueError("CLAUDE_API_KEY environment variable not set")
-        
+
         # Prepare API parameters
         api_params = {
             "model": model,
             "system": system_prompt,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": temperature
+            "temperature": temperature,
         }
-        
+
         # Add tools if provided and force tool use if requested
         if tools:
             api_params["tools"] = tools
             if force_tool_use:
                 api_params["tool_choice"] = {"type": "any"}
-        
+
         # Call Claude API with system prompt as separate parameter
         response = claude_client.messages.create(**api_params)
-        
+
         # Process response - handle both text and tool calls
         result = {
             "success": True,
@@ -130,22 +127,25 @@ def process_text_with_llm(
             "usage": {
                 "prompt_tokens": response.usage.input_tokens,
                 "completion_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens
+                + response.usage.output_tokens,
             },
-            "stop_reason": response.stop_reason
+            "stop_reason": response.stop_reason,
         }
-        
+
         # Extract content and tool calls
         for content_block in response.content:
             if content_block.type == "text":
                 result["content"] = content_block.text
             elif content_block.type == "tool_use":
-                result["tool_calls"].append({
-                    "id": content_block.id,
-                    "name": content_block.name,
-                    "parameters": content_block.input
-                })
-        
+                result["tool_calls"].append(
+                    {
+                        "id": content_block.id,
+                        "name": content_block.name,
+                        "parameters": content_block.input,
+                    }
+                )
+
         return result
 
     except Exception as e:
@@ -158,6 +158,7 @@ def process_text_with_llm(
 
 
 # ===== DATA PROCESSING ASSISTANCE =====
+
 
 @app.tool()
 @mesh.tool(
@@ -173,38 +174,38 @@ def interpret_data_results(
 ) -> dict[str, Any]:
     """
     Interpret data processing results and provide insights.
-    
+
     Args:
         data_summary: Summary of processed data
         analysis_type: Type of analysis needed (general, statistical, quality, trends)
         focus_areas: Specific areas to focus on
-        
+
     Returns:
         Dictionary with interpretation and insights
     """
     focus_areas = focus_areas or []
-    
+
     try:
         # Simulate LLM interpretation of data results
         interpretation_prompts = {
             "general": "Provide general insights about this data processing result",
             "statistical": "Focus on statistical patterns and anomalies in the data",
             "quality": "Assess data quality and identify potential issues",
-            "trends": "Identify trends and patterns in the processed data"
+            "trends": "Identify trends and patterns in the processed data",
         }
-        
+
         # Build context for interpretation
         context = f"Data processing results: {data_summary}"
         if focus_areas:
             context += f" Focus on: {', '.join(focus_areas)}"
-        
+
         # Simulated LLM interpretation
         insights = f"Based on the {analysis_type} analysis, the data shows characteristics typical of {data_summary.get('format', 'unknown')} format. "
-        if 'validation_report' in data_summary:
+        if "validation_report" in data_summary:
             insights += "Data validation appears successful. "
-        if 'metadata' in data_summary:
+        if "metadata" in data_summary:
             insights += f"Metadata indicates {data_summary['metadata']} structure. "
-        
+
         return {
             "interpretation": insights,
             "analysis_type": analysis_type,
@@ -213,16 +214,16 @@ def interpret_data_results(
             "recommendations": [
                 "Consider additional validation steps",
                 "Monitor data quality metrics",
-                "Review processing pipeline efficiency"
+                "Review processing pipeline efficiency",
             ],
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         return {
             "error": f"Data interpretation failed: {str(e)}",
             "analysis_type": analysis_type,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
 
 

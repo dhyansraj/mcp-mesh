@@ -25,24 +25,26 @@ app = FastMCP("Chat Client Service")
 @app.tool()
 @mesh.tool(
     capability="chat_interface",
-    dependencies=["llm-service"],  # Depends on LLM service capability from llm-chat-agent
+    dependencies=[
+        "llm-service"
+    ],  # Depends on LLM service capability from llm-chat-agent
     description="Simple chat interface that delegates to LLM agent",
 )
 def simple_chat(
     message: str,
     task: str = "analyze",
     context: Optional[str] = None,
-    llm_service: mesh.McpAgent | None = None
+    llm_service: mesh.McpAgent | None = None,
 ) -> Dict[str, str]:
     """
     Simple chat interface using dependency injection to call LLM agent.
-    
+
     Args:
         message: The message/text to process
         task: Processing task (analyze, summarize, interpret, classify, extract)
         context: Optional context for the processing
         llm_service: Injected LLM service from llm-chat-agent
-        
+
     Returns:
         Chat response with LLM processing results
     """
@@ -50,9 +52,9 @@ def simple_chat(
         return {
             "error": "LLM service not available",
             "message": message,
-            "status": "service_unavailable"
+            "status": "service_unavailable",
         }
-    
+
     try:
         # Call the injected LLM service
         # This will call process_text_with_llm on the llm-chat-agent
@@ -62,20 +64,20 @@ def simple_chat(
             context=context or "User chat interaction",
             model="claude-3-sonnet-20240229",
             max_tokens=200,
-            temperature=0.7
+            temperature=0.7,
         )
-        
+
         return {
             "user_message": message,
             "llm_response": str(llm_response),
             "task": task,
-            "status": "success"
+            "status": "success",
         }
     except Exception as e:
         return {
             "error": f"Failed to process with LLM: {e}",
             "message": message,
-            "status": "processing_error"
+            "status": "processing_error",
         }
 
 
@@ -88,40 +90,40 @@ def simple_chat(
 def health_check(llm_service: mesh.McpAgent | None = None) -> Dict[str, str]:
     """
     Health check for the chat client and its dependencies.
-    
+
     Args:
         llm_service: Injected LLM service
-        
+
     Returns:
         Health status of chat services
     """
     status = {
         "chat_client": "healthy",
         "llm_service": "unavailable",
-        "timestamp": "unknown"
+        "timestamp": "unknown",
     }
-    
+
     if llm_service is not None:
         try:
             # Try a simple test call without tools for health check
             test_result = llm_service(
                 text="Health check test",
-                task="analyze", 
+                task="analyze",
                 context="System health check",
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=50,
-                temperature=0.1
+                temperature=0.1,
             )
-            
+
             status["llm_service"] = "healthy"
             if isinstance(test_result, dict):
                 status["timestamp"] = str(test_result.get("timestamp", "unknown"))
             status["test_successful"] = "true"
-            
+
         except Exception as e:
             status["llm_service"] = f"error: {e}"
             status["test_successful"] = "false"
-    
+
     return status
 
 
@@ -135,17 +137,17 @@ def analyze_file(
     file_path: str,
     task: str = "analyze",
     context: Optional[str] = None,
-    llm_service: mesh.McpAgent | None = None
+    llm_service: mesh.McpAgent | None = None,
 ) -> Dict[str, str]:
     """
     Read a file from disk and analyze its content using the LLM agent.
-    
+
     Args:
         file_path: Path to the file to read and analyze
         task: Analysis task (analyze, summarize, interpret, classify, extract)
         context: Optional context for the analysis
         llm_service: Injected LLM service from llm-chat-agent
-        
+
     Returns:
         File analysis results from LLM agent
     """
@@ -153,38 +155,38 @@ def analyze_file(
         return {
             "error": "LLM service not available",
             "file_path": file_path,
-            "status": "service_unavailable"
+            "status": "service_unavailable",
         }
-    
+
     # Check if file exists
     if not os.path.exists(file_path):
         return {
             "error": f"File not found: {file_path}",
             "file_path": file_path,
-            "status": "file_not_found"
+            "status": "file_not_found",
         }
-    
+
     # Check if it's a file (not directory)
     if not os.path.isfile(file_path):
         return {
             "error": f"Path is not a file: {file_path}",
             "file_path": file_path,
-            "status": "not_a_file"
+            "status": "not_a_file",
         }
-    
+
     try:
         # Read complete file content (no truncation)
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()
-            
+
         # Get file size for metadata
         file_size = os.path.getsize(file_path)
-        
+
         # Prepare context for LLM
         analysis_context = f"File analysis of: {os.path.basename(file_path)}"
         if context:
             analysis_context += f" | {context}"
-            
+
         # Define complex tool schema for structured analysis
         analysis_tool = {
             "name": "analyze_document_structured",
@@ -194,34 +196,40 @@ def analyze_file(
                 "properties": {
                     "document_type": {
                         "type": "string",
-                        "enum": ["resume", "cover_letter", "technical_document", "report", "other"],
-                        "description": "Type of document identified"
+                        "enum": [
+                            "resume",
+                            "cover_letter",
+                            "technical_document",
+                            "report",
+                            "other",
+                        ],
+                        "description": "Type of document identified",
                     },
                     "professional_summary": {
                         "type": "string",
-                        "description": "Brief professional summary if applicable"
+                        "description": "Brief professional summary if applicable",
                     },
                     "technical_skills": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of technical skills and technologies mentioned"
+                        "description": "List of technical skills and technologies mentioned",
                     },
                     "key_insights": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Key insights and important findings from the document"
+                        "description": "Key insights and important findings from the document",
                     },
                     "experience_years": {
                         "type": "number",
-                        "description": "Number of years of experience mentioned, if applicable"
+                        "description": "Number of years of experience mentioned, if applicable",
                     },
                     "education_info": {
                         "type": "object",
                         "properties": {
                             "highest_degree": {"type": "string"},
                             "institution": {"type": "string"},
-                            "field_of_study": {"type": "string"}
-                        }
+                            "field_of_study": {"type": "string"},
+                        },
                     },
                     "work_experience": {
                         "type": "array",
@@ -233,42 +241,42 @@ def analyze_file(
                                 "duration": {"type": "string"},
                                 "key_achievements": {
                                     "type": "array",
-                                    "items": {"type": "string"}
-                                }
-                            }
-                        }
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                     "quality_assessment": {
                         "type": "object",
                         "properties": {
                             "overall_score": {
-                                "type": "number", 
-                                "minimum": 1, 
+                                "type": "number",
+                                "minimum": 1,
                                 "maximum": 10,
-                                "description": "Overall document quality score"
+                                "description": "Overall document quality score",
                             },
                             "strengths": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Document strengths identified"
+                                "description": "Document strengths identified",
                             },
                             "areas_for_improvement": {
-                                "type": "array", 
+                                "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Areas that could be improved"
-                            }
+                                "description": "Areas that could be improved",
+                            },
                         },
-                        "required": ["overall_score"]
+                        "required": ["overall_score"],
                     },
                     "content_summary": {
                         "type": "string",
-                        "description": "Comprehensive summary of document content"
-                    }
+                        "description": "Comprehensive summary of document content",
+                    },
                 },
-                "required": ["document_type", "content_summary", "key_insights"]
-            }
+                "required": ["document_type", "content_summary", "key_insights"],
+            },
         }
-        
+
         # Call LLM service for analysis with structured tool
         llm_response = llm_service(
             text=content,
@@ -278,15 +286,19 @@ def analyze_file(
             max_tokens=4000,  # Match PDF extractor token limit
             temperature=0.3,  # Lower for more consistent structured output
             tools=[analysis_tool],
-            force_tool_use=True
+            force_tool_use=True,
         )
-        
+
         # Process structured response
         structured_analysis = None
-        if isinstance(llm_response, dict) and llm_response.get("success") and llm_response.get("tool_calls"):
+        if (
+            isinstance(llm_response, dict)
+            and llm_response.get("success")
+            and llm_response.get("tool_calls")
+        ):
             # Extract structured data from tool calls
             structured_analysis = llm_response["tool_calls"][0]["parameters"]
-        
+
         return {
             "file_path": file_path,
             "file_size": str(file_size),
@@ -295,28 +307,34 @@ def analyze_file(
             "llm_raw_response": str(llm_response),
             "structured_analysis": structured_analysis,
             "analysis_enhanced": structured_analysis is not None,
-            "model_used": llm_response.get("model", "unknown") if isinstance(llm_response, dict) else "unknown",
-            "token_usage": llm_response.get("usage", {}) if isinstance(llm_response, dict) else {},
-            "status": "success"
+            "model_used": (
+                llm_response.get("model", "unknown")
+                if isinstance(llm_response, dict)
+                else "unknown"
+            ),
+            "token_usage": (
+                llm_response.get("usage", {}) if isinstance(llm_response, dict) else {}
+            ),
+            "status": "success",
         }
-        
+
     except UnicodeDecodeError:
         return {
             "error": f"Cannot read file as UTF-8 text: {file_path}",
             "file_path": file_path,
-            "status": "encoding_error"
+            "status": "encoding_error",
         }
     except PermissionError:
         return {
             "error": f"Permission denied reading file: {file_path}",
             "file_path": file_path,
-            "status": "permission_denied"
+            "status": "permission_denied",
         }
     except Exception as e:
         return {
             "error": f"Failed to analyze file: {e}",
             "file_path": file_path,
-            "status": "analysis_error"
+            "status": "analysis_error",
         }
 
 
@@ -332,16 +350,17 @@ def analyze_file(
 class ChatClientAgent:
     """
     Chat Client Agent that demonstrates dependency injection patterns.
-    
+
     This agent acts as a conversational interface that delegates all LLM
     processing to the llm-chat-agent via MCP Mesh dependency injection.
-    
+
     Key features:
     - Dependency injection for LLM services using mesh.McpMeshAgent typing
     - Conversational interface
     - Health checking
     - Error handling and graceful degradation
     """
+
     pass
 
 
