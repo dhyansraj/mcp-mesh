@@ -360,9 +360,7 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Streaming-specific configuration
         self.streaming_capable = self.kwargs_config.get("streaming", False)
         self.stream_timeout = self.kwargs_config.get("stream_timeout", 300)  # 5 minutes
-        self.buffer_size = self.kwargs_config.get(
-            "buffer_size", 16384
-        )  # Increased from 4KB to 16KB for large responses
+        self.buffer_size = self.kwargs_config.get("buffer_size", 4096)
 
         # Session management configuration
         self.session_required = self.kwargs_config.get("session_required", False)

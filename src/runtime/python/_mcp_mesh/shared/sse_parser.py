@@ -64,39 +64,40 @@ class SSEParser:
                 )
                 raise RuntimeError(f"Invalid JSON response in {context}: {e}")
 
-        # Parse SSE format: accumulate all 'data:' lines
-        logger.debug(f"🔧 {context}: Parsing SSE format - accumulating data lines")
-        accumulated_json = ""
+        # Parse SSE format: find first valid JSON in data lines
+        logger.debug(f"🔧 {context}: Parsing SSE format - looking for first valid JSON")
         data_line_count = 0
+        first_valid_json = None
 
         for line in response_text.split("\n"):
             if line.startswith("data:"):
                 data_content = line[5:].strip()  # Remove 'data:' prefix and whitespace
                 if data_content:
-                    accumulated_json += data_content
                     data_line_count += 1
+                    try:
+                        # Try to parse this line as JSON
+                        parsed_json = json.loads(data_content)
+                        if first_valid_json is None:
+                            first_valid_json = parsed_json
+                            logger.debug(f"🔧 {context}: Found first valid JSON in data line {data_line_count}")
+                    except json.JSONDecodeError:
+                        # Skip invalid JSON lines - this is expected behavior
+                        logger.debug(f"🔧 {context}: Skipping invalid JSON in data line {data_line_count}: {data_content[:50]}...")
+                        continue
 
         logger.debug(
-            f"🔧 {context}: Found {data_line_count} data lines, accumulated JSON length: {len(accumulated_json)}"
+            f"🔧 {context}: Processed {data_line_count} data lines"
         )
 
-        # Parse accumulated JSON
-        if not accumulated_json:
-            logger.error(f"🔧 {context}: No data found in SSE response")
-            raise RuntimeError(f"No data found in SSE response from {context}")
+        # Return first valid JSON found
+        if first_valid_json is None:
+            logger.error(f"🔧 {context}: No valid JSON found in SSE response")
+            raise RuntimeError(f"Could not parse SSE response from FastMCP")
 
-        try:
-            result = json.loads(accumulated_json)
-            logger.debug(
-                f"🔧 {context}: SSE JSON parsed successfully! Result type: {type(result)}"
-            )
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"🔧 {context}: Failed to parse accumulated SSE JSON: {e}")
-            logger.error(
-                f"🔧 {context}: Accumulated data preview: {accumulated_json[:500]}..."
-            )
-            raise RuntimeError(f"Could not parse SSE response from {context}: {e}")
+        logger.debug(
+            f"🔧 {context}: SSE parsing successful! Result type: {type(first_valid_json)}"
+        )
+        return first_valid_json
 
     @staticmethod
     def parse_streaming_sse_chunk(chunk_data: str) -> Optional[dict[str, Any]]:
