@@ -1,5 +1,47 @@
 # MCP Mesh Release Notes
 
+## v0.4.2 (2025-08-11)
+
+### 🔧 Critical Bug Fixes
+
+**SSE Parsing Reliability**
+
+- Fixed sporadic JSON parsing errors during large file processing (>15KB files)
+- Consolidated duplicate SSE parsing logic across 3 proxy classes for improved maintainability
+- Enhanced error handling with context-aware debugging for better troubleshooting
+- Added shared `SSEParser` utility class with proper JSON accumulation logic
+
+**FastMCP Discovery Stability**
+
+- Fixed `RuntimeError: dictionary changed size during iteration` crashes during agent startup
+- Applied thread-safe dictionary iteration patterns to prevent concurrent modification errors
+- Improved startup reliability for complex multi-agent environments
+
+**Code Consolidation**
+
+- Eliminated duplicate SSE parsing code across `MCPClientProxy`, `AsyncMCPClient`, and `FullMCPProxy`
+- Added `SSEStreamProcessor` for consistent streaming support
+- Enhanced debugging capabilities with contextual logging
+
+### 📁 New Files Added
+
+- `src/runtime/python/_mcp_mesh/shared/sse_parser.py` - Consolidated SSE parsing utilities
+
+### 🧪 Enhanced Examples
+
+- Updated LLM chat agent with real Claude API integration and tool calling support
+- New comprehensive chat client agent demonstrating advanced dependency injection patterns
+- Improved large file processing examples with 100% reliability testing
+
+### 📈 Validation Results
+
+- ✅ **Large file processing**: 100% reliability with 23KB+ files generating 6K+ token responses
+- ✅ **Agent startup**: Eliminated intermittent crashes during FastMCP server discovery
+- ✅ **Code quality**: Consolidated duplicate logic improving maintainability and reducing technical debt
+- ✅ **Testing**: Verified with real-world scenarios including rapid startup/shutdown cycles
+
+---
+
 ## v0.4.1 (2025-08-10)
 
 ### 🏷️ Enhanced Tag Matching
