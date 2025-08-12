@@ -188,6 +188,19 @@ System monitoring agent that provides:
 - 📊 Health monitoring capabilities
 - 🏷️ Tag-based capability advertising
 
+### `fastapi_app.py` (NEW - Development Preview)
+
+FastAPI integration example that demonstrates:
+
+- 🌐 **`@mesh.route` decorators** for dependency injection in FastAPI routes
+- 🏗️ **Development testing ground** for API pipeline implementation
+- 🔧 **Graceful degradation** when MCP agents are unavailable
+- 📖 **Interactive API docs** at http://localhost:8080/docs
+
+**Current Status**: Phase 1 - Decorator registration works, dependency injection coming in Phase 2
+
+See [FASTAPI_EXAMPLE.md](FASTAPI_EXAMPLE.md) for detailed usage and testing instructions.
+
 ## 🔧 Development Workflow
 
 ### 1. Modify an Agent

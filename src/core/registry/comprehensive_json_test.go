@@ -135,7 +135,7 @@ func TestJSONSchemaValidation(t *testing.T) {
 
 		// Validate all optional fields are parsed
 		assert.NotNil(t, registration.AgentType)
-		assert.Equal(t, generated.McpAgent, *registration.AgentType)
+		assert.Equal(t, generated.MeshAgentRegistrationAgentTypeMcpAgent, *registration.AgentType)
 		assert.NotNil(t, registration.Name)
 		assert.Equal(t, "test-agent", *registration.Name)
 		assert.NotNil(t, registration.Version)

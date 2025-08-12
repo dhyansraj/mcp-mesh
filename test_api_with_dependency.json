@@ -1,0 +1,17 @@
+{
+  "agent_id": "test-api-with-data-service",
+  "agent_type": "api",
+  "tools": [
+    {
+      "function_name": "api_data_endpoint",
+      "capability": "api-data-handler",
+      "dependencies": [
+        {
+          "capability": "data_service"
+        }
+      ]
+    }
+  ],
+  "http_host": "127.0.0.1",
+  "http_port": 8080
+}

@@ -14,7 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 # Import the classes under test
-from _mcp_mesh.pipeline.heartbeat.dependency_resolution import DependencyResolutionStep
+from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import (
+    DependencyResolutionStep,
+)
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -442,7 +444,7 @@ class TestSuccessfulExecution:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_successful_processing(
         self, mock_rewiring, step, mock_heartbeat_response, mock_registry_wrapper
@@ -479,7 +481,7 @@ class TestSuccessfulExecution:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_zero_dependencies(
         self, mock_rewiring, step, mock_registry_wrapper
@@ -501,7 +503,7 @@ class TestSuccessfulExecution:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_complex_dependency_count(
         self, mock_rewiring, step, mock_registry_wrapper
@@ -542,7 +544,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_rewiring_exception(
         self, mock_rewiring, step, mock_registry_wrapper
@@ -563,7 +565,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_parse_dependencies_exception(
         self, mock_rewiring, step, mock_registry_wrapper
@@ -629,7 +631,7 @@ class TestRewiring:
     @pytest.fixture
     def clear_global_hash(self):
         """Clear the global hash state before each test."""
-        import _mcp_mesh.pipeline.heartbeat.dependency_resolution as dep_module
+        import _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution as dep_module
 
         dep_module._last_dependency_hash = None
         yield
@@ -643,6 +645,7 @@ class TestRewiring:
         import logging
 
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         await step.process_heartbeat_response_for_rewiring(None)
 
@@ -656,6 +659,7 @@ class TestRewiring:
         import logging
 
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         await step.process_heartbeat_response_for_rewiring({})
 
@@ -708,7 +712,7 @@ class TestRewiring:
         """Test rewiring with unchanged hash (skip rewiring)."""
         import logging
 
-        import _mcp_mesh.pipeline.heartbeat.dependency_resolution as dep_module
+        import _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution as dep_module
 
         # Mock injector
         mock_injector = MagicMock()
@@ -733,6 +737,7 @@ class TestRewiring:
         dep_module._last_dependency_hash = current_hash
 
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         await step.process_heartbeat_response_for_rewiring(heartbeat_response)
 
@@ -846,7 +851,7 @@ class TestContextHandling:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_execute_preserves_existing_context(self, mock_rewiring, step):
         """Test execute preserves existing context data."""
@@ -901,7 +906,7 @@ class TestLogging:
 
     @pytest.mark.asyncio
     @patch(
-        "_mcp_mesh.pipeline.heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
+        "_mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution.DependencyResolutionStep.process_heartbeat_response_for_rewiring"
     )
     async def test_debug_logging(self, mock_rewiring, step, caplog):
         """Test debug logging during processing."""
@@ -918,6 +923,7 @@ class TestLogging:
         mock_rewiring.return_value = None
 
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         result = await step.execute(context)
 

@@ -69,8 +69,9 @@ def configure_logging():
     root_logger.addHandler(handler)
     root_logger.setLevel(log_level)
 
-    # Set level for all mcp_mesh loggers
+    # Set level for all mcp_mesh loggers (both mcp_mesh and _mcp_mesh namespaces)
     logging.getLogger("mcp_mesh").setLevel(log_level)
+    logging.getLogger("_mcp_mesh").setLevel(log_level)
 
     # Return the configured level for reference
     return log_level

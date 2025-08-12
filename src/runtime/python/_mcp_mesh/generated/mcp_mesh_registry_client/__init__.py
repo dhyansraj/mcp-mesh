@@ -36,6 +36,7 @@ __version__ = "1.0.0"
 # import apis into sdk package
 from _mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 from _mcp_mesh.generated.mcp_mesh_registry_client.api.health_api import HealthApi
+from _mcp_mesh.generated.mcp_mesh_registry_client.api.tracing_api import TracingApi
 
 # import ApiClient
 from _mcp_mesh.generated.mcp_mesh_registry_client.api_response import ApiResponse
@@ -77,3 +78,4 @@ from _mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response i
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.rich_dependency import RichDependency
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.root_response import RootResponse
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.standardized_dependency import StandardizedDependency
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.trace_event import TraceEvent

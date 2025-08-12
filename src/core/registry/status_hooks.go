@@ -125,26 +125,28 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			}
 		}
 
-		// Create the appropriate registry event in the same transaction
-		eventType := getEventTypeForStatusChange(oldStatus, newStatus)
-		eventData := createEventDataForStatusChange(oldStatus, newStatus)
+		// Create the appropriate registry event in the same transaction (skip for API services)
+		if oldAgent.AgentType.String() != "api" {
+			eventType := getEventTypeForStatusChange(oldStatus, newStatus)
+			eventData := createEventDataForStatusChange(oldStatus, newStatus)
 
-		// Create the registry event in the same transaction
-		_, err = m.Client().RegistryEvent.Create().
-			SetEventType(eventType).
-			SetAgentID(agentID).
-			SetTimestamp(time.Now().UTC()).
-			SetData(eventData).
-			Save(ctx)
+			// Create the registry event in the same transaction
+			_, err = m.Client().RegistryEvent.Create().
+				SetEventType(eventType).
+				SetAgentID(agentID).
+				SetTimestamp(time.Now().UTC()).
+				SetData(eventData).
+				Save(ctx)
 
-		if err != nil {
-			config.Logger.Error("Failed to create registry event for agent %s status change (%s → %s): %v",
-				agentID, oldStatus, newStatus, err)
-			// Don't fail the mutation if event creation fails
-			// This ensures the status update still happens even if audit fails
-		} else {
-			config.Logger.Info("Created %s event for agent %s status change (%s → %s)",
-				eventType, agentID, oldStatus, newStatus)
+			if err != nil {
+				config.Logger.Error("Failed to create registry event for agent %s status change (%s → %s): %v",
+					agentID, oldStatus, newStatus, err)
+				// Don't fail the mutation if event creation fails
+				// This ensures the status update still happens even if audit fails
+			} else {
+				config.Logger.Info("Created %s event for agent %s status change (%s → %s)",
+					eventType, agentID, oldStatus, newStatus)
+			}
 		}
 	}
 

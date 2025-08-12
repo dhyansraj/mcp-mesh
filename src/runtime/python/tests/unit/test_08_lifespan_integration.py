@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 # Import the function under test
-from _mcp_mesh.pipeline.heartbeat.lifespan_integration import heartbeat_lifespan_task
+from _mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration import heartbeat_lifespan_task
 
 
 class TestLifespanIntegrationConfig:
@@ -48,7 +48,7 @@ class TestLifespanIntegrationConfig:
         """Test that all parameters are correctly extracted from config."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):  # Exit after setup
@@ -78,7 +78,7 @@ class TestLifespanIntegrationConfig:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -102,7 +102,7 @@ class TestLifespanIntegrationConfig:
         """Test handling of None registry_wrapper."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -138,7 +138,7 @@ class TestLifespanIntegrationStandalone:
     async def test_standalone_mode_early_return(self, mock_standalone_config):
         """Test that standalone mode returns early without creating orchestrator."""
         with patch(
-            "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+            "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
         ) as mock_orchestrator_class:
 
             result = await heartbeat_lifespan_task(mock_standalone_config)
@@ -151,12 +151,12 @@ class TestLifespanIntegrationStandalone:
     async def test_standalone_mode_logging(self, mock_standalone_config, caplog):
         """Test that standalone mode logs appropriate message."""
         with patch(
-            "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+            "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
         ):
 
             # Set log level to capture INFO messages
             caplog.set_level(
-                logging.INFO, logger="_mcp_mesh.pipeline.heartbeat.lifespan_integration"
+                logging.INFO, logger="_mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration"
             )
 
             await heartbeat_lifespan_task(mock_standalone_config)
@@ -179,7 +179,7 @@ class TestLifespanIntegrationStandalone:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -215,7 +215,7 @@ class TestLifespanIntegrationOrchestrator:
         """Test that HeartbeatOrchestrator is created correctly."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -236,7 +236,7 @@ class TestLifespanIntegrationOrchestrator:
         """Test that orchestrator.execute_heartbeat is called with correct parameters."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -274,7 +274,7 @@ class TestLifespanIntegrationOrchestrator:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -299,7 +299,7 @@ class TestLifespanIntegrationOrchestrator:
         """Test that startup logging includes agent_id."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -311,7 +311,7 @@ class TestLifespanIntegrationOrchestrator:
 
             # Set log level to capture INFO messages
             caplog.set_level(
-                logging.INFO, logger="_mcp_mesh.pipeline.heartbeat.lifespan_integration"
+                logging.INFO, logger="_mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration"
             )
 
             try:
@@ -346,7 +346,7 @@ class TestLifespanIntegrationErrorHandling:
         """Test that heartbeat execution failure doesn't stop the loop."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -381,7 +381,7 @@ class TestLifespanIntegrationErrorHandling:
             # Set log level to capture DEBUG messages
             caplog.set_level(
                 logging.DEBUG,
-                logger="_mcp_mesh.pipeline.heartbeat.lifespan_integration",
+                logger="_mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration",
             )
 
             try:
@@ -405,7 +405,7 @@ class TestLifespanIntegrationErrorHandling:
         """Test that heartbeat execution exception doesn't stop the loop."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -456,7 +456,7 @@ class TestLifespanIntegrationErrorHandling:
         """Test that multiple consecutive errors don't crash the task."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -507,7 +507,7 @@ class TestLifespanIntegrationCancellation:
         """Test proper handling of cancellation during sleep."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -518,7 +518,7 @@ class TestLifespanIntegrationCancellation:
 
             # Set log level to capture INFO messages
             caplog.set_level(
-                logging.INFO, logger="_mcp_mesh.pipeline.heartbeat.lifespan_integration"
+                logging.INFO, logger="_mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration"
             )
 
             with pytest.raises(asyncio.CancelledError):
@@ -536,7 +536,7 @@ class TestLifespanIntegrationCancellation:
     ):
         """Test proper handling of cancellation during heartbeat execution."""
         with patch(
-            "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+            "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
         ) as mock_orchestrator_class:
 
             mock_orchestrator = AsyncMock()
@@ -545,7 +545,7 @@ class TestLifespanIntegrationCancellation:
 
             # Set log level to capture INFO messages
             caplog.set_level(
-                logging.INFO, logger="_mcp_mesh.pipeline.heartbeat.lifespan_integration"
+                logging.INFO, logger="_mcp_mesh.pipeline.mcp_heartbeat.lifespan_integration"
             )
 
             with pytest.raises(asyncio.CancelledError):
@@ -562,7 +562,7 @@ class TestLifespanIntegrationCancellation:
         """Test that CancelledError is properly re-raised."""
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ),
             patch("asyncio.sleep", side_effect=asyncio.CancelledError()),
         ):
@@ -595,7 +595,7 @@ class TestLifespanIntegrationCancellation:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep", return_value=None),
         ):  # Don't actually sleep
@@ -627,7 +627,7 @@ class TestLifespanIntegrationIntegration:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):
@@ -672,7 +672,7 @@ class TestLifespanIntegrationIntegration:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
+                "_mcp_mesh.pipeline.mcp_heartbeat.heartbeat_orchestrator.HeartbeatOrchestrator"
             ) as mock_orchestrator_class,
             patch("asyncio.sleep") as mock_sleep,
         ):

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 # Import the classes under test
-from _mcp_mesh.pipeline.heartbeat.registry_connection import RegistryConnectionStep
+from _mcp_mesh.pipeline.mcp_heartbeat.registry_connection import RegistryConnectionStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -128,7 +128,7 @@ class TestConnectionReuse:
     ):
         """Test execute with existing wrapper doesn't create new connection."""
         with patch(
-            "_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient"
+            "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient"
         ) as mock_api_client:
             result = await step.execute(mock_context_with_existing_wrapper)
 
@@ -186,9 +186,9 @@ class TestNewConnectionCreation:
         return MagicMock()
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper")
     @patch.dict("os.environ", {"MCP_MESH_REGISTRY_URL": "http://test-registry:8000"})
     async def test_execute_creates_new_connection(
         self,
@@ -227,9 +227,9 @@ class TestNewConnectionCreation:
         assert result.context.get("registry_wrapper") == mock_wrapper
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper")
     @patch.dict("os.environ", {}, clear=True)
     async def test_execute_creates_connection_with_default_url(
         self,
@@ -260,9 +260,9 @@ class TestNewConnectionCreation:
         assert result.context.get("registry_url") == "http://localhost:8000"
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper")
     async def test_execute_connection_creation_order(
         self,
         mock_wrapper_class,
@@ -311,7 +311,7 @@ class TestErrorHandling:
         return {}
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
     async def test_execute_configuration_error(
         self, mock_config_class, step, mock_context_empty
     ):
@@ -325,8 +325,8 @@ class TestErrorHandling:
         assert "Configuration error" in result.errors
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
     async def test_execute_api_client_error(
         self, mock_api_client_class, mock_config_class, step, mock_context_empty
     ):
@@ -342,9 +342,9 @@ class TestErrorHandling:
         assert "API client error" in result.errors
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper")
     async def test_execute_wrapper_error(
         self,
         mock_wrapper_class,
@@ -368,7 +368,7 @@ class TestErrorHandling:
         assert "Wrapper creation error" in result.errors
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.os.getenv")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.os.getenv")
     async def test_execute_url_resolution_error(
         self, mock_getenv, step, mock_context_empty
     ):
@@ -389,7 +389,7 @@ class TestErrorHandling:
         context = {"existing": "data"}
 
         with patch(
-            "_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration",
+            "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration",
             side_effect=Exception("Test error"),
         ):
             result = await step.execute(context)
@@ -425,8 +425,9 @@ class TestLogging:
 
         context = {"registry_wrapper": mock_existing_wrapper}
 
-        # Set log level to capture DEBUG messages
+        # Set log level to capture DEBUG messages for the specific logger
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         result = await step.execute(context)
 
@@ -434,9 +435,9 @@ class TestLogging:
         assert "Reusing existing registry connection" in caplog.text
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient")
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper")
     @patch.dict("os.environ", {"MCP_MESH_REGISTRY_URL": "http://test-registry:8000"})
     async def test_execute_new_connection_logging(
         self, mock_wrapper_class, mock_api_client_class, mock_config_class, step, caplog
@@ -459,7 +460,7 @@ class TestLogging:
         )
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration")
+    @patch("_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration")
     async def test_execute_error_logging(self, mock_config_class, step, caplog):
         """Test execute error logging."""
         import logging
@@ -490,13 +491,13 @@ class TestEdgeCases:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration"
             ) as mock_config_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient"
             ) as mock_api_client_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper"
             ) as mock_wrapper_class,
         ):
 
@@ -519,13 +520,13 @@ class TestEdgeCases:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration"
             ) as mock_config_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient"
             ) as mock_api_client_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper"
             ) as mock_wrapper_class,
         ):
 
@@ -550,13 +551,13 @@ class TestEdgeCases:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.Configuration"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.Configuration"
             ) as mock_config_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.ApiClient"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.ApiClient"
             ) as mock_api_client_class,
             patch(
-                "_mcp_mesh.pipeline.heartbeat.registry_connection.RegistryClientWrapper"
+                "_mcp_mesh.pipeline.mcp_heartbeat.registry_connection.RegistryClientWrapper"
             ) as mock_wrapper_class,
         ):
 

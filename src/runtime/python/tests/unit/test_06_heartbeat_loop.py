@@ -13,7 +13,7 @@ import pytest
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.startup.heartbeat_loop import HeartbeatLoopStep
+from _mcp_mesh.pipeline.mcp_startup.heartbeat_loop import HeartbeatLoopStep
 
 
 class TestHeartbeatLoopStep:
@@ -84,7 +84,7 @@ class TestHeartbeatLoopStepSuccess:
         return {"agent_config": {}, "agent_id": "test-agent-abc12345"}
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_with_health_interval(
         self, mock_get_config_value, step, mock_context_with_health_interval
     ):
@@ -107,7 +107,7 @@ class TestHeartbeatLoopStepSuccess:
         assert heartbeat_config["registry_wrapper"] is None
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_without_health_interval_defaults_to_30(
         self, mock_get_config_value, step, mock_context_without_health_interval
     ):
@@ -126,7 +126,7 @@ class TestHeartbeatLoopStepSuccess:
         assert heartbeat_config["interval"] == 5
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_minimal_context(
         self, mock_get_config_value, step, mock_context_minimal
     ):
@@ -163,7 +163,7 @@ class TestHeartbeatLoopStepStandalone:
         }
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_standalone_mode(
         self, mock_get_config_value, step, mock_context
     ):
@@ -185,7 +185,7 @@ class TestHeartbeatLoopStepStandalone:
         assert heartbeat_config["standalone_mode"] is True
         assert heartbeat_config["registry_wrapper"] is None
 
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     def test_get_standalone_mode_uses_config_resolver(
         self, mock_get_config_value, step
     ):
@@ -232,7 +232,7 @@ class TestHeartbeatLoopStepErrors:
         return {"agent_config": {"health_interval": 30}}
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_missing_agent_config(
         self, mock_get_config_value, step, mock_context_missing_agent_config
     ):
@@ -249,7 +249,7 @@ class TestHeartbeatLoopStepErrors:
         assert heartbeat_config["interval"] == 5  # Default value
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_missing_agent_id(
         self, mock_get_config_value, step, mock_context_missing_agent_id
     ):
@@ -266,7 +266,7 @@ class TestHeartbeatLoopStepErrors:
         assert heartbeat_config["agent_id"] == "unknown-agent"  # Default value
 
     @pytest.mark.asyncio
-    @patch("_mcp_mesh.pipeline.startup.heartbeat_loop.get_config_value")
+    @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
     async def test_execute_with_exception(self, mock_get_config_value, step):
         """Test execute with exception during processing."""
         # Mock get_config_value to raise an exception

@@ -87,12 +87,14 @@ def create_server(name: str | None = None) -> "FastMCP":
     return FastMCP(name=name)
 
 
-# Make decorators available as mesh.tool and mesh.agent
+# Make decorators available as mesh.tool, mesh.agent, and mesh.route
 def __getattr__(name):
     if name == "tool":
         return decorators.tool
     elif name == "agent":
         return decorators.agent
+    elif name == "route":
+        return decorators.route
     elif name == "McpMeshAgent":
         return McpMeshAgent
     elif name == "McpAgent":

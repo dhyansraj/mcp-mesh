@@ -16,7 +16,7 @@ from _mcp_mesh.engine.decorator_registry import DecoratedFunction
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.startup.heartbeat_preparation import HeartbeatPreparationStep
+from _mcp_mesh.pipeline.mcp_startup.heartbeat_preparation import HeartbeatPreparationStep
 from _mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 
@@ -98,7 +98,7 @@ class TestHeartbeatPreparationSuccess:
     ):
         """Test basic heartbeat preparation with simple tools."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_mesh_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -122,7 +122,7 @@ class TestHeartbeatPreparationSuccess:
     async def test_heartbeat_preparation_no_tools(self, step, mock_agent_config):
         """Test heartbeat preparation with no tools."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -158,7 +158,7 @@ class TestHeartbeatPreparationSuccess:
             mock_tools[f"tool_{i}"] = decorated_func
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -197,7 +197,7 @@ class TestHeartbeatPreparationContext:
     async def test_context_keys_present(self, step, mock_agent_config):
         """Test that all expected context keys are populated."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -218,7 +218,7 @@ class TestHeartbeatPreparationContext:
         """Test registration data structure."""
         with (
             patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
             ) as mock_registry,
             patch(
                 "_mcp_mesh.shared.host_resolver.HostResolver.get_external_host",
@@ -248,7 +248,7 @@ class TestHeartbeatPreparationContext:
     async def test_health_status_structure(self, step, mock_agent_config):
         """Test health status structure."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -285,7 +285,7 @@ class TestHeartbeatPreparationContext:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -327,7 +327,7 @@ class TestHeartbeatPreparationConfigUsage:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
             ) as mock_registry,
             patch(
                 "_mcp_mesh.shared.host_resolver.HostResolver.get_external_host",
@@ -357,7 +357,7 @@ class TestHeartbeatPreparationConfigUsage:
 
         with (
             patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
             ) as mock_registry,
             patch(
                 "_mcp_mesh.shared.host_resolver.HostResolver.get_external_host",
@@ -387,7 +387,7 @@ class TestHeartbeatPreparationConfigUsage:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -440,13 +440,13 @@ class TestHeartbeatPreparationDebugMode:
     ):
         """Test debug pointer information is included when debug mode is enabled."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.get_config_value"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.get_config_value"
         ) as mock_get_config:
             # Mock debug mode enabled
             mock_get_config.return_value = True
 
             with patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_mesh_tools.return_value = mock_tool_with_dependencies
                 mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -470,13 +470,13 @@ class TestHeartbeatPreparationDebugMode:
     ):
         """Test debug pointer information is excluded when debug mode is disabled."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.get_config_value"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.get_config_value"
         ) as mock_get_config:
             # Mock debug mode disabled
             mock_get_config.return_value = False
 
             with patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_mesh_tools.return_value = mock_tool_with_dependencies
                 mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -502,7 +502,7 @@ class TestHeartbeatPreparationErrors:
         error_message = "Tools registry access failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.side_effect = Exception(error_message)
 
@@ -518,7 +518,7 @@ class TestHeartbeatPreparationErrors:
         error_message = "Agent config resolution failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}
             mock_registry.get_resolved_agent_config.side_effect = Exception(
@@ -552,14 +552,14 @@ class TestHeartbeatPreparationErrors:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
 
             # Mock validation to fail
             with patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.validate_mesh_dependencies"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.validate_mesh_dependencies"
             ) as mock_validate:
                 mock_validate.side_effect = Exception("Validation error")
 
@@ -574,7 +574,7 @@ class TestHeartbeatPreparationErrors:
         error_message = "Heartbeat preparation error"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.side_effect = Exception(error_message)
 
@@ -622,13 +622,13 @@ class TestHeartbeatPreparationToolValidation:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
 
             with patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.validate_mesh_dependencies"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.validate_mesh_dependencies"
             ) as mock_validate:
                 mock_validate.return_value = (True, "")  # Valid
 
@@ -672,13 +672,13 @@ class TestHeartbeatPreparationToolValidation:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
 
             with patch(
-                "_mcp_mesh.pipeline.startup.heartbeat_preparation.validate_mesh_dependencies"
+                "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.validate_mesh_dependencies"
             ) as mock_validate:
                 mock_validate.return_value = (False, "Invalid signature")  # Invalid
 
@@ -703,7 +703,7 @@ class TestHeartbeatPreparationToolValidation:
             )
 
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = mock_tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config
@@ -723,7 +723,7 @@ class TestHeartbeatPreparationToolValidation:
     async def test_default_capability_when_none_provided(self, step, mock_agent_config):
         """Test default capability is added when no tools provide capabilities."""
         with patch(
-            "_mcp_mesh.pipeline.startup.heartbeat_preparation.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_tools.return_value = {}  # No tools
             mock_registry.get_resolved_agent_config.return_value = mock_agent_config

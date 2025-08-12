@@ -22,7 +22,7 @@ func (Agent) Fields() []ent.Field {
 			StorageKey("agent_id").
 			Comment("Unique identifier for the agent"),
 		field.Enum("agent_type").
-			Values("mcp_agent", "mesh_tool", "decorator_agent").
+			Values("mcp_agent", "mesh_tool", "decorator_agent", "api").
 			Default("mcp_agent").
 			Comment("Type of agent"),
 		field.String("name").

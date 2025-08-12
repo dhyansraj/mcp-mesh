@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from _mcp_mesh.pipeline.heartbeat.heartbeat_pipeline import HeartbeatPipeline
+from _mcp_mesh.pipeline.mcp_heartbeat.heartbeat_pipeline import HeartbeatPipeline
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 from _mcp_mesh.shared.fast_heartbeat_status import FastHeartbeatStatus
 

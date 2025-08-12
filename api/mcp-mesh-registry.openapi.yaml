@@ -278,9 +278,9 @@ components:
       type: object
       required: [agent_id, tools]
       description: |
-        Agent registration request with flattened structure.
+        Service registration request with flattened structure.
         Used by both /agents/register and /heartbeat endpoints.
-        Based on @mesh.tool decorator processing - always has at least one tool.
+        Supports both agents (agent_type=mcp_agent) and API services (agent_type=api).
       properties:
         agent_id:
           type: string
@@ -291,10 +291,10 @@ components:
           description: Unique identifier for the agent
         agent_type:
           type: string
-          enum: [mcp_agent]
+          enum: [mcp_agent, api]
           default: "mcp_agent"
           example: "mcp_agent"
-          description: Type of agent (always mcp_agent for mesh tools)
+          description: Type of service - mcp_agent provides capabilities, api consumes them
         name:
           type: string
           minLength: 1
@@ -801,6 +801,7 @@ components:
         [
           id,
           name,
+          agent_type,
           status,
           endpoint,
           capabilities,
@@ -814,6 +815,11 @@ components:
         name:
           type: string
           example: "hello-world"
+        agent_type:
+          type: string
+          enum: [mcp_agent, api]
+          example: "mcp_agent"
+          description: Type of service - mcp_agent provides capabilities, api consumes them
         status:
           type: string
           enum: [healthy, degraded, unhealthy, offline]

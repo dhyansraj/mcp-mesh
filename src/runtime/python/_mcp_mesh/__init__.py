@@ -48,7 +48,7 @@ def initialize_runtime():
         # Legacy processor system has been replaced by pipeline architecture
 
         # Use pipeline-based runtime
-        from .pipeline.startup import start_runtime
+        from .pipeline.mcp_startup import start_runtime
 
         start_runtime()
 
@@ -60,7 +60,18 @@ def initialize_runtime():
 
 # Auto-initialize runtime if enabled
 if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
-    initialize_runtime()
+    # Use debounced initialization instead of immediate MCP startup
+    # This allows the system to determine MCP vs API pipeline based on decorators
+    try:
+        from .pipeline.mcp_startup import start_runtime
+        
+        # Start the debounced runtime (sets up coordinator, no immediate pipeline execution)
+        start_runtime()
+        
+        sys.stderr.write("MCP Mesh debounced runtime initialized\n")
+    except Exception as e:
+        # Log but don't fail - allows graceful degradation
+        sys.stderr.write(f"MCP Mesh runtime initialization failed: {e}\n")
 
 
 __all__ = [
