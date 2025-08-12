@@ -32,7 +32,7 @@ def _trigger_debounced_processing():
     all decorators are captured before processing begins.
     """
     try:
-        from _mcp_mesh.pipeline.startup import get_debounce_coordinator
+        from _mcp_mesh.pipeline.mcp_startup import get_debounce_coordinator
 
         coordinator = get_debounce_coordinator()
         coordinator.trigger_processing()
@@ -484,4 +484,146 @@ def agent(
 
         return target
 
+    return decorator
+
+
+def route(
+    *,
+    dependencies: list[dict[str, Any]] | list[str] | None = None,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """
+    FastAPI route handler decorator for dependency injection.
+    
+    Enables automatic dependency injection of MCP agents into FastAPI route handlers,
+    eliminating the need for manual MCP client management in backend services.
+    
+    Args:
+        dependencies: Optional list of agent capabilities to inject (default: [])
+        **kwargs: Additional metadata for the route
+        
+    Returns:
+        The original route handler function with dependency injection enabled
+        
+    Example:
+        @app.post("/upload")
+        @mesh.route(dependencies=["pdf-extractor", "user-service"])
+        async def upload_resume(
+            request: Request,
+            file: UploadFile = File(...),
+            pdf_agent: McpAgent = None,    # Injected by MCP Mesh
+            user_service: McpAgent = None  # Injected by MCP Mesh
+        ):
+            result = await pdf_agent.extract_text_from_pdf(file)
+            await user_service.update_profile(user_data, result)
+            return {"success": True}
+    """
+    
+    def decorator(target: T) -> T:
+        # Validate and process dependencies (reuse logic from tool decorator)
+        if dependencies is not None:
+            if not isinstance(dependencies, list):
+                raise ValueError("dependencies must be a list")
+            
+            validated_dependencies = []
+            for dep in dependencies:
+                if isinstance(dep, str):
+                    # Simple string dependency
+                    validated_dependencies.append({
+                        "capability": dep,
+                        "tags": [],
+                    })
+                elif isinstance(dep, dict):
+                    # Complex dependency with metadata
+                    if "capability" not in dep:
+                        raise ValueError("dependency must have 'capability' field")
+                    if not isinstance(dep["capability"], str):
+                        raise ValueError("dependency capability must be a string")
+                    
+                    # Validate optional dependency fields
+                    dep_tags = dep.get("tags", [])
+                    if not isinstance(dep_tags, list):
+                        raise ValueError("dependency tags must be a list")
+                    for tag in dep_tags:
+                        if not isinstance(tag, str):
+                            raise ValueError("all dependency tags must be strings")
+                    
+                    dep_version = dep.get("version")
+                    if dep_version is not None and not isinstance(dep_version, str):
+                        raise ValueError("dependency version must be a string")
+                    
+                    dependency_dict = {
+                        "capability": dep["capability"],
+                        "tags": dep_tags,
+                    }
+                    if dep_version is not None:
+                        dependency_dict["version"] = dep_version
+                    validated_dependencies.append(dependency_dict)
+                else:
+                    raise ValueError("dependencies must be strings or dictionaries")
+        else:
+            validated_dependencies = []
+        
+        # Build route metadata
+        metadata = {
+            "dependencies": validated_dependencies,
+            "description": getattr(target, "__doc__", None),
+            **kwargs,
+        }
+        
+        # Store metadata on function
+        target._mesh_route_metadata = metadata
+        
+        # Register with DecoratorRegistry using custom decorator type
+        DecoratorRegistry.register_custom_decorator("mesh_route", target, metadata)
+        
+        logger.debug(
+            f"🔍 Route '{target.__name__}' registered with {len(validated_dependencies)} dependencies"
+        )
+        
+        try:
+            # Import here to avoid circular imports
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
+
+            # Extract dependency names for injector 
+            dependency_names = [dep["capability"] for dep in validated_dependencies]
+
+            # Log the original function pointer
+            logger.debug(f"🔸 ORIGINAL route function pointer: {target} at {hex(id(target))}")
+
+            injector = get_global_injector()
+            wrapped = injector.create_injection_wrapper(target, dependency_names)
+
+            # Log the wrapper function pointer
+            logger.debug(
+                f"🔹 WRAPPER route function pointer: {wrapped} at {hex(id(wrapped))}"
+            )
+
+            # Preserve metadata on wrapper
+            wrapped._mesh_route_metadata = metadata
+
+            # Store the wrapper on the original function for reference
+            target._mesh_injection_wrapper = wrapped
+            
+            # Also store a flag on the wrapper itself so route integration can detect it
+            wrapped._mesh_is_injection_wrapper = True
+
+            # Return the wrapped function - FastAPI will register this wrapper when it runs
+            logger.debug(f"✅ Returning injection wrapper for route '{target.__name__}'")
+            logger.debug(f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}")
+
+            # Trigger debounced processing before returning
+            _trigger_debounced_processing()
+            return wrapped
+
+        except Exception as e:
+            # Log but don't fail - graceful degradation
+            logger.error(
+                f"Route dependency injection setup failed for {target.__name__}: {e}"
+            )
+            
+            # Fallback: return original function and trigger processing
+            _trigger_debounced_processing()
+            return target
+    
     return decorator

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from _mcp_mesh.pipeline.heartbeat.dependency_resolution import DependencyResolutionStep
+from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import DependencyResolutionStep
 from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
 
 

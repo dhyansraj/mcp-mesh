@@ -14,7 +14,7 @@ import pytest
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.startup.fastapiserver_setup import FastAPIServerSetupStep
+from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import FastAPIServerSetupStep
 
 
 class TestFastAPIServerSetupStep:

@@ -72,6 +72,36 @@ class DebounceCoordinator:
                 f"⏰ Scheduled processing in {self.delay_seconds} seconds"
             )
 
+    def _determine_pipeline_type(self) -> str:
+        """
+        Determine which pipeline to execute based on registered decorators.
+        
+        Returns:
+            "mcp": Only MCP agents/tools found
+            "api": Only API routes found  
+            "mixed": Both MCP and API decorators found (throws exception)
+            "none": No decorators found
+        """
+        from ...engine.decorator_registry import DecoratorRegistry
+        
+        agents = DecoratorRegistry.get_mesh_agents()
+        tools = DecoratorRegistry.get_mesh_tools()
+        routes = DecoratorRegistry.get_all_by_type("mesh_route")
+        
+        has_mcp = len(agents) > 0 or len(tools) > 0
+        has_api = len(routes) > 0
+        
+        self.logger.debug(f"🔍 Pipeline type detection: MCP={has_mcp} ({len(agents)} agents, {len(tools)} tools), API={has_api} ({len(routes)} routes)")
+        
+        if has_api and has_mcp:
+            return "mixed"
+        elif has_api:
+            return "api"
+        elif has_mcp:
+            return "mcp"
+        else:
+            return "none"
+
     def _execute_processing(self) -> None:
         """Execute the processing (called by timer)."""
         try:
@@ -83,6 +113,21 @@ class DebounceCoordinator:
                 f"🚀 Debounce delay ({self.delay_seconds}s) complete, processing all decorators"
             )
 
+            # Determine which pipeline to execute
+            pipeline_type = self._determine_pipeline_type()
+            
+            if pipeline_type == "mixed":
+                error_msg = (
+                    "❌ Mixed mode not supported: Cannot use @mesh.route decorators "
+                    "together with @mesh.tool/@mesh.agent decorators in the same process. "
+                    "Please use either MCP agent decorators OR API route decorators, not both."
+                )
+                self.logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            elif pipeline_type == "none":
+                self.logger.warning("⚠️ No decorators found - nothing to process")
+                return
+            
             # Execute the pipeline using asyncio.run
             import asyncio
 
@@ -90,18 +135,36 @@ class DebounceCoordinator:
             auto_run_enabled = self._check_auto_run_enabled()
 
             self.logger.debug(f"🔍 Auto-run enabled: {auto_run_enabled}")
+            self.logger.info(f"🎯 Pipeline type: {pipeline_type}")
 
             if auto_run_enabled:
                 self.logger.info("🔄 Auto-run enabled - using FastAPI natural blocking")
-                # Phase 1: Run async pipeline setup
-                result = asyncio.run(self._orchestrator.process_once())
+                
+                # Execute appropriate pipeline based on type
+                if pipeline_type == "mcp":
+                    # Phase 1: Run async MCP pipeline setup
+                    result = asyncio.run(self._orchestrator.process_once())
+                elif pipeline_type == "api":
+                    # Phase 1: Run async API pipeline setup
+                    result = asyncio.run(self._orchestrator.process_api_once())
+                else:
+                    raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
 
                 # Phase 2: Extract FastAPI app and start synchronous server
                 pipeline_context = result.get("context", {}).get("pipeline_context", {})
                 fastapi_app = pipeline_context.get("fastapi_app")
                 binding_config = pipeline_context.get("fastapi_binding_config", {})
+                heartbeat_config = pipeline_context.get("heartbeat_config", {})
 
-                if fastapi_app and binding_config:
+                if pipeline_type == "api":
+                    # For API services, ONLY do dependency injection - user controls their FastAPI server
+                    # Dependency injection is already complete from pipeline execution
+                    # Optionally start heartbeat in background (non-blocking)
+                    self._setup_api_heartbeat_background(heartbeat_config, pipeline_context)
+                    self.logger.info("✅ API dependency injection complete - user's FastAPI server can now start")
+                    return  # Don't block - let user's uvicorn run
+                elif fastapi_app and binding_config:
+                    # For MCP agents with FastAPI server
                     self._start_blocking_fastapi_server(fastapi_app, binding_config)
                 else:
                     self.logger.warning(
@@ -110,11 +173,20 @@ class DebounceCoordinator:
             else:
                 # Single execution mode (for testing/debugging)
                 self.logger.info("🏁 Auto-run disabled - single execution mode")
-                result = asyncio.run(self._orchestrator.process_once())
+                
+                if pipeline_type == "mcp":
+                    result = asyncio.run(self._orchestrator.process_once())
+                elif pipeline_type == "api":
+                    result = asyncio.run(self._orchestrator.process_api_once())
+                else:
+                    raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+                    
                 self.logger.info("✅ Pipeline execution completed, exiting")
 
         except Exception as e:
             self.logger.error(f"❌ Error in debounced processing: {e}")
+            # Re-raise to ensure the system exits on mixed mode or other critical errors
+            raise
 
     def _start_blocking_fastapi_server(
         self, app: Any, binding_config: dict[str, Any]
@@ -147,6 +219,58 @@ class DebounceCoordinator:
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
+
+    def _setup_api_heartbeat_background(
+        self, heartbeat_config: dict[str, Any], pipeline_context: dict[str, Any]
+    ) -> None:
+        """Setup API heartbeat to run in background - non-blocking."""
+        try:
+            # Populate heartbeat context with current pipeline context
+            heartbeat_config["context"] = pipeline_context
+            service_id = heartbeat_config.get("service_id", "unknown")
+            standalone_mode = heartbeat_config.get("standalone_mode", False)
+            
+            if standalone_mode:
+                self.logger.info(
+                    f"📝 API service '{service_id}' configured in standalone mode - no heartbeat"
+                )
+                return
+            
+            self.logger.info(
+                f"🔗 Setting up background API heartbeat for service '{service_id}'"
+            )
+            
+            # Import heartbeat functionality
+            from ..api_heartbeat.api_lifespan_integration import api_heartbeat_lifespan_task
+            import threading
+            import asyncio
+            
+            def run_heartbeat():
+                """Run heartbeat in separate thread with its own event loop."""
+                self.logger.debug(f"Starting background heartbeat thread for {service_id}")
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # Run heartbeat task
+                    loop.run_until_complete(api_heartbeat_lifespan_task(heartbeat_config))
+                except Exception as e:
+                    self.logger.error(f"❌ Background heartbeat error: {e}")
+                finally:
+                    loop.close()
+            
+            # Start heartbeat in daemon thread (won't prevent process exit)
+            heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
+            heartbeat_thread.start()
+            
+            self.logger.info(
+                f"💓 Background API heartbeat thread started for service '{service_id}'"
+            )
+
+        except Exception as e:
+            self.logger.warning(f"⚠️ Could not setup API heartbeat: {e}")
+            # Don't fail - heartbeat is optional for API services
 
     def _perform_graceful_shutdown(self) -> None:
         """Perform graceful shutdown by unregistering from registry."""
@@ -272,6 +396,43 @@ class MeshOrchestrator:
             "timestamp": result.timestamp.isoformat(),
         }
 
+    async def process_api_once(self) -> dict:
+        """
+        Execute the API pipeline once for @mesh.route decorators.
+        
+        This handles FastAPI route integration and dependency injection setup.
+        """
+        self.logger.info(f"🚀 Starting API pipeline execution: {self.name}")
+        
+        try:
+            # Import API pipeline here to avoid circular imports
+            from ..api_startup import APIPipeline
+            
+            # Create and execute API pipeline
+            api_pipeline = APIPipeline(name=f"{self.name}-api")
+            result = await api_pipeline.execute()
+            
+            # Convert result to dict for return type (same format as MCP pipeline)
+            return {
+                "status": result.status.value,
+                "message": result.message,
+                "errors": result.errors,
+                "context": result.context,
+                "timestamp": result.timestamp.isoformat(),
+            }
+            
+        except Exception as e:
+            error_msg = f"API pipeline execution failed: {e}"
+            self.logger.error(f"❌ {error_msg}")
+            
+            return {
+                "status": "failed", 
+                "message": error_msg,
+                "errors": [str(e)],
+                "context": {},
+                "timestamp": "unknown",
+            }
+
     async def start_service(self, auto_run_config: Optional[dict] = None) -> None:
         """
         Start the service with optional auto-run behavior.
@@ -366,6 +527,10 @@ def start_runtime() -> None:
     Actual pipeline execution will be triggered by decorator registration
     with a configurable delay to ensure all decorators are captured.
     """
+    # Configure logging FIRST before any log messages
+    from ...shared.logging_config import configure_logging
+    configure_logging()
+    
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
     # Install signal handlers in main thread FIRST (before any threading)

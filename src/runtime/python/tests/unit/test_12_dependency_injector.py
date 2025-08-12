@@ -662,6 +662,10 @@ class TestWrapperUpdateMechanism:
         import logging
 
         caplog.set_level(logging.DEBUG)
+        # Set the module logger level too
+        logging.getLogger("_mcp_mesh.engine.dependency_injector").setLevel(
+            logging.DEBUG
+        )
 
         def test_func(param1):
             return param1
@@ -860,6 +864,10 @@ class TestDebugLogging:
         import logging
 
         caplog.set_level(logging.DEBUG)
+        # Set the module logger level too
+        logging.getLogger("_mcp_mesh.engine.dependency_injector").setLevel(
+            logging.DEBUG
+        )
 
         def test_func(param1, dependency=None):
             return f"{param1}-{dependency}"
@@ -877,6 +885,6 @@ class TestDebugLogging:
 
             # Check for debug log messages
             assert "DEPENDENCY_WRAPPER: Function test_func called" in caplog.text
-            assert "DEPENDENCY_WRAPPER: args=('test_value',)" in caplog.text
+            assert "DEPENDENCY_WRAPPER: args=('test_value',), kwargs={}" in caplog.text
             assert "DEPENDENCY_WRAPPER: mesh_positions=[1]" in caplog.text
             assert "DEPENDENCY_WRAPPER: dependencies=['dep1']" in caplog.text

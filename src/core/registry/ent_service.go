@@ -332,8 +332,8 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 		// Dependencies will be calculated after transaction commits
 
-		// Create registry event only for new agents
-		if isNewAgent {
+		// Create registry event only for new agents (skip for API services)
+		if isNewAgent && agentType != "api" {
 			eventData := map[string]interface{}{
 				"agent_type": agentType,
 				"name":       name,
@@ -617,7 +617,11 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 
 			// Status change recovery events are now handled automatically by hooks
 			if previousStatus == agent.StatusUnhealthy {
-				s.logger.Info("Agent %s recovered from unhealthy status - event created by hook", req.AgentID)
+				if existingAgent.AgentType.String() == "api" {
+					s.logger.Info("Agent %s recovered from unhealthy status - no event created (API service)", req.AgentID)
+				} else {
+					s.logger.Info("Agent %s recovered from unhealthy status - event created by hook", req.AgentID)
+				}
 			}
 
 			return &HeartbeatResponse{
@@ -718,12 +722,13 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		status := string(a.Status)
 
 		agentInfo := generated.AgentInfo{
-			Id:       a.ID,
-			Name:     a.Name,
-			Version:  &a.Version,
-			Status:   generated.AgentInfoStatus(status),
-			Endpoint: endpoint,
-			LastSeen: &a.UpdatedAt,
+			Id:        a.ID,
+			Name:      a.Name,
+			AgentType: generated.AgentInfoAgentType(a.AgentType),
+			Version:   &a.Version,
+			Status:    generated.AgentInfoStatus(status),
+			Endpoint:  endpoint,
+			LastSeen:  &a.UpdatedAt,
 		}
 
 		// Add capabilities
@@ -1362,25 +1367,27 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		return fmt.Errorf("failed to query agent: %w", err)
 	}
 
-	// Create explicit unregister event before updating status
+	// Create explicit unregister event before updating status (skip for API services)
 	now := time.Now().UTC()
-	eventData := map[string]interface{}{
-		"agent_type": currentAgent.AgentType.String(),
-		"name":       currentAgent.Name,
-		"version":    currentAgent.Version,
-		"reason":     "graceful_shutdown",
-		"source":     "delete_endpoint",
-	}
+	if currentAgent.AgentType.String() != "api" {
+		eventData := map[string]interface{}{
+			"agent_type": currentAgent.AgentType.String(),
+			"name":       currentAgent.Name,
+			"version":    currentAgent.Version,
+			"reason":     "graceful_shutdown",
+			"source":     "delete_endpoint",
+		}
 
-	_, err = tx.RegistryEvent.Create().
-		SetEventType(registryevent.EventTypeUnregister).
-		SetAgentID(agentID).
-		SetTimestamp(now).
-		SetData(eventData).
-		Save(ctx)
-	if err != nil {
-		s.logger.Warning("Failed to create unregister event: %v", err)
-		// Don't fail the unregistration over event creation
+		_, err = tx.RegistryEvent.Create().
+			SetEventType(registryevent.EventTypeUnregister).
+			SetAgentID(agentID).
+			SetTimestamp(now).
+			SetData(eventData).
+			Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to create unregister event: %v", err)
+			// Don't fail the unregistration over event creation
+		}
 	}
 
 	// Update agent status to unhealthy and update timestamp (like RegisterAgent does)

@@ -2,6 +2,7 @@ mcp_mesh_registry_client/__init__.py
 mcp_mesh_registry_client/api/__init__.py
 mcp_mesh_registry_client/api/agents_api.py
 mcp_mesh_registry_client/api/health_api.py
+mcp_mesh_registry_client/api/tracing_api.py
 mcp_mesh_registry_client/api_client.py
 mcp_mesh_registry_client/api_response.py
 mcp_mesh_registry_client/configuration.py
@@ -35,5 +36,6 @@ mcp_mesh_registry_client/models/registration_response.py
 mcp_mesh_registry_client/models/rich_dependency.py
 mcp_mesh_registry_client/models/root_response.py
 mcp_mesh_registry_client/models/standardized_dependency.py
+mcp_mesh_registry_client/models/trace_event.py
 mcp_mesh_registry_client/py.typed
 mcp_mesh_registry_client/rest.py

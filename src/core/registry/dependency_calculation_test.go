@@ -9,7 +9,7 @@ import (
 // TestDependencyCalculation tests the dependency counting logic in isolation
 func TestDependencyCalculation(t *testing.T) {
 	// Create test request (same structure as real request)
-	agentType := generated.McpAgent
+	agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
 	realRequest := generated.MeshAgentRegistration{
 		AgentId:   "fastmcp-service-6fe236a0",
 		AgentType: &agentType,

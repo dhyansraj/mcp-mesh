@@ -13,7 +13,7 @@ func TestEntDependencyResolution(t *testing.T) {
 	entService := setupTestService(t)
 
 	// Test real request format from test_request.json
-	agentType := generated.McpAgent
+	agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
 	realRequest := generated.MeshAgentRegistration{
 		AgentId:   "fastmcp-service-6fe236a0",
 		AgentType: &agentType,

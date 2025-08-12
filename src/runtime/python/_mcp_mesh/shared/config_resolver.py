@@ -71,12 +71,9 @@ def get_config_value(
         raw_value = default
         source = "default"
 
-    logger.debug(f"Config {env_var}: raw_value={raw_value} (from {source})")
-
     # Step 2: Validate and convert the value
     try:
         validated_value = _validate_value(raw_value, rule, env_var)
-        logger.debug(f"Config {env_var}: validated_value={validated_value}")
         return validated_value
 
     except ConfigResolutionError as e:

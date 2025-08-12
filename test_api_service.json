@@ -1,0 +1,16 @@
+{
+  "agent_id": "test-api-service-no-cap",
+  "agent_type": "api",
+  "tools": [
+    {
+      "function_name": "api_endpoint_handler",
+      "dependencies": [
+        {
+          "capability": "data-service"
+        }
+      ]
+    }
+  ],
+  "http_host": "127.0.0.1",
+  "http_port": 8080
+}

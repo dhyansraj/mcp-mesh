@@ -261,8 +261,10 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	}
 
 	// Store tools information for potential future use
-	toolsData := make([]interface{}, len(reg.Tools))
-	for i, tool := range reg.Tools {
+	var toolsData []interface{}
+	if reg.Tools != nil {
+		toolsData = make([]interface{}, len(reg.Tools))
+		for i, tool := range reg.Tools {
 		toolData := map[string]interface{}{
 			"function_name": tool.FunctionName,
 			"capability":    tool.Capability,
@@ -298,7 +300,8 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		if tool.Kwargs != nil {
 			toolData["kwargs"] = *tool.Kwargs
 		}
-		toolsData[i] = toolData
+			toolsData[i] = toolData
+		}
 	}
 	result["tools"] = toolsData
 

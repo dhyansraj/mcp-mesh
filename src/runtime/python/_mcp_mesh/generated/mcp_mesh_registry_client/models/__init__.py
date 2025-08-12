@@ -43,3 +43,4 @@ from _mcp_mesh.generated.mcp_mesh_registry_client.models.registration_response i
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.rich_dependency import RichDependency
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.root_response import RootResponse
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.standardized_dependency import StandardizedDependency
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.trace_event import TraceEvent

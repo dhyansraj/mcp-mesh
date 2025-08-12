@@ -14,7 +14,7 @@ import pytest
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.startup.configuration import ConfigurationStep
+from _mcp_mesh.pipeline.mcp_startup.configuration import ConfigurationStep
 
 
 class TestConfigurationStep:
@@ -92,7 +92,7 @@ class TestConfigurationSuccess:
         mock_agents = {"TestAgent": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = (
                 mock_config_with_agent
@@ -118,7 +118,7 @@ class TestConfigurationSuccess:
         mock_agents = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config_synthetic
             mock_registry.get_mesh_agents.return_value = mock_agents
@@ -143,7 +143,7 @@ class TestConfigurationSuccess:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = (
                 mock_config_with_agent
@@ -166,7 +166,7 @@ class TestConfigurationSuccess:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = test_config
             mock_registry.get_mesh_agents.return_value = {"CustomAgent": MagicMock()}
@@ -183,7 +183,7 @@ class TestConfigurationSuccess:
         mock_agents = {"TestAgent": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = mock_agents
@@ -209,7 +209,7 @@ class TestConfigurationContext:
         mock_agents = {"Agent": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = mock_agents
@@ -228,7 +228,7 @@ class TestConfigurationContext:
         mock_agents = {"Agent": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = mock_agents
@@ -258,7 +258,7 @@ class TestConfigurationContext:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = expected_config
             mock_registry.get_mesh_agents.return_value = {"Agent": MagicMock()}
@@ -277,7 +277,7 @@ class TestConfigurationContext:
 
         # Test with explicit agents
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = {"Agent1": MagicMock()}
@@ -287,7 +287,7 @@ class TestConfigurationContext:
 
         # Test without explicit agents
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = {}
@@ -319,7 +319,7 @@ class TestConfigurationMessages:
             expected_message = f"Configuration resolved for agent '{agent_id}'"
 
             with patch(
-                "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_resolved_agent_config.return_value = mock_config
                 mock_registry.get_mesh_agents.return_value = {}
@@ -338,7 +338,7 @@ class TestConfigurationMessages:
 
         for config in agent_configs:
             with patch(
-                "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_resolved_agent_config.return_value = config
                 mock_registry.get_mesh_agents.return_value = {}
@@ -354,7 +354,7 @@ class TestConfigurationMessages:
         mock_config = {"agent_id": "default-test-001", "name": "test"}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = {}
@@ -380,7 +380,7 @@ class TestConfigurationErrors:
         error_message = "Configuration resolution failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.side_effect = Exception(
                 error_message
@@ -399,7 +399,7 @@ class TestConfigurationErrors:
         mock_config = {"agent_id": "test-123", "name": "test"}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.side_effect = Exception(error_message)
@@ -416,7 +416,7 @@ class TestConfigurationErrors:
         error_message = "Unexpected configuration error"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.side_effect = RuntimeError(
                 error_message
@@ -436,7 +436,7 @@ class TestConfigurationErrors:
         error_message = "Configuration error"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.side_effect = Exception(
                 error_message
@@ -454,7 +454,7 @@ class TestConfigurationErrors:
         error_message = "Agents call failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.side_effect = Exception(error_message)
@@ -482,7 +482,7 @@ class TestConfigurationIntegration:
         mock_config = {"agent_id": "context-test-789", "name": "context"}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = {}
@@ -514,7 +514,7 @@ class TestConfigurationIntegration:
         }
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = env_override_config
             mock_registry.get_mesh_agents.return_value = {"EnvAgent": MagicMock()}
@@ -533,7 +533,7 @@ class TestConfigurationIntegration:
         mock_config = {"agent_id": "structure-test-012", "name": "structure"}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_resolved_agent_config.return_value = mock_config
             mock_registry.get_mesh_agents.return_value = {}
@@ -565,7 +565,7 @@ class TestConfigurationIntegration:
 
         for config in test_configs:
             with patch(
-                "_mcp_mesh.pipeline.startup.configuration.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.configuration.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_resolved_agent_config.return_value = config
                 mock_registry.get_mesh_agents.return_value = {}

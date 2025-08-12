@@ -14,7 +14,7 @@ from _mcp_mesh.engine.decorator_registry import DecoratedFunction
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.startup.decorator_collection import DecoratorCollectionStep
+from _mcp_mesh.pipeline.mcp_startup.decorator_collection import DecoratorCollectionStep
 
 
 class TestDecoratorCollectionStep:
@@ -84,7 +84,7 @@ class TestDecoratorCollectionSuccess:
         mock_tools = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -105,7 +105,7 @@ class TestDecoratorCollectionSuccess:
         mock_tools = {"test_tool": mock_tool}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -126,7 +126,7 @@ class TestDecoratorCollectionSuccess:
         mock_tools = {"test_tool": mock_tool}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -151,7 +151,7 @@ class TestDecoratorCollectionSuccess:
         mock_tools = {"tool1": MagicMock(), "tool2": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -179,7 +179,7 @@ class TestDecoratorCollectionEmpty:
         mock_tools = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -200,7 +200,7 @@ class TestDecoratorCollectionEmpty:
         mock_tools = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -235,7 +235,7 @@ class TestDecoratorCollectionContext:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -254,7 +254,7 @@ class TestDecoratorCollectionContext:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -274,7 +274,7 @@ class TestDecoratorCollectionContext:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -292,7 +292,7 @@ class TestDecoratorCollectionContext:
         mock_tools = {f"tool{i}": MagicMock() for i in range(3)}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -326,7 +326,7 @@ class TestDecoratorCollectionMessages:
             mock_tools = {f"tool{i}": MagicMock() for i in range(tool_count)}
 
             with patch(
-                "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+                "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
             ) as mock_registry:
                 mock_registry.get_mesh_agents.return_value = mock_agents
                 mock_registry.get_mesh_tools.return_value = mock_tools
@@ -342,7 +342,7 @@ class TestDecoratorCollectionMessages:
         mock_tools = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -359,7 +359,7 @@ class TestDecoratorCollectionMessages:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -385,7 +385,7 @@ class TestDecoratorCollectionErrors:
         error_message = "Registry agents access failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.side_effect = Exception(error_message)
 
@@ -401,7 +401,7 @@ class TestDecoratorCollectionErrors:
         error_message = "Registry tools access failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = {}
             mock_registry.get_mesh_tools.side_effect = Exception(error_message)
@@ -418,7 +418,7 @@ class TestDecoratorCollectionErrors:
         error_message = "Unexpected registry error"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.side_effect = RuntimeError(error_message)
 
@@ -436,7 +436,7 @@ class TestDecoratorCollectionErrors:
         error_message = "Registry access failed"
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.side_effect = Exception(error_message)
 
@@ -452,7 +452,7 @@ class TestDecoratorCollectionErrors:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -467,7 +467,7 @@ class TestDecoratorCollectionErrors:
     async def test_error_prevents_second_registry_call(self, step):
         """Test that error in first call prevents second call."""
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.side_effect = Exception("First call failed")
 
@@ -494,7 +494,7 @@ class TestDecoratorCollectionIntegration:
         mock_tools = {}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -517,7 +517,7 @@ class TestDecoratorCollectionIntegration:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools
@@ -535,7 +535,7 @@ class TestDecoratorCollectionIntegration:
         mock_tools = {"tool1": MagicMock()}
 
         with patch(
-            "_mcp_mesh.pipeline.startup.decorator_collection.DecoratorRegistry"
+            "_mcp_mesh.pipeline.mcp_startup.decorator_collection.DecoratorRegistry"
         ) as mock_registry:
             mock_registry.get_mesh_agents.return_value = mock_agents
             mock_registry.get_mesh_tools.return_value = mock_tools

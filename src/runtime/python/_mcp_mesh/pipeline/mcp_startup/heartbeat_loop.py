@@ -49,7 +49,7 @@ class HeartbeatLoopStep(PipelineStep):
             standalone_mode = self._get_standalone_mode()
 
             # Import heartbeat task function
-            from ..heartbeat import heartbeat_lifespan_task
+            from ..mcp_heartbeat import heartbeat_lifespan_task
 
             # Create heartbeat config - registry connection will be attempted in heartbeat pipeline
             heartbeat_config = {

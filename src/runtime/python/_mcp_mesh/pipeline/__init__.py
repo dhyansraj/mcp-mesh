@@ -12,13 +12,13 @@ Key Components:
 - Built-in steps for common operations (collection, config, heartbeat, etc.)
 """
 
-from .heartbeat import (
+from .mcp_heartbeat import (
                         DependencyResolutionStep,
                         HeartbeatSendStep,
                         RegistryConnectionStep,
 )
 from .shared import MeshPipeline, PipelineResult, PipelineStatus, PipelineStep
-from .startup import (
+from .mcp_startup import (
                         ConfigurationStep,
                         DecoratorCollectionStep,
                         FastAPIServerSetupStep,

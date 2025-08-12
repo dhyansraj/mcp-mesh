@@ -32,6 +32,7 @@ class AgentInfo(BaseModel):
     """ # noqa: E501
     id: StrictStr
     name: StrictStr
+    agent_type: StrictStr = Field(description="Type of service - mcp_agent provides capabilities, api consumes them")
     status: StrictStr
     endpoint: StrictStr
     capabilities: List[CapabilityInfo]
@@ -39,7 +40,14 @@ class AgentInfo(BaseModel):
     dependencies_resolved: Annotated[int, Field(strict=True, ge=0)] = Field(description="Number of dependencies that have been resolved")
     last_seen: Optional[datetime] = None
     version: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["id", "name", "status", "endpoint", "capabilities", "total_dependencies", "dependencies_resolved", "last_seen", "version"]
+    __properties: ClassVar[List[str]] = ["id", "name", "agent_type", "status", "endpoint", "capabilities", "total_dependencies", "dependencies_resolved", "last_seen", "version"]
+
+    @field_validator('agent_type')
+    def agent_type_validate_enum(cls, value):
+        """Validates the enum"""
+        if value not in set(['mcp_agent', 'api']):
+            raise ValueError("must be one of enum values ('mcp_agent', 'api')")
+        return value
 
     @field_validator('status')
     def status_validate_enum(cls, value):
@@ -108,6 +116,7 @@ class AgentInfo(BaseModel):
         _obj = cls.model_validate({
             "id": obj.get("id"),
             "name": obj.get("name"),
+            "agent_type": obj.get("agent_type"),
             "status": obj.get("status"),
             "endpoint": obj.get("endpoint"),
             "capabilities": [CapabilityInfo.from_dict(_item) for _item in obj["capabilities"]] if obj.get("capabilities") is not None else None,

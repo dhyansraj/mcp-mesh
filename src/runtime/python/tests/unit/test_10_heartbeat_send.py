@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Import the classes under test
-from _mcp_mesh.pipeline.heartbeat.heartbeat_send import HeartbeatSendStep
+from _mcp_mesh.pipeline.mcp_heartbeat.heartbeat_send import HeartbeatSendStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -611,6 +611,7 @@ class TestLogging:
         }
 
         caplog.set_level(logging.DEBUG)
+        step.logger.setLevel(logging.DEBUG)
 
         result = await step.execute(context)
 

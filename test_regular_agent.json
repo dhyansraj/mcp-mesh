@@ -1,0 +1,12 @@
+{
+  "agent_id": "test-regular-agent",
+  "agent_type": "mcp_agent",
+  "tools": [
+    {
+      "function_name": "provide_data",
+      "capability": "data-service"
+    }
+  ],
+  "http_host": "127.0.0.1",
+  "http_port": 9000
+}

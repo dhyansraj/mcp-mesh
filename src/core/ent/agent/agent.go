@@ -120,6 +120,7 @@ const (
 	AgentTypeMcpAgent       AgentType = "mcp_agent"
 	AgentTypeMeshTool       AgentType = "mesh_tool"
 	AgentTypeDecoratorAgent AgentType = "decorator_agent"
+	AgentTypeAPI            AgentType = "api"
 )
 
 func (at AgentType) String() string {
@@ -129,7 +130,7 @@ func (at AgentType) String() string {
 // AgentTypeValidator is a validator for the "agent_type" field enum values. It is called by the builders before save.
 func AgentTypeValidator(at AgentType) error {
 	switch at {
-	case AgentTypeMcpAgent, AgentTypeMeshTool, AgentTypeDecoratorAgent:
+	case AgentTypeMcpAgent, AgentTypeMeshTool, AgentTypeDecoratorAgent, AgentTypeAPI:
 		return nil
 	default:
 		return fmt.Errorf("agent: invalid enum value for agent_type field: %q", at)

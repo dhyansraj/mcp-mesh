@@ -28,10 +28,10 @@ from typing_extensions import Self
 
 class MeshAgentRegistration(BaseModel):
     """
-    Agent registration request with flattened structure. Used by both /agents/register and /heartbeat endpoints. Based on @mesh.tool decorator processing - always has at least one tool. 
+    Service registration request with flattened structure. Used by both /agents/register and /heartbeat endpoints. Supports both agents (agent_type=mcp_agent) and API services (agent_type=api). 
     """ # noqa: E501
     agent_id: Annotated[str, Field(min_length=1, strict=True, max_length=64)] = Field(description="Unique identifier for the agent")
-    agent_type: Optional[StrictStr] = Field(default='mcp_agent', description="Type of agent (always mcp_agent for mesh tools)")
+    agent_type: Optional[StrictStr] = Field(default='mcp_agent', description="Type of service - mcp_agent provides capabilities, api consumes them")
     name: Optional[Annotated[str, Field(min_length=1, strict=True, max_length=64)]] = Field(default=None, description="Human-readable agent name (defaults to agent_id)")
     version: Optional[StrictStr] = Field(default='1.0.0', description="Agent version")
     http_host: Optional[StrictStr] = Field(default='0.0.0.0', description="HTTP host for agent endpoint")
@@ -54,8 +54,8 @@ class MeshAgentRegistration(BaseModel):
         if value is None:
             return value
 
-        if value not in set(['mcp_agent']):
-            raise ValueError("must be one of enum values ('mcp_agent')")
+        if value not in set(['mcp_agent', 'api']):
+            raise ValueError("must be one of enum values ('mcp_agent', 'api')")
         return value
 
     model_config = ConfigDict(
