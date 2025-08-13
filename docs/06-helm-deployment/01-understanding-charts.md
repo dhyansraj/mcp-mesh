@@ -340,7 +340,7 @@ global:
 # Image configuration (updated to match working examples)
 image:
   repository: mcp-mesh-base  # 🎯 Updated from mcp-mesh/registry
-  tag: "0.4"  # 🎯 Updated for local development
+  tag: "0.5"  # 🎯 Updated for local development
   pullPolicy: Never  # 🎯 For local development
 
 # Deployment settings
@@ -441,7 +441,7 @@ mesh:
 | Section        | Key          | Description        | Default (Updated) |
 | -------------- | ------------ | ------------------ | ----------------- |
 | `image`        | `repository` | Container image    | mcp-mesh-base     |
-| `image`        | `tag`        | Image version      | 0.4               |
+| `image`        | `tag`        | Image version      | 0.5               |
 | `image`        | `pullPolicy` | Pull policy        | Never             |
 | `replicaCount` | -            | Number of replicas | 1                 |
 | `service`      | `type`       | Service type       | ClusterIP         |
@@ -466,7 +466,7 @@ version: 1.0.0
 appVersion: "1.0.0"
 dependencies:
   - name: mcp-mesh-agent
-    version: "0.4.0"
+    version: "0.5.0"
     repository: "https://charts.mcp-mesh.io"
 ```
 

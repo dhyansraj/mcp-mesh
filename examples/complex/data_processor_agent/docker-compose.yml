@@ -49,7 +49,7 @@ services:
   # Optional: MCP Registry for dependency resolution
   # Uncomment if you want to test with full MCP Mesh infrastructure
   # mcp-registry:
-  #   image: mcpmesh/registry:0.4
+  #   image: mcpmesh/registry:0.5
   #   container_name: mcp-registry
   #   ports:
   #     - "8000:8000"

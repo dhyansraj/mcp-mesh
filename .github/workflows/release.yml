@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v0.4.0)"
+        description: "Version (e.g., v0.5.0)"
         required: true
-        default: "v0.4.2"
+        default: "v0.5.0"
       environment:
         description: "Environment"
         type: choice
@@ -133,7 +133,7 @@ jobs:
           # For install script in Dockerfiles, we need the v prefix
           VERSION_WITH_V="v${VERSION}"
 
-          # Create semantic version tags (e.g., 0.4.0 -> 0.4.0, 0.4, 0)
+          # Create semantic version tags (e.g., 0.5.0 -> 0.5.0, 0.5, 0)
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f1-2)
@@ -462,9 +462,8 @@ jobs:
             • [Docker Images](https://hub.docker.com/u/mcpmesh)
 
             🎉 **What's New:**
+            • FastAPI Dependency Injection - New @mesh.route decorator for FastAPI apps
             • Enhanced Tag Matching - Smart service discovery with +/- operators and priority scoring
-            • Industry-Standard Syntax - Kubernetes-style label selectors for intelligent provider selection
-            • Complete Backward Compatibility - Seamless upgrade path from exact tag matching
-            • Comprehensive Documentation - Migration guides and smart selection patterns
-            • Cost Control Examples - LLM provider selection with safety patterns
-          thread_name: "Release ${{ steps.version.outputs.version }}"
+            • Large Payload Support - Enhanced handling of large requests and responses
+            • Complete Backward Compatibility - Seamless upgrade path from v0.4.x
+            • Comprehensive Version Updates - All 39+ files updated for v0.5.0 consistency

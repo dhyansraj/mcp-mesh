@@ -86,7 +86,7 @@ spec:
     spec:
       containers:
         - name: agent
-          image: mcpmesh/python-runtime:0.4
+          image: mcpmesh/python-runtime:0.5
           imagePullPolicy: IfNotPresent
           command: ["python", "/app/agent.py"]
           ports:
