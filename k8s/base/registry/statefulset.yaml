@@ -90,7 +90,7 @@ spec:
 
       containers:
         - name: registry
-          image: mcpmesh/registry:0.4
+          image: mcpmesh/registry:0.5
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

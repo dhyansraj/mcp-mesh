@@ -31,7 +31,7 @@ from .engine.decorator_registry import (
     get_decorator_stats,
 )
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 # Store reference to runtime processor if initialized
 _runtime_processor = None
@@ -64,10 +64,10 @@ if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
     # This allows the system to determine MCP vs API pipeline based on decorators
     try:
         from .pipeline.mcp_startup import start_runtime
-        
+
         # Start the debounced runtime (sets up coordinator, no immediate pipeline execution)
         start_runtime()
-        
+
         sys.stderr.write("MCP Mesh debounced runtime initialized\n")
     except Exception as e:
         # Log but don't fail - allows graceful degradation

@@ -1,5 +1,41 @@
 # MCP Mesh Release Notes
 
+## v0.5.0 (2025-08-13)
+
+### 🚀 Major Release - FastAPI Dependency Injection Integration
+
+**FastAPI Native Support**
+
+- Complete FastAPI dependency injection system integration with MCP Mesh decorators
+- Seamless interoperability between FastAPI's `Depends()` and mesh dependency resolution
+- Type-safe dependency injection with automatic provider discovery and lifecycle management
+- Introduced new `@mesh.route` decorator exclusively for FastAPI apps to inject MCP Mesh agents
+
+**Advanced Dependency Resolution**
+
+- Added +/- operator support in tags: + means preferred, - means exclude
+
+### 🐛 Bug Fixes & Stability
+
+- Enhanced support for large payload and response handling
+
+### 🏷️ Migration Guide
+
+**Upgrading from v0.4.x**
+
+- **Python Package**: Update to `pip install "mcp-mesh>=0.5,<0.6"`
+- **Docker Images**: Use `mcpmesh/registry:0.5` and `mcpmesh/python-runtime:0.5`
+- **Helm Charts**: All charts now use v0.5.0 for consistent dependency management
+- **Configuration**: Update any hardcoded version references in deployment manifests
+
+**Breaking Changes**
+
+- None - this release maintains full backward compatibility with v0.4.x
+- Enhanced FastAPI integration is additive and does not affect existing code
+- All existing decorators and patterns continue to work unchanged
+
+---
+
 ## v0.4.2 (2025-08-11)
 
 ### 🔧 Critical Bug Fixes
