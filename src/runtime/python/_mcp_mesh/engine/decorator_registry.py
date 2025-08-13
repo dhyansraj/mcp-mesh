@@ -278,6 +278,28 @@ class DecoratorRegistry:
     _cached_agent_config: Optional[dict[str, Any]] = None
 
     @classmethod
+    def update_agent_config(cls, updates: dict[str, Any]) -> None:
+        """
+        Update the cached agent configuration with new values.
+        
+        This is useful for API services that generate their agent ID
+        during pipeline execution and need to store it for telemetry.
+        
+        Args:
+            updates: Dictionary of config values to update
+        """
+        if cls._cached_agent_config is None:
+            # Initialize with current resolved config if not cached yet
+            cls._cached_agent_config = cls.get_resolved_agent_config().copy()
+        
+        # Update with new values
+        cls._cached_agent_config.update(updates)
+        
+        logger.debug(
+            f"🔧 Updated cached agent configuration with: {updates}"
+        )
+
+    @classmethod
     def get_resolved_agent_config(cls) -> dict[str, Any]:
         """
         Get resolved agent configuration from stored decorator metadata.
@@ -288,11 +310,14 @@ class DecoratorRegistry:
         Returns:
             dict: Pre-resolved configuration with consistent agent_id
         """
-        # Return cached configuration if available
-        if cls._cached_agent_config is not None:
+        # Step 1: Check if cached configuration already has agent_id (from API pipeline)
+        if cls._cached_agent_config is not None and cls._cached_agent_config.get('agent_id'):
+            logger.debug(
+                f"🔧 Using cached agent configuration: agent_id='{cls._cached_agent_config.get('agent_id')}'"
+            )
             return cls._cached_agent_config
 
-        # If we have explicit @mesh.agent configuration, use it
+        # Step 2: If we have explicit @mesh.agent configuration, use it
         if cls._mesh_agents:
             for agent_name, decorated_func in cls._mesh_agents.items():
                 # Return the already-resolved configuration from decorator
@@ -306,14 +331,23 @@ class DecoratorRegistry:
                 )
                 return resolved_config
 
-        # Fallback: Synthetic defaults when no @mesh.agent decorator exists
-        # This happens when only @mesh.tool decorators are used
-        from mesh.decorators import _get_or_create_agent_id
-
+        # Step 3: Fallback to synthetic defaults when no @mesh.agent decorator exists
+        # This happens when only @mesh.tool decorators are used and no cached agent_id
         from ..shared.config_resolver import ValidationRule, get_config_value
         from ..shared.defaults import MeshDefaults
 
-        agent_id = _get_or_create_agent_id()
+        # Check if we're in an API context (have mesh_route decorators)
+        mesh_routes = cls.get_all_by_type("mesh_route")
+        is_api_context = len(mesh_routes) > 0
+        
+        if is_api_context:
+            # Use API service ID generation logic for consistency
+            agent_id = cls._generate_api_service_id_fallback()
+        else:
+            # Use standard MCP agent ID generation
+            from mesh.decorators import _get_or_create_agent_id
+            agent_id = _get_or_create_agent_id()
+        
         fallback_config = {
             "name": None,
             "version": get_config_value(
@@ -367,6 +401,62 @@ class DecoratorRegistry:
             f"🔧 Generated synthetic agent configuration: agent_id='{agent_id}'"
         )
         return fallback_config
+
+    @classmethod
+    def _generate_api_service_id_fallback(cls) -> str:
+        """
+        Generate API service ID as fallback using same priority logic as API pipeline.
+        
+        Priority order:
+        1. MCP_MESH_API_NAME environment variable 
+        2. MCP_MESH_AGENT_NAME environment variable (fallback)
+        3. Default to "api-{uuid8}"
+        
+        Returns:
+            Generated service ID with UUID suffix matching API service format
+        """
+        import uuid
+        
+        from ..shared.config_resolver import ValidationRule, get_config_value
+        
+        # Check for API-specific environment variable first (same as API pipeline)
+        api_name = get_config_value(
+            "MCP_MESH_API_NAME",
+            default=None,
+            rule=ValidationRule.STRING_RULE,
+        )
+        
+        # Fallback to general agent name env var
+        if not api_name:
+            api_name = get_config_value(
+                "MCP_MESH_AGENT_NAME", 
+                default=None,
+                rule=ValidationRule.STRING_RULE,
+            )
+        
+        # Clean the service name if provided
+        if api_name:
+            cleaned_name = api_name.lower().replace(" ", "-").replace("_", "-")
+            cleaned_name = "-".join(part for part in cleaned_name.split("-") if part)
+        else:
+            cleaned_name = ""
+        
+        # Generate UUID suffix
+        uuid_suffix = str(uuid.uuid4())[:8]
+        
+        # Apply same naming logic as API pipeline
+        if not cleaned_name:
+            # No name provided: default to "api-{uuid8}"
+            service_id = f"api-{uuid_suffix}"
+        elif "api" in cleaned_name.lower():
+            # Name already contains "api": use "{name}-{uuid8}"
+            service_id = f"{cleaned_name}-{uuid_suffix}"
+        else:
+            # Name doesn't contain "api": use "{name}-api-{uuid8}"
+            service_id = f"{cleaned_name}-api-{uuid_suffix}"
+        
+        logger.debug(f"Generated fallback API service ID: '{service_id}' from env name: '{api_name}'")
+        return service_id
 
     @classmethod
     def get_all_agents(cls) -> list[tuple[Any, dict[str, Any]]]:

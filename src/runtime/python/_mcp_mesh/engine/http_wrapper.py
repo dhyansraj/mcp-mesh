@@ -395,6 +395,12 @@ class HttpMcpWrapper:
         from starlette.responses import Response
 
         class MCPSessionRoutingMiddleware(BaseHTTPMiddleware):
+            """Session routing middleware for MCP requests.
+            
+            Handles session affinity by routing requests to appropriate pods
+            based on session ID. Telemetry/tracing is now handled in the
+            DI function wrapper for unified coverage of both MCP and API calls.
+            """
             def __init__(self, app, http_wrapper):
                 super().__init__(app)
                 self.http_wrapper = http_wrapper
@@ -402,26 +408,9 @@ class HttpMcpWrapper:
 
             async def dispatch(self, request: Request, call_next):
                 # Only handle MCP requests (FastMCP app already only handles /mcp)
-
-                # Extract and set trace context from headers for distributed tracing
-                try:
-                    from ..tracing.trace_context_helper import TraceContextHelper
-
-                    # Use helper class for trace context extraction and setup
-                    trace_context = (
-                        await TraceContextHelper.extract_trace_context_from_request(
-                            request
-                        )
-                    )
-                    TraceContextHelper.setup_request_trace_context(
-                        trace_context, self.logger
-                    )
-                except Exception as e:
-                    import logging
-
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to set trace context: {e}")
-                    pass
+                
+                # Note: Telemetry/tracing now handled in DI function wrapper for unified approach
+                # This middleware focuses purely on session routing
 
                 # Extract session ID from request
                 session_id = await self.http_wrapper._extract_session_id(request)

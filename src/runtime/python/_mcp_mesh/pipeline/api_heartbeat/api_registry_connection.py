@@ -52,14 +52,21 @@ class APIRegistryConnectionStep(PipelineStep):
                     context={"registry_wrapper": registry_wrapper}
                 )
 
-            # Get registry configuration from context
+            # Get registry configuration from context and environment
             agent_config = context.get("agent_config", {})
             registration_data = context.get("registration_data", {})
             
-            registry_url = (
-                agent_config.get("registry_url") 
-                or registration_data.get("registry_url")
-                or "http://localhost:8000"  # Default fallback
+            # Use proper config resolver to respect environment variables first
+            from ...shared.config_resolver import ValidationRule, get_config_value
+            
+            registry_url = get_config_value(
+                "MCP_MESH_REGISTRY_URL",
+                override=(
+                    agent_config.get("registry_url") 
+                    or registration_data.get("registry_url")
+                ),
+                default="http://localhost:8000",
+                rule=ValidationRule.URL_RULE,
             )
 
             self.logger.debug(f"🔍 Using registry URL: {registry_url}")

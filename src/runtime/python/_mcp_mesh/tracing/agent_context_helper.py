@@ -41,7 +41,7 @@ class AgentContextHelper:
             from ..engine.decorator_registry import DecoratorRegistry
 
             agent_config = DecoratorRegistry.get_resolved_agent_config()
-
+            
             # Extract core configuration fields using proper resolution
             context["agent_id"] = agent_config.get("agent_id", "unknown")
             context["agent_name"] = agent_config.get("name") or os.getenv(

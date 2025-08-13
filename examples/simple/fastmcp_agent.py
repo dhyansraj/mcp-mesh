@@ -157,7 +157,7 @@ async def health_status(
     status_type: str, time_service: mesh.McpMeshAgent = None
 ) -> str:
     """Health status information."""
-    timestamp = time_service() if time_service else "unknown"
+    timestamp = await time_service() if time_service else "unknown"
 
     status = {
         "status": "healthy",

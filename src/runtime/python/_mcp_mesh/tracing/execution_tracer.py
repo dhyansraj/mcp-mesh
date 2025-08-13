@@ -191,3 +191,44 @@ class ExecutionTracer:
         except Exception as e:
             tracer.end_execution(error=str(e), success=False)
             raise  # Re-raise the exception
+
+    @staticmethod
+    async def trace_function_execution_async(
+        func: Callable,
+        args: tuple,
+        kwargs: dict,
+        dependencies: list[str],
+        mesh_positions: list[int],
+        injected_count: int,
+        logger_instance: logging.Logger,
+    ) -> Any:
+        """
+        Trace async function execution with comprehensive logging.
+
+        This is a static method that handles the complete execution flow with proper
+        exception handling and cleanup. If tracing is disabled, calls function directly.
+        """
+        import inspect
+        
+        # If tracing is disabled, call function directly without any overhead
+        if not _is_tracing_enabled():
+            if inspect.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            else:
+                return func(*args, **kwargs)
+
+        tracer = ExecutionTracer(func.__name__, logger_instance)
+        tracer.start_execution(
+            args, kwargs, dependencies, mesh_positions, injected_count
+        )
+
+        try:
+            if inspect.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+            tracer.end_execution(result, success=True)
+            return result
+        except Exception as e:
+            tracer.end_execution(error=str(e), success=False)
+            raise  # Re-raise the exception

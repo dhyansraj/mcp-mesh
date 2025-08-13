@@ -93,7 +93,7 @@ class MCPClientProxy:
                 "params": {"name": self.function_name, "arguments": kwargs},
             }
 
-            url = f"{self.endpoint}/mcp/"  # Use trailing slash to avoid 307 redirect
+            url = f"{self.endpoint}/mcp"  # Remove trailing slash to avoid 307 redirect
             data = json.dumps(payload).encode("utf-8")
 
             # Build headers with trace context injection

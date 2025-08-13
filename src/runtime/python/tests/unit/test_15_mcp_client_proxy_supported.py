@@ -54,8 +54,8 @@ class TestMCPClientProxyBasicProtocol:
         call_args = mock_urlopen.call_args
         request = call_args[0][0]
 
-        # Check URL
-        assert request.full_url == "http://test-service:8080/mcp/"
+        # Check URL (fixed: removed trailing slash to avoid 307 redirects)
+        assert request.full_url == "http://test-service:8080/mcp"
 
         # Check headers
         assert request.get_header("Content-type") == "application/json"
@@ -470,4 +470,4 @@ class TestAsyncMCPClientSupported:
             mock_urlopen.assert_called_once()
             call_args = mock_urlopen.call_args
             request = call_args[0][0]
-            assert request.full_url == "http://service:8080/mcp/"
+            assert request.full_url == "http://service:8080/mcp"

@@ -256,14 +256,7 @@ class APIDependencyResolutionStep(PipelineStep):
                         # Import here to avoid circular imports
                         import os
 
-                        from ...engine.full_mcp_proxy import (
-                            EnhancedFullMCPProxy,
-                            FullMCPProxy,
-                        )
-                        from ...engine.mcp_client_proxy import (
-                            EnhancedMCPClientProxy,
-                            MCPClientProxy,
-                        )
+                        from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                         # Get current agent ID for self-dependency detection
@@ -308,20 +301,18 @@ class APIDependencyResolutionStep(PipelineStep):
                                 f"this is unusual for API services. Consider refactoring."
                             )
                             # For API services, we don't have access to original functions in the same way
-                            # Fall back to HTTP proxy approach
-                            proxy_type = self._determine_api_proxy_type_for_capability(
-                                capability, injector
-                            )
-                            new_proxy = self._create_proxy_for_api(
-                                proxy_type, endpoint, dep_function_name, kwargs_config
+                            # Fall back to unified proxy (same as cross-service)
+                            new_proxy = EnhancedUnifiedMCPProxy(
+                                endpoint,
+                                dep_function_name,
+                                kwargs_config=kwargs_config,
                             )
                         else:
-                            # Create cross-service proxy (the normal case for API services)
-                            proxy_type = self._determine_api_proxy_type_for_capability(
-                                capability, injector
-                            )
-                            new_proxy = self._create_proxy_for_api(
-                                proxy_type, endpoint, dep_function_name, kwargs_config
+                            # Create cross-service proxy using unified proxy (same as MCP pipeline)
+                            new_proxy = EnhancedUnifiedMCPProxy(
+                                endpoint,
+                                dep_function_name,
+                                kwargs_config=kwargs_config,
                             )
 
                         # Update in injector (this will update ALL route handlers that depend on this capability)
@@ -335,7 +326,7 @@ class APIDependencyResolutionStep(PipelineStep):
                         
                         self.logger.info(
                             f"🔄 Updated API dependency '{capability}' → {endpoint}/{dep_function_name} "
-                            f"(proxy: {proxy_type})"
+                            f"(proxy: EnhancedUnifiedMCPProxy - consistent with MCP pipeline)"
                         )
                     else:
                         if status != "available":

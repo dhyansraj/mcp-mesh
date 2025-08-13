@@ -13,7 +13,7 @@ Usage:
 """
 
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import mesh
 from fastmcp import FastMCP
@@ -30,11 +30,12 @@ app = FastMCP("Chat Client Service")
     ],  # Depends on LLM service capability from llm-chat-agent
     description="Simple chat interface that delegates to LLM agent",
 )
-def simple_chat(
+async def simple_chat(
     message: str,
     task: str = "analyze",
     context: Optional[str] = None,
-    llm_service: mesh.McpAgent | None = None,
+    model: str = "claude-3-5-sonnet-20241022",
+    llm_service: mesh.McpMeshAgent | None = None,
 ) -> Dict[str, str]:
     """
     Simple chat interface using dependency injection to call LLM agent.
@@ -43,6 +44,7 @@ def simple_chat(
         message: The message/text to process
         task: Processing task (analyze, summarize, interpret, classify, extract)
         context: Optional context for the processing
+        model: Claude model to use (defaults to claude-3-5-sonnet-20241022)
         llm_service: Injected LLM service from llm-chat-agent
 
     Returns:
@@ -56,14 +58,14 @@ def simple_chat(
         }
 
     try:
-        # Call the injected LLM service
+        # Call the injected LLM service using natural async pattern
         # This will call process_text_with_llm on the llm-chat-agent
-        llm_response = llm_service(
+        llm_response = await llm_service(
             text=message,
             task=task,
             context=context or "User chat interaction",
-            model="claude-3-sonnet-20240229",
-            max_tokens=200,
+            model=model,
+            max_tokens=8000,  # Increased for complex analysis
             temperature=0.7,
         )
 
@@ -87,7 +89,7 @@ def simple_chat(
     dependencies=["llm-service"],  # Simple dependency to check LLM service
     description="Check if LLM chat services are available and working",
 )
-def health_check(llm_service: mesh.McpAgent | None = None) -> Dict[str, str]:
+async def health_check(llm_service: mesh.McpMeshAgent | None = None) -> Dict[str, str]:
     """
     Health check for the chat client and its dependencies.
 
@@ -106,7 +108,7 @@ def health_check(llm_service: mesh.McpAgent | None = None) -> Dict[str, str]:
     if llm_service is not None:
         try:
             # Try a simple test call without tools for health check
-            test_result = llm_service(
+            test_result = await llm_service(
                 text="Health check test",
                 task="analyze",
                 context="System health check",
@@ -133,12 +135,13 @@ def health_check(llm_service: mesh.McpAgent | None = None) -> Dict[str, str]:
     dependencies=["llm-service"],  # Depends on LLM service for file content analysis
     description="Read file from disk and analyze content using LLM agent",
 )
-def analyze_file(
+async def analyze_file(
     file_path: str,
     task: str = "analyze",
     context: Optional[str] = None,
-    llm_service: mesh.McpAgent | None = None,
-) -> Dict[str, str]:
+    model: str = "claude-3-5-sonnet-20241022",
+    llm_service: mesh.McpMeshAgent | None = None,
+) -> Dict[str, Any]:
     """
     Read a file from disk and analyze its content using the LLM agent.
 
@@ -146,6 +149,7 @@ def analyze_file(
         file_path: Path to the file to read and analyze
         task: Analysis task (analyze, summarize, interpret, classify, extract)
         context: Optional context for the analysis
+        model: Claude model to use (defaults to claude-3-5-sonnet-20241022)
         llm_service: Injected LLM service from llm-chat-agent
 
     Returns:
@@ -277,27 +281,35 @@ def analyze_file(
             },
         }
 
-        # Call LLM service for analysis with structured tool
-        llm_response = llm_service(
+        # Call LLM service for analysis with structured tool using natural async pattern
+        llm_response = await llm_service(
             text=content,
             task=task,
             context=analysis_context,
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=4000,  # Match PDF extractor token limit
+            model=model,
+            max_tokens=8000,  # Increased for large PDF analysis
             temperature=0.3,  # Lower for more consistent structured output
             tools=[analysis_tool],
             force_tool_use=True,
         )
 
-        # Process structured response
+        # Process structured response - now unified proxy returns clean Python dicts
         structured_analysis = None
-        if (
-            isinstance(llm_response, dict)
-            and llm_response.get("success")
-            and llm_response.get("tool_calls")
-        ):
-            # Extract structured data from tool calls
-            structured_analysis = llm_response["tool_calls"][0]["parameters"]
+
+        # Handle unified Python dict responses from proxy
+        if isinstance(llm_response, dict):
+            if llm_response.get("success") and llm_response.get("tool_calls"):
+                # Direct dict format from unified proxy conversion
+                structured_analysis = llm_response["tool_calls"][0]["parameters"]
+            elif "structuredContent" in llm_response:
+                # Nested format (legacy compatibility)
+                structured_content = llm_response["structuredContent"]
+                if structured_content.get("success") and structured_content.get(
+                    "tool_calls"
+                ):
+                    structured_analysis = structured_content["tool_calls"][0][
+                        "parameters"
+                    ]
 
         return {
             "file_path": file_path,
