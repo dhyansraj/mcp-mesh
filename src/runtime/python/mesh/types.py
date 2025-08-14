@@ -3,7 +3,7 @@ MCP Mesh type definitions for dependency injection.
 """
 
 from collections.abc import AsyncIterator
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 try:
     from pydantic_core import core_schema
@@ -15,29 +15,56 @@ except ImportError:
 
 class McpMeshAgent(Protocol):
     """
-    Protocol for MCP Mesh agent proxies used in dependency injection.
+    Unified MCP Mesh agent proxy using FastMCP's built-in client.
 
-    Each proxy is bound to a specific remote function and knows exactly what to call.
-    The registry handles function-to-function mapping, so users don't need to specify function names.
+    This protocol now provides all MCP protocol features using FastMCP's superior client
+    implementation, replacing both the old basic and advanced proxy types.
+
+    Features:
+    - All MCP protocol methods (tools, resources, prompts)
+    - Streaming support with FastMCP's StreamableHttpTransport
+    - Session management with notifications
+    - Automatic redirect handling (fixes /mcp/ → /mcp issue)
+    - CallToolResult objects with structured content parsing
+    - Enhanced proxy configuration via kwargs
 
     Usage Examples:
-        @mesh.tool(dependencies=[{"capability": "get_current_date"}])  # Function name as capability
-        def greet(name: str, date_getter: McpMeshAgent) -> str:
+        @mesh.tool(dependencies=["date-service"])
+        def greet(name: str, date_service: McpMeshAgent) -> str:
             # Simple call - proxy knows which remote function to invoke
-            current_date = date_getter()
+            current_date = date_service()
 
             # With arguments
-            current_date = date_getter({"format": "ISO"})
+            current_date = date_service({"format": "ISO"})
 
             # Explicit invoke (same as call)
-            current_date = date_getter.invoke({"format": "ISO"})
+            current_date = date_service.invoke({"format": "ISO"})
 
             return f"Hello {name}, today is {current_date}"
 
-    The proxy is bound to one specific remote function, eliminating the need to specify function names.
+        @mesh.tool(dependencies=["file-service"])
+        async def process_files(file_service: McpMeshAgent) -> str:
+            # Full MCP Protocol usage
+            tools = await file_service.list_tools()
+            resources = await file_service.list_resources()
+            prompts = await file_service.list_prompts()
+
+            # Read a specific resource
+            config = await file_service.read_resource("file://config.json")
+
+            # Get a prompt template
+            prompt = await file_service.get_prompt("analysis_prompt", {"topic": "data"})
+
+            # Streaming tool call
+            async for chunk in file_service.call_tool_streaming("process_large_file", {"file": "big.txt"}):
+                print(chunk)
+
+            return "Processing complete"
+
+    The unified proxy provides all MCP protocol features while maintaining simple callable interface.
     """
 
-    def __call__(self, arguments: dict[str, Any] = None) -> Any:
+    def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
         """
         Call the bound remote function.
 
@@ -45,11 +72,11 @@ class McpMeshAgent(Protocol):
             arguments: Arguments to pass to the remote function (optional)
 
         Returns:
-            Result from the remote function call
+            Result from the remote function call (CallToolResult object)
         """
         ...
 
-    def invoke(self, arguments: dict[str, Any] = None) -> Any:
+    def invoke(self, arguments: Optional[dict[str, Any]] = None) -> Any:
         """
         Explicitly invoke the bound remote function.
 
@@ -60,12 +87,63 @@ class McpMeshAgent(Protocol):
             arguments: Arguments to pass to the remote function (optional)
 
         Returns:
-            Result from the remote function call
+            Result from the remote function call (CallToolResult object)
 
         Example:
-            result = date_getter.invoke({"format": "ISO"})
-            # Same as: result = date_getter({"format": "ISO"})
+            result = date_service.invoke({"format": "ISO"})
+            # Same as: result = date_service({"format": "ISO"})
         """
+        ...
+
+    # Full MCP Protocol Methods - now available on all McpMeshAgent proxies
+    async def list_tools(self) -> list:
+        """List available tools from remote agent."""
+        ...
+
+    async def list_resources(self) -> list:
+        """List available resources from remote agent."""
+        ...
+
+    async def read_resource(self, uri: str) -> Any:
+        """Read resource contents from remote agent."""
+        ...
+
+    async def list_prompts(self) -> list:
+        """List available prompts from remote agent."""
+        ...
+
+    async def get_prompt(self, name: str, arguments: Optional[dict] = None) -> Any:
+        """Get prompt template from remote agent."""
+        ...
+
+    # Streaming Support using FastMCP's superior streaming capabilities
+    async def call_tool_streaming(
+        self, name: str, arguments: dict = None, progress_handler=None
+    ) -> AsyncIterator[Any]:
+        """
+        Call a tool with streaming response using FastMCP's streaming support.
+
+        Args:
+            name: Tool name to call
+            arguments: Tool arguments
+            progress_handler: Optional progress handler for streaming
+
+        Yields:
+            Streaming response chunks
+        """
+        ...
+
+    # Session Management using FastMCP's built-in session support
+    async def create_session(self) -> str:
+        """Create a new session and return session ID."""
+        ...
+
+    async def call_with_session(self, session_id: str, **kwargs) -> Any:
+        """Call tool with explicit session ID for stateful operations."""
+        ...
+
+    async def close_session(self, session_id: str) -> bool:
+        """Close session and cleanup session state."""
         ...
 
     if PYDANTIC_AVAILABLE:
@@ -104,47 +182,30 @@ class McpMeshAgent(Protocol):
 
 class McpAgent(Protocol):
     """
-    Protocol for Full MCP Agent proxies with complete MCP protocol support.
+    DEPRECATED: Use McpMeshAgent instead.
 
-    This agent type provides access to the complete MCP protocol including:
-    - Tools (call, list)
-    - Resources (read, list)
-    - Prompts (get, list)
-    - Streaming tool calls
+    This type has been unified with McpMeshAgent. All features previously exclusive
+    to McpAgent are now available in McpMeshAgent using FastMCP's superior client.
 
-    Usage Examples:
-        @mesh.tool(dependencies=[{"capability": "file_service"}])
-        async def process_files(file_service: McpAgent) -> str:
-            # Vanilla MCP Protocol usage (100% compatible)
-            tools = await file_service.list_tools()
-            resources = await file_service.list_resources()
-            prompts = await file_service.list_prompts()
+    Migration:
+        # Old way (deprecated)
+        def process_files(file_service: McpAgent) -> str:
+            pass
 
-            # Read a specific resource
-            config = await file_service.read_resource("file://config.json")
+        # New way (recommended)
+        def process_files(file_service: McpMeshAgent) -> str:
+            pass
 
-            # Get a prompt template
-            prompt = await file_service.get_prompt("analysis_prompt", {"topic": "data"})
-
-            # Basic tool call (McpMeshAgent compatibility)
-            result = file_service({"action": "process"})
-
-            # Streaming tool call (breakthrough feature)
-            async for chunk in file_service.call_tool_streaming("process_large_file", {"file": "big.txt"}):
-                print(chunk)
-
-            return "Processing complete"
-
-    This proxy provides full MCP protocol access while maintaining backward compatibility
-    with the basic __call__ interface from McpMeshAgent.
+    McpMeshAgent now provides all MCP protocol features including streaming,
+    session management, and CallToolResult objects via FastMCP client.
     """
 
     # Basic compatibility with McpMeshAgent
-    def __call__(self, arguments: dict[str, Any] | None = None) -> Any:
+    def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
         """Call the bound remote function (McpMeshAgent compatibility)."""
         ...
 
-    def invoke(self, arguments: dict[str, Any] | None = None) -> Any:
+    def invoke(self, arguments: Optional[dict[str, Any]] = None) -> Any:
         """Explicitly invoke the bound remote function (McpMeshAgent compatibility)."""
         ...
 
@@ -165,7 +226,7 @@ class McpAgent(Protocol):
         """List available prompts from remote agent (vanilla MCP method)."""
         ...
 
-    async def get_prompt(self, name: str, arguments: dict | None = None) -> Any:
+    async def get_prompt(self, name: str, arguments: Optional[dict] = None) -> Any:
         """Get prompt template from remote agent (vanilla MCP method)."""
         ...
 

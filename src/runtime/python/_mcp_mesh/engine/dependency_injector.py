@@ -288,9 +288,45 @@ class DependencyInjector:
                 f"🔧 No injection positions for {func.__name__}, creating minimal wrapper for tracking"
             )
 
-            @functools.wraps(func)
-            def minimal_wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
+            # Check if we need async wrapper for minimal case
+            if inspect.iscoroutinefunction(func):
+                @functools.wraps(func)
+                async def minimal_wrapper(*args, **kwargs):
+                    # Execute with telemetry tracing even for async functions without dependencies
+                    try:
+                        from ..tracing.execution_tracer import ExecutionTracer
+                        
+                        # Use ExecutionTracer for minimal async wrapper (no dependencies)
+                        return await ExecutionTracer.trace_function_execution_async(
+                            func, args, kwargs, [], [], 0, wrapper_logger
+                        )
+                    except ImportError:
+                        # Fallback if tracing is unavailable - never fail user function
+                        wrapper_logger.debug("🔇 Tracing unavailable, executing without telemetry")
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        # Never fail user function due to tracing errors
+                        wrapper_logger.warning(f"⚠️ Telemetry failed, executing without: {e}")
+                        return await func(*args, **kwargs)
+            else:
+                @functools.wraps(func)
+                def minimal_wrapper(*args, **kwargs):
+                    # Execute with telemetry tracing even for functions without dependencies
+                    try:
+                        from ..tracing.execution_tracer import ExecutionTracer
+                        
+                        # Use ExecutionTracer for minimal wrapper (no dependencies)
+                        return ExecutionTracer.trace_original_function(
+                            func, args, kwargs, wrapper_logger
+                        )
+                    except ImportError:
+                        # Fallback if tracing is unavailable - never fail user function
+                        wrapper_logger.debug("🔇 Tracing unavailable, executing without telemetry")
+                        return func(*args, **kwargs)
+                    except Exception as e:
+                        # Never fail user function due to tracing errors
+                        wrapper_logger.warning(f"⚠️ Telemetry failed, executing without: {e}")
+                        return func(*args, **kwargs)
 
             # Add minimal metadata for compatibility
             minimal_wrapper._mesh_injected_deps = {}
@@ -390,17 +426,51 @@ class DependencyInjector:
                     f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}"
                 )
 
-                # ===== EXECUTE WITH DEPENDENCY INJECTION =====
-                # Call the original function with injected dependencies
+                # ===== EXECUTE WITH TELEMETRY AND DEPENDENCY INJECTION =====
+                # Call the original function with telemetry tracing and injected dependencies
                 original_func = func._mesh_original_func
 
-                # Check if the function is async and handle accordingly
-                if inspect.iscoroutinefunction(original_func):
-                    # For async functions, await the result directly
-                    result = await original_func(*args, **final_kwargs)
-                else:
-                    # For sync functions, call directly
-                    result = original_func(*args, **final_kwargs)
+                # Execute with telemetry tracing
+                try:
+                    from ..tracing.execution_tracer import ExecutionTracer
+                    
+                    # Use ExecutionTracer for comprehensive telemetry
+                    if inspect.iscoroutinefunction(original_func):
+                        # For async functions, await the result directly
+                        result = await ExecutionTracer.trace_function_execution_async(
+                            original_func,
+                            args,
+                            final_kwargs,
+                            dependencies,
+                            mesh_positions,
+                            injected_count,
+                            wrapper_logger,
+                        )
+                    else:
+                        # For sync functions, call directly
+                        result = ExecutionTracer.trace_function_execution(
+                            original_func,
+                            args,
+                            final_kwargs,
+                            dependencies,
+                            mesh_positions,
+                            injected_count,
+                            wrapper_logger,
+                        )
+                except ImportError:
+                    # Fallback if tracing is unavailable - never fail user function
+                    wrapper_logger.debug("🔇 Tracing unavailable, executing without telemetry")
+                    if inspect.iscoroutinefunction(original_func):
+                        result = await original_func(*args, **final_kwargs)
+                    else:
+                        result = original_func(*args, **final_kwargs)
+                except Exception as e:
+                    # Never fail user function due to tracing errors
+                    wrapper_logger.warning(f"⚠️ Telemetry failed, executing without: {e}")
+                    if inspect.iscoroutinefunction(original_func):
+                        result = await original_func(*args, **final_kwargs)
+                    else:
+                        result = original_func(*args, **final_kwargs)
 
                 wrapper_logger.debug(
                     f"🔧 DEPENDENCY_WRAPPER: Original returned: {type(result)}"
@@ -454,8 +524,29 @@ class DependencyInjector:
                             final_kwargs[param_name] = dependency
                             injected_count += 1
 
-                # Call the original function with injected dependencies
-                return func._mesh_original_func(*args, **final_kwargs)
+                # ===== EXECUTE WITH TELEMETRY AND DEPENDENCY INJECTION =====
+                # Call the original function with telemetry tracing and injected dependencies
+                try:
+                    from ..tracing.execution_tracer import ExecutionTracer
+                    
+                    # Use ExecutionTracer for comprehensive telemetry
+                    return ExecutionTracer.trace_function_execution(
+                        func._mesh_original_func,
+                        args,
+                        final_kwargs,
+                        dependencies,
+                        mesh_positions,
+                        injected_count,
+                        wrapper_logger,
+                    )
+                except ImportError:
+                    # Fallback if tracing is unavailable - never fail user function
+                    wrapper_logger.debug("🔇 Tracing unavailable, executing without telemetry")
+                    return func._mesh_original_func(*args, **final_kwargs)
+                except Exception as e:
+                    # Never fail user function due to tracing errors
+                    wrapper_logger.warning(f"⚠️ Telemetry failed, executing without: {e}")
+                    return func._mesh_original_func(*args, **final_kwargs)
 
         # Store dependency state on wrapper
         dependency_wrapper._mesh_injected_deps = {}

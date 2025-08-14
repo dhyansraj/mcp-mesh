@@ -26,12 +26,12 @@ app = FastMCP("Dependent Service")
         }
     ],
 )
-def generate_report(
+async def generate_report(
     title: str, content: str = "Sample content", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Generate a timestamped report using the time service."""
-    # Get timestamp from the injected time service
-    timestamp = time_service() if time_service else "unknown"
+    # Get timestamp from the injected time service using natural async pattern
+    timestamp = await time_service() if time_service else "unknown"
 
     report = {
         "title": title,
@@ -46,12 +46,12 @@ def generate_report(
 
 @app.tool()
 @mesh.tool(capability="analysis_service", dependencies=["time_service"])
-def analyze_data(
+async def analyze_data(
     data: list, analysis_type: str = "basic", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Analyze data with timestamp from time service."""
-    # Get timestamp from the injected time service
-    timestamp = time_service() if time_service else "unknown"
+    # Get timestamp from the injected time service using natural async pattern
+    timestamp = await time_service() if time_service else "unknown"
 
     # Simple analysis
     if not data:
@@ -89,7 +89,7 @@ def analyze_data(
 @mesh.tool(
     capability="comprehensive_report_service", dependencies=["system_info_service"]
 )
-def generate_comprehensive_report(
+async def generate_comprehensive_report(
     report_title: str,
     include_system_data: bool = True,
     system_info_service: mesh.McpMeshAgent = None,
@@ -98,7 +98,7 @@ def generate_comprehensive_report(
     # Get enriched system info from FastMCP service (which calls system agent)
     if include_system_data and system_info_service:
         try:
-            system_data = system_info_service(include_timestamp=True)
+            system_data = await system_info_service(include_timestamp=True)
         except Exception as e:
             system_data = {"error": f"Failed to get system data: {e}"}
     else:

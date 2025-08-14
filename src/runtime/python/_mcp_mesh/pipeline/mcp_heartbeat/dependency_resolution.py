@@ -190,11 +190,7 @@ class DependencyResolutionStep(PipelineStep):
 
             # Import here to avoid circular imports
             from ...engine.dependency_injector import get_global_injector
-            from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-            from ...engine.mcp_client_proxy import (
-                EnhancedMCPClientProxy,
-                MCPClientProxy,
-            )
+            from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
 
             injector = get_global_injector()
 
@@ -235,14 +231,6 @@ class DependencyResolutionStep(PipelineStep):
                         # Get current agent ID for self-dependency detection
                         import os
 
-                        from ...engine.full_mcp_proxy import (
-                            EnhancedFullMCPProxy,
-                            FullMCPProxy,
-                        )
-                        from ...engine.mcp_client_proxy import (
-                            EnhancedMCPClientProxy,
-                            MCPClientProxy,
-                        )
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                         # Get current agent ID from DecoratorRegistry (single source of truth)
@@ -302,98 +290,26 @@ class DependencyResolutionStep(PipelineStep):
                                     f"❌ Cannot create SelfDependencyProxy for '{capability}': "
                                     f"original function '{dep_function_name}' not found, falling back to HTTP"
                                 )
-                                # Use type-based proxy selection for fallback too
-                                proxy_type = self._determine_proxy_type_for_capability(
-                                    capability, injector
+                                # Use unified proxy for fallback
+                                new_proxy = EnhancedUnifiedMCPProxy(
+                                    endpoint,
+                                    dep_function_name,
+                                    kwargs_config=kwargs_config,
                                 )
-                                if proxy_type == "FullMCPProxy":
-                                    # Use enhanced proxy if kwargs available
-                                    if kwargs_config:
-                                        new_proxy = EnhancedFullMCPProxy(
-                                            endpoint,
-                                            dep_function_name,
-                                            kwargs_config=kwargs_config,
-                                        )
-                                        self.logger.debug(
-                                            f"🔧 Created EnhancedFullMCPProxy with kwargs: {kwargs_config}"
-                                        )
-                                    else:
-                                        new_proxy = FullMCPProxy(
-                                            endpoint,
-                                            dep_function_name,
-                                            kwargs_config=kwargs_config,
-                                        )
-                                        self.logger.debug(
-                                            "🔧 Created FullMCPProxy (no kwargs)"
-                                        )
-                                else:
-                                    # Use enhanced proxy if kwargs available
-                                    if kwargs_config:
-                                        new_proxy = EnhancedMCPClientProxy(
-                                            endpoint,
-                                            dep_function_name,
-                                            kwargs_config=kwargs_config,
-                                        )
-                                        self.logger.debug(
-                                            f"🔧 Created EnhancedMCPClientProxy with kwargs: {kwargs_config}"
-                                        )
-                                    else:
-                                        new_proxy = MCPClientProxy(
-                                            endpoint,
-                                            dep_function_name,
-                                            kwargs_config=kwargs_config,
-                                        )
-                                        self.logger.debug(
-                                            "🔧 Created MCPClientProxy (no kwargs)"
-                                        )
+                                self.logger.debug(
+                                    f"🔧 Created EnhancedUnifiedMCPProxy (fallback): {kwargs_config}"
+                                )
                         else:
-                            # Create cross-service proxy based on parameter types that use this capability
-                            proxy_type = self._determine_proxy_type_for_capability(
-                                capability, injector
+                            # Create cross-service proxy using unified proxy
+                            new_proxy = EnhancedUnifiedMCPProxy(
+                                endpoint,
+                                dep_function_name,
+                                kwargs_config=kwargs_config,
                             )
-
-                            if proxy_type == "FullMCPProxy":
-                                # Use enhanced proxy if kwargs available
-                                if kwargs_config:
-                                    new_proxy = EnhancedFullMCPProxy(
-                                        endpoint,
-                                        dep_function_name,
-                                        kwargs_config=kwargs_config,
-                                    )
-                                    self.logger.info(
-                                        f"🔄 Updated to EnhancedFullMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
-                                        f"timeout={kwargs_config.get('timeout', 30)}s, streaming={kwargs_config.get('streaming', False)}"
-                                    )
-                                else:
-                                    new_proxy = FullMCPProxy(
-                                        endpoint,
-                                        dep_function_name,
-                                        kwargs_config=kwargs_config,
-                                    )
-                                    self.logger.debug(
-                                        f"🔄 Updated to FullMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}"
-                                    )
-                            else:
-                                # Use enhanced proxy if kwargs available
-                                if kwargs_config:
-                                    new_proxy = EnhancedMCPClientProxy(
-                                        endpoint,
-                                        dep_function_name,
-                                        kwargs_config=kwargs_config,
-                                    )
-                                    self.logger.info(
-                                        f"🔄 Updated to EnhancedMCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
-                                        f"timeout={kwargs_config.get('timeout', 30)}s, retries={kwargs_config.get('retry_count', 1)}"
-                                    )
-                                else:
-                                    new_proxy = MCPClientProxy(
-                                        endpoint,
-                                        dep_function_name,
-                                        kwargs_config=kwargs_config,
-                                    )
-                                    self.logger.debug(
-                                        f"🔄 Updated to MCPClientProxy: '{capability}' -> {endpoint}/{dep_function_name}"
-                                    )
+                            self.logger.info(
+                                f"🔄 Updated to EnhancedUnifiedMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
+                                f"timeout={kwargs_config.get('timeout', 30)}s, streaming={kwargs_config.get('streaming', False)}"
+                            )
 
                         # Update in injector (this will update ALL functions that depend on this capability)
                         await injector.register_dependency(capability, new_proxy)
@@ -434,84 +350,4 @@ class DependencyResolutionStep(PipelineStep):
             )
             # Don't raise - this should not break the heartbeat loop
 
-    def _determine_proxy_type_for_capability(self, capability: str, injector) -> str:
-        """
-        Determine which proxy type to use based on parameter types that depend on this capability.
-
-        Logic (TWO-PASS for deterministic results):
-        1. First pass: Scan ALL functions to check if ANY uses McpAgent
-        2. If ANY McpAgent found → use FullMCPProxy for entire capability
-        3. Otherwise → use MCPClientProxy (for McpMeshAgent or default)
-
-        This eliminates race conditions caused by function processing order.
-
-        Args:
-            capability: The capability name to check
-            injector: The dependency injector instance
-
-        Returns:
-            "FullMCPProxy" or "MCPClientProxy"
-        """
-        try:
-            # Get functions that depend on this capability
-            if capability not in injector._dependency_mapping:
-                self.logger.debug(
-                    f"🔍 No functions depend on capability '{capability}', using MCPClientProxy"
-                )
-                return "MCPClientProxy"
-
-            affected_function_ids = injector._dependency_mapping[capability]
-
-            # PASS 1: Scan ALL functions to detect ANY McpAgent usage
-            mcpagent_functions = []
-            mcpmeshagent_functions = []
-
-            for func_id in affected_function_ids:
-                if func_id in injector._function_registry:
-                    wrapper_func = injector._function_registry[func_id]
-
-                    # Get stored parameter types from wrapper
-                    if hasattr(wrapper_func, "_mesh_parameter_types") and hasattr(
-                        wrapper_func, "_mesh_dependencies"
-                    ):
-                        parameter_types = wrapper_func._mesh_parameter_types
-                        dependencies = wrapper_func._mesh_dependencies
-                        mesh_positions = wrapper_func._mesh_positions
-
-                        # Find which parameter position corresponds to this capability
-                        for dep_index, dep_name in enumerate(dependencies):
-                            if dep_name == capability and dep_index < len(
-                                mesh_positions
-                            ):
-                                param_position = mesh_positions[dep_index]
-
-                                # Check the parameter type at this position
-                                if param_position in parameter_types:
-                                    param_type = parameter_types[param_position]
-                                    if param_type == "McpAgent":
-                                        mcpagent_functions.append(func_id)
-                                    elif param_type == "McpMeshAgent":
-                                        mcpmeshagent_functions.append(func_id)
-
-            # PASS 2: Make deterministic decision based on complete analysis
-            if mcpagent_functions:
-                self.logger.debug(
-                    f"🔍 Found McpAgent in functions {mcpagent_functions} for capability '{capability}' → using FullMCPProxy"
-                )
-                if mcpmeshagent_functions:
-                    self.logger.info(
-                        f"ℹ️ Capability '{capability}' used by both McpAgent {mcpagent_functions} and McpMeshAgent {mcpmeshagent_functions} → upgrading ALL to FullMCPProxy"
-                    )
-                return "FullMCPProxy"
-            else:
-                # Only McpMeshAgent or untyped parameters
-                self.logger.debug(
-                    f"🔍 Only McpMeshAgent/untyped functions {mcpmeshagent_functions} for capability '{capability}' → using MCPClientProxy"
-                )
-                return "MCPClientProxy"
-
-        except Exception as e:
-            self.logger.warning(
-                f"⚠️ Failed to determine proxy type for capability '{capability}': {e}"
-            )
-            return "MCPClientProxy"  # Safe default
+    # Proxy type determination method removed - now using unified proxy for all dependencies

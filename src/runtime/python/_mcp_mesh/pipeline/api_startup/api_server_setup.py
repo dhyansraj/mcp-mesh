@@ -201,8 +201,9 @@ class APIServerSetupStep(PipelineStep):
         This configuration will be used to start the heartbeat pipeline
         for periodic service registration and health monitoring.
         """
-        # Generate service ID using same logic as MCP agents
-        service_id = self._generate_api_service_id(app_info)
+        # Check if we already have a service ID in the decorator registry
+        # If so, and it's in API format, reuse it to avoid ID changes
+        service_id = self._get_or_generate_api_service_id(app_info)
         
         # Get heartbeat interval using centralized defaults (consistent with MCP heartbeat)
         from ...shared.defaults import MeshDefaults
@@ -230,6 +231,23 @@ class APIServerSetupStep(PipelineStep):
             }
         }
         
+        # Store the generated service ID back to decorator registry for telemetry
+        try:
+            from ...engine.decorator_registry import DecoratorRegistry
+            
+            DecoratorRegistry.update_agent_config({
+                "agent_id": service_id,
+                "name": app_info.get("title", "api-service")
+            })
+            
+            self.logger.debug(
+                f"🔧 Stored API service ID '{service_id}' in decorator registry for telemetry"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"⚠️ Failed to store API service ID in decorator registry: {e}"
+            )
+        
         self.logger.info(
             f"💓 API heartbeat config created: service_id='{service_id}', "
             f"interval={heartbeat_interval}s, standalone={standalone_mode}"
@@ -237,51 +255,108 @@ class APIServerSetupStep(PipelineStep):
         
         return heartbeat_config
 
-    def _generate_api_service_id(self, app_info: Dict[str, Any]) -> str:
+    def _generate_api_service_id(self, app_info: Optional[Dict[str, Any]] = None) -> str:
         """
-        Generate API service ID using same UUID logic as MCP agents.
+        Generate API service ID using same priority logic as MCP agents.
         
-        Logic:
-        - If no name provided: "api-{uuid8}"
-        - If name doesn't contain "api": "{name}-api-{uuid8}"  
-        - If name contains "api": "{name}-{uuid8}"
+        Priority order:
+        1. MCP_MESH_API_NAME environment variable 
+        2. MCP_MESH_AGENT_NAME environment variable (fallback)
+        3. Default to "api-{uuid8}"
         
         Args:
-            app_info: FastAPI app information containing title
+            app_info: FastAPI app information (optional, not used in simplified logic)
             
         Returns:
             Generated service ID with UUID suffix
         """
-        # Get service name from app title or use default
-        service_name = app_info.get("title", "")
+        import uuid
         
-        # Clean the service name (similar to MCP agent logic)
-        if service_name:
-            # Convert to lowercase and replace spaces/special chars with hyphens
-            cleaned_name = service_name.lower().replace(" ", "-").replace("_", "-")
-            # Remove any double hyphens and strip
+        # Check for API-specific environment variable first
+        api_name = get_config_value(
+            "MCP_MESH_API_NAME",
+            default=None,
+            rule=ValidationRule.STRING_RULE,
+        )
+        
+        # Fallback to general agent name env var
+        if not api_name:
+            api_name = get_config_value(
+                "MCP_MESH_AGENT_NAME", 
+                default=None,
+                rule=ValidationRule.STRING_RULE,
+            )
+        
+        # Clean the service name if provided
+        if api_name:
+            cleaned_name = api_name.lower().replace(" ", "-").replace("_", "-")
             cleaned_name = "-".join(part for part in cleaned_name.split("-") if part)
         else:
             cleaned_name = ""
         
-        # Apply the UUID suffix logic similar to MCP agents
+        # Generate UUID suffix  
         uuid_suffix = str(uuid.uuid4())[:8]
         
+        # Apply naming logic
         if not cleaned_name:
-            # No name provided: use "api-{uuid8}"
+            # No name provided: default to "api-{uuid8}"
             service_id = f"api-{uuid_suffix}"
         elif "api" in cleaned_name.lower():
-            # Name contains "api": use "{name}-{uuid8}"
+            # Name already contains "api": use "{name}-{uuid8}"
             service_id = f"{cleaned_name}-{uuid_suffix}"
         else:
             # Name doesn't contain "api": use "{name}-api-{uuid8}"
             service_id = f"{cleaned_name}-api-{uuid_suffix}"
         
         self.logger.debug(
-            f"Generated API service ID: '{service_id}' from app title: '{service_name}'"
+            f"Generated API service ID: '{service_id}' from env name: '{api_name}'"
         )
         
         return service_id
+
+    def _get_or_generate_api_service_id(self, app_info: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Get existing service ID from decorator registry or generate a new one.
+        
+        Since both the fallback and API pipeline now use identical logic based on 
+        environment variables, we can simply reuse any existing API service ID.
+        
+        Args:
+            app_info: FastAPI app information (optional, not used in simplified logic)
+            
+        Returns:
+            Service ID (existing or newly generated)
+        """
+        try:
+            from ...engine.decorator_registry import DecoratorRegistry
+            
+            # Get current cached config to see if we already have an ID
+            current_config = DecoratorRegistry.get_resolved_agent_config()
+            existing_id = current_config.get("agent_id", "")
+            
+            # Check if existing ID looks like an API service ID
+            is_api_format = (
+                existing_id.startswith("api-") or  # api-{uuid}
+                "-api-" in existing_id  # {name}-api-{uuid}
+            )
+            
+            if existing_id and is_api_format:
+                # Reuse existing API service ID (fallback and pipeline use same logic now)
+                self.logger.info(
+                    f"🔄 Reusing existing API service ID: '{existing_id}' (consistent with fallback logic)"
+                )
+                return existing_id
+            else:
+                # Generate new ID - will be identical to what fallback would have generated
+                new_id = self._generate_api_service_id(app_info)
+                self.logger.info(
+                    f"🆕 Generated new API service ID: '{new_id}' (no existing API format ID found)"
+                )
+                return new_id
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️ Error checking existing service ID, generating new one: {e}")
+            return self._generate_api_service_id(app_info)
 
     def _is_http_enabled(self) -> bool:
         """Check if HTTP transport is enabled."""

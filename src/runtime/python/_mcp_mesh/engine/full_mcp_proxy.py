@@ -85,7 +85,7 @@ class FullMCPProxy(MCPClientProxy):
             try:
                 import httpx
 
-                url = f"{self.endpoint}/mcp/"
+                url = f"{self.endpoint}/mcp"
 
                 # Build headers with trace context
                 headers = {
@@ -234,7 +234,7 @@ class FullMCPProxy(MCPClientProxy):
             }
 
             # URL for MCP protocol endpoint
-            url = f"{self.endpoint.rstrip('/')}/mcp/"
+            url = f"{self.endpoint.rstrip('/')}/mcp"
 
             # Add session ID to headers for session routing
             headers = {
@@ -500,7 +500,7 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Inject trace context headers
         headers = self._inject_trace_headers(headers)
 
-        url = f"{self.endpoint}/mcp/"
+        url = f"{self.endpoint}/mcp"
 
         try:
             import httpx
@@ -580,7 +580,7 @@ class EnhancedFullMCPProxy(FullMCPProxy):
         # Inject trace context headers
         headers = self._inject_trace_headers(headers)
 
-        url = f"{self.endpoint}/mcp/"
+        url = f"{self.endpoint}/mcp"
 
         try:
             import httpx

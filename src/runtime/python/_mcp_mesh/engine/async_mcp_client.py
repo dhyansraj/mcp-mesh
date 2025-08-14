@@ -39,7 +39,7 @@ class AsyncMCPClient:
 
     async def _make_request(self, payload: dict) -> dict:
         """Make async HTTP request to MCP endpoint."""
-        url = f"{self.endpoint}/mcp/"
+        url = f"{self.endpoint}/mcp"
 
         try:
             # Use httpx for proper async HTTP requests (better threading support than aiohttp)
@@ -91,7 +91,7 @@ class AsyncMCPClient:
 
     async def _make_request_sync(self, payload: dict) -> dict:
         """Fallback sync HTTP request using urllib."""
-        url = f"{self.endpoint}/mcp/"
+        url = f"{self.endpoint}/mcp"
         data = json.dumps(payload).encode("utf-8")
 
         # Create request
