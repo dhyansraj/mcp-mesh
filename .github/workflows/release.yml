@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.5.0)"
         required: true
-        default: "v0.5.0"
+        default: "v0.5.1"
       environment:
         description: "Environment"
         type: choice
@@ -444,26 +444,20 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Discord Webhook Notification
-        uses: Ilshidur/action-discord@master
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        with:
-          args: |
-            🚀 **New MCP Mesh Release!**
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          RELEASE_URL="${{ github.event.release.html_url || format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }}"
 
-            **Version:** ${{ steps.version.outputs.version }}
-            **Release Notes:** ${{ github.event.release.html_url ||
-            format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }}
+          # Create JSON payload for Discord webhook with thread_name for forum channels
+          PAYLOAD=$(cat <<EOF
+          {
+            "content": "🚀 **New MCP Mesh Release!**\n\n**Version:** ${VERSION}\n**Release Notes:** ${RELEASE_URL}\n\n📦 **Download:**\n• [GitHub Release](${RELEASE_URL})\n• [PyPI Package](https://pypi.org/project/mcp-mesh/)\n• [Docker Images](https://hub.docker.com/u/mcpmesh)\n\n🎉 **What's New:**\n• FastMCP Client Integration - Official protocol support with better compliance\n• Unified Telemetry Architecture - Complete observability across MCP agents and API services\n• FastAPI Route Telemetry - Distributed tracing for @mesh.route decorated endpoints\n• Agent ID Consistency - Unified generation eliminates registry/telemetry mismatch",
+            "thread_name": "MCP Mesh Release ${VERSION}"
+          }
+          EOF
+          )
 
-            📦 **Download:**
-            • [GitHub Release](${{ github.event.release.html_url ||
-            format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }})
-            • [PyPI Package](https://pypi.org/project/mcp-mesh/)
-            • [Docker Images](https://hub.docker.com/u/mcpmesh)
-
-            🎉 **What's New:**
-            • FastAPI Dependency Injection - New @mesh.route decorator for FastAPI apps
-            • Enhanced Tag Matching - Smart service discovery with +/- operators and priority scoring
-            • Large Payload Support - Enhanced handling of large requests and responses
-            • Complete Backward Compatibility - Seamless upgrade path from v0.4.x
-            • Comprehensive Version Updates - All 39+ files updated for v0.5.0 consistency
+          # Send to Discord webhook
+          curl -H "Content-Type: application/json" \
+               -d "$PAYLOAD" \
+               "${{ secrets.DISCORD_WEBHOOK }}"
