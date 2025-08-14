@@ -316,7 +316,7 @@ docker pull mcpmesh/python-runtime:0.5
 docker pull mcpmesh/cli:0.5
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.5.0/mcp-mesh_v0.5.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.5.1/mcp-mesh_v0.5.1_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 

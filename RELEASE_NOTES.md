@@ -1,5 +1,41 @@
 # MCP Mesh Release Notes
 
+## v0.5.1 (2025-08-14)
+
+### 🔧 Major Enhancement Release - Unified Telemetry Architecture
+
+**FastMCP Client Integration**
+
+- Replaced custom MCP client with official FastMCP client library for better protocol compliance
+- Enhanced error handling and timeout management with official client optimizations
+
+**Unified Telemetry Architecture**
+
+- Moved telemetry from HTTP middleware to dependency injection wrapper for complete coverage
+- Added distributed tracing support for FastAPI routes with `@mesh.route()` decorators
+- Unified agent ID generation across MCP agents and API services
+- Redis stream storage for all telemetry data in `mesh:trace`
+
+**Agent Context Enhancement**
+
+- 3-step agent ID resolution: cached → @mesh.agent config → synthetic defaults
+- Environment variable priority: `MCP_MESH_API_NAME` → `MCP_MESH_AGENT_NAME` → `api-{uuid8}`
+- Comprehensive metadata collection with performance metrics
+
+### 🏷️ Migration Guide
+
+**Upgrading from v0.5.0:**
+
+- **Python Package**: Update to `pip install "mcp-mesh>=0.5.1,<0.6"`
+- **Docker Images**: Use `mcpmesh/registry:0.5.1` and `mcpmesh/python-runtime:0.5.1`
+- **Helm Charts**: All charts now use v0.5.1 for consistent dependency management
+
+**Breaking Changes:**
+
+- None - this release maintains full backward compatibility with v0.5.0
+
+---
+
 ## v0.5.0 (2025-08-13)
 
 ### 🚀 Major Release - FastAPI Dependency Injection Integration
