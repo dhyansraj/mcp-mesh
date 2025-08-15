@@ -15,7 +15,7 @@ on:
         description: "Environment"
         type: choice
         options: [production, test]
-        default: test
+        default: production
 
 env:
   REGISTRY: mcpmesh
@@ -38,6 +38,7 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       - name: Install cross-compilation toolchain
         run: |
@@ -84,10 +85,204 @@ jobs:
             dist/*.zip
             dist/checksums.txt
 
+  # Build macOS binaries natively
+  build-macos-binaries:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building macOS version: ${VERSION}"
+
+      - name: Build macOS binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORMS: "darwin/amd64,darwin/arm64"
+          OUTPUT_DIR: "dist-macos"
+        run: ./packaging/scripts/build-binaries.sh
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist-macos/*.tar.gz
+            dist-macos/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries-${{ steps.version.outputs.version }}
+          path: |
+            dist-macos/*.tar.gz
+            dist-macos/*.zip
+
+  # Combine checksums from all platforms (for real releases)
+  combine-checksums:
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-macos-binaries]
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-${{ steps.version.outputs.version }}
+          path: dist-linux
+
+      - name: Download macOS binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries-${{ steps.version.outputs.version }}
+          path: dist-macos
+
+      - name: Generate combined checksums
+        run: |
+          mkdir -p dist-combined
+
+          # Copy all archives to combined directory
+          find dist-linux -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist-combined/
+          find dist-macos -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist-combined/
+
+          # Generate combined checksums
+          cd dist-combined
+          if command -v sha256sum &> /dev/null; then
+            sha256sum *.tar.gz > checksums.txt
+            if ls *.zip &> /dev/null; then
+              sha256sum *.zip >> checksums.txt
+            fi
+          elif command -v shasum &> /dev/null; then
+            shasum -a 256 *.tar.gz > checksums.txt
+            if ls *.zip &> /dev/null; then
+              shasum -a 256 *.zip >> checksums.txt
+            fi
+          fi
+
+          echo "Combined checksums:"
+          cat checksums.txt
+
+      - name: Upload combined checksums to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist-combined/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish Python package to PyPI
+  publish-python:
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-macos-binaries]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    permissions:
+      contents: read
+      id-token: write # For trusted publishing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Prepare packaging files
+        working-directory: packaging/pypi
+        run: |
+          cp ../../src/runtime/python/README.md .
+          cp ../../LICENSE .
+          cp -r ../../src/runtime/python/_mcp_mesh .
+          cp -r ../../src/runtime/python/mesh .
+
+      - name: Update version in packaging files
+        working-directory: packaging/pypi
+        run: |
+          # Determine version
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # Debug output
+          echo "Event name: ${{ github.event_name }}"
+          echo "Ref name: ${{ github.ref_name }}"
+          echo "Detected version: ${VERSION}"
+          echo "Current version in file: $(grep '__version__' _mcp_mesh/__init__.py)"
+
+          # Update version in both __init__.py and pyproject.toml
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" _mcp_mesh/__init__.py
+          sed -i "s/version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
+
+          # Verify the versions were updated
+          echo "Updated __init__.py version to: $(grep '__version__' _mcp_mesh/__init__.py)"
+          echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
+
+      - name: Build package
+        working-directory: packaging/pypi
+        run: python -m build
+
+      - name: Check package
+        working-directory: packaging/pypi
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packaging/pypi/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
   # Build and push Docker images
   build-docker:
     runs-on: ubuntu-latest
     needs: [publish-python]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     permissions:
       contents: read
       packages: write
@@ -99,18 +294,12 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: >
-          github.event_name == 'release' ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Log in to GitHub Container Registry
-        if: >
-          github.event_name == 'release' ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -161,9 +350,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.meta.outputs.version_with_v }}
-          push: >
-            ${{ github.event_name == 'release' ||
-            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
+          push: true
           tags: |
             ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.patch_version }}
             ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.minor_version }}
@@ -222,9 +409,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
-          push: >
-            ${{ github.event_name == 'release' ||
-            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
+          push: true
           tags: |
             ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.patch_version }}
             ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.minor_version }}
@@ -245,9 +430,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ steps.meta.outputs.version_with_v }}
-          push: >
-            ${{ github.event_name == 'release' ||
-            (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') }}
+          push: true
           tags: |
             ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.patch_version }}
             ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.minor_version }}
@@ -260,89 +443,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Publish Python package to PyPI
-  publish-python:
-    runs-on: ubuntu-latest
-    needs: [build-binaries]
-    if: >
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
-    permissions:
-      contents: read
-      id-token: write # For trusted publishing
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-
-      - name: Prepare packaging files
-        working-directory: packaging/pypi
-        run: |
-          cp ../../src/runtime/python/README.md .
-          cp ../../LICENSE .
-          cp -r ../../src/runtime/python/_mcp_mesh .
-          cp -r ../../src/runtime/python/mesh .
-
-      - name: Update version in packaging files
-        working-directory: packaging/pypi
-        run: |
-          # Determine version
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-          fi
-          VERSION=${VERSION#v}  # Remove 'v' prefix
-
-          # Convert test versions to PEP 440 compliant format
-          if [[ "$VERSION" == *"-test"* ]]; then
-            VERSION=$(echo "$VERSION" | sed 's/-test/.dev/')
-          fi
-
-          # Debug output
-          echo "Event name: ${{ github.event_name }}"
-          echo "Ref name: ${{ github.ref_name }}"
-          echo "Detected version: ${VERSION}"
-          echo "Current version in file: $(grep '__version__' _mcp_mesh/__init__.py)"
-
-          # Update version in both __init__.py and pyproject.toml
-          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" _mcp_mesh/__init__.py
-          sed -i "s/version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
-
-          # Verify the versions were updated
-          echo "Updated __init__.py version to: $(grep '__version__' _mcp_mesh/__init__.py)"
-          echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
-
-      - name: Build package
-        working-directory: packaging/pypi
-        run: python -m build
-
-      - name: Check package
-        working-directory: packaging/pypi
-        run: twine check dist/*
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: packaging/pypi/dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
-
   # Update package manager manifests
   update-packages:
     runs-on: ubuntu-latest
+    needs: [build-binaries, build-macos-binaries, combine-checksums]
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
-    needs: [build-binaries]
     permissions:
       contents: write
       pull-requests: write
@@ -351,32 +458,102 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Update Homebrew formula
+        env:
+          GITHUB_TOKEN: ${{ secrets.HOMEBREW_PAT_TOKEN }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="${{ github.ref_name }}"
           fi
-          VERSION=${VERSION#v}  # Remove 'v' prefix
+          VERSION_NO_V=${VERSION#v}  # Remove 'v' prefix
+          TAG_NAME="$VERSION"
 
-          # Download checksums
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG_NAME="${{ github.event.inputs.version }}"
-          else
-            TAG_NAME="${{ github.ref_name }}"
-          fi
+          echo "Updating Homebrew formula for version: $VERSION"
 
+          # Download checksums from release
           curl -L \
             "https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/checksums.txt" \
             -o checksums.txt
 
-          # Update Homebrew formula with new version and checksums
-          # This would typically involve updating the formula file and creating a PR
-          # For now, we'll just log the information needed
-          echo "Homebrew formula update needed:"
-          echo "Version: ${VERSION}"
-          echo "Checksums:"
-          cat checksums.txt
+          # Extract SHA256 for macOS binaries
+          DARWIN_AMD64_SHA=$(grep "mcp-mesh_${TAG_NAME}_darwin_amd64.tar.gz" checksums.txt | cut -d' ' -f1)
+          DARWIN_ARM64_SHA=$(grep "mcp-mesh_${TAG_NAME}_darwin_arm64.tar.gz" checksums.txt | cut -d' ' -f1)
+
+          if [[ -z "$DARWIN_AMD64_SHA" || -z "$DARWIN_ARM64_SHA" ]]; then
+            echo "Error: Could not find macOS checksums in checksums.txt"
+            cat checksums.txt
+            exit 1
+          fi
+
+          echo "Darwin AMD64 SHA: $DARWIN_AMD64_SHA"
+          echo "Darwin ARM64 SHA: $DARWIN_ARM64_SHA"
+
+          # Create updated formula
+          REPO_URL="https://github.com/dhyansraj/mcp-mesh"
+          ARM64_URL="${REPO_URL}/releases/download/${TAG_NAME}/mcp-mesh_${TAG_NAME}_darwin_arm64.tar.gz"
+          AMD64_URL="${REPO_URL}/releases/download/${TAG_NAME}/mcp-mesh_${TAG_NAME}_darwin_amd64.tar.gz"
+
+          cat > mcp-mesh.rb << EOF
+          class McpMesh < Formula
+            desc "Distributed service orchestration framework built on the Model Context Protocol"
+            homepage "${REPO_URL}"
+            url "${ARM64_URL}"
+            sha256 "${DARWIN_ARM64_SHA}"
+            license "MIT"
+            version "${VERSION_NO_V}"
+
+            # Dependencies
+            depends_on "go" => :build
+
+            on_macos do
+              if Hardware::CPU.intel?
+                url "${AMD64_URL}"
+                sha256 "${DARWIN_AMD64_SHA}"
+              end
+            end
+
+            def install
+              # Install meshctl CLI
+              bin.install "meshctl"
+
+              # Install registry binary
+              bin.install "mcp-mesh-registry"
+            end
+
+            def caveats
+              <<~EOS
+                MCP Mesh has been installed with two binaries:
+                  • meshctl         - CLI tool for managing MCP Mesh
+                  • mcp-mesh-registry - Registry service for service discovery
+
+                To start the registry service:
+                  mcp-mesh-registry
+
+                To use the CLI:
+                  meshctl --help
+
+                For more information:
+                  https://github.com/dhyansraj/mcp-mesh/blob/main/README.md
+              EOS
+            end
+
+            test do
+              # Test that the binaries are installed and can show version/help
+              system "#{bin}/meshctl", "--help"
+              system "#{bin}/mcp-mesh-registry", "--help"
+            end
+          end
+          EOF
+
+          # Update the formula in the tap repository
+          gh api --method PUT \
+            "/repos/dhyansraj/homebrew-mcp-mesh/contents/Formula/mcp-mesh.rb" \
+            -f message="Update to ${VERSION}" \
+            -f content="$(base64 -w 0 mcp-mesh.rb)" \
+            -f sha="$(gh api /repos/dhyansraj/homebrew-mcp-mesh/contents/Formula/mcp-mesh.rb --jq '.sha')"
+
+          echo "✅ Homebrew formula updated successfully to ${VERSION}"
 
       - name: Update Scoop manifest
         run: |
@@ -392,41 +569,10 @@ jobs:
 
           echo "Scoop manifest updated for version: ${VERSION}"
 
-  # Security scan - Disabled due to 0.0.0.0 binding causing false positives
-  # security-scan:
-  #   runs-on: ubuntu-latest
-  #   if: >
-  #     github.event_name == 'release' ||
-  #     (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
-  #   needs: [build-docker]
-  #   permissions:
-  #     contents: read
-  #   steps:
-  #     - name: Run Trivy vulnerability scanner on Registry image
-  #       uses: aquasecurity/trivy-action@master
-  #       with:
-  #         image-ref: "${{ env.REGISTRY }}/registry:latest"
-  #         format: "table"
-  #         exit-code: "0" # Don't fail on vulnerabilities for now
-  #
-  #     - name: Run Trivy vulnerability scanner on Python Runtime image
-  #       uses: aquasecurity/trivy-action@master
-  #       with:
-  #         image-ref: "${{ env.REGISTRY }}/python-runtime:latest"
-  #         format: "table"
-  #         exit-code: "0"
-  #
-  #     - name: Run Trivy vulnerability scanner on CLI image
-  #       uses: aquasecurity/trivy-action@master
-  #       with:
-  #         image-ref: "${{ env.REGISTRY }}/cli:latest"
-  #         format: "table"
-  #         exit-code: "0"
-
   # Discord notification for successful releases
   notify-discord:
     runs-on: ubuntu-latest
-    needs: [build-binaries, publish-python, build-docker, update-packages]
+    needs: [build-binaries, build-macos-binaries, publish-python, build-docker, update-packages]
     if: >
       ${{ success() && (github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')) }}
@@ -446,12 +592,23 @@ jobs:
       - name: Discord Webhook Notification
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          RELEASE_URL="${{ github.event.release.html_url || format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }}"
+          RELEASE_URL="${{ github.event.release.html_url }}"
+          if [[ -z "$RELEASE_URL" ]]; then
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}"
+          fi
 
           # Create JSON payload for Discord webhook with thread_name for forum channels
+          CONTENT="🚀 **New MCP Mesh Release!**\\n\\n**Version:** ${VERSION}\\n**Release Notes:** ${RELEASE_URL}\\n\\n"
+          CONTENT+="📦 **Download:**\\n• [GitHub Release](${RELEASE_URL})\\n"
+          CONTENT+="• [PyPI Package](https://pypi.org/project/mcp-mesh/)\\n"
+          CONTENT+="• [Docker Images](https://hub.docker.com/u/mcpmesh)\\n"
+          CONTENT+="• [Homebrew](https://github.com/dhyansraj/homebrew-mcp-mesh)\\n\\n🎉 **What's New:**\\n"
+          CONTENT+="• macOS Native Builds - Intel & Apple Silicon support\\n• Homebrew Distribution - Official tap available\\n"
+          CONTENT+="• Enhanced PATH Resolution - Works with system installations\\n• Cross-Platform Binary Consistency"
+
           PAYLOAD=$(cat <<EOF
           {
-            "content": "🚀 **New MCP Mesh Release!**\n\n**Version:** ${VERSION}\n**Release Notes:** ${RELEASE_URL}\n\n📦 **Download:**\n• [GitHub Release](${RELEASE_URL})\n• [PyPI Package](https://pypi.org/project/mcp-mesh/)\n• [Docker Images](https://hub.docker.com/u/mcpmesh)\n\n🎉 **What's New:**\n• FastMCP Client Integration - Official protocol support with better compliance\n• Unified Telemetry Architecture - Complete observability across MCP agents and API services\n• FastAPI Route Telemetry - Distributed tracing for @mesh.route decorated endpoints\n• Agent ID Consistency - Unified generation eliminates registry/telemetry mismatch",
+            "content": "${CONTENT}",
             "thread_name": "MCP Mesh Release ${VERSION}"
           }
           EOF
