@@ -395,11 +395,10 @@ class HttpMcpWrapper:
         from starlette.responses import Response
 
         class MCPSessionRoutingMiddleware(BaseHTTPMiddleware):
-            """Session routing middleware for MCP requests.
+            """Clean session routing middleware for MCP requests (v0.4.0 style).
             
-            Handles session affinity by routing requests to appropriate pods
-            based on session ID. Telemetry/tracing is now handled in the
-            DI function wrapper for unified coverage of both MCP and API calls.
+            Handles session affinity and basic trace context setup only.
+            Function execution tracing is handled by ExecutionTracer in DependencyInjector.
             """
             def __init__(self, app, http_wrapper):
                 super().__init__(app)
@@ -407,10 +406,23 @@ class HttpMcpWrapper:
                 self.logger = logger
 
             async def dispatch(self, request: Request, call_next):
-                # Only handle MCP requests (FastMCP app already only handles /mcp)
-                
-                # Note: Telemetry/tracing now handled in DI function wrapper for unified approach
-                # This middleware focuses purely on session routing
+                # Extract and set trace context from headers for distributed tracing
+                try:
+                    from ..tracing.trace_context_helper import TraceContextHelper
+
+                    # Use helper class for trace context extraction and setup
+                    trace_context = (
+                        await TraceContextHelper.extract_trace_context_from_request(
+                            request
+                        )
+                    )
+                    TraceContextHelper.setup_request_trace_context(
+                        trace_context, self.logger
+                    )
+                except Exception as e:
+                    # Never fail request due to tracing issues
+                    self.logger.warning(f"Failed to set trace context: {e}")
+                    pass
 
                 # Extract session ID from request
                 session_id = await self.http_wrapper._extract_session_id(request)
@@ -443,7 +455,7 @@ class HttpMcpWrapper:
 
         # Add the middleware to FastMCP app
         self._mcp_app.add_middleware(MCPSessionRoutingMiddleware, http_wrapper=self)
-        logger.info("✅ Session routing middleware added to FastMCP app")
+        logger.info("✅ Clean session routing middleware added to FastMCP app (v0.4.0 style)")
 
     async def _extract_session_id(self, request) -> str:
         """Extract session ID from request headers or body."""

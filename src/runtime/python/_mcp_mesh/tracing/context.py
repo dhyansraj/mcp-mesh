@@ -56,8 +56,10 @@ class TraceContext:
     @classmethod
     def generate_new(cls) -> TraceInfo:
         """Generate new trace context"""
-        trace_id = str(uuid.uuid4())
-        span_id = str(uuid.uuid4())
+        from .utils import generate_span_id, generate_trace_id
+
+        trace_id = generate_trace_id()
+        span_id = generate_span_id()
         return TraceInfo(trace_id, span_id)
 
     @classmethod
@@ -65,7 +67,9 @@ class TraceContext:
         cls, trace_id: str, parent_span: Optional[str] = None
     ) -> TraceInfo:
         """Create trace context from incoming request headers"""
-        span_id = str(uuid.uuid4())
+        from .utils import generate_span_id
+
+        span_id = generate_span_id()
         return TraceInfo(trace_id, span_id, parent_span)
 
     @classmethod
@@ -73,7 +77,9 @@ class TraceContext:
         """Set current trace context from incoming request headers"""
         if trace_id:
             # Generate new span ID for this service, but keep the trace ID and parent span
-            span_id = str(uuid.uuid4())
+            from .utils import generate_span_id
+
+            span_id = generate_span_id()
             cls.set_current(trace_id, span_id, parent_span)
             return True
         return False

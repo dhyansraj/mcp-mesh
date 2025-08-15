@@ -4,22 +4,11 @@ Trace Context Helper - Helper class for HTTP request trace context setup.
 This class encapsulates all the trace context setup logic to keep HTTP wrappers clean.
 """
 
+import json
 import logging
-import os
-import uuid
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
-
-
-def _is_tracing_enabled() -> bool:
-    """Check if distributed tracing is enabled via environment variable."""
-    return os.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
 
 
 class TraceContextHelper:
@@ -36,7 +25,9 @@ class TraceContextHelper:
         If tracing is disabled, this function returns immediately without setting up trace context.
         """
         # If tracing is disabled, skip all trace context setup
-        if not _is_tracing_enabled():
+        from .utils import is_tracing_enabled
+
+        if not is_tracing_enabled():
             return
 
         try:
@@ -46,7 +37,9 @@ class TraceContextHelper:
             extracted_trace_id = trace_context.get("trace_id")
             if extracted_trace_id and extracted_trace_id.strip():
                 # EXISTING TRACE: This service is being called by another service
-                current_span_id = str(uuid.uuid4())
+                from .utils import generate_span_id
+
+                current_span_id = generate_span_id()
                 parent_span_id = trace_context.get("parent_span")
 
                 # Set context that will be used throughout request lifecycle
@@ -57,8 +50,10 @@ class TraceContextHelper:
                 )
             else:
                 # NEW ROOT TRACE: This service is the entry point (no incoming trace headers)
-                root_trace_id = str(uuid.uuid4())
-                root_span_id = str(uuid.uuid4())
+                from .utils import generate_span_id, generate_trace_id
+
+                root_trace_id = generate_trace_id()
+                root_span_id = generate_span_id()
 
                 # Set context for root trace (no parent_span)
                 TraceContext.set_current(
@@ -101,8 +96,6 @@ class TraceContextHelper:
         # Try extracting from JSON-RPC body as fallback
         if not trace_id:
             try:
-                import json
-
                 body = await request.body()
                 if body:
                     payload = json.loads(body.decode("utf-8"))
@@ -156,7 +149,9 @@ class TraceContextHelper:
         If tracing is disabled, this function returns immediately without modifying headers.
         """
         # If tracing is disabled, skip all trace header injection
-        if not _is_tracing_enabled():
+        from .utils import is_tracing_enabled
+
+        if not is_tracing_enabled():
             return
 
         try:

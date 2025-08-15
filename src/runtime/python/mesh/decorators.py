@@ -577,6 +577,14 @@ def route(
         # Register with DecoratorRegistry using custom decorator type
         DecoratorRegistry.register_custom_decorator("mesh_route", target, metadata)
         
+        # Try to add tracing middleware to any FastAPI apps we can find immediately
+        # This ensures middleware is added before the app starts
+        try:
+            _add_tracing_middleware_immediately()
+        except Exception as e:
+            # Don't fail decorator application due to middleware issues
+            logger.debug(f"Failed to add immediate tracing middleware: {e}")
+        
         logger.debug(
             f"🔍 Route '{target.__name__}' registered with {len(validated_dependencies)} dependencies"
         )
@@ -627,3 +635,30 @@ def route(
             return target
     
     return decorator
+
+
+def _add_tracing_middleware_immediately():
+    """
+    Request tracing middleware injection using monkey-patch approach.
+    
+    This sets up automatic middleware injection for both existing and future
+    FastAPI apps, eliminating timing issues with app startup/lifespan.
+    """
+    try:
+        from _mcp_mesh.shared.fastapi_middleware_manager import get_fastapi_middleware_manager
+        
+        manager = get_fastapi_middleware_manager()
+        success = manager.request_middleware_injection()
+        
+        if success:
+            logger.debug("🔍 TRACING: Middleware injection setup completed (monkey-patch + discovery)")
+        else:
+            logger.debug("🔍 TRACING: Middleware injection setup failed")
+            
+    except Exception as e:
+        # Never fail decorator application
+        logger.debug(f"🔍 TRACING: Middleware injection setup failed: {e}")
+
+
+# Middleware injection is now handled by FastAPIMiddlewareManager
+# in _mcp_mesh.shared.fastapi_middleware_manager

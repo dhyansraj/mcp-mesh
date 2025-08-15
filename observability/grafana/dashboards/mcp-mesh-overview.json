@@ -56,20 +56,36 @@
           "options": {
             "fields": {
               "Duration": {
-                "aggregations": ["sum"],
+                "aggregations": [
+                  "sum"
+                ],
                 "operation": "aggregate"
               },
               "Service": {
                 "aggregations": [],
                 "operation": "groupby"
               },
-              "traceService": {
-                "aggregations": [],
-                "operation": "groupby"
+              "nested": {
+                "aggregations": []
               },
               "traceDuration": {
-                "aggregations": ["sum"],
+                "aggregations": [
+                  "max"
+                ],
                 "operation": "aggregate"
+              },
+              "traceID": {
+                "aggregations": [],
+                "operation": null
+              },
+              "traceName": {
+                "aggregations": []
+              },
+              "traceService": {
+                "aggregations": [
+                  "count"
+                ],
+                "operation": "groupby"
               }
             }
           }
@@ -96,8 +112,10 @@
       "options": {
         "reduceOptions": {
           "values": true,
-          "calcs": ["lastNotNull"],
-          "fields": ""
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/"
         },
         "pieType": "pie",
         "tooltip": {
@@ -109,40 +127,48 @@
           "displayMode": "list",
           "placement": "bottom"
         },
-        "displayLabels": ["name", "value"]
+        "displayLabels": [
+          "name"
+        ]
       }
     },
     {
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
+      "id": 2,
+      "type": "barchart",
+      "title": "Service Activity Summary",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "h": 8,
+        "w": 24
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
           "custom": {
-            "axisGridShow": true,
-            "axisLabel": "",
-            "axisPlacement": "auto",
+            "lineWidth": 1,
             "fillOpacity": 80,
             "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "axisColorMode": "text",
+            "axisBorderShow": false,
+            "scaleDistribution": {
+              "type": "linear"
             },
-            "insertNulls": false,
-            "lineWidth": 1,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
+            "axisCenteredZero": false,
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false,
+              "vis": false
             },
             "thresholdsStyle": {
               "mode": "off"
-            }
+            },
+            "axisGridShow": true
+          },
+          "color": {
+            "mode": "palette-classic"
           },
           "mappings": [],
           "thresholds": {
@@ -161,32 +187,38 @@
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 8
-      },
-      "id": 2,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "groupWidth": 0.7,
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "orientation": "auto",
-        "stacking": "none",
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
-      },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "Service": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "traceName": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "traceDuration": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "traceService": {
+                "aggregations": [],
+                "operation": null
+              },
+              "nested": {
+                "aggregations": [],
+                "operation": null
+              }
+            }
+          }
+        }
+      ],
+      "pluginVersion": "11.4.0",
       "targets": [
         {
           "datasource": {
@@ -194,11 +226,37 @@
             "uid": "tempo"
           },
           "query": "{}",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "traceql",
+          "limit": 20,
+          "tableType": "traces"
         }
       ],
-      "title": "Service Activity Summary",
-      "type": "barchart"
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "always",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.97,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        }
+      }
     },
     {
       "datasource": {
