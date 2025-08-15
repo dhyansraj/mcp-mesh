@@ -84,6 +84,119 @@ jobs:
             dist/*.zip
             dist/checksums.txt
 
+  # Build macOS binaries natively
+  build-macos-binaries:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building macOS version: ${VERSION}"
+
+      - name: Build macOS binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORMS: "darwin/amd64,darwin/arm64"
+          OUTPUT_DIR: "dist-macos"
+        run: ./packaging/scripts/build-binaries.sh
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist-macos/*.tar.gz
+            dist-macos/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries-${{ steps.version.outputs.version }}
+          path: |
+            dist-macos/*.tar.gz
+            dist-macos/*.zip
+
+  # Combine checksums from all platforms
+  combine-checksums:
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-macos-binaries]
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-${{ steps.version.outputs.version }}
+          path: dist-linux
+
+      - name: Download macOS binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries-${{ steps.version.outputs.version }}
+          path: dist-macos
+
+      - name: Generate combined checksums
+        run: |
+          mkdir -p dist-combined
+
+          # Copy all archives to combined directory
+          find dist-linux -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist-combined/
+          find dist-macos -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} dist-combined/
+
+          # Generate combined checksums
+          cd dist-combined
+          if command -v sha256sum &> /dev/null; then
+            sha256sum *.tar.gz *.zip > checksums.txt
+          elif command -v shasum &> /dev/null; then
+            shasum -a 256 *.tar.gz *.zip > checksums.txt
+          fi
+
+          echo "Combined checksums:"
+          cat checksums.txt
+
+      - name: Upload combined checksums to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist-combined/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Build and push Docker images
   build-docker:
     runs-on: ubuntu-latest
@@ -263,7 +376,7 @@ jobs:
   # Publish Python package to PyPI
   publish-python:
     runs-on: ubuntu-latest
-    needs: [build-binaries]
+    needs: [build-binaries, build-macos-binaries]
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
@@ -342,7 +455,7 @@ jobs:
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
-    needs: [build-binaries]
+    needs: [build-binaries, build-macos-binaries]
     permissions:
       contents: write
       pull-requests: write
@@ -446,12 +559,24 @@ jobs:
       - name: Discord Webhook Notification
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          RELEASE_URL="${{ github.event.release.html_url || format('https://github.com/{0}/releases/tag/{1}', github.repository, steps.version.outputs.version) }}"
+          RELEASE_URL="${{ github.event.release.html_url }}"
+          if [[ -z "$RELEASE_URL" ]]; then
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}"
+          fi
 
           # Create JSON payload for Discord webhook with thread_name for forum channels
+          CONTENT="🚀 **New MCP Mesh Release!**\\n\\n**Version:** ${VERSION}\\n**Release Notes:** ${RELEASE_URL}\\n\\n"
+          CONTENT+="📦 **Download:**\\n• [GitHub Release](${RELEASE_URL})\\n"
+          CONTENT+="• [PyPI Package](https://pypi.org/project/mcp-mesh/)\\n"
+          CONTENT+="• [Docker Images](https://hub.docker.com/u/mcpmesh)\\n\\n🎉 **What's New:**\\n"
+          CONTENT+="• FastMCP Client Integration - Official protocol support\\n"
+          CONTENT+="• Unified Telemetry Architecture - Complete observability\\n"
+          CONTENT+="• FastAPI Route Telemetry - Distributed tracing support\\n"
+          CONTENT+="• Agent ID Consistency - Unified generation"
+
           PAYLOAD=$(cat <<EOF
           {
-            "content": "🚀 **New MCP Mesh Release!**\n\n**Version:** ${VERSION}\n**Release Notes:** ${RELEASE_URL}\n\n📦 **Download:**\n• [GitHub Release](${RELEASE_URL})\n• [PyPI Package](https://pypi.org/project/mcp-mesh/)\n• [Docker Images](https://hub.docker.com/u/mcpmesh)\n\n🎉 **What's New:**\n• FastMCP Client Integration - Official protocol support with better compliance\n• Unified Telemetry Architecture - Complete observability across MCP agents and API services\n• FastAPI Route Telemetry - Distributed tracing for @mesh.route decorated endpoints\n• Agent ID Consistency - Unified generation eliminates registry/telemetry mismatch",
+            "content": "${CONTENT}",
             "thread_name": "MCP Mesh Release ${VERSION}"
           }
           EOF
