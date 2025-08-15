@@ -41,7 +41,7 @@ class AgentContextHelper:
             from ..engine.decorator_registry import DecoratorRegistry
 
             agent_config = DecoratorRegistry.get_resolved_agent_config()
-            
+
             # Extract core configuration fields using proper resolution
             context["agent_id"] = agent_config.get("agent_id", "unknown")
             context["agent_name"] = agent_config.get("name") or os.getenv(
@@ -95,21 +95,26 @@ class AgentContextHelper:
         """
         context = cls.get_agent_context()
 
+        # If agent_name is unknown but we have a valid agent_id, use agent_id as agent_name
+        agent_name = context["agent_name"]
+        agent_id = context["agent_id"]
+
+        if agent_name in ("unknown-agent", "unknown") and agent_id not in (
+            "unknown",
+            "",
+        ):
+            agent_name = agent_id
+
         # Return only the fields we want in trace data
         return {
-            "agent_id": context["agent_id"],
-            "agent_name": context["agent_name"],
+            "agent_id": agent_id,
+            "agent_name": agent_name,
             "agent_hostname": context["agent_hostname"],
             "agent_ip": context["pod_ip"],
             "agent_port": context["agent_port"],
             "agent_namespace": context["agent_namespace"],
             "agent_endpoint": context["agent_endpoint"],
         }
-
-    @classmethod
-    def clear_cache(cls) -> None:
-        """Clear cached context (useful for testing)."""
-        cls._cached_context = None
 
 
 # Convenience functions

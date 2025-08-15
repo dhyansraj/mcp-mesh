@@ -39,18 +39,14 @@ class RedisTracePublisher:
 
     def _is_tracing_enabled(self) -> bool:
         """Check if distributed tracing is enabled via environment variable."""
-        return os.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false").lower() in (
-            "true",
-            "1",
-            "yes",
-            "on",
-        )
+        from .utils import is_tracing_enabled
+
+        return is_tracing_enabled()
 
     def _init_redis(self):
         """Initialize Redis connection with graceful fallback (following session storage pattern)."""
         if not self._tracing_enabled:
             self._available = False
-            logger.info("Distributed tracing: disabled")
             return
 
         logger.info("Distributed tracing: enabled")
@@ -76,33 +72,23 @@ class RedisTracePublisher:
             return  # Silent no-op when Redis unavailable
 
         try:
-            # Add timestamp to trace data if not present
-            if "published_at" not in trace_data:
-                import time
+            function_name = trace_data.get("function_name", "unknown")
+            trace_id = trace_data.get("trace_id", "no-trace-id")
 
-                trace_data["published_at"] = time.time()
+            # Add timestamp and convert for Redis storage
+            from .utils import add_timestamp_if_missing, convert_for_redis_storage
 
-            # Convert complex types to JSON strings for Redis Stream storage
-            redis_trace_data = {}
-            for key, value in trace_data.items():
-                if isinstance(value, (list, dict)):
-                    # Convert lists and dicts to JSON strings
-                    import json
-
-                    redis_trace_data[key] = json.dumps(value)
-                elif value is None:
-                    redis_trace_data[key] = "null"
-                else:
-                    # Keep simple types as-is (str, int, float, bool)
-                    redis_trace_data[key] = str(value)
+            add_timestamp_if_missing(trace_data)
+            redis_trace_data = convert_for_redis_storage(trace_data)
 
             # Publish to Redis Stream
             if self._redis_client:
-                self._redis_client.xadd(self.stream_name, redis_trace_data)
+                message_id = self._redis_client.xadd(self.stream_name, redis_trace_data)
+                logger.debug(f"Published trace for '{function_name}' to Redis stream")
 
         except Exception as e:
             # Non-blocking - never fail agent operations due to trace publishing
-            logger.warning(f"Failed to publish execution trace to Redis: {e}")
+            pass
 
     @property
     def is_available(self) -> bool:
@@ -151,9 +137,3 @@ def get_trace_publisher() -> RedisTracePublisher:
     if _trace_publisher is None:
         _trace_publisher = RedisTracePublisher()
     return _trace_publisher
-
-
-# Legacy alias for backward compatibility
-def get_metadata_publisher() -> RedisTracePublisher:
-    """Legacy alias for get_trace_publisher - use get_trace_publisher instead."""
-    return get_trace_publisher()

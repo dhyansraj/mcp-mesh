@@ -56,6 +56,67 @@ class UnifiedMCPProxy:
                 f"🔧 UnifiedMCPProxy initialized with kwargs: {self.kwargs_config}"
             )
 
+    def _create_fastmcp_client(self, endpoint: str):
+        """Create FastMCP client with automatic trace header injection.
+
+        This method automatically detects trace context and adds distributed tracing
+        headers when available, while maintaining full backward compatibility.
+
+        Args:
+            endpoint: MCP endpoint URL
+
+        Returns:
+            FastMCP Client instance with or without trace headers
+        """
+        try:
+            from fastmcp import Client
+            from fastmcp.client.transports import StreamableHttpTransport
+
+            # Try to get current trace context for header injection
+            trace_headers = self._get_trace_headers()
+
+            if trace_headers:
+                # Create client with trace headers for distributed tracing
+                transport = StreamableHttpTransport(url=endpoint, headers=trace_headers)
+                return Client(transport)
+            else:
+                # Create standard client when no trace context available
+                return Client(endpoint)
+
+        except ImportError:
+            # If StreamableHttpTransport not available, fall back to standard client
+            from fastmcp import Client
+
+            return Client(endpoint)
+        except Exception as e:
+            # Any other error, fall back to standard client
+            from fastmcp import Client
+
+            return Client(endpoint)
+
+    def _get_trace_headers(self) -> dict[str, str]:
+        """Extract trace headers from current context for distributed tracing.
+
+        Returns:
+            Dict of trace headers or empty dict if no trace context available
+        """
+        try:
+            from ..tracing.context import TraceContext
+
+            current_trace = TraceContext.get_current()
+            if current_trace:
+                headers = {
+                    "X-Trace-ID": current_trace.trace_id,
+                    "X-Parent-Span": current_trace.span_id,  # Current span becomes parent for downstream
+                }
+                return headers
+            else:
+                return {}
+
+        except Exception as e:
+            # Never fail MCP calls due to tracing issues
+            return {}
+
     def _configure_from_kwargs(self):
         """Auto-configure proxy settings from kwargs."""
         # Basic configuration
@@ -213,74 +274,63 @@ class UnifiedMCPProxy:
         return await self.call_tool_with_tracing(self.function_name, kwargs)
 
     async def call_tool_with_tracing(self, name: str, arguments: dict = None) -> Any:
-        """Call a tool with comprehensive tracing and telemetry."""
-        # Check if telemetry is enabled
-        if not self.telemetry_enabled:
-            self.logger.debug(f"🔇 Telemetry disabled, calling tool directly: {name}")
+        """Call a tool with clean ExecutionTracer integration (v0.4.0 style)."""
+        # Check if telemetry is enabled - use same check as ExecutionTracer for consistency
+        from ..tracing.execution_tracer import ExecutionTracer
+        from ..tracing.utils import is_tracing_enabled
+
+        if not self.telemetry_enabled or not is_tracing_enabled():
             return await self.call_tool(name, arguments)
 
-        # Import tracing dependencies
-        from ..tracing.execution_tracer import ExecutionTracer
+        # Create wrapper function for ExecutionTracer compatibility
+        async def proxy_call_wrapper(*args, **kwargs):
+            # Add proxy-specific metadata to execution context if tracer is available
+            try:
+                from ..tracing.context import TraceContext
 
-        # Initialize execution tracer
-        tracer = ExecutionTracer(name, self.logger)
+                current_trace = TraceContext.get_current()
+                if current_trace and hasattr(current_trace, "execution_metadata"):
+                    # Add proxy metadata to current trace
+                    proxy_metadata = {
+                        "call_type": "unified_mcp_proxy",
+                        "endpoint": self.endpoint,
+                        "proxy_type": "fastmcp_with_fallback",
+                        "streaming_capable": self.streaming_capable,
+                        "timeout": self.timeout,
+                        "retry_count": self.retry_count,
+                    }
 
-        try:
-            # Start execution tracing with proxy metadata
-            tracer.start_execution(
-                args=(),
-                kwargs=arguments or {},
-                dependencies=[self.endpoint],
-                mesh_positions=[],
-                injected_count=1,  # This is an injected dependency call
-            )
+                    # Add enhanced agent context if enabled
+                    if self.collect_agent_context:
+                        try:
+                            agent_context = self._collect_agent_context_metadata(
+                                name, arguments
+                            )
+                            proxy_metadata.update(agent_context)
+                        except Exception as e:
+                            self.logger.debug(
+                                f"Failed to collect agent context metadata: {e}"
+                            )
 
-            # Add proxy-specific metadata
-            tracer.execution_metadata.update(
-                {
-                    "call_type": "unified_mcp_proxy",
-                    "endpoint": self.endpoint,
-                    "function_name": name,
-                    "proxy_type": "fastmcp_with_fallback",
-                    "streaming_capable": self.streaming_capable,
-                    "timeout": self.timeout,
-                    "retry_count": self.retry_count,
-                }
-            )
+                    # Update current execution metadata
+                    if hasattr(current_trace, "execution_metadata"):
+                        current_trace.execution_metadata.update(proxy_metadata)
 
-            # Add enhanced agent context metadata if enabled
-            if self.collect_agent_context:
-                try:
-                    agent_context = self._collect_agent_context_metadata(
-                        name, arguments
-                    )
-                    tracer.execution_metadata.update(agent_context)
-                except Exception as e:
-                    self.logger.debug(f"Failed to collect agent context metadata: {e}")
-                    # Add minimal fallback metadata
-                    tracer.execution_metadata.update(
-                        {
-                            "client_agent_id": "unknown",
-                            "target_agent_endpoint": self.endpoint,
-                            "proxy_instance_id": id(self),
-                        }
-                    )
+            except Exception as e:
+                self.logger.debug(f"Failed to add proxy metadata: {e}")
 
-            # Perform the actual tool call
-            result = await self.call_tool(name, arguments)
+            return await self.call_tool(name, arguments)
 
-            # End tracing with success
-            tracer.end_execution(result, success=True)
-
-            self.logger.info(f"✅ Traced tool call '{name}' succeeded")
-            return result
-
-        except Exception as e:
-            # End tracing with error
-            tracer.end_execution(error=str(e), success=False)
-
-            self.logger.error(f"❌ Traced tool call '{name}' failed: {e}")
-            raise  # Re-raise the exception
+        # Use ExecutionTracer's static async method for clean integration
+        return await ExecutionTracer.trace_function_execution_async(
+            proxy_call_wrapper,
+            args=(),
+            kwargs={},  # arguments are handled inside the wrapper
+            dependencies=[self.endpoint],
+            mesh_positions=[],
+            injected_count=1,
+            logger_instance=self.logger,
+        )
 
     async def call_tool(self, name: str, arguments: dict = None) -> Any:
         """Call a tool using FastMCP client with HTTP transport.
@@ -292,15 +342,13 @@ class UnifiedMCPProxy:
         start_time = time.time()
 
         try:
-            from fastmcp import Client
-
             # Use correct FastMCP client endpoint - agents expose MCP on /mcp
             mcp_endpoint = f"{self.endpoint}/mcp"
             self.logger.debug(f"🔄 Trying FastMCP client with endpoint: {mcp_endpoint}")
 
-            async with Client(mcp_endpoint) as client:
-                # Add tracing metadata for FastMCP client
-                self.logger.debug(f"🔄 FastMCP client call with tracing: {name}")
+            # Create client with automatic trace header injection
+            client_instance = self._create_fastmcp_client(mcp_endpoint)
+            async with client_instance as client:
 
                 # Use FastMCP's call_tool which returns CallToolResult object
                 result = await client.call_tool(name, arguments or {})
@@ -651,46 +699,51 @@ class UnifiedMCPProxy:
     # MCP Protocol Methods - using FastMCP client's superior implementation
     async def list_tools(self) -> list:
         """List available tools from remote agent."""
-        from fastmcp import Client
-
         mcp_endpoint = f"{self.endpoint}/mcp"
-        async with Client(mcp_endpoint) as client:
+
+        # Create client with automatic trace header injection
+        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        async with client_instance as client:
             result = await client.list_tools()
             return result.tools if hasattr(result, "tools") else result
 
     async def list_resources(self) -> list:
         """List available resources from remote agent."""
-        from fastmcp import Client
-
         mcp_endpoint = f"{self.endpoint}/mcp"
-        async with Client(mcp_endpoint) as client:
+
+        # Create client with automatic trace header injection
+        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        async with client_instance as client:
             result = await client.list_resources()
             return result.resources if hasattr(result, "resources") else result
 
     async def read_resource(self, uri: str) -> Any:
         """Read resource contents from remote agent."""
-        from fastmcp import Client
-
         mcp_endpoint = f"{self.endpoint}/mcp"
-        async with Client(mcp_endpoint) as client:
+
+        # Create client with automatic trace header injection
+        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        async with client_instance as client:
             result = await client.read_resource(uri)
             return result.contents if hasattr(result, "contents") else result
 
     async def list_prompts(self) -> list:
         """List available prompts from remote agent."""
-        from fastmcp import Client
-
         mcp_endpoint = f"{self.endpoint}/mcp"
-        async with Client(mcp_endpoint) as client:
+
+        # Create client with automatic trace header injection
+        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        async with client_instance as client:
             result = await client.list_prompts()
             return result.prompts if hasattr(result, "prompts") else result
 
     async def get_prompt(self, name: str, arguments: dict = None) -> Any:
         """Get prompt template from remote agent."""
-        from fastmcp import Client
-
         mcp_endpoint = f"{self.endpoint}/mcp"
-        async with Client(mcp_endpoint) as client:
+
+        # Create client with automatic trace header injection
+        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        async with client_instance as client:
             result = await client.get_prompt(name, arguments or {})
             return result
 
@@ -700,8 +753,7 @@ class UnifiedMCPProxy:
 
         FastMCP client handles session management internally.
         """
-        import uuid
-        
+
         # Generate session ID for compatibility
         session_id = f"session:{uuid.uuid4().hex[:16]}"
         self.logger.debug(f"📝 Created session ID: {session_id}")

@@ -161,7 +161,7 @@ async def benchmark_services(
         if time_agent:
             start_time = time.time()
             try:
-                time_result = time_agent()
+                time_result = await time_agent()
                 end_time = time.time()
                 results["services"]["time_service"] = {
                     "status": "success",
@@ -186,7 +186,7 @@ async def benchmark_services(
         if system_info_agent:
             start_time = time.time()
             try:
-                system_result = system_info_agent(include_timestamp=True)
+                system_result = await system_info_agent(include_timestamp=True)
                 end_time = time.time()
                 results["services"]["system_info_service"] = {
                     "status": "success",

@@ -11,6 +11,7 @@ import logging
 from ..shared.mesh_pipeline import MeshPipeline
 from .api_server_setup import APIServerSetupStep
 from .fastapi_discovery import FastAPIAppDiscoveryStep
+from .middleware_integration import TracingMiddlewareIntegrationStep
 from .route_collection import RouteCollectionStep
 from .route_integration import RouteIntegrationStep
 
@@ -25,7 +26,8 @@ class APIPipeline(MeshPipeline):
     1. Route collection (@mesh.route decorators)
     2. FastAPI app discovery (find user's FastAPI instances)
     3. Route integration (apply dependency injection)
-    4. API server setup (service registration metadata)
+    4. Tracing middleware integration (add telemetry to FastAPI apps)
+    5. API server setup (service registration metadata)
 
     Unlike MCP agents, API services are consumers so we focus on:
     - Dependency injection into route handlers
@@ -41,10 +43,11 @@ class APIPipeline(MeshPipeline):
         """Setup the API pipeline steps."""
         # Essential API integration steps
         steps = [
-            RouteCollectionStep(),          # Collect @mesh.route decorators
-            FastAPIAppDiscoveryStep(),      # Find user's FastAPI app instances
-            RouteIntegrationStep(),         # Apply dependency injection to routes
-            APIServerSetupStep(),           # Prepare service registration metadata
+            RouteCollectionStep(),              # Collect @mesh.route decorators
+            FastAPIAppDiscoveryStep(),          # Find user's FastAPI app instances
+            RouteIntegrationStep(),             # Apply dependency injection to routes
+            TracingMiddlewareIntegrationStep(), # Add tracing middleware to FastAPI apps
+            APIServerSetupStep(),               # Prepare service registration metadata
             # Note: Heartbeat integration will be added in next phase
             # Note: User controls FastAPI server startup (uvicorn/gunicorn)
         ]

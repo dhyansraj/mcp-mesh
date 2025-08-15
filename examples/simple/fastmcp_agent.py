@@ -89,14 +89,14 @@ def process_data(data: str, format_type: str = "json") -> dict:
 
 @app.tool()
 @mesh.tool(capability="system_info_service", dependencies=["info"])
-def get_enriched_system_info(
+async def get_enriched_system_info(
     include_timestamp: bool = True, info_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Get enriched system information by calling system agent."""
     # Get system info from system agent
     system_info = (
-        info_service() if info_service else {"error": "system info unavailable"}
-    )
+      await info_service() if info_service else {"error": "system info unavailable"}
+  )
 
     # Enrich with FastMCP service information
     enriched_data = {

@@ -5,22 +5,19 @@ This class encapsulates all the execution logging logic to keep the dependency i
 """
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from typing import Any, Optional
 
+# Import shared utilities at module level to avoid circular imports during execution
+from .utils import (
+    generate_span_id,
+    get_agent_metadata_with_fallback,
+    is_tracing_enabled,
+    publish_trace_with_fallback,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def _is_tracing_enabled() -> bool:
-    """Check if distributed tracing is enabled via environment variable."""
-    return os.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
 
 
 class ExecutionTracer:
@@ -60,30 +57,24 @@ class ExecutionTracer:
             }
 
             # Add agent context metadata for distributed tracing
-            try:
-                from .agent_context_helper import get_trace_metadata
-
-                agent_metadata = get_trace_metadata()
-                self.execution_metadata.update(agent_metadata)
-            except Exception as e:
-                # Never fail execution due to agent metadata collection
-                self.logger.debug(f"Failed to get agent metadata: {e}")
-                # Add minimal fallback metadata
-                self.execution_metadata.update(
-                    {
-                        "agent_id": "unknown",
-                        "agent_name": "unknown",
-                        "agent_hostname": "unknown",
-                        "agent_ip": "unknown",
-                    }
-                )
+            agent_metadata = get_agent_metadata_with_fallback(self.logger)
+            self.execution_metadata.update(agent_metadata)
 
             if self.trace_context:
+                # Generate a new child span ID for this function execution
+                # Keep the same trace_id but create unique span_id per function call
+                function_span_id = generate_span_id()
+
+
                 self.execution_metadata.update(
                     {
                         "trace_id": self.trace_context.trace_id,
-                        "span_id": self.trace_context.span_id,
-                        "parent_span": self.trace_context.parent_span,
+                        "span_id": function_span_id,  # New child span for this function
+                        "parent_span": (
+                            self.trace_context.span_id
+                            if self.trace_context.parent_span is not None
+                            else None
+                        ),  # HTTP middleware span becomes parent only if not root
                     }
                 )
 
@@ -117,15 +108,7 @@ class ExecutionTracer:
             )
 
             # Save execution trace to Redis for distributed tracing storage
-            try:
-                from .redis_metadata_publisher import get_trace_publisher
-
-                publisher = get_trace_publisher()
-                if publisher.is_available:
-                    publisher.publish_execution_trace(self.execution_metadata)
-            except Exception as e:
-                # Never fail agent operations due to trace publishing
-                pass
+            publish_trace_with_fallback(self.execution_metadata, self.logger)
 
         except Exception as e:
             self.logger.warning(
@@ -149,7 +132,7 @@ class ExecutionTracer:
         exception handling and cleanup. If tracing is disabled, calls function directly.
         """
         # If tracing is disabled, call function directly without any overhead
-        if not _is_tracing_enabled():
+        if not is_tracing_enabled():
             return func(*args, **kwargs)
 
         tracer = ExecutionTracer(func.__name__, logger_instance)
@@ -176,7 +159,7 @@ class ExecutionTracer:
         If tracing is disabled, calls function directly.
         """
         # If tracing is disabled, call function directly without any overhead
-        if not _is_tracing_enabled():
+        if not is_tracing_enabled():
             return func(*args, **kwargs)
 
         tracer = ExecutionTracer(func.__name__, logger_instance)
@@ -209,9 +192,9 @@ class ExecutionTracer:
         exception handling and cleanup. If tracing is disabled, calls function directly.
         """
         import inspect
-        
+
         # If tracing is disabled, call function directly without any overhead
-        if not _is_tracing_enabled():
+        if not is_tracing_enabled():
             if inspect.iscoroutinefunction(func):
                 return await func(*args, **kwargs)
             else:
