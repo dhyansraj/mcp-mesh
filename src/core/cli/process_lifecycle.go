@@ -253,29 +253,10 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 		dbPath = pm.config.DBPath
 	}
 
-	// Start registry process - try multiple locations for registry binary
-	possiblePaths := []string{
-		"./bin/mcp-mesh-registry",           // Preferred location (matches Makefile)
-		"./mcp-mesh-registry",               // Legacy location
-		"./build/mcp-mesh-registry",         // Build directory
-		"cmd/mcp-mesh-registry/mcp-mesh-registry", // Legacy build location
-		"mcp-mesh-registry",                 // In PATH
-	}
-
-	var registryBinary string
-	var binaryFound bool
-
-	// Check each possible location
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			registryBinary = path
-			binaryFound = true
-			break
-		}
-	}
-
-	if !binaryFound {
-		return nil, fmt.Errorf("registry binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", possiblePaths)
+	// Find registry binary
+	registryBinary, err := pm.findRegistryBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start registry: %w", err)
 	}
 
 	args := []string{
@@ -393,8 +374,12 @@ func (pm *ProcessManager) startProcessInternal(name string, info *ProcessInfo) e
 	var cmd *exec.Cmd
 
 	if info.ServiceType == "registry" {
-		// Start registry process
-		registryBinary := "./mcp-mesh-registry"
+		// Find registry binary
+		registryBinary, err := pm.findRegistryBinary()
+		if err != nil {
+			return err
+		}
+
 		port := 8080
 		if portVal, ok := info.Metadata["port"].(int); ok {
 			port = portVal
@@ -433,6 +418,32 @@ func (pm *ProcessManager) startProcessInternal(name string, info *ProcessInfo) e
 	info.LastSeen = time.Now()
 
 	return nil
+}
+
+// findRegistryBinary finds the registry binary in local paths or PATH
+func (pm *ProcessManager) findRegistryBinary() (string, error) {
+	// First check local paths
+	localPaths := []string{
+		"./bin/mcp-mesh-registry",
+		"./mcp-mesh-registry",
+		"./build/mcp-mesh-registry",
+		"cmd/mcp-mesh-registry/mcp-mesh-registry",
+	}
+
+	for _, path := range localPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// If not found locally, check PATH
+	if path, err := exec.LookPath("mcp-mesh-registry"); err == nil {
+		return path, nil
+	}
+
+	// Return error with all attempted paths
+	allPaths := append(localPaths, "mcp-mesh-registry (in PATH)")
+	return "", fmt.Errorf("registry binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", allPaths)
 }
 
 // generateProcessName generates a unique process name from a file path

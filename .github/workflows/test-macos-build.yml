@@ -1,0 +1,138 @@
+name: Test macOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g., v0.5.2-test)"
+        required: true
+        default: "v0.5.2-test"
+
+env:
+  GO_VERSION: "1.23"
+
+jobs:
+  # Build Linux binaries for comparison
+  build-linux-binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+
+      - name: Build Linux binaries
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          PLATFORMS: "linux/amd64,linux/arm64"
+          OUTPUT_DIR: "dist-linux"
+        run: ./packaging/scripts/build-binaries.sh
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries-${{ github.event.inputs.version }}
+          path: |
+            dist-linux/*.tar.gz
+            dist-linux/*.zip
+
+  # Build macOS binaries natively
+  build-macos-binaries:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build macOS binaries
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          PLATFORMS: "darwin/amd64,darwin/arm64"
+          OUTPUT_DIR: "dist-macos"
+        run: ./packaging/scripts/build-binaries.sh
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries-${{ github.event.inputs.version }}
+          path: |
+            dist-macos/*.tar.gz
+            dist-macos/*.zip
+
+  # Verify both builds completed successfully
+  verify-builds:
+    runs-on: ubuntu-latest
+    needs: [build-linux-binaries, build-macos-binaries]
+    permissions:
+      contents: read
+    steps:
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries-${{ github.event.inputs.version }}
+          path: linux-artifacts
+
+      - name: Download macOS binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries-${{ github.event.inputs.version }}
+          path: macos-artifacts
+
+      - name: List all generated artifacts
+        run: |
+          echo "=== Linux Artifacts ==="
+          find linux-artifacts -type f -name "*.tar.gz" -o -name "*.zip" | sort
+
+          echo "=== macOS Artifacts ==="
+          find macos-artifacts -type f -name "*.tar.gz" -o -name "*.zip" | sort
+
+          echo "=== File Sizes ==="
+          echo "Linux binaries:"
+          find linux-artifacts -type f -exec ls -lh {} \;
+          echo "macOS binaries:"
+          find macos-artifacts -type f -exec ls -lh {} \;
+
+      - name: Generate test report
+        run: |
+          echo "# macOS Build Test Results" > test-report.md
+          echo "" >> test-report.md
+          echo "## Generated Artifacts" >> test-report.md
+          echo "" >> test-report.md
+          echo "### Linux (Cross-compiled)" >> test-report.md
+          find linux-artifacts -name "*.tar.gz" -exec echo "- {}" \; >> test-report.md
+          echo "" >> test-report.md
+          echo "### macOS (Native)" >> test-report.md
+          find macos-artifacts -name "*.tar.gz" -exec echo "- {}" \; >> test-report.md
+          echo "" >> test-report.md
+          echo "## Next Steps" >> test-report.md
+          echo "1. Download macOS artifacts" >> test-report.md
+          echo "2. Test install script on macOS" >> test-report.md
+          echo "3. Verify meshctl and registry work correctly" >> test-report.md
+
+          cat test-report.md
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.event.inputs.version }}
+          path: test-report.md

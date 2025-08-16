@@ -250,23 +250,25 @@ install_binary() {
     # Use the same platform format as the release assets (with underscores)
     local platform_for_path="${PLATFORM//-/_}"
     if [[ "$binary_name" == "registry" ]]; then
-        extracted_binary="$temp_dir/$platform_for_path/registry"
+        extracted_binary="$temp_dir/$platform_for_path/mcp-mesh-registry"
+        install_name="mcp-mesh-registry"
     else
         extracted_binary="$temp_dir/$platform_for_path/$binary_name"
+        install_name="$binary_name"
     fi
 
     if [[ -w "$INSTALL_DIR" ]]; then
-        cp "$extracted_binary" "$INSTALL_DIR/$binary_name"
-        chmod +x "$INSTALL_DIR/$binary_name"
+        cp "$extracted_binary" "$INSTALL_DIR/$install_name"
+        chmod +x "$INSTALL_DIR/$install_name"
     else
-        sudo cp "$extracted_binary" "$INSTALL_DIR/$binary_name"
-        sudo chmod +x "$INSTALL_DIR/$binary_name"
+        sudo cp "$extracted_binary" "$INSTALL_DIR/$install_name"
+        sudo chmod +x "$INSTALL_DIR/$install_name"
     fi
 
     # Cleanup
     rm -rf "$temp_dir"
 
-    print_info "✅ $binary_name installed successfully!"
+    print_info "✅ $install_name installed successfully!"
 }
 
 # Install meshctl
@@ -287,11 +289,11 @@ install_registry() {
     install_binary "registry"
 
     # Verify installation
-    if command -v registry >/dev/null 2>&1; then
-        print_info "Verification: registry installed to $INSTALL_DIR/registry"
+    if command -v mcp-mesh-registry >/dev/null 2>&1; then
+        print_info "Verification: mcp-mesh-registry installed to $INSTALL_DIR/mcp-mesh-registry"
     else
-        print_warn "registry was installed to $INSTALL_DIR but is not in PATH"
-        print_warn "Add $INSTALL_DIR to your PATH or use the full path: $INSTALL_DIR/registry"
+        print_warn "mcp-mesh-registry was installed to $INSTALL_DIR but is not in PATH"
+        print_warn "Add $INSTALL_DIR to your PATH or use the full path: $INSTALL_DIR/mcp-mesh-registry"
     fi
 }
 
@@ -333,7 +335,7 @@ main() {
             print_info "Run 'meshctl --help' to get started with the CLI"
         fi
         if [[ "$INSTALL_REGISTRY" == "true" ]]; then
-            print_info "Run 'registry --help' to get started with the registry"
+            print_info "Run 'mcp-mesh-registry --help' to get started with the registry"
         fi
     fi
 }

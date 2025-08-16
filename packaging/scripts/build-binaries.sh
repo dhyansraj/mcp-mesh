@@ -245,7 +245,7 @@ build_all_binaries() {
         # Build meshctl
         if build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
             # Build registry
-            if build_binary "registry" "$goos" "$goarch" "registry"; then
+            if build_binary "registry" "$goos" "$goarch" "mcp-mesh-registry"; then
                 built_platforms+=("${goos}_${goarch}")
             else
                 failed_builds+=("registry-${goos}_${goarch}")
