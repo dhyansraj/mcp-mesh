@@ -25,7 +25,7 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
     esac && \
     wget -O registry.tar.gz "https://github.com/dhyansraj/mcp-mesh/releases/download/${VERSION}/mcp-mesh_${VERSION}_linux_${ARCH}.tar.gz" && \
     tar -xzf registry.tar.gz && \
-    cp linux_${ARCH}/registry /usr/local/bin/registry && \
+    cp linux_${ARCH}/mcp-mesh-registry /usr/local/bin/registry && \
     chmod +x /usr/local/bin/registry && \
     rm -rf registry.tar.gz linux_${ARCH}
 
