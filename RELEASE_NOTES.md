@@ -1,5 +1,51 @@
 # MCP Mesh Release Notes
 
+## v0.5.2 (2025-08-16)
+
+### 🍎 macOS Support & Platform Improvements
+
+**Native macOS Binary Distribution**
+
+- Added native macOS builds for both Intel (`darwin/amd64`) and Apple Silicon (`darwin/arm64`) architectures
+- Implemented automated Homebrew tap distribution via `dhyansraj/homebrew-mcp-mesh`
+- Fixed binary naming consistency: standardized on `mcp-mesh-registry` across all platforms
+- Enhanced GitHub Actions pipeline with cross-platform build support and automated package manager updates
+
+**Enhanced Installation Experience**
+
+- **Homebrew Support**: `brew tap dhyansraj/mcp-mesh && brew install mcp-mesh`
+- **PATH Resolution**: Improved binary discovery for both development and system installations using `exec.LookPath()`
+- **Cross-Platform Install Script**: Updated `install.sh` to handle macOS/Linux differences seamlessly
+
+**Distributed Tracing Reliability**
+
+- Fixed silent tracing failures that were preventing proper observability data collection
+- Enhanced FastAPI middleware integration for more robust trace capture
+- Improved context handling and metadata publishing to Redis streams
+- Updated Grafana dashboards with better trace visualization
+
+### 🏷️ Migration Guide
+
+**Upgrading from v0.5.1:**
+
+- **Python Package**: Update to `pip install "mcp-mesh>=0.5.2,<0.6"`
+- **macOS Users**: Install via Homebrew: `brew tap dhyansraj/mcp-mesh && brew install mcp-mesh`
+- **Docker Images**: Use `mcpmesh/registry:0.5.2` and `mcpmesh/python-runtime:0.5.2`
+- **Helm Charts**: All charts now use v0.5.2 for consistent dependency management
+
+**Breaking Changes:**
+
+- None - this release maintains full backward compatibility with v0.5.1
+- Binary names are now consistent (`mcp-mesh-registry`) but old references will continue to work
+
+### 📦 Distribution Improvements
+
+- **GitHub Actions**: Native macOS builds with proper Gatekeeper signing preparation
+- **Homebrew Automation**: Automatic formula updates with cross-platform checksum verification
+- **Enhanced CI/CD**: Improved reliability with disabled Go cache and proper dependency management
+
+---
+
 ## v0.5.1 (2025-08-14)
 
 ### 🔧 Major Enhancement Release - Unified Telemetry Architecture

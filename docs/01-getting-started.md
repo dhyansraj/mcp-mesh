@@ -91,9 +91,36 @@ curl -s -X POST http://localhost:8081/mcp \
 
 That's it! You now have a working distributed MCP service mesh! 🎉
 
-## Alternative: Python Package (3 Minutes)
+## Alternative: macOS with Homebrew (2 Minutes)
 
-**For Python development with published packages:**
+**For macOS users with Homebrew:**
+
+```bash
+# 1. Install MCP Mesh CLI tools
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+
+# 2. Install Python package with semantic versioning
+pip install "mcp-mesh>=0.5,<0.6"
+
+# 3. Download example agents
+git clone https://github.com/dhyansraj/mcp-mesh.git
+cd mcp-mesh/examples/simple
+
+# 4. Start registry and agents
+mcp-mesh-registry --host 0.0.0.0 --port 8000 &
+python system_agent.py &
+python hello_world.py &
+
+# 5. Test it
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+```
+
+## Alternative: Linux/macOS Install Script (3 Minutes)
+
+**For Linux or manual macOS installation:**
 
 ```bash
 # 1. Install MCP Mesh with semantic versioning (allows patch updates)
@@ -101,7 +128,7 @@ pip install "mcp-mesh>=0.5,<0.6"
 
 # 2. Download and start registry (use minor version for latest patches)
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.5
-registry --host 0.0.0.0 --port 8000 &
+mcp-mesh-registry --host 0.0.0.0 --port 8000 &
 
 # 3. Download example agents
 git clone https://github.com/dhyansraj/mcp-mesh.git
