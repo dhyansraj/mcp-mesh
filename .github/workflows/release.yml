@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.5.0)"
         required: true
-        default: "v0.5.2"
+        default: "v0.5.3"
       environment:
         description: "Environment"
         type: choice
@@ -149,6 +149,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Determine version
         id: version
         run: |
@@ -161,17 +164,18 @@ jobs:
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Download Linux binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: binaries-${{ steps.version.outputs.version }}
-          path: dist-linux
+      - name: Download release assets
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist-linux dist-macos
 
-      - name: Download macOS binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-binaries-${{ steps.version.outputs.version }}
-          path: dist-macos
+          # Download Linux binaries from release
+          gh release download "${VERSION}" --pattern "*linux*.tar.gz" --dir dist-linux
+
+          # Download macOS binaries from release
+          gh release download "${VERSION}" --pattern "*darwin*.tar.gz" --dir dist-macos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate combined checksums
         run: |
@@ -576,13 +580,21 @@ jobs:
       [
         build-binaries,
         build-macos-binaries,
+        combine-checksums,
         publish-python,
         build-docker,
         update-packages,
       ]
     if: >
-      ${{ success() && (github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')) }}
+      always() &&
+      needs.build-binaries.result == 'success' &&
+      needs.build-macos-binaries.result == 'success' &&
+      needs.combine-checksums.result == 'success' &&
+      needs.publish-python.result == 'success' &&
+      needs.build-docker.result == 'success' &&
+      needs.update-packages.result == 'success' &&
+      (github.event_name == 'release' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'))
     steps:
       - name: Determine version
         id: version
@@ -610,8 +622,10 @@ jobs:
           CONTENT+="• [PyPI Package](https://pypi.org/project/mcp-mesh/)\\n"
           CONTENT+="• [Docker Images](https://hub.docker.com/u/mcpmesh)\\n"
           CONTENT+="• [Homebrew](https://github.com/dhyansraj/homebrew-mcp-mesh)\\n\\n🎉 **What's New:**\\n"
-          CONTENT+="• macOS Native Builds - Intel & Apple Silicon support\\n• Homebrew Distribution - Official tap available\\n"
-          CONTENT+="• Enhanced PATH Resolution - Works with system installations\\n• Cross-Platform Binary Consistency"
+          CONTENT+="• macOS Native Builds - Intel & Apple Silicon support\\n"
+          CONTENT+="• Homebrew Distribution - Official tap available\\n"
+          CONTENT+="• Enhanced PATH Resolution - Works with system installations\\n"
+          CONTENT+="• Cross-Platform Binary Consistency"
 
           PAYLOAD=$(cat <<EOF
           {

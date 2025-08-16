@@ -1,5 +1,15 @@
 # MCP Mesh Release Notes
 
+## v0.5.3 (2025-08-16)
+
+### GitHub Pipeline Fixes
+
+- Fixed Docker registry binary path resolution
+- Fixed release artifact checksum generation
+- Improved release workflow reliability
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.2...v0.5.3)
+
 ## v0.5.2 (2025-08-16)
 
 ### 🍎 macOS Support & Platform Improvements
