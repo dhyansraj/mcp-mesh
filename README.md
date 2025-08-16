@@ -176,6 +176,16 @@ pip install "mcp-mesh>=0.5,<0.6"
 
 ### CLI Tools
 
+**macOS (Homebrew)**
+
+```bash
+# Add the official tap and install
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+```
+
+**Linux/macOS (Install Script)**
+
 ```bash
 # Install meshctl and registry binaries
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
@@ -196,11 +206,12 @@ docker pull mcpmesh/cli:0.5
 
 ### Quick Setup Options
 
-| Method             | Best For                | Command                                            |
-| ------------------ | ----------------------- | -------------------------------------------------- |
-| **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up` |
-| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.5,<0.6"`                 |
-| **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`              |
+| Method             | Best For                | Command                                                |
+| ------------------ | ----------------------- | ------------------------------------------------------ |
+| **Homebrew**       | macOS users             | `brew tap dhyansraj/mcp-mesh && brew install mcp-mesh` |
+| **Docker Compose** | Getting started quickly | `cd examples/docker-examples && docker-compose up`     |
+| **Python Package** | Agent development       | `pip install "mcp-mesh>=0.5,<0.6"`                     |
+| **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`                  |
 
 > **🔧 For Development**: See [Local Development Guide](docs/02-local-development.md) to build from source.
 
@@ -307,6 +318,10 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 ### Package Manager Installation
 
 ```bash
+# macOS with Homebrew (recommended)
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+
 # Python package from PyPI (allows patch updates)
 pip install "mcp-mesh>=0.5,<0.6"
 
@@ -316,7 +331,7 @@ docker pull mcpmesh/python-runtime:0.5
 docker pull mcpmesh/cli:0.5
 
 # Download CLI binary directly (specific version)
-curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.5.1/mcp-mesh_v0.5.1_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/dhyansraj/mcp-mesh/releases/download/v0.5.2/mcp-mesh_v0.5.2_linux_amd64.tar.gz | tar xz
 sudo mv meshctl /usr/local/bin/
 ```
 

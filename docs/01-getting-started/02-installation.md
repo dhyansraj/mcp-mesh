@@ -4,7 +4,22 @@
 
 ## Quick Install (Recommended)
 
-Install MCP Mesh using published packages:
+### macOS with Homebrew
+
+```bash
+# Install CLI tools (includes meshctl and mcp-mesh-registry)
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+
+# Install Python package with semantic versioning
+pip install "mcp-mesh>=0.5,<0.6"
+
+# Verify installation
+meshctl --version
+mcp-mesh-registry --version
+```
+
+### Linux/macOS with Install Script
 
 ```bash
 # Install MCP Mesh from PyPI with semantic versioning (allows patch updates)
@@ -15,14 +30,14 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 
 # Verify installation
 meshctl --version
-registry --version
+mcp-mesh-registry --version
 ```
 
 **What this installs:**
 
 - 📦 **Python package**: MCP Mesh runtime for building agents
 - 🔧 **meshctl**: CLI tool for managing the mesh
-- 🏗️ **registry**: Service discovery and coordination server
+- 🏗️ **mcp-mesh-registry**: Service discovery and coordination server
 
 ## Alternative: Build from Source
 
@@ -273,8 +288,8 @@ For comprehensive solutions, see our [Troubleshooting Guide](./troubleshooting.m
 
 ## 📝 TODO
 
-- [ ] Create one-line installer script
-- [ ] Add Homebrew formula for macOS
+- [x] Create one-line installer script
+- [x] Add Homebrew formula for macOS
 - [ ] Create snap package for Linux
 - [ ] Add Windows installer (.exe)
 - [ ] Support poetry and pipenv
