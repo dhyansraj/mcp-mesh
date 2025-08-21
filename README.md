@@ -236,7 +236,9 @@ curl http://localhost:9090/mcp/ -X POST \
 | **Python Package** | Agent development       | `pip install "mcp-mesh>=0.5,<0.6"`                     |
 | **Kubernetes**     | Production deployment   | `kubectl apply -k examples/k8s/base/`                  |
 
-### Advanced Features for Production
+---
+
+## Advanced Features for Production
 
 MCP Mesh extends the MCP protocol with enterprise-grade capabilities for distributed environments:
 
@@ -339,94 +341,6 @@ While the Model Context Protocol (MCP) provides an excellent foundation for AI t
 - **Solution**: Resilient architecture where agents work standalone and gracefully handle registry failures while maintaining service continuity
 
 MCP Mesh transforms MCP from a point-to-point protocol into a distributed service mesh, making production-scale MCP deployments as simple as developing locally.
-
----
-
-## Vision: Global AI Agent Network
-
-MCP Mesh's architecture naturally enables a distributed ecosystem where AI agents can discover and collaborate across organizational and geographical boundaries. The same technology powering enterprise deployments can scale to support industry-wide cooperation.
-
-### **Technical Foundation for Cross-Cluster Federation**
-
-The registry-based discovery model supports federated architectures where agents from different Kubernetes clusters can participate in a shared capability network:
-
-```yaml
-# Multi-cluster registry federation
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: registry-federation
-data:
-  federation.yaml: |
-    primary_registry: "https://registry.my-org.com"
-    federated_registries:
-      - url: "https://public-registry.ai-consortium.org"
-        trust_level: "verified"
-        capabilities: ["translation", "analysis", "computation"]
-      - url: "https://academic-registry.university.edu"
-        trust_level: "research"
-        capabilities: ["research_tools", "data_analysis"]
-```
-
-### **Potential Industry Applications**
-
-**Enterprise Collaboration**: Organizations could share specialized AI capabilities while maintaining security boundaries - imagine a financial analysis agent discovering legal compliance tools from a partner firm's cluster, or supply chain optimization agents coordinating across vendor networks.
-
-**Research Networks**: Academic institutions could pool computational resources and specialized models, allowing researchers worldwide to access domain-specific AI tools without complex bilateral agreements.
-
-**Industry Standards**: Professional consortia could establish common capability registries, enabling standardized AI tool interfaces across competing platforms while preserving competitive differentiation in implementation.
-
-### **Current State and Roadmap**
-
-Today, MCP Mesh provides the core infrastructure patterns needed for this vision:
-
-- ✅ **Registry Federation**: Multiple registries can already cross-reference capabilities
-- ✅ **Security Boundaries**: Namespace isolation and RBAC controls
-- ✅ **Standard Protocols**: HTTP APIs and MCP compatibility ensure interoperability
-- 🔄 **In Development**: Enhanced authentication, capability verification, and cross-cluster networking
-- 📋 **Future Work**: Economic frameworks, reputation systems, and governance tooling
-
-The technology exists; what's needed is community coordination and trust frameworks. MCP Mesh provides the infrastructure foundation for organizations ready to explore collaborative AI agent networks.
-
----
-
-## Development
-
-### Prerequisites
-
-- **Go 1.21+** (for registry service)
-- **Python 3.11+** (for agent runtime)
-- **Docker** (for containerized development)
-- **Kubernetes/Minikube** (for cluster deployment)
-
-### Build and Test
-
-```bash
-# Build the entire project
-make build
-
-# Run tests
-make test-all
-
-# Local development with Docker Compose
-make dev
-
-# Deploy to Kubernetes
-make deploy
-```
-
-### Project Structure
-
-```
-mcp-mesh/
-├── src/core/           # Go registry service and CLI
-├── src/runtime/        # Python agent runtime and decorators
-├── examples/           # Sample agents and deployment examples
-├── docs/              # Comprehensive documentation
-├── helm/              # Helm charts for Kubernetes deployment
-├── docker/            # Docker configurations
-└── k8s/               # Kubernetes manifests
-```
 
 ---
 
