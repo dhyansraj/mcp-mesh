@@ -75,24 +75,26 @@ class DebounceCoordinator:
     def _determine_pipeline_type(self) -> str:
         """
         Determine which pipeline to execute based on registered decorators.
-        
+
         Returns:
             "mcp": Only MCP agents/tools found
-            "api": Only API routes found  
+            "api": Only API routes found
             "mixed": Both MCP and API decorators found (throws exception)
             "none": No decorators found
         """
         from ...engine.decorator_registry import DecoratorRegistry
-        
+
         agents = DecoratorRegistry.get_mesh_agents()
         tools = DecoratorRegistry.get_mesh_tools()
         routes = DecoratorRegistry.get_all_by_type("mesh_route")
-        
+
         has_mcp = len(agents) > 0 or len(tools) > 0
         has_api = len(routes) > 0
-        
-        self.logger.debug(f"🔍 Pipeline type detection: MCP={has_mcp} ({len(agents)} agents, {len(tools)} tools), API={has_api} ({len(routes)} routes)")
-        
+
+        self.logger.debug(
+            f"🔍 Pipeline type detection: MCP={has_mcp} ({len(agents)} agents, {len(tools)} tools), API={has_api} ({len(routes)} routes)"
+        )
+
         if has_api and has_mcp:
             return "mixed"
         elif has_api:
@@ -105,6 +107,8 @@ class DebounceCoordinator:
     def _execute_processing(self) -> None:
         """Execute the processing (called by timer)."""
         try:
+
+
             if self._orchestrator is None:
                 self.logger.error("❌ No orchestrator set for processing")
                 return
@@ -115,7 +119,7 @@ class DebounceCoordinator:
 
             # Determine which pipeline to execute
             pipeline_type = self._determine_pipeline_type()
-            
+
             if pipeline_type == "mixed":
                 error_msg = (
                     "❌ Mixed mode not supported: Cannot use @mesh.route decorators "
@@ -127,7 +131,7 @@ class DebounceCoordinator:
             elif pipeline_type == "none":
                 self.logger.warning("⚠️ No decorators found - nothing to process")
                 return
-            
+
             # Execute the pipeline using asyncio.run
             import asyncio
 
@@ -139,7 +143,7 @@ class DebounceCoordinator:
 
             if auto_run_enabled:
                 self.logger.info("🔄 Auto-run enabled - using FastAPI natural blocking")
-                
+
                 # Execute appropriate pipeline based on type
                 if pipeline_type == "mcp":
                     # Phase 1: Run async MCP pipeline setup
@@ -160,12 +164,65 @@ class DebounceCoordinator:
                     # For API services, ONLY do dependency injection - user controls their FastAPI server
                     # Dependency injection is already complete from pipeline execution
                     # Optionally start heartbeat in background (non-blocking)
-                    self._setup_api_heartbeat_background(heartbeat_config, pipeline_context)
-                    self.logger.info("✅ API dependency injection complete - user's FastAPI server can now start")
+                    self._setup_api_heartbeat_background(
+                        heartbeat_config, pipeline_context
+                    )
+                    self.logger.info(
+                        "✅ API dependency injection complete - user's FastAPI server can now start"
+                    )
                     return  # Don't block - let user's uvicorn run
                 elif fastapi_app and binding_config:
-                    # For MCP agents with FastAPI server
-                    self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                    # For MCP agents - use same daemon thread pattern as API apps
+                    self._setup_mcp_heartbeat_background(
+                        heartbeat_config, pipeline_context
+                    )
+                    
+                    # Check if server was already reused from immediate uvicorn start
+                    server_reused = pipeline_context.get("server_reused", False)
+                    existing_server = pipeline_context.get("existing_server", {})
+
+                    if server_reused:
+                        # Check server status to determine action
+                        server_status = existing_server.get("status", "unknown")
+
+                        if server_status == "configured":
+                            self.logger.info("🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop")
+                            # Start the configured server within this event loop
+                            server_obj = existing_server.get("server")
+                            if server_obj:
+                                self.logger.info("🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context")
+                                # This runs in the same event loop as the pipeline - no conflict!
+                                import asyncio
+
+                                # Define async function to run the server
+                                async def run_configured_server():
+                                    await server_obj.serve()
+
+                                # Run the server within the existing event loop context
+                                asyncio.run(run_configured_server())
+                                self.logger.info("✅ CONFIGURED SERVER: Server started successfully")
+                            else:
+                                self.logger.error("❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()")
+                                self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                        elif server_status == "running":
+                            self.logger.info("🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()")
+                            self.logger.info("✅ FastMCP mounted on running server - agent in normal operating state")
+                            # Server is already running in normal state - no further action needed
+                            return
+                        else:
+                            self.logger.info("🔄 SERVER REUSE: Existing server detected, skipping uvicorn.run()")
+                            self.logger.info("✅ FastMCP mounted on existing server - agent ready")
+                            # Keep the process alive but don't start new uvicorn
+                            # Use a robust keep-alive pattern that doesn't overflow
+                            import time
+                            try:
+                                while True:
+                                    time.sleep(3600)  # Sleep 1 hour at a time instead of infinity
+                            except KeyboardInterrupt:
+                                self.logger.info("🛑 Server reuse mode interrupted - shutting down")
+                                return
+                    else:
+                        self._start_blocking_fastapi_server(fastapi_app, binding_config)
                 else:
                     self.logger.warning(
                         "⚠️ Auto-run enabled but no FastAPI app prepared - exiting"
@@ -173,14 +230,14 @@ class DebounceCoordinator:
             else:
                 # Single execution mode (for testing/debugging)
                 self.logger.info("🏁 Auto-run disabled - single execution mode")
-                
+
                 if pipeline_type == "mcp":
                     result = asyncio.run(self._orchestrator.process_once())
                 elif pipeline_type == "api":
                     result = asyncio.run(self._orchestrator.process_api_once())
                 else:
                     raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
-                    
+
                 self.logger.info("✅ Pipeline execution completed, exiting")
 
         except Exception as e:
@@ -229,41 +286,48 @@ class DebounceCoordinator:
             heartbeat_config["context"] = pipeline_context
             service_id = heartbeat_config.get("service_id", "unknown")
             standalone_mode = heartbeat_config.get("standalone_mode", False)
-            
+
             if standalone_mode:
                 self.logger.info(
                     f"📝 API service '{service_id}' configured in standalone mode - no heartbeat"
                 )
                 return
-            
+
             self.logger.info(
                 f"🔗 Setting up background API heartbeat for service '{service_id}'"
             )
-            
+
             # Import heartbeat functionality
-            from ..api_heartbeat.api_lifespan_integration import api_heartbeat_lifespan_task
-            import threading
             import asyncio
-            
+            import threading
+
+            from ..api_heartbeat.api_lifespan_integration import (
+                api_heartbeat_lifespan_task,
+            )
+
             def run_heartbeat():
                 """Run heartbeat in separate thread with its own event loop."""
-                self.logger.debug(f"Starting background heartbeat thread for {service_id}")
+                self.logger.debug(
+                    f"Starting background heartbeat thread for {service_id}"
+                )
                 try:
                     # Create new event loop for this thread
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    
+
                     # Run heartbeat task
-                    loop.run_until_complete(api_heartbeat_lifespan_task(heartbeat_config))
+                    loop.run_until_complete(
+                        api_heartbeat_lifespan_task(heartbeat_config)
+                    )
                 except Exception as e:
                     self.logger.error(f"❌ Background heartbeat error: {e}")
                 finally:
                     loop.close()
-            
+
             # Start heartbeat in daemon thread (won't prevent process exit)
             heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
             heartbeat_thread.start()
-            
+
             self.logger.info(
                 f"💓 Background API heartbeat thread started for service '{service_id}'"
             )
@@ -271,6 +335,61 @@ class DebounceCoordinator:
         except Exception as e:
             self.logger.warning(f"⚠️ Could not setup API heartbeat: {e}")
             # Don't fail - heartbeat is optional for API services
+
+    def _setup_mcp_heartbeat_background(
+        self, heartbeat_config: dict[str, Any], pipeline_context: dict[str, Any]
+    ) -> None:
+        """Setup MCP heartbeat to run in background - same pattern as API apps."""
+        try:
+            # Populate heartbeat context with current pipeline context
+            heartbeat_config["context"] = pipeline_context
+            agent_id = heartbeat_config.get("agent_id", "unknown")
+            standalone_mode = heartbeat_config.get("standalone_mode", False)
+
+            if standalone_mode:
+                self.logger.info(
+                    f"📝 MCP agent '{agent_id}' configured in standalone mode - no heartbeat"
+                )
+                return
+
+            self.logger.info(
+                f"🔗 Setting up background MCP heartbeat for agent '{agent_id}'"
+            )
+
+            # Import heartbeat functionality
+            import asyncio
+            import threading
+
+            from ..mcp_heartbeat.lifespan_integration import heartbeat_lifespan_task
+
+            def run_heartbeat():
+                """Run heartbeat in separate thread with its own event loop."""
+                self.logger.debug(
+                    f"Starting background heartbeat thread for {agent_id}"
+                )
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    # Run heartbeat task
+                    loop.run_until_complete(heartbeat_lifespan_task(heartbeat_config))
+                except Exception as e:
+                    self.logger.error(f"❌ Background heartbeat error: {e}")
+                finally:
+                    loop.close()
+
+            # Start heartbeat in daemon thread (won't prevent process exit)
+            heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
+            heartbeat_thread.start()
+
+            self.logger.info(
+                f"💓 Background MCP heartbeat thread started for agent '{agent_id}'"
+            )
+
+        except Exception as e:
+            self.logger.warning(f"⚠️ Could not setup MCP heartbeat: {e}")
+            # Don't fail - heartbeat is optional for MCP agents
 
     def _perform_graceful_shutdown(self) -> None:
         """Perform graceful shutdown by unregistering from registry."""
@@ -399,19 +518,19 @@ class MeshOrchestrator:
     async def process_api_once(self) -> dict:
         """
         Execute the API pipeline once for @mesh.route decorators.
-        
+
         This handles FastAPI route integration and dependency injection setup.
         """
         self.logger.info(f"🚀 Starting API pipeline execution: {self.name}")
-        
+
         try:
             # Import API pipeline here to avoid circular imports
             from ..api_startup import APIPipeline
-            
+
             # Create and execute API pipeline
             api_pipeline = APIPipeline(name=f"{self.name}-api")
             result = await api_pipeline.execute()
-            
+
             # Convert result to dict for return type (same format as MCP pipeline)
             return {
                 "status": result.status.value,
@@ -420,13 +539,13 @@ class MeshOrchestrator:
                 "context": result.context,
                 "timestamp": result.timestamp.isoformat(),
             }
-            
+
         except Exception as e:
             error_msg = f"API pipeline execution failed: {e}"
             self.logger.error(f"❌ {error_msg}")
-            
+
             return {
-                "status": "failed", 
+                "status": "failed",
                 "message": error_msg,
                 "errors": [str(e)],
                 "context": {},
@@ -529,12 +648,13 @@ def start_runtime() -> None:
     """
     # Configure logging FIRST before any log messages
     from ...shared.logging_config import configure_logging
+
     configure_logging()
-    
+
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
-    # Install signal handlers in main thread FIRST (before any threading)
-    _install_signal_handlers()
+    # Skip signal handlers - let uvicorn/FastAPI handle graceful shutdown
+    # This prevents DNS threading conflicts in containerized environments
 
     # Create orchestrator and set up debouncing
     orchestrator = get_global_orchestrator()
@@ -551,80 +671,5 @@ def start_runtime() -> None:
     # through the debounce coordinator
 
 
-def _install_signal_handlers() -> None:
-    """Install signal handlers for graceful shutdown in main thread."""
-    try:
-        import signal
-        import threading
-
-        # Only install if we're in the main thread
-        if threading.current_thread() is not threading.main_thread():
-            logger.debug("🚨 Not in main thread, skipping signal handler installation")
-            return
-
-        def signal_handler(signum, frame):
-            logger.info(f"🔴 Received signal {signum}, performing graceful shutdown...")
-
-            # Get the global orchestrator and perform shutdown
-            orchestrator = get_global_orchestrator()
-
-            # Create a simple sync shutdown using the stored context
-            import asyncio
-
-            try:
-                # Try to get pipeline context for graceful shutdown
-                pipeline_context = getattr(orchestrator.pipeline, "_last_context", {})
-                registry_url = pipeline_context.get("registry_url")
-                agent_id = pipeline_context.get("agent_id")
-
-                if registry_url and agent_id:
-                    # Perform synchronous graceful shutdown
-                    logger.info(
-                        f"🏁 Gracefully unregistering agent '{agent_id}' from {registry_url}"
-                    )
-
-                    # Import here to avoid circular imports
-                    from ...generated.mcp_mesh_registry_client.api_client import (
-                        ApiClient,
-                    )
-                    from ...generated.mcp_mesh_registry_client.configuration import (
-                        Configuration,
-                    )
-                    from ...shared.registry_client_wrapper import RegistryClientWrapper
-
-                    config = Configuration(host=registry_url)
-                    api_client = ApiClient(configuration=config)
-                    registry_wrapper = RegistryClientWrapper(api_client)
-
-                    # Run the async unregister in a new event loop
-                    success = asyncio.run(registry_wrapper.unregister_agent(agent_id))
-                    if success:
-                        logger.info(f"✅ Agent '{agent_id}' unregistered successfully")
-                    else:
-                        logger.warning(
-                            f"⚠️ Agent '{agent_id}' unregister failed - continuing shutdown"
-                        )
-                else:
-                    logger.warning(
-                        f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
-                    )
-
-            except Exception as e:
-                logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
-
-            # Exit gracefully
-            import sys
-
-            sys.exit(0)
-
-        # Register signal handlers for SIGINT (Ctrl+C) and SIGTERM
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        logger.info(
-            "📡 Signal handlers registered in main thread for graceful shutdown"
-        )
-
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to install signal handlers: {e}")
-        # Continue without signal handlers - graceful shutdown will rely on FastAPI lifespan
+# Signal handlers removed - graceful shutdown now handled by FastAPI lifespan and daemon threads
+# This prevents DNS threading conflicts in containerized environments

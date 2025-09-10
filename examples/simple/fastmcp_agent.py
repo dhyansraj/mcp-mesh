@@ -52,7 +52,7 @@ def get_current_time() -> str:
 
 @app.tool()
 @mesh.tool(capability="math_service", dependencies=["time_service"])
-def calculate_with_timestamp(
+async def calculate_with_timestamp(
     a: float, b: float, operation: str = "add", time_service: mesh.McpMeshAgent = None
 ) -> dict:
     """Perform math operation with timestamp from time service."""
@@ -65,7 +65,7 @@ def calculate_with_timestamp(
     else:
         result = 0
 
-    timestamp = time_service() if time_service else "unknown"
+    timestamp = await time_service() if time_service else "unknown"
 
     return {
         "operation": operation,
