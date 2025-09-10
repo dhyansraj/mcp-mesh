@@ -10,6 +10,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
+from .threading_utils import ThreadingUtils
+
 logger = logging.getLogger(__name__)
 
 
@@ -829,6 +831,15 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
             f"auth_required: {self.auth_required}"
         )
 
+    def __call__(self, **kwargs) -> Any:
+        """Synchronous callable interface for dependency injection.
+
+        This method provides a sync interface for dependency injection.
+        Returns the actual result, not a coroutine.
+        """
+        # Use the enhanced tool call with proper sync-to-async bridging
+        return self.call_tool_auto(self.function_name, kwargs)
+
     async def call_tool_enhanced(self, name: str, arguments: dict = None) -> Any:
         """Enhanced tool call with retry logic and custom configuration."""
         last_exception = None
@@ -858,8 +869,19 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
         raise last_exception
 
     def call_tool_auto(self, name: str, arguments: dict = None) -> Any:
-        """Automatically choose streaming vs non-streaming based on configuration."""
-        if self.streaming_capable:
-            return self.call_tool_streaming(name, arguments)
-        else:
-            return self.call_tool_enhanced(name, arguments)
+        """Automatically choose streaming vs non-streaming based on configuration.
+
+        Uses shared ThreadingUtils for consistent DNS-safe threading behavior.
+        """
+        # Create coroutine function based on streaming capability
+        def coro_func():
+            if self.streaming_capable:
+                return self.call_tool_streaming(name, arguments)
+            else:
+                return self.call_tool_enhanced(name, arguments)
+
+        return ThreadingUtils.run_sync_from_async(
+            coro_func,
+            timeout=self.timeout or 60.0,
+            context_name=f"UnifiedMCPProxy.{name}",
+        )
