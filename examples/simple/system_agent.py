@@ -73,6 +73,7 @@ def fetch_system_overview() -> dict[str, Any]:  # Clear: function name ≠ capab
     Returns:
         Dictionary containing system information
     """
+
     uptime = datetime.now() - start_time
 
     return {
@@ -203,7 +204,7 @@ def perform_health_diagnostic(
     name="system-agent",
     version="1.0.0",
     description="System Agent service with FastMCP and mesh integration",
-    http_port=8080,
+    http_port=9091,
     enable_http=True,
     auto_run=True,
 )

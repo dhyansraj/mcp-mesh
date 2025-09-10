@@ -55,6 +55,15 @@ class DecoratorRegistry:
 
     # Registry for new decorator types (extensibility)
     _custom_decorators: dict[str, dict[str, DecoratedFunction]] = {}
+    
+    # Immediate uvicorn server storage (for preventing shutdown state)
+    _immediate_uvicorn_server: Optional[dict[str, Any]] = None
+    
+    # FastMCP lifespan storage (for proper integration with FastAPI)
+    _fastmcp_lifespan: Optional[Any] = None
+    
+    # FastMCP HTTP app storage (the same app instance whose lifespan was extracted)
+    _fastmcp_http_app: Optional[Any] = None
 
     @classmethod
     def register_mesh_agent(cls, func: Callable, metadata: dict[str, Any]) -> None:
@@ -507,6 +516,92 @@ class DecoratorRegistry:
                 return registry_metadata
 
         return {}
+
+    @classmethod
+    def store_immediate_uvicorn_server(cls, server_info: dict[str, Any]) -> None:
+        """
+        Store reference to immediate uvicorn server started in decorator.
+        
+        Args:
+            server_info: Dictionary containing server information:
+                - 'app': FastAPI app instance
+                - 'host': Server host
+                - 'port': Server port  
+                - 'thread': Thread object
+                - Any other relevant server metadata
+        """
+        cls._immediate_uvicorn_server = server_info
+        logger.debug(f"🔄 REGISTRY: Stored immediate uvicorn server reference: {server_info.get('host')}:{server_info.get('port')}")
+
+    @classmethod
+    def get_immediate_uvicorn_server(cls) -> Optional[dict[str, Any]]:
+        """
+        Get stored immediate uvicorn server reference.
+        
+        Returns:
+            Server info dict if available, None otherwise
+        """
+        return cls._immediate_uvicorn_server
+
+    @classmethod
+    def clear_immediate_uvicorn_server(cls) -> None:
+        """Clear stored immediate uvicorn server reference."""
+        cls._immediate_uvicorn_server = None
+        logger.debug("🔄 REGISTRY: Cleared immediate uvicorn server reference")
+
+    @classmethod
+    def store_fastmcp_lifespan(cls, lifespan: Any) -> None:
+        """
+        Store FastMCP lifespan for integration with FastAPI.
+        
+        Args:
+            lifespan: FastMCP lifespan function
+        """
+        cls._fastmcp_lifespan = lifespan
+        logger.debug("🔄 REGISTRY: Stored FastMCP lifespan for FastAPI integration")
+
+    @classmethod
+    def get_fastmcp_lifespan(cls) -> Optional[Any]:
+        """
+        Get stored FastMCP lifespan.
+        
+        Returns:
+            FastMCP lifespan if available, None otherwise
+        """
+        return cls._fastmcp_lifespan
+
+    @classmethod
+    def clear_fastmcp_lifespan(cls) -> None:
+        """Clear stored FastMCP lifespan reference."""
+        cls._fastmcp_lifespan = None
+        logger.debug("🔄 REGISTRY: Cleared FastMCP lifespan reference")
+
+    @classmethod
+    def store_fastmcp_http_app(cls, http_app: Any) -> None:
+        """
+        Store FastMCP HTTP app (the same instance whose lifespan was extracted).
+        
+        Args:
+            http_app: FastMCP HTTP app instance
+        """
+        cls._fastmcp_http_app = http_app
+        logger.debug("🔄 REGISTRY: Stored FastMCP HTTP app for mounting")
+
+    @classmethod
+    def get_fastmcp_http_app(cls) -> Optional[Any]:
+        """
+        Get stored FastMCP HTTP app.
+        
+        Returns:
+            FastMCP HTTP app if available, None otherwise
+        """
+        return cls._fastmcp_http_app
+
+    @classmethod
+    def clear_fastmcp_http_app(cls) -> None:
+        """Clear stored FastMCP HTTP app reference."""
+        cls._fastmcp_http_app = None
+        logger.debug("🔄 REGISTRY: Cleared FastMCP HTTP app reference")
 
 
 # Convenience functions for external access

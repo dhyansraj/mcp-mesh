@@ -378,7 +378,7 @@ if __name__ == "__main__":
     try:
         import uvicorn
         uvicorn.run(
-            "fastapi_app:app",  # Standard FastAPI pattern
+            app,  # Use the app object directly instead of module string
             host="0.0.0.0",
             port=8080,
             reload=False,  # Disabled for MCP Mesh focus - no file watching
