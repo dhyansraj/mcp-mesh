@@ -72,6 +72,20 @@ class DebounceCoordinator:
                 f"⏰ Scheduled processing in {self.delay_seconds} seconds"
             )
 
+    def cleanup(self) -> None:
+        """
+        Clean up any pending timers and reset state.
+
+        This is called during test teardown to prevent background threads
+        from interfering with subsequent tests.
+        """
+        with self._lock:
+            if self._pending_timer is not None:
+                self.logger.debug("🧹 Cleaning up pending processing timer")
+                self._pending_timer.cancel()
+                self._pending_timer = None
+            self._orchestrator = None
+
     def _determine_pipeline_type(self) -> str:
         """
         Determine which pipeline to execute based on registered decorators.
@@ -481,6 +495,20 @@ def get_debounce_coordinator() -> DebounceCoordinator:
         _debounce_coordinator = DebounceCoordinator(delay_seconds=delay)
 
     return _debounce_coordinator
+
+
+def clear_debounce_coordinator() -> None:
+    """
+    Clear the global debounce coordinator and clean up any pending timers.
+
+    This function is intended for test cleanup to prevent background threads
+    from interfering with subsequent tests.
+    """
+    global _debounce_coordinator
+
+    if _debounce_coordinator is not None:
+        _debounce_coordinator.cleanup()
+        _debounce_coordinator = None
 
 
 class MeshOrchestrator:

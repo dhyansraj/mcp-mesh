@@ -13,6 +13,7 @@ from .heartbeat_loop import HeartbeatLoopStep
 from .heartbeat_preparation import HeartbeatPreparationStep
 from .startup_orchestrator import (
                                    MeshOrchestrator,
+                                   clear_debounce_coordinator,
                                    get_debounce_coordinator,
                                    get_global_orchestrator,
                                    start_runtime,
@@ -28,6 +29,7 @@ __all__ = [
     "HeartbeatPreparationStep",
     "MeshOrchestrator",
     "StartupPipeline",
+    "clear_debounce_coordinator",
     "get_global_orchestrator",
     "get_debounce_coordinator",
     "start_runtime",

@@ -22,8 +22,12 @@ class TestMeshToolDetection:
     """Test basic @mesh.tool decorator detection and metadata storage."""
 
     def setup_method(self):
-        """Clear registry before each test."""
+        """Clear registry and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
 
     def test_basic_mesh_tool_no_parameters(self):
         """Test @mesh.tool with no parameters."""
@@ -118,8 +122,12 @@ class TestMeshAgentDetection:
     """Test basic @mesh.agent decorator detection and metadata storage."""
 
     def setup_method(self):
-        """Clear registry before each test."""
+        """Clear registry and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
 
     def test_mesh_agent_with_required_name(self):
         """Test @mesh.agent with required name parameter."""
@@ -190,8 +198,12 @@ class TestParameterValidation:
     """Test parameter validation for both decorators."""
 
     def setup_method(self):
-        """Clear registry before each test."""
+        """Clear registry and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
 
     # @mesh.tool validation tests
     def test_mesh_tool_invalid_capability_type(self):
@@ -302,9 +314,13 @@ class TestEnvironmentVariablePrecedence:
     """Test environment variable precedence over decorator parameters."""
 
     def setup_method(self):
-        """Clear registry and environment before each test."""
+        """Clear registry, environment, and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
-        # Clear relevant environment variables
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
+        # Clear relevant environment variables, but preserve MCP_MESH_AUTO_RUN=false for tests
         env_vars = [
             "MCP_MESH_AGENT_NAME",
             "MCP_MESH_HTTP_HOST",
@@ -312,7 +328,7 @@ class TestEnvironmentVariablePrecedence:
             "MCP_MESH_HTTP_ENABLED",
             "MCP_MESH_NAMESPACE",
             "MCP_MESH_HEALTH_INTERVAL",
-            "MCP_MESH_AUTO_RUN",
+            # "MCP_MESH_AUTO_RUN",  # CRITICAL: Don't clear this in tests to prevent runtime initialization
             "MCP_MESH_AUTO_RUN_INTERVAL",
         ]
         for var in env_vars:
@@ -327,7 +343,7 @@ class TestEnvironmentVariablePrecedence:
             "MCP_MESH_HTTP_ENABLED",
             "MCP_MESH_NAMESPACE",
             "MCP_MESH_HEALTH_INTERVAL",
-            "MCP_MESH_AUTO_RUN",
+            # "MCP_MESH_AUTO_RUN",  # CRITICAL: Don't clear this in tests to preserve test environment
             "MCP_MESH_AUTO_RUN_INTERVAL",
         ]
         for var in env_vars:
@@ -433,8 +449,12 @@ class TestDecoratorRegistry:
     """Test DecoratorRegistry integration and storage."""
 
     def setup_method(self):
-        """Clear registry before each test."""
+        """Clear registry and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
 
     def test_registry_stores_mesh_tools(self):
         """Test that DecoratorRegistry properly stores @mesh.tool decorators."""
@@ -533,8 +553,12 @@ class TestConstraintValidation:
     """Test system constraints: 0-1 agents, 0-N tools."""
 
     def setup_method(self):
-        """Clear registry before each test."""
+        """Clear registry and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
+        # Clear debounce coordinator to prevent background thread interference
+        from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
+
+        clear_debounce_coordinator()
 
     def test_zero_agents_allowed(self):
         """Test that zero agents is allowed."""
