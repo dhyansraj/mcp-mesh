@@ -43,6 +43,8 @@ class HeartbeatOrchestrator:
         self._heartbeat_count += 1
 
         try:
+
+
             # Prepare heartbeat context with validation
             heartbeat_context = self._prepare_heartbeat_context(agent_id, context)
 
@@ -65,10 +67,12 @@ class HeartbeatOrchestrator:
             import asyncio
 
             try:
+
                 result = await asyncio.wait_for(
                     self.pipeline.execute_heartbeat_cycle(heartbeat_context),
                     timeout=30.0,
                 )
+
             except TimeoutError:
                 self.logger.error(
                     f"❌ Heartbeat #{self._heartbeat_count} timed out after 30 seconds"
