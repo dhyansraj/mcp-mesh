@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  test-server:
+    build: .
+    command: python test_server.py
+    ports:
+      - "9080:9080"
+    environment:
+      - PORT=9080
+    networks:
+      - test-network
+
+  test-client-mesh:
+    build: .
+    command: python test_client_mesh.py
+    ports:
+      - "9081:9081"
+    environment:
+      - PORT=9081
+      - TARGET_HOST=test-server:9080  # This is the critical DNS service name test!
+    depends_on:
+      - test-server
+    networks:
+      - test-network
+
+
+networks:
+  test-network:
+    driver: bridge

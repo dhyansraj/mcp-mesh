@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  test-server:
+    build: .
+    command: python test_server.py
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  test-client:
+    build: .
+    command: python test_client.py
+    environment:
+      # This is the key test - using service name instead of IP/localhost
+      - TARGET_HOST=test-server:8080
+    depends_on:
+      test-server:
+        condition: service_healthy
+    networks:
+      - test-network
+
+  test-client-loop:
+    build: .
+    command: python test_client.py
+    environment:
+      - TARGET_HOST=test-server:8080
+      - LOOP_TEST=true
+    depends_on:
+      test-server:
+        condition: service_healthy
+    networks:
+      - test-network
+    profiles:
+      - loop-test
+
+networks:
+  test-network:
+    driver: bridge
