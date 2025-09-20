@@ -58,8 +58,10 @@ def initialize_runtime():
         sys.stderr.write(f"MCP Mesh runtime initialization failed: {e}\n")
 
 
-# Auto-initialize runtime if enabled
-if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
+# Auto-initialize runtime if enabled (but skip during testing)
+if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true" and os.getenv(
+    "MCP_MESH_AUTO_RUN", "true"
+).lower() not in ("false", "0", "no"):
     # Use debounced initialization instead of immediate MCP startup
     # This allows the system to determine MCP vs API pipeline based on decorators
     try:
