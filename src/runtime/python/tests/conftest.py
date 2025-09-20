@@ -5,6 +5,7 @@ Provides shared fixtures and test configuration across all test modules.
 """
 
 import asyncio
+import os
 import shutil
 import tempfile
 from collections.abc import AsyncGenerator, Generator
@@ -12,6 +13,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
+# CRITICAL: Set MCP_MESH_AUTO_RUN=false BEFORE any mesh imports to prevent atexit conflicts
+# This must be done at module level before any MCP Mesh components are imported
+os.environ["MCP_MESH_AUTO_RUN"] = "false"
 
 from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
@@ -101,7 +106,7 @@ def sample_directory_structure(temp_dir) -> dict:
         "tests": {"test_main.py": "def test_main(): assert True"},
     }
 
-    created_structure = {}
+    created_structure: dict = {}
 
     def create_structure(base_path: Path, struct: dict, result: dict):
         for name, content in struct.items():

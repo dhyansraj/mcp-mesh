@@ -96,7 +96,7 @@ List available tools on each agent:
 
 ```bash
 # Hello World Agent Tools
-curl -s -X POST http://localhost:8081/mcp/ \
+curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -104,7 +104,7 @@ curl -s -X POST http://localhost:8081/mcp/ \
     "id": 1,
     "method": "tools/list",
     "params": {}
-  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+  }' 
 
 # FastMCP Agent Tools
 curl -s -X POST http://localhost:8083/mcp/ \
@@ -129,7 +129,7 @@ curl -s -X POST http://localhost:8082/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # Dependent Agent Tools
-curl -s -X POST http://localhost:8084/mcp/ \
+curl -s -X POST http://localhost:8084/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -137,7 +137,7 @@ curl -s -X POST http://localhost:8084/mcp/ \
     "id": 1,
     "method": "tools/list",
     "params": {}
-  }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
+  }' 
 ```
 
 ## Tool Examples
@@ -304,7 +304,7 @@ curl -s -X POST http://localhost:8082/mcp/ \
 # 🔥 NEW: 3-Agent Dependency Chain with Distributed Tracing
 # This demonstrates the complete dependency injection flow:
 # Dependent Agent → FastMCP Agent → System Agent
-curl -s -X POST http://localhost:8084/mcp/ \
+curl -s -X POST http://localhost:8084/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -318,7 +318,7 @@ curl -s -X POST http://localhost:8084/mcp/ \
         "include_system_data": true
       }
     }
-  }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
+  }' 
 
 # Generate report (uses FastMCP agent's time service)
 curl -s -X POST http://localhost:8084/mcp/ \

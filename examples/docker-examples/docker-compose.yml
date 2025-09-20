@@ -7,6 +7,7 @@
 # - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:0.5)
 # - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:0.5)
 # - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:0.5)
+# - fastapi-app: FastAPI application with mesh integration (mcpmesh/python-runtime:0.5)
 #
 # Usage:
 #   docker-compose up
@@ -17,6 +18,7 @@
 #   - System Agent: http://localhost:8082
 #   - FastMCP Agent: http://localhost:8083
 #   - Dependent Agent: http://localhost:8084
+#   - FastAPI App: http://localhost:8085
 #   - Redis: localhost:6379
 #   - Grafana Dashboard: http://localhost:3000 (admin/admin)
 #   - Tempo Tracing: http://localhost:3200
@@ -301,6 +303,61 @@ services:
       - POD_IP=dependent-agent
       - MCP_MESH_HTTP_ENABLED=true
       - MCP_MESH_AGENT_NAME=dependent-service
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no dependencies needed, can start in any order
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # FastAPI App with mesh integration - built locally
+  fastapi-app:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    container_name: mcp-mesh-fastapi-app
+    hostname: fastapi-app
+    ports:
+      - "8085:8080"
+    volumes:
+      # Mount FastAPI app code
+      - ../simple/fastapi_app.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=fastapi-app
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=fastapi-app
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=fastapi-app
       - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
       - MCP_MESH_ENABLED=true
       - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
