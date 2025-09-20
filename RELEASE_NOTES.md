@@ -1,13 +1,5 @@
 # MCP Mesh Release Notes
 
-## v0.5.4 (2025-09-10)
-
-### DNS Threading Fix
-
-- Fixed DNS atexit threading bug causing sporadic FastMCP connection failures in Kubernetes environments
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.3...v0.5.4)
-
 ## v0.5.3 (2025-08-16)
 
 ### GitHub Pipeline Fixes

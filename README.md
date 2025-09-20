@@ -12,6 +12,8 @@
 
 ## 🎯 Why MCP Mesh?
 
+> **The MCP Protocol is brilliant for AI tool integration. MCP Mesh makes it production-ready.**
+
 While MCP solved AI tool standardization, scaling MCP applications to production presents unique challenges. MCP Mesh transforms MCP from a development protocol into an enterprise-grade distributed system.
 
 ---

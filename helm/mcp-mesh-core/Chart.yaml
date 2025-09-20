@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-core
 description: MCP Mesh Core Infrastructure - Registry, PostgreSQL, Redis, and Observability
 type: application
-version: 0.5.4
-appVersion: "0.5.4"
+version: 0.5.3
+appVersion: "0.5.3"
 keywords:
   - mcp
   - mesh
