@@ -60,7 +60,7 @@ async def simple_chat(
     try:
         # Call the injected LLM service using natural async pattern
         # This will call process_text_with_llm on the llm-chat-agent
-        llm_response = llm_service(
+        llm_response = await llm_service(
             text=message,
             task=task,
             context=context or "User chat interaction",
@@ -108,7 +108,7 @@ async def health_check(llm_service: mesh.McpMeshAgent | None = None) -> Dict[str
     if llm_service is not None:
         try:
             # Try a simple test call without tools for health check
-            test_result = llm_service(
+            test_result = await llm_service(
                 text="Health check test",
                 task="analyze",
                 context="System health check",
@@ -282,7 +282,7 @@ async def analyze_file(
         }
 
         # Call LLM service for analysis with structured tool using natural async pattern
-        llm_response = llm_service(
+        llm_response = await llm_service(
             text=content,
             task=task,
             context=analysis_context,
