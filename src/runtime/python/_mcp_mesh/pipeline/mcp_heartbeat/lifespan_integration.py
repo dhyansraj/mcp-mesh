@@ -44,6 +44,19 @@ async def heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
 
     try:
         while True:
+            # Check if shutdown is complete before executing heartbeat
+            try:
+                from ...shared.simple_shutdown import should_stop_heartbeat
+
+                if should_stop_heartbeat():
+                    logger.info(
+                        f"🛑 Heartbeat stopped for agent '{agent_id}' due to shutdown"
+                    )
+                    break
+            except ImportError:
+                # If simple_shutdown is not available, continue normally
+                pass
+
             try:
                 # Execute heartbeat pipeline
                 success = await heartbeat_orchestrator.execute_heartbeat(

@@ -96,6 +96,8 @@ class FastAPIServerSetupStep(PipelineStep):
                         result.add_error(f"Failed to wrap server '{server_key}': {e}")
 
             # Create FastAPI application with proper FastMCP lifespan integration (AFTER wrappers)
+            # Store context for shutdown coordination
+            self._current_context = context
             fastapi_app = self._create_fastapi_app(
                 agent_config, fastmcp_servers, heartbeat_config, mcp_wrappers
             )
@@ -333,8 +335,24 @@ class FastAPIServerSetupStep(PipelineStep):
                         try:
                             yield
                         finally:
-                            # Graceful shutdown - unregister from registry
-                            await self._graceful_shutdown(main_app)
+                            # Registry cleanup using simple shutdown
+                            context = getattr(self, "_current_context", {})
+                            registry_url = context.get(
+                                "registry_url", "http://localhost:8001"
+                            )
+                            agent_id = context.get("agent_id", "unknown")
+
+                            try:
+                                from ...shared.simple_shutdown import (
+                                    _simple_shutdown_coordinator,
+                                )
+
+                                _simple_shutdown_coordinator.set_shutdown_context(
+                                    registry_url, agent_id
+                                )
+                                await _simple_shutdown_coordinator.perform_registry_cleanup()
+                            except Exception as e:
+                                self.logger.error(f"❌ Registry cleanup error: {e}")
 
                             # Clean up all lifespans in reverse order
                             for ctx in reversed(lifespan_contexts):
@@ -359,8 +377,24 @@ class FastAPIServerSetupStep(PipelineStep):
                     try:
                         yield
                     finally:
-                        # Graceful shutdown - unregister from registry
-                        await self._graceful_shutdown(main_app)
+                        # Registry cleanup using simple shutdown
+                        context = getattr(self, "_current_context", {})
+                        registry_url = context.get(
+                            "registry_url", "http://localhost:8001"
+                        )
+                        agent_id = context.get("agent_id", "unknown")
+
+                        try:
+                            from ...shared.simple_shutdown import (
+                                _simple_shutdown_coordinator,
+                            )
+
+                            _simple_shutdown_coordinator.set_shutdown_context(
+                                registry_url, agent_id
+                            )
+                            await _simple_shutdown_coordinator.perform_registry_cleanup()
+                        except Exception as e:
+                            self.logger.error(f"❌ Registry cleanup error: {e}")
 
                 primary_lifespan = graceful_shutdown_only_lifespan
 
@@ -372,6 +406,8 @@ class FastAPIServerSetupStep(PipelineStep):
                 redoc_url="/redoc",
                 lifespan=primary_lifespan,
             )
+
+            # Registry cleanup is now integrated directly into the lifespan above
 
             # Store app reference for global shutdown coordination
             app.state.shutdown_step = self

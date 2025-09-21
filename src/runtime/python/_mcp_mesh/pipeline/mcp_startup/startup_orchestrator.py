@@ -305,10 +305,8 @@ class DebounceCoordinator:
 
         except KeyboardInterrupt:
             self.logger.info(
-                "🔴 Received KeyboardInterrupt, performing graceful shutdown..."
+                "🔴 Received KeyboardInterrupt, shutdown will be handled by FastAPI lifespan"
             )
-            # Perform graceful shutdown before exiting
-            self._perform_graceful_shutdown()
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
@@ -427,64 +425,7 @@ class DebounceCoordinator:
             self.logger.warning(f"⚠️ Could not setup MCP heartbeat: {e}")
             # Don't fail - heartbeat is optional for MCP agents
 
-    def _perform_graceful_shutdown(self) -> None:
-        """Perform graceful shutdown by unregistering from registry."""
-        try:
-            # Run graceful shutdown asynchronously
-            import asyncio
-
-            asyncio.run(self._graceful_shutdown_async())
-        except Exception as e:
-            self.logger.error(f"❌ Graceful shutdown failed: {e}")
-
-    async def _graceful_shutdown_async(self) -> None:
-        """Async graceful shutdown implementation."""
-        try:
-            # Get the latest pipeline context from the orchestrator
-            if self._orchestrator is None:
-                self.logger.warning(
-                    "🚨 No orchestrator available for graceful shutdown"
-                )
-                return
-
-            # Access the pipeline context through the orchestrator
-            pipeline_context = getattr(self._orchestrator.pipeline, "_last_context", {})
-
-            # Get registry configuration
-            registry_url = pipeline_context.get("registry_url")
-            agent_id = pipeline_context.get("agent_id")
-
-            if not registry_url or not agent_id:
-                self.logger.warning(
-                    f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
-                )
-                return
-
-            # Create registry client for shutdown
-            from ...generated.mcp_mesh_registry_client.api_client import ApiClient
-            from ...generated.mcp_mesh_registry_client.configuration import (
-                Configuration,
-            )
-            from ...shared.registry_client_wrapper import RegistryClientWrapper
-
-            config = Configuration(host=registry_url)
-            api_client = ApiClient(configuration=config)
-            registry_wrapper = RegistryClientWrapper(api_client)
-
-            # Perform graceful unregistration
-            success = await registry_wrapper.unregister_agent(agent_id)
-            if success:
-                self.logger.info(
-                    f"🏁 Graceful shutdown completed for agent '{agent_id}'"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ Graceful shutdown failed for agent '{agent_id}' - continuing shutdown"
-                )
-
-        except Exception as e:
-            # Don't fail the shutdown process due to unregistration errors
-            self.logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
+    # Graceful shutdown is now handled by FastAPI lifespan in simple_shutdown.py
 
     def _check_auto_run_enabled(self) -> bool:
         """Check if auto-run is enabled (defaults to True for persistent service behavior)."""
@@ -703,9 +644,7 @@ def start_runtime() -> None:
 
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
-    # Install minimal signal handlers for graceful shutdown
-    # This restores the DELETE /heartbeats call that was removed during DNS fix
-    _install_minimal_signal_handlers()
+    # Signal handlers removed - cleanup now handled by FastAPI lifespan
 
     # Create orchestrator and set up debouncing
     orchestrator = get_global_orchestrator()
@@ -722,96 +661,7 @@ def start_runtime() -> None:
     # through the debounce coordinator
 
 
-def _install_minimal_signal_handlers() -> None:
-    """
-    Install minimal signal handlers that only perform graceful shutdown.
-
-    This restores the DELETE /heartbeats functionality that was removed during
-    the DNS threading fix while avoiding complex operations that could conflict
-    with DNS resolution in containerized environments.
-    """
-    import signal
-
-    def graceful_shutdown_signal_handler(signum, frame):
-        """Handle shutdown signals by performing graceful unregistration."""
-        try:
-            logger.info(f"🚨 Received signal {signum}, performing graceful shutdown...")
-
-            # Get the global orchestrator to access pipeline context
-            orchestrator = get_global_orchestrator()
-            if orchestrator and hasattr(orchestrator.pipeline, "_last_context"):
-                pipeline_context = orchestrator.pipeline._last_context
-
-                # Get registry configuration
-                registry_url = pipeline_context.get("registry_url")
-                agent_id = pipeline_context.get("agent_id")
-
-                if registry_url and agent_id:
-                    # Perform synchronous graceful shutdown
-                    import asyncio
-
-                    try:
-                        # Create new event loop for shutdown
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-
-                        # Run graceful shutdown
-                        loop.run_until_complete(
-                            _perform_signal_graceful_shutdown(registry_url, agent_id)
-                        )
-                        loop.close()
-
-                        logger.info(
-                            f"🏁 Graceful shutdown completed for agent '{agent_id}'"
-                        )
-                    except Exception as e:
-                        logger.error(f"❌ Graceful shutdown error: {e}")
-                else:
-                    logger.warning(
-                        f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
-                    )
-            else:
-                logger.warning(
-                    "🚨 No orchestrator context available for graceful shutdown"
-                )
-
-        except Exception as e:
-            logger.error(f"❌ Signal handler error: {e}")
-        finally:
-            # Exit cleanly
-            logger.info("🛑 Exiting...")
-            sys.exit(0)
-
-    # Install handlers for common termination signals
-    signal.signal(signal.SIGTERM, graceful_shutdown_signal_handler)
-    signal.signal(signal.SIGINT, graceful_shutdown_signal_handler)
-
-    logger.debug("🛡️ Minimal signal handlers installed for graceful shutdown")
-
-
-async def _perform_signal_graceful_shutdown(registry_url: str, agent_id: str) -> None:
-    """Perform graceful shutdown from signal handler context."""
-    try:
-        # Create registry client for shutdown
-        from ...generated.mcp_mesh_registry_client.api_client import ApiClient
-        from ...generated.mcp_mesh_registry_client.configuration import Configuration
-        from ...shared.registry_client_wrapper import RegistryClientWrapper
-
-        config = Configuration(host=registry_url)
-        api_client = ApiClient(configuration=config)
-        registry_wrapper = RegistryClientWrapper(api_client)
-
-        # Perform graceful unregistration (this sends DELETE /heartbeats)
-        success = await registry_wrapper.unregister_agent(agent_id)
-        if success:
-            logger.info(
-                f"✅ Agent '{agent_id}' successfully unregistered from registry"
-            )
-        else:
-            logger.warning(f"⚠️ Failed to unregister agent '{agent_id}' from registry")
-
-    except Exception as e:
-        logger.error(f"❌ Signal graceful shutdown error: {e}")
+# Signal handlers removed - cleanup now handled by FastAPI lifespan in simple_shutdown.py
 
 
 # Minimal signal handlers restored to provide graceful shutdown with DELETE /heartbeats
