@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 # Import from _mcp_mesh for registry and runtime integration
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
+from _mcp_mesh.shared.simple_shutdown import start_blocking_loop_with_shutdown_support
 
 logger = logging.getLogger(__name__)
 
@@ -98,50 +99,49 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
         )
 
-        # Create uvicorn config and server but DON'T start it with asyncio.run()
-        # This prevents the dual event loop conflict
+        # Use uvicorn.run() for proper signal handling (enables FastAPI lifespan shutdown)
         logger.info(
-            "⚡ IMMEDIATE UVICORN: Creating uvicorn config without starting event loop"
-        )
-
-        config = uvicorn.Config(app=app, host=http_host, port=port, log_level="info")
-        server = uvicorn.Server(config)
-
-        # DON'T start the server here - let the pipeline handle the event loop
-        logger.info(
-            "✅ IMMEDIATE UVICORN: Uvicorn server configured (will be started by pipeline)"
+            "⚡ IMMEDIATE UVICORN: Starting server with uvicorn.run() for proper signal handling"
         )
 
         # Start uvicorn server in background thread (NON-daemon to keep process alive)
         def run_server():
-            """Run uvicorn server in background thread - keeps process alive."""
+            """Run uvicorn server in background thread with proper signal handling."""
             try:
                 logger.info(
                     f"🌟 IMMEDIATE UVICORN: Starting server on {http_host}:{port}"
                 )
-                server.run()  # This blocks and keeps the thread alive
+                # Use uvicorn.run() instead of Server().run() for proper signal handling
+                uvicorn.run(
+                    app,
+                    host=http_host,
+                    port=port,
+                    log_level="info",
+                    timeout_graceful_shutdown=30,  # Allow time for registry cleanup
+                    access_log=False,  # Reduce noise
+                )
             except Exception as e:
                 logger.error(f"❌ IMMEDIATE UVICORN: Server failed: {e}")
                 import traceback
 
                 logger.error(f"Server traceback: {traceback.format_exc()}")
 
-        # Start server in daemon thread (matches working test setup pattern)
-        thread = threading.Thread(target=run_server, daemon=True)
+        # Start server in non-daemon thread so it can handle signals properly
+        thread = threading.Thread(target=run_server, daemon=False)
         thread.start()
 
         logger.info(
-            "🔒 IMMEDIATE UVICORN: Server thread started (daemon=True) - matches working test setup"
+            "🔒 IMMEDIATE UVICORN: Server thread started (daemon=False) - can handle signals"
         )
 
         # Store server reference in DecoratorRegistry BEFORE starting (critical timing)
         server_info = {
             "app": app,
-            "server": server,  # Include uvicorn server object
-            "config": config,  # Include config for reference
+            "server": None,  # No server object with uvicorn.run()
+            "config": None,  # No config object needed
             "host": http_host,
             "port": port,
-            "thread": thread,  # Server thread (daemon)
+            "thread": thread,  # Server thread (non-daemon)
             "type": "immediate_uvicorn_running",
             "status": "running",  # Server is now running in background thread
         }
@@ -162,9 +162,18 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
         )
 
+        # Set up registry context for shutdown cleanup (use defaults initially)
+        import os
+
+        from _mcp_mesh.shared.simple_shutdown import _simple_shutdown_coordinator
+
+        registry_url = os.getenv("MCP_MESH_REGISTRY_URL", "http://localhost:8000")
+        agent_id = "unknown"  # Will be updated by pipeline when available
+        _simple_shutdown_coordinator.set_shutdown_context(registry_url, agent_id)
+
         # CRITICAL FIX: Keep main thread alive to prevent shutdown state
         # This matches the working test setup pattern that prevents DNS resolution failures
-        # Uses graceful shutdown manager for clean code organization
+        # Uses simple shutdown with signal handlers for clean registry cleanup
         start_blocking_loop_with_shutdown_support(thread)
 
     except Exception as e:
