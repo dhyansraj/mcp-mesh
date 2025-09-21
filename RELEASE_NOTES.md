@@ -1,14 +1,25 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.5...v0.5.6)
+
+## v0.5.6 (2025-09-21)
+
+### 🔧 Graceful Shutdown and Registry Cleanup
+
+- Implemented clean shutdown architecture with FastAPI lifespan integration
+- Added proper DELETE /agents/{agent_id} registry cleanup when agents terminate
+- Fixed race conditions between heartbeat and shutdown threads
+- Enhanced agent lifecycle management with graceful signal handling
+- Improved DNS atexit threading reliability for Kubernetes environments
+
+### 🚀 System Improvements
+
+- Updated environment variable configuration: MCP_MESH_REGISTRY_URL for Docker/K8s compatibility
+- Fixed CI test hanging issues with MCP_MESH_AUTO_RUN=false configuration
+- Enhanced error handling and logging for production debugging
+- Streamlined agent startup and shutdown processes
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.3...v0.5.5)
-
-## v0.5.5 (2025-09-20)
-
-### 🔧 DNS Threading Fix
-
-- Fixed DNS atexit threading bug causing sporadic FastMCP connection failures in Kubernetes environments
-- Resolved "can't register atexit after shutdown" errors in Python 3.8+ ThreadPoolExecutor
-- Improved reliability of DNS service discovery for load balancing
 
 ## v0.5.3 (2025-08-16)
 
