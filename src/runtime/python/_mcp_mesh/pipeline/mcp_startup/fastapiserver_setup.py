@@ -4,7 +4,7 @@ import os
 import socket
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -35,7 +35,7 @@ class FastAPIServerSetupStep(PipelineStep):
             # Get configuration and discovered servers
             agent_config = context.get("agent_config", {})
             fastmcp_servers = context.get("fastmcp_servers", {})
-            
+
             # Check for existing server from ServerDiscoveryStep
             existing_server = context.get("existing_server")
             existing_fastapi_app = context.get("existing_fastapi_app")
@@ -51,13 +51,21 @@ class FastAPIServerSetupStep(PipelineStep):
             # Resolve binding and advertisement configuration
             binding_config = self._resolve_binding_config(agent_config)
             advertisement_config = self._resolve_advertisement_config(agent_config)
-            
+
             # Handle existing server case - mount FastMCP with proper lifespan integration
             if server_reuse and existing_server:
-                self.logger.info(f"🔄 SERVER REUSE: Found existing server, will mount FastMCP with proper lifespan integration")
+                self.logger.info(
+                    "🔄 SERVER REUSE: Found existing server, will mount FastMCP with proper lifespan integration"
+                )
                 return await self._handle_existing_server(
-                    context, result, existing_server, existing_fastapi_app, fastmcp_servers,
-                    agent_config, binding_config, advertisement_config
+                    context,
+                    result,
+                    existing_server,
+                    existing_fastapi_app,
+                    fastmcp_servers,
+                    agent_config,
+                    binding_config,
+                    advertisement_config,
                 )
 
             # Get heartbeat config for lifespan integration
@@ -128,6 +136,21 @@ class FastAPIServerSetupStep(PipelineStep):
             result.add_context("mcp_wrappers", mcp_wrappers)
             result.add_context("fastapi_binding_config", binding_config)
             result.add_context("fastapi_advertisement_config", advertisement_config)
+
+            # Set shutdown context for signal handlers with FastAPI app
+            try:
+                from mesh.decorators import set_shutdown_context
+
+                shutdown_context = {
+                    "fastapi_app": fastapi_app,
+                    "registry_url": context.get("registry_url"),
+                    "agent_id": context.get("agent_id"),
+                    "registry_wrapper": context.get("registry_wrapper"),
+                }
+                set_shutdown_context(shutdown_context)
+                self.logger.debug("🔧 Shutdown context set for signal handlers")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Failed to set shutdown context: {e}")
 
             # Pass through server reuse information to orchestrator
             result.add_context("server_reused", server_reuse)
@@ -349,6 +372,9 @@ class FastAPIServerSetupStep(PipelineStep):
                 redoc_url="/redoc",
                 lifespan=primary_lifespan,
             )
+
+            # Store app reference for global shutdown coordination
+            app.state.shutdown_step = self
 
             self.logger.debug(
                 f"Created FastAPI app for agent '{agent_name}' with lifespan: {primary_lifespan is not None}"
@@ -690,7 +716,6 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             "registry_wrapper": context.get("registry_wrapper"),
         }
 
-
     async def _handle_existing_server(
         self,
         context: dict[str, Any],
@@ -704,14 +729,14 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
     ) -> Any:
         """
         Handle mounting FastMCP on existing uvicorn server.
-        
+
         This is used when ServerDiscoveryStep finds an existing uvicorn server
         (e.g., started immediately in @mesh.agent decorator) and we need to
         mount FastMCP endpoints on it instead of starting a new server.
         """
         try:
-            self.logger.info(f"🔄 SERVER REUSE: Mounting FastMCP on existing server")
-            
+            self.logger.info("🔄 SERVER REUSE: Mounting FastMCP on existing server")
+
             # Get the existing minimal FastAPI app that's already running
             existing_app = None
             if existing_fastapi_app and "app" in existing_fastapi_app:
@@ -723,25 +748,31 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             else:
                 # As fallback, try to get the app from DecoratorRegistry
                 from ...engine.decorator_registry import DecoratorRegistry
+
                 server_info = DecoratorRegistry.get_immediate_uvicorn_server()
                 if server_info and "app" in server_info:
                     existing_app = server_info["app"]
-            
+
             if not existing_app:
                 raise ValueError("No existing FastAPI app found for server reuse")
-                
-            self.logger.info(f"🔄 SERVER REUSE: Using existing FastAPI app '{existing_app.title}' for FastMCP mounting")
-            
+
+            self.logger.info(
+                f"🔄 SERVER REUSE: Using existing FastAPI app '{existing_app.title}' for FastMCP mounting"
+            )
+
             # Check if FastMCP lifespan is already integrated with the FastAPI app
             from ...engine.decorator_registry import DecoratorRegistry
+
             fastmcp_lifespan = DecoratorRegistry.get_fastmcp_lifespan()
             fastmcp_http_app = DecoratorRegistry.get_fastmcp_http_app()
-            
+
             mcp_wrappers = {}
             if fastmcp_servers:
                 if fastmcp_lifespan and fastmcp_http_app:
-                    self.logger.info("✅ SERVER REUSE: FastMCP lifespan already integrated, mounting same HTTP app")
-                    
+                    self.logger.info(
+                        "✅ SERVER REUSE: FastMCP lifespan already integrated, mounting same HTTP app"
+                    )
+
                     # FastMCP lifespan is already integrated, mount the same HTTP app that was used for lifespan
                     for server_key, server_instance in fastmcp_servers.items():
                         try:
@@ -751,29 +782,34 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             self.logger.info(
                                 f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' using stored HTTP app (lifespan already integrated)"
                             )
-                            
+
                             mcp_wrappers[server_key] = {
                                 "fastmcp_app": fastmcp_http_app,
                                 "server_instance": server_instance,
                                 "lifespan_integrated": True,
                             }
-                                
+
                         except Exception as e:
                             self.logger.error(
                                 f"❌ SERVER REUSE: Failed to mount FastMCP server '{server_key}': {e}"
                             )
-                            result.add_error(f"Failed to mount server '{server_key}': {e}")
+                            result.add_error(
+                                f"Failed to mount server '{server_key}': {e}"
+                            )
                 else:
-                    self.logger.info("🔄 SERVER REUSE: No FastMCP lifespan integrated, using HttpMcpWrapper")
-                    
+                    self.logger.info(
+                        "🔄 SERVER REUSE: No FastMCP lifespan integrated, using HttpMcpWrapper"
+                    )
+
                     # No lifespan integration, use HttpMcpWrapper (fallback method)
                     for server_key, server_instance in fastmcp_servers.items():
                         try:
                             # Create HttpMcpWrapper for proper FastMCP app creation and session routing
                             from ...engine.http_wrapper import HttpMcpWrapper
+
                             mcp_wrapper = HttpMcpWrapper(server_instance)
                             await mcp_wrapper.setup()
-                            
+
                             # Mount using the wrapper's properly configured FastMCP app
                             if mcp_wrapper._mcp_app:
                                 # Mount at root since FastMCP creates its own /mcp routes internally
@@ -781,7 +817,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                                 self.logger.info(
                                     f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' via HttpMcpWrapper at root (provides /mcp routes)"
                                 )
-                            
+
                             mcp_wrappers[server_key] = {
                                 "wrapper": mcp_wrapper,
                                 "server_instance": server_instance,
@@ -791,13 +827,17 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             self.logger.error(
                                 f"❌ SERVER REUSE: Failed to create HttpMcpWrapper for server '{server_key}': {e}"
                             )
-                            result.add_error(f"Failed to wrap server '{server_key}': {e}")
+                            result.add_error(
+                                f"Failed to wrap server '{server_key}': {e}"
+                            )
 
                 # Add K8s health endpoints to existing app (if not already present)
                 self._add_k8s_endpoints(existing_app, agent_config, mcp_wrappers)
 
                 # FastMCP servers are already mounted directly - no additional integration needed
-                self.logger.info(f"🔌 SERVER REUSE: All FastMCP servers mounted successfully")
+                self.logger.info(
+                    "🔌 SERVER REUSE: All FastMCP servers mounted successfully"
+                )
 
             # Store context for graceful shutdown access
             self._store_context_for_shutdown(context)
@@ -813,14 +853,18 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self._current_context["mcp_wrappers"] = mcp_wrappers
 
             # FastMCP is now mounted directly - no server replacement needed
-            self.logger.info(f"🔄 SERVER REUSE: FastMCP routes mounted to existing app successfully")
+            self.logger.info(
+                "🔄 SERVER REUSE: FastMCP routes mounted to existing app successfully"
+            )
 
             # Store results in context (existing app updated, server reused)
             result.add_context("fastapi_app", existing_app)
             result.add_context("mcp_wrappers", mcp_wrappers)
             result.add_context("fastapi_binding_config", binding_config)
             result.add_context("fastapi_advertisement_config", advertisement_config)
-            result.add_context("server_reused", True)  # Flag to skip uvicorn.run() in orchestrator
+            result.add_context(
+                "server_reused", True
+            )  # Flag to skip uvicorn.run() in orchestrator
 
             bind_host = binding_config["bind_host"]
             bind_port = binding_config["bind_port"]
@@ -836,8 +880,14 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             )
 
         except Exception as e:
-            self.logger.error(f"❌ SERVER REUSE: Failed to mount on existing server: {e}")
-            result.status = result.PipelineStatus.FAILED if hasattr(result, 'PipelineStatus') else 'failed'
+            self.logger.error(
+                f"❌ SERVER REUSE: Failed to mount on existing server: {e}"
+            )
+            result.status = (
+                result.PipelineStatus.FAILED
+                if hasattr(result, "PipelineStatus")
+                else "failed"
+            )
             result.message = f"Server reuse failed: {e}"
             result.add_error(str(e))
 

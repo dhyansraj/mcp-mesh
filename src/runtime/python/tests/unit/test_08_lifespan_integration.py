@@ -253,7 +253,7 @@ class TestLifespanIntegrationOrchestrator:
                 call_count += 1
                 if call_count >= 1:  # After first heartbeat
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)  # Don't actually sleep
+                return None  # Don't actually sleep
 
             mock_sleep.side_effect = sleep_side_effect
 
@@ -374,7 +374,7 @@ class TestLifespanIntegrationErrorHandling:
                 sleep_call_count += 1
                 if sleep_call_count >= 2:
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)
+                return None  # Return immediately for first sleep
 
             mock_sleep.side_effect = sleep_side_effect
 
@@ -433,7 +433,7 @@ class TestLifespanIntegrationErrorHandling:
                 sleep_call_count += 1
                 if sleep_call_count >= 2:
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)
+                return None  # Return immediately for first sleep
 
             mock_sleep.side_effect = sleep_side_effect
 
@@ -475,7 +475,7 @@ class TestLifespanIntegrationErrorHandling:
                 sleep_call_count += 1
                 if sleep_call_count >= 3:
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)
+                return None
 
             mock_sleep.side_effect = sleep_side_effect
 
@@ -644,7 +644,7 @@ class TestLifespanIntegrationIntegration:
                 call_count += 1
                 if call_count >= 2:
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)
+                return None
 
             mock_sleep.side_effect = sleep_side_effect
 
@@ -700,7 +700,7 @@ class TestLifespanIntegrationIntegration:
                 call_count += 1
                 if call_count >= 4:
                     raise asyncio.CancelledError()
-                return asyncio.sleep(0)
+                return None
 
             mock_sleep.side_effect = sleep_side_effect
 

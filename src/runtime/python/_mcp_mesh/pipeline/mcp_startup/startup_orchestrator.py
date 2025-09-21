@@ -122,7 +122,6 @@ class DebounceCoordinator:
         """Execute the processing (called by timer)."""
         try:
 
-
             if self._orchestrator is None:
                 self.logger.error("❌ No orchestrator set for processing")
                 return
@@ -190,7 +189,7 @@ class DebounceCoordinator:
                     self._setup_mcp_heartbeat_background(
                         heartbeat_config, pipeline_context
                     )
-                    
+
                     # Check if server was already reused from immediate uvicorn start
                     server_reused = pipeline_context.get("server_reused", False)
                     existing_server = pipeline_context.get("existing_server", {})
@@ -200,11 +199,15 @@ class DebounceCoordinator:
                         server_status = existing_server.get("status", "unknown")
 
                         if server_status == "configured":
-                            self.logger.info("🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop")
+                            self.logger.info(
+                                "🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop"
+                            )
                             # Start the configured server within this event loop
                             server_obj = existing_server.get("server")
                             if server_obj:
-                                self.logger.info("🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context")
+                                self.logger.info(
+                                    "🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context"
+                                )
                                 # This runs in the same event loop as the pipeline - no conflict!
                                 import asyncio
 
@@ -214,26 +217,45 @@ class DebounceCoordinator:
 
                                 # Run the server within the existing event loop context
                                 asyncio.run(run_configured_server())
-                                self.logger.info("✅ CONFIGURED SERVER: Server started successfully")
+                                self.logger.info(
+                                    "✅ CONFIGURED SERVER: Server started successfully"
+                                )
                             else:
-                                self.logger.error("❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()")
-                                self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                                self.logger.error(
+                                    "❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()"
+                                )
+                                self._start_blocking_fastapi_server(
+                                    fastapi_app, binding_config
+                                )
                         elif server_status == "running":
-                            self.logger.info("🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()")
-                            self.logger.info("✅ FastMCP mounted on running server - agent in normal operating state")
+                            self.logger.info(
+                                "🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()"
+                            )
+                            self.logger.info(
+                                "✅ FastMCP mounted on running server - agent in normal operating state"
+                            )
                             # Server is already running in normal state - no further action needed
                             return
                         else:
-                            self.logger.info("🔄 SERVER REUSE: Existing server detected, skipping uvicorn.run()")
-                            self.logger.info("✅ FastMCP mounted on existing server - agent ready")
+                            self.logger.info(
+                                "🔄 SERVER REUSE: Existing server detected, skipping uvicorn.run()"
+                            )
+                            self.logger.info(
+                                "✅ FastMCP mounted on existing server - agent ready"
+                            )
                             # Keep the process alive but don't start new uvicorn
                             # Use a robust keep-alive pattern that doesn't overflow
                             import time
+
                             try:
                                 while True:
-                                    time.sleep(3600)  # Sleep 1 hour at a time instead of infinity
+                                    time.sleep(
+                                        3600
+                                    )  # Sleep 1 hour at a time instead of infinity
                             except KeyboardInterrupt:
-                                self.logger.info("🛑 Server reuse mode interrupted - shutting down")
+                                self.logger.info(
+                                    "🛑 Server reuse mode interrupted - shutting down"
+                                )
                                 return
                     else:
                         self._start_blocking_fastapi_server(fastapi_app, binding_config)
@@ -681,8 +703,9 @@ def start_runtime() -> None:
 
     logger.info("🔧 Starting MCP Mesh runtime with debouncing")
 
-    # Skip signal handlers - let uvicorn/FastAPI handle graceful shutdown
-    # This prevents DNS threading conflicts in containerized environments
+    # Install minimal signal handlers for graceful shutdown
+    # This restores the DELETE /heartbeats call that was removed during DNS fix
+    _install_minimal_signal_handlers()
 
     # Create orchestrator and set up debouncing
     orchestrator = get_global_orchestrator()
@@ -699,5 +722,97 @@ def start_runtime() -> None:
     # through the debounce coordinator
 
 
-# Signal handlers removed - graceful shutdown now handled by FastAPI lifespan and daemon threads
-# This prevents DNS threading conflicts in containerized environments
+def _install_minimal_signal_handlers() -> None:
+    """
+    Install minimal signal handlers that only perform graceful shutdown.
+
+    This restores the DELETE /heartbeats functionality that was removed during
+    the DNS threading fix while avoiding complex operations that could conflict
+    with DNS resolution in containerized environments.
+    """
+    import signal
+
+    def graceful_shutdown_signal_handler(signum, frame):
+        """Handle shutdown signals by performing graceful unregistration."""
+        try:
+            logger.info(f"🚨 Received signal {signum}, performing graceful shutdown...")
+
+            # Get the global orchestrator to access pipeline context
+            orchestrator = get_global_orchestrator()
+            if orchestrator and hasattr(orchestrator.pipeline, "_last_context"):
+                pipeline_context = orchestrator.pipeline._last_context
+
+                # Get registry configuration
+                registry_url = pipeline_context.get("registry_url")
+                agent_id = pipeline_context.get("agent_id")
+
+                if registry_url and agent_id:
+                    # Perform synchronous graceful shutdown
+                    import asyncio
+
+                    try:
+                        # Create new event loop for shutdown
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+
+                        # Run graceful shutdown
+                        loop.run_until_complete(
+                            _perform_signal_graceful_shutdown(registry_url, agent_id)
+                        )
+                        loop.close()
+
+                        logger.info(
+                            f"🏁 Graceful shutdown completed for agent '{agent_id}'"
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Graceful shutdown error: {e}")
+                else:
+                    logger.warning(
+                        f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
+                    )
+            else:
+                logger.warning(
+                    "🚨 No orchestrator context available for graceful shutdown"
+                )
+
+        except Exception as e:
+            logger.error(f"❌ Signal handler error: {e}")
+        finally:
+            # Exit cleanly
+            logger.info("🛑 Exiting...")
+            sys.exit(0)
+
+    # Install handlers for common termination signals
+    signal.signal(signal.SIGTERM, graceful_shutdown_signal_handler)
+    signal.signal(signal.SIGINT, graceful_shutdown_signal_handler)
+
+    logger.debug("🛡️ Minimal signal handlers installed for graceful shutdown")
+
+
+async def _perform_signal_graceful_shutdown(registry_url: str, agent_id: str) -> None:
+    """Perform graceful shutdown from signal handler context."""
+    try:
+        # Create registry client for shutdown
+        from ...generated.mcp_mesh_registry_client.api_client import ApiClient
+        from ...generated.mcp_mesh_registry_client.configuration import Configuration
+        from ...shared.registry_client_wrapper import RegistryClientWrapper
+
+        config = Configuration(host=registry_url)
+        api_client = ApiClient(configuration=config)
+        registry_wrapper = RegistryClientWrapper(api_client)
+
+        # Perform graceful unregistration (this sends DELETE /heartbeats)
+        success = await registry_wrapper.unregister_agent(agent_id)
+        if success:
+            logger.info(
+                f"✅ Agent '{agent_id}' successfully unregistered from registry"
+            )
+        else:
+            logger.warning(f"⚠️ Failed to unregister agent '{agent_id}' from registry")
+
+    except Exception as e:
+        logger.error(f"❌ Signal graceful shutdown error: {e}")
+
+
+# Minimal signal handlers restored to provide graceful shutdown with DELETE /heartbeats
+# Avoids complex operations that could conflict with DNS resolution in containers

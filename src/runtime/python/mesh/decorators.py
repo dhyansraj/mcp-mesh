@@ -27,131 +27,150 @@ _SHARED_AGENT_ID: str | None = None
 def _start_uvicorn_immediately(http_host: str, http_port: int):
     """
     Start basic uvicorn server immediately to prevent Python interpreter shutdown.
-    
+
     This prevents the DNS threading conflicts by ensuring uvicorn takes control
     before the script ends and Python enters shutdown state.
     """
-    logger.info(f"🎯 IMMEDIATE UVICORN: _start_uvicorn_immediately() called with host={http_host}, port={http_port}")
-    
+    logger.info(
+        f"🎯 IMMEDIATE UVICORN: _start_uvicorn_immediately() called with host={http_host}, port={http_port}"
+    )
+
     try:
+        import asyncio
+        import threading
+        import time
+
         import uvicorn
         from fastapi import FastAPI
-        import threading
-        import asyncio
-        import time
-        
-        logger.info("📦 IMMEDIATE UVICORN: Successfully imported uvicorn, FastAPI, threading, asyncio")
-        
+
+        logger.info(
+            "📦 IMMEDIATE UVICORN: Successfully imported uvicorn, FastAPI, threading, asyncio"
+        )
+
         # Get stored FastMCP lifespan if available
         fastmcp_lifespan = None
         try:
             from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
             fastmcp_lifespan = DecoratorRegistry.get_fastmcp_lifespan()
             if fastmcp_lifespan:
-                logger.info("✅ IMMEDIATE UVICORN: Found stored FastMCP lifespan, will integrate with FastAPI")
+                logger.info(
+                    "✅ IMMEDIATE UVICORN: Found stored FastMCP lifespan, will integrate with FastAPI"
+                )
             else:
-                logger.info("🔍 IMMEDIATE UVICORN: No FastMCP lifespan found, creating basic FastAPI app")
+                logger.info(
+                    "🔍 IMMEDIATE UVICORN: No FastMCP lifespan found, creating basic FastAPI app"
+                )
         except Exception as e:
             logger.warning(f"⚠️ IMMEDIATE UVICORN: Failed to get FastMCP lifespan: {e}")
-        
+
         # Create FastAPI app with FastMCP lifespan if available
         if fastmcp_lifespan:
             app = FastAPI(title="MCP Mesh Agent (Starting)", lifespan=fastmcp_lifespan)
-            logger.info("📦 IMMEDIATE UVICORN: Created FastAPI app with FastMCP lifespan integration")
+            logger.info(
+                "📦 IMMEDIATE UVICORN: Created FastAPI app with FastMCP lifespan integration"
+            )
         else:
             app = FastAPI(title="MCP Mesh Agent (Starting)")
             logger.info("📦 IMMEDIATE UVICORN: Created minimal FastAPI app")
-        
+
         # Add basic health endpoint
         @app.get("/health")
         def health():
-            return {"status": "immediate_uvicorn", "message": "MCP Mesh agent started via immediate uvicorn"}
-        
+            return {
+                "status": "immediate_uvicorn",
+                "message": "MCP Mesh agent started via immediate uvicorn",
+            }
+
         @app.get("/immediate-status")
         def immediate_status():
-            return {"immediate_uvicorn": True, "message": "This server was started immediately in decorator"}
-        
+            return {
+                "immediate_uvicorn": True,
+                "message": "This server was started immediately in decorator",
+            }
+
         logger.info("📦 IMMEDIATE UVICORN: Added health endpoints")
-        
+
         # Determine port (0 means auto-assign)
         port = http_port if http_port > 0 else 8080
-        
-        logger.info(f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}")
-        
+
+        logger.info(
+            f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
+        )
+
         # Create uvicorn config and server but DON'T start it with asyncio.run()
         # This prevents the dual event loop conflict
-        logger.info(f"⚡ IMMEDIATE UVICORN: Creating uvicorn config without starting event loop")
-
-        config = uvicorn.Config(
-            app=app,
-            host=http_host,
-            port=port,
-            log_level="info"
+        logger.info(
+            "⚡ IMMEDIATE UVICORN: Creating uvicorn config without starting event loop"
         )
+
+        config = uvicorn.Config(app=app, host=http_host, port=port, log_level="info")
         server = uvicorn.Server(config)
 
         # DON'T start the server here - let the pipeline handle the event loop
-        logger.info(f"✅ IMMEDIATE UVICORN: Uvicorn server configured (will be started by pipeline)")
+        logger.info(
+            "✅ IMMEDIATE UVICORN: Uvicorn server configured (will be started by pipeline)"
+        )
 
         # Start uvicorn server in background thread (NON-daemon to keep process alive)
         def run_server():
             """Run uvicorn server in background thread - keeps process alive."""
             try:
-                logger.info(f"🌟 IMMEDIATE UVICORN: Starting server on {http_host}:{port}")
+                logger.info(
+                    f"🌟 IMMEDIATE UVICORN: Starting server on {http_host}:{port}"
+                )
                 server.run()  # This blocks and keeps the thread alive
             except Exception as e:
                 logger.error(f"❌ IMMEDIATE UVICORN: Server failed: {e}")
                 import traceback
+
                 logger.error(f"Server traceback: {traceback.format_exc()}")
 
         # Start server in daemon thread (matches working test setup pattern)
         thread = threading.Thread(target=run_server, daemon=True)
         thread.start()
 
-        logger.info(f"🔒 IMMEDIATE UVICORN: Server thread started (daemon=True) - matches working test setup")
+        logger.info(
+            "🔒 IMMEDIATE UVICORN: Server thread started (daemon=True) - matches working test setup"
+        )
 
         # Store server reference in DecoratorRegistry BEFORE starting (critical timing)
         server_info = {
-            'app': app,
-            'server': server,  # Include uvicorn server object
-            'config': config,  # Include config for reference
-            'host': http_host,
-            'port': port,
-            'thread': thread,  # Server thread (daemon)
-            'type': 'immediate_uvicorn_running',
-            'status': 'running'  # Server is now running in background thread
+            "app": app,
+            "server": server,  # Include uvicorn server object
+            "config": config,  # Include config for reference
+            "host": http_host,
+            "port": port,
+            "thread": thread,  # Server thread (daemon)
+            "type": "immediate_uvicorn_running",
+            "status": "running",  # Server is now running in background thread
         }
 
         # Import here to avoid circular imports
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
         DecoratorRegistry.store_immediate_uvicorn_server(server_info)
 
-        logger.info(f"🔄 IMMEDIATE UVICORN: Server reference stored in DecoratorRegistry BEFORE pipeline starts")
+        logger.info(
+            "🔄 IMMEDIATE UVICORN: Server reference stored in DecoratorRegistry BEFORE pipeline starts"
+        )
 
         # Give server a moment to start
         time.sleep(1)
 
-        logger.info(f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)")
+        logger.info(
+            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
+        )
 
         # CRITICAL FIX: Keep main thread alive to prevent shutdown state
         # This matches the working test setup pattern that prevents DNS resolution failures
-        logger.info("🔒 MAIN THREAD: Blocking to keep alive (prevents threading shutdown state)")
-        try:
-            while True:
-                if thread.is_alive():
-                    thread.join(timeout=1)  # Check every second like test setup
-                else:
-                    logger.warning("⚠️ Server thread died, exiting...")
-                    break
-        except KeyboardInterrupt:
-            logger.info("👋 MAIN THREAD: Received interrupt, shutting down gracefully")
-        except Exception as e:
-            logger.error(f"❌ MAIN THREAD: Error in blocking loop: {e}")
+        # Uses graceful shutdown manager for clean code organization
+        start_blocking_loop_with_shutdown_support(thread)
 
-        logger.info("🏁 MAIN THREAD: Exiting blocking loop")
-        
     except Exception as e:
-        logger.error(f"❌ IMMEDIATE UVICORN: Failed to start immediate uvicorn server: {e}")
+        logger.error(
+            f"❌ IMMEDIATE UVICORN: Failed to start immediate uvicorn server: {e}"
+        )
         # Don't fail decorator application - pipeline can still try to start normally
 
 
@@ -164,7 +183,6 @@ def _trigger_debounced_processing():
     """
     try:
         from _mcp_mesh.pipeline.mcp_startup import get_debounce_coordinator
-
 
         coordinator = get_debounce_coordinator()
         coordinator.trigger_processing()
@@ -622,54 +640,85 @@ def agent(
             logger.info(
                 f"🚀 AGENT DECORATOR: Auto-run enabled for agent '{name}' - starting uvicorn immediately to prevent shutdown state"
             )
-            
+
             # Create FastMCP lifespan before starting uvicorn for proper integration
             fastmcp_lifespan = None
             try:
                 # Try to create FastMCP server and extract lifespan
-                logger.info("🔍 AGENT DECORATOR: Creating FastMCP server for lifespan extraction")
-                
+                logger.info(
+                    "🔍 AGENT DECORATOR: Creating FastMCP server for lifespan extraction"
+                )
+
                 # Look for FastMCP app in current module
                 import sys
+
                 current_module = sys.modules.get(target.__module__)
                 if current_module:
                     # Look for 'app' attribute (standard FastMCP pattern)
-                    if hasattr(current_module, 'app'):
-                        fastmcp_server = getattr(current_module, 'app')
-                        logger.info(f"🔍 AGENT DECORATOR: Found FastMCP server: {type(fastmcp_server)}")
-                        
+                    if hasattr(current_module, "app"):
+                        fastmcp_server = current_module.app
+                        logger.info(
+                            f"🔍 AGENT DECORATOR: Found FastMCP server: {type(fastmcp_server)}"
+                        )
+
                         # Create FastMCP HTTP app with stateless transport to get lifespan
-                        if hasattr(fastmcp_server, 'http_app') and callable(fastmcp_server.http_app):
+                        if hasattr(fastmcp_server, "http_app") and callable(
+                            fastmcp_server.http_app
+                        ):
                             try:
                                 fastmcp_http_app = fastmcp_server.http_app(
                                     stateless_http=True, transport="streamable-http"
                                 )
-                                if hasattr(fastmcp_http_app, 'lifespan'):
+                                if hasattr(fastmcp_http_app, "lifespan"):
                                     fastmcp_lifespan = fastmcp_http_app.lifespan
-                                    logger.info("✅ AGENT DECORATOR: Extracted FastMCP lifespan for FastAPI integration")
-                                    
+                                    logger.info(
+                                        "✅ AGENT DECORATOR: Extracted FastMCP lifespan for FastAPI integration"
+                                    )
+
                                     # Store both lifespan and HTTP app in DecoratorRegistry for uvicorn and pipeline to use
-                                    DecoratorRegistry.store_fastmcp_lifespan(fastmcp_lifespan)
-                                    DecoratorRegistry.store_fastmcp_http_app(fastmcp_http_app)
-                                    logger.info("✅ AGENT DECORATOR: Stored FastMCP HTTP app for proper mounting")
+                                    DecoratorRegistry.store_fastmcp_lifespan(
+                                        fastmcp_lifespan
+                                    )
+                                    DecoratorRegistry.store_fastmcp_http_app(
+                                        fastmcp_http_app
+                                    )
+                                    logger.info(
+                                        "✅ AGENT DECORATOR: Stored FastMCP HTTP app for proper mounting"
+                                    )
                                 else:
-                                    logger.warning("⚠️ AGENT DECORATOR: FastMCP HTTP app has no lifespan attribute")
+                                    logger.warning(
+                                        "⚠️ AGENT DECORATOR: FastMCP HTTP app has no lifespan attribute"
+                                    )
                             except Exception as e:
-                                logger.warning(f"⚠️ AGENT DECORATOR: Failed to create FastMCP HTTP app: {e}")
+                                logger.warning(
+                                    f"⚠️ AGENT DECORATOR: Failed to create FastMCP HTTP app: {e}"
+                                )
                         else:
-                            logger.warning("⚠️ AGENT DECORATOR: FastMCP server has no http_app method")
+                            logger.warning(
+                                "⚠️ AGENT DECORATOR: FastMCP server has no http_app method"
+                            )
                     else:
-                        logger.info("🔍 AGENT DECORATOR: No FastMCP 'app' found in current module - will handle in pipeline")
+                        logger.info(
+                            "🔍 AGENT DECORATOR: No FastMCP 'app' found in current module - will handle in pipeline"
+                        )
                 else:
-                    logger.warning("⚠️ AGENT DECORATOR: Could not access current module for FastMCP discovery")
-                        
+                    logger.warning(
+                        "⚠️ AGENT DECORATOR: Could not access current module for FastMCP discovery"
+                    )
+
             except Exception as e:
-                logger.warning(f"⚠️ AGENT DECORATOR: FastMCP lifespan creation failed: {e}")
-            
-            logger.info(f"🎯 AGENT DECORATOR: About to call _start_uvicorn_immediately({binding_host}, {final_http_port})")
+                logger.warning(
+                    f"⚠️ AGENT DECORATOR: FastMCP lifespan creation failed: {e}"
+                )
+
+            logger.info(
+                f"🎯 AGENT DECORATOR: About to call _start_uvicorn_immediately({binding_host}, {final_http_port})"
+            )
             # Start basic uvicorn server immediately to prevent interpreter shutdown
             _start_uvicorn_immediately(binding_host, final_http_port)
-            logger.info(f"✅ AGENT DECORATOR: _start_uvicorn_immediately() call completed")
+            logger.info(
+                "✅ AGENT DECORATOR: _start_uvicorn_immediately() call completed"
+            )
 
         return target
 
@@ -683,17 +732,17 @@ def route(
 ) -> Callable[[T], T]:
     """
     FastAPI route handler decorator for dependency injection.
-    
+
     Enables automatic dependency injection of MCP agents into FastAPI route handlers,
     eliminating the need for manual MCP client management in backend services.
-    
+
     Args:
         dependencies: Optional list of agent capabilities to inject (default: [])
         **kwargs: Additional metadata for the route
-        
+
     Returns:
         The original route handler function with dependency injection enabled
-        
+
     Example:
         @app.post("/upload")
         @mesh.route(dependencies=["pdf-extractor", "user-service"])
@@ -707,28 +756,30 @@ def route(
             await user_service.update_profile(user_data, result)
             return {"success": True}
     """
-    
+
     def decorator(target: T) -> T:
         # Validate and process dependencies (reuse logic from tool decorator)
         if dependencies is not None:
             if not isinstance(dependencies, list):
                 raise ValueError("dependencies must be a list")
-            
+
             validated_dependencies = []
             for dep in dependencies:
                 if isinstance(dep, str):
                     # Simple string dependency
-                    validated_dependencies.append({
-                        "capability": dep,
-                        "tags": [],
-                    })
+                    validated_dependencies.append(
+                        {
+                            "capability": dep,
+                            "tags": [],
+                        }
+                    )
                 elif isinstance(dep, dict):
                     # Complex dependency with metadata
                     if "capability" not in dep:
                         raise ValueError("dependency must have 'capability' field")
                     if not isinstance(dep["capability"], str):
                         raise ValueError("dependency capability must be a string")
-                    
+
                     # Validate optional dependency fields
                     dep_tags = dep.get("tags", [])
                     if not isinstance(dep_tags, list):
@@ -736,11 +787,11 @@ def route(
                     for tag in dep_tags:
                         if not isinstance(tag, str):
                             raise ValueError("all dependency tags must be strings")
-                    
+
                     dep_version = dep.get("version")
                     if dep_version is not None and not isinstance(dep_version, str):
                         raise ValueError("dependency version must be a string")
-                    
+
                     dependency_dict = {
                         "capability": dep["capability"],
                         "tags": dep_tags,
@@ -752,20 +803,20 @@ def route(
                     raise ValueError("dependencies must be strings or dictionaries")
         else:
             validated_dependencies = []
-        
+
         # Build route metadata
         metadata = {
             "dependencies": validated_dependencies,
             "description": getattr(target, "__doc__", None),
             **kwargs,
         }
-        
+
         # Store metadata on function
         target._mesh_route_metadata = metadata
-        
+
         # Register with DecoratorRegistry using custom decorator type
         DecoratorRegistry.register_custom_decorator("mesh_route", target, metadata)
-        
+
         # Try to add tracing middleware to any FastAPI apps we can find immediately
         # This ensures middleware is added before the app starts
         try:
@@ -773,20 +824,22 @@ def route(
         except Exception as e:
             # Don't fail decorator application due to middleware issues
             logger.debug(f"Failed to add immediate tracing middleware: {e}")
-        
+
         logger.debug(
             f"🔍 Route '{target.__name__}' registered with {len(validated_dependencies)} dependencies"
         )
-        
+
         try:
             # Import here to avoid circular imports
             from _mcp_mesh.engine.dependency_injector import get_global_injector
 
-            # Extract dependency names for injector 
+            # Extract dependency names for injector
             dependency_names = [dep["capability"] for dep in validated_dependencies]
 
             # Log the original function pointer
-            logger.debug(f"🔸 ORIGINAL route function pointer: {target} at {hex(id(target))}")
+            logger.debug(
+                f"🔸 ORIGINAL route function pointer: {target} at {hex(id(target))}"
+            )
 
             injector = get_global_injector()
             wrapped = injector.create_injection_wrapper(target, dependency_names)
@@ -801,12 +854,14 @@ def route(
 
             # Store the wrapper on the original function for reference
             target._mesh_injection_wrapper = wrapped
-            
+
             # Also store a flag on the wrapper itself so route integration can detect it
             wrapped._mesh_is_injection_wrapper = True
 
             # Return the wrapped function - FastAPI will register this wrapper when it runs
-            logger.debug(f"✅ Returning injection wrapper for route '{target.__name__}'")
+            logger.debug(
+                f"✅ Returning injection wrapper for route '{target.__name__}'"
+            )
             logger.debug(f"🔹 Returning WRAPPER: {wrapped} at {hex(id(wrapped))}")
 
             # Trigger debounced processing before returning
@@ -818,32 +873,36 @@ def route(
             logger.error(
                 f"Route dependency injection setup failed for {target.__name__}: {e}"
             )
-            
+
             # Fallback: return original function and trigger processing
             _trigger_debounced_processing()
             return target
-    
+
     return decorator
 
 
 def _add_tracing_middleware_immediately():
     """
     Request tracing middleware injection using monkey-patch approach.
-    
+
     This sets up automatic middleware injection for both existing and future
     FastAPI apps, eliminating timing issues with app startup/lifespan.
     """
     try:
-        from _mcp_mesh.shared.fastapi_middleware_manager import get_fastapi_middleware_manager
-        
+        from _mcp_mesh.shared.fastapi_middleware_manager import (
+            get_fastapi_middleware_manager,
+        )
+
         manager = get_fastapi_middleware_manager()
         success = manager.request_middleware_injection()
-        
+
         if success:
-            logger.debug("🔍 TRACING: Middleware injection setup completed (monkey-patch + discovery)")
+            logger.debug(
+                "🔍 TRACING: Middleware injection setup completed (monkey-patch + discovery)"
+            )
         else:
             logger.debug("🔍 TRACING: Middleware injection setup failed")
-            
+
     except Exception as e:
         # Never fail decorator application
         logger.debug(f"🔍 TRACING: Middleware injection setup failed: {e}")
@@ -851,3 +910,13 @@ def _add_tracing_middleware_immediately():
 
 # Middleware injection is now handled by FastAPIMiddlewareManager
 # in _mcp_mesh.shared.fastapi_middleware_manager
+
+
+# Graceful shutdown functions have been moved to _mcp_mesh.shared.graceful_shutdown_manager
+# This maintains backward compatibility for existing pipeline code
+
+
+def set_shutdown_context(context: dict[str, Any]):
+    """Set context for graceful shutdown (called from pipeline)."""
+    # Delegate to the shared graceful shutdown manager
+    set_global_shutdown_context(context)
