@@ -12,7 +12,6 @@ from typing import Any, Optional
 from ..shared.content_extractor import ContentExtractor
 from ..shared.sse_parser import SSEParser
 from .async_mcp_client import AsyncMCPClient
-from .threading_utils import ThreadingUtils
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +47,24 @@ class MCPClientProxy:
             )
 
     def _run_async(self, coro):
-        """Convert async coroutine to sync call avoiding atexit bug.
+        """Convert async coroutine to sync call."""
 
-        Uses shared ThreadingUtils for consistent DNS-safe threading behavior.
-        """
-        return ThreadingUtils.run_sync_from_async(
-            coro, timeout=60.0, context_name=f"MCPClient.{self.function_name}"
-        )
+        try:
+            # Try to get existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, need to run in thread
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, coro)
+                    return future.result()
+            else:
+                # No running loop, safe to use loop.run_until_complete
+                return loop.run_until_complete(coro)
+        except RuntimeError:
+            # No event loop exists, create new one
+            return asyncio.run(coro)
 
     def __call__(self, **kwargs) -> Any:
         """Callable interface for dependency injection.

@@ -31,7 +31,7 @@ from .engine.decorator_registry import (
     get_decorator_stats,
 )
 
-__version__ = "0.5.4"
+__version__ = "0.5.3"
 
 # Store reference to runtime processor if initialized
 _runtime_processor = None
@@ -59,7 +59,10 @@ def initialize_runtime():
 
 
 # Auto-initialize runtime if enabled
-if os.getenv("MCP_MESH_ENABLED", "true").lower() == "true":
+if (
+    os.getenv("MCP_MESH_ENABLED", "true").lower() == "true"
+    and os.getenv("MCP_MESH_AUTO_RUN", "true").lower() == "true"
+):
     # Use debounced initialization instead of immediate MCP startup
     # This allows the system to determine MCP vs API pipeline based on decorators
     try:

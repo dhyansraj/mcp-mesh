@@ -10,8 +10,6 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
-from .threading_utils import ThreadingUtils
-
 logger = logging.getLogger(__name__)
 
 
@@ -58,11 +56,27 @@ class UnifiedMCPProxy:
                 f"🔧 UnifiedMCPProxy initialized with kwargs: {self.kwargs_config}"
             )
 
-    def _create_fastmcp_client(self, endpoint: str):
-        """Create FastMCP client with automatic trace header injection.
+    def _is_ip_address(self, hostname: str) -> bool:
+        """Check if hostname is an IP address vs DNS name.
+        
+        Args:
+            hostname: Hostname to check
+            
+        Returns:
+            True if IP address, False if DNS name
+        """
+        import ipaddress
+        try:
+            ipaddress.ip_address(hostname)
+            return True
+        except ValueError:
+            return False
 
-        This method automatically detects trace context and adds distributed tracing
-        headers when available, while maintaining full backward compatibility.
+    def _create_fastmcp_client(self, endpoint: str):
+        """Create FastMCP client with DNS detection for threading conflict avoidance.
+
+        This method detects DNS names vs IP addresses and forces HTTP fallback for DNS names
+        to avoid FastMCP client threading conflicts in containerized environments.
 
         Args:
             endpoint: MCP endpoint URL
@@ -71,6 +85,14 @@ class UnifiedMCPProxy:
             FastMCP Client instance with or without trace headers
         """
         try:
+            # Extract hostname from endpoint URL for DNS detection  
+            from urllib.parse import urlparse
+            parsed = urlparse(endpoint)
+            hostname = parsed.hostname or parsed.netloc.split(':')[0]
+            
+            # DNS resolution works perfectly with FastMCP - no need to force HTTP fallback
+            self.logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
+            
             from fastmcp import Client
             from fastmcp.client.transports import StreamableHttpTransport
 
@@ -85,16 +107,14 @@ class UnifiedMCPProxy:
                 # Create standard client when no trace context available
                 return Client(endpoint)
 
-        except ImportError:
-            # If StreamableHttpTransport not available, fall back to standard client
-            from fastmcp import Client
-
-            return Client(endpoint)
+        except ImportError as e:
+            # DNS names or FastMCP not available - this will trigger HTTP fallback
+            self.logger.debug(f"🔄 FastMCP client unavailable: {e}")
+            raise  # Re-raise to trigger _fallback_http_call
         except Exception as e:
-            # Any other error, fall back to standard client
-            from fastmcp import Client
-
-            return Client(endpoint)
+            # Any other error - this will trigger HTTP fallback  
+            self.logger.debug(f"🔄 FastMCP client error: {e}")
+            raise ImportError(f"FastMCP client failed: {e}")  # Convert to ImportError to trigger fallback
 
     def _get_trace_headers(self) -> dict[str, str]:
         """Extract trace headers from current context for distributed tracing.
@@ -341,6 +361,7 @@ class UnifiedMCPProxy:
         """
         import time
 
+
         start_time = time.time()
 
         try:
@@ -350,6 +371,7 @@ class UnifiedMCPProxy:
 
             # Create client with automatic trace header injection
             client_instance = self._create_fastmcp_client(mcp_endpoint)
+
             async with client_instance as client:
 
                 # Use FastMCP's call_tool which returns CallToolResult object
@@ -394,7 +416,8 @@ class UnifiedMCPProxy:
             self.logger.warning(f"FastMCP Client failed: {e}, falling back to HTTP")
             # Try HTTP fallback
             try:
-                return await self._fallback_http_call(name, arguments)
+                result = await self._fallback_http_call(name, arguments)
+                return result
             except Exception as fallback_error:
                 raise RuntimeError(
                     f"Tool call to '{name}' failed: {e}, fallback also failed: {fallback_error}"
@@ -831,15 +854,6 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
             f"auth_required: {self.auth_required}"
         )
 
-    def __call__(self, **kwargs) -> Any:
-        """Synchronous callable interface for dependency injection.
-
-        This method provides a sync interface for dependency injection.
-        Returns the actual result, not a coroutine.
-        """
-        # Use the enhanced tool call with proper sync-to-async bridging
-        return self.call_tool_auto(self.function_name, kwargs)
-
     async def call_tool_enhanced(self, name: str, arguments: dict = None) -> Any:
         """Enhanced tool call with retry logic and custom configuration."""
         last_exception = None
@@ -869,19 +883,8 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
         raise last_exception
 
     def call_tool_auto(self, name: str, arguments: dict = None) -> Any:
-        """Automatically choose streaming vs non-streaming based on configuration.
-
-        Uses shared ThreadingUtils for consistent DNS-safe threading behavior.
-        """
-        # Create coroutine function based on streaming capability
-        def coro_func():
-            if self.streaming_capable:
-                return self.call_tool_streaming(name, arguments)
-            else:
-                return self.call_tool_enhanced(name, arguments)
-
-        return ThreadingUtils.run_sync_from_async(
-            coro_func,
-            timeout=self.timeout or 60.0,
-            context_name=f"UnifiedMCPProxy.{name}",
-        )
+        """Automatically choose streaming vs non-streaming based on configuration."""
+        if self.streaming_capable:
+            return self.call_tool_streaming(name, arguments)
+        else:
+            return self.call_tool_enhanced(name, arguments)

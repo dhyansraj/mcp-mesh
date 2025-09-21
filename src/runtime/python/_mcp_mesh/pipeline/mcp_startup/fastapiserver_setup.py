@@ -4,7 +4,7 @@ import os
 import socket
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -36,6 +36,11 @@ class FastAPIServerSetupStep(PipelineStep):
             agent_config = context.get("agent_config", {})
             fastmcp_servers = context.get("fastmcp_servers", {})
 
+            # Check for existing server from ServerDiscoveryStep
+            existing_server = context.get("existing_server")
+            existing_fastapi_app = context.get("existing_fastapi_app")
+            server_reuse = context.get("server_reuse", False)
+
             # Check if HTTP transport is enabled
             if not self._is_http_enabled():
                 result.status = PipelineStatus.SKIPPED
@@ -46,6 +51,22 @@ class FastAPIServerSetupStep(PipelineStep):
             # Resolve binding and advertisement configuration
             binding_config = self._resolve_binding_config(agent_config)
             advertisement_config = self._resolve_advertisement_config(agent_config)
+
+            # Handle existing server case - mount FastMCP with proper lifespan integration
+            if server_reuse and existing_server:
+                self.logger.info(
+                    "🔄 SERVER REUSE: Found existing server, will mount FastMCP with proper lifespan integration"
+                )
+                return await self._handle_existing_server(
+                    context,
+                    result,
+                    existing_server,
+                    existing_fastapi_app,
+                    fastmcp_servers,
+                    agent_config,
+                    binding_config,
+                    advertisement_config,
+                )
 
             # Get heartbeat config for lifespan integration
             heartbeat_config = context.get("heartbeat_config")
@@ -115,6 +136,25 @@ class FastAPIServerSetupStep(PipelineStep):
             result.add_context("mcp_wrappers", mcp_wrappers)
             result.add_context("fastapi_binding_config", binding_config)
             result.add_context("fastapi_advertisement_config", advertisement_config)
+
+            # Set shutdown context for signal handlers with FastAPI app
+            try:
+                from mesh.decorators import set_shutdown_context
+
+                shutdown_context = {
+                    "fastapi_app": fastapi_app,
+                    "registry_url": context.get("registry_url"),
+                    "agent_id": context.get("agent_id"),
+                    "registry_wrapper": context.get("registry_wrapper"),
+                }
+                set_shutdown_context(shutdown_context)
+                self.logger.debug("🔧 Shutdown context set for signal handlers")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Failed to set shutdown context: {e}")
+
+            # Pass through server reuse information to orchestrator
+            result.add_context("server_reused", server_reuse)
+            result.add_context("existing_server", existing_server)
 
             bind_host = binding_config["bind_host"]
             bind_port = binding_config["bind_port"]
@@ -200,7 +240,7 @@ class FastAPIServerSetupStep(PipelineStep):
                 "description", "MCP Mesh Agent with FastAPI integration"
             )
 
-            # Determine lifespan strategy based on configuration
+            # Simplified lifespan - heartbeat now handled by daemon thread
             primary_lifespan = None
 
             # Helper function to get FastMCP lifespan from wrapper
@@ -216,179 +256,16 @@ class FastAPIServerSetupStep(PipelineStep):
                         return mcp_wrapper._mcp_app.lifespan
                 return None
 
-            if heartbeat_config and len(fastmcp_servers) == 1:
-                # Single FastMCP server with heartbeat - combine FastMCP lifespan + heartbeat
-                self.logger.debug(
-                    "Creating combined lifespan for single FastMCP server with heartbeat"
-                )
-
-                fastmcp_lifespan = get_fastmcp_lifespan()
-                if not fastmcp_lifespan:
-                    self.logger.warning(
-                        "No FastMCP lifespan available for heartbeat combination"
-                    )
-
-                # Create combined lifespan for single FastMCP + heartbeat
-                @asynccontextmanager
-                async def single_fastmcp_with_heartbeat_lifespan(main_app):
-                    """Lifespan manager for single FastMCP + heartbeat."""
-                    # Start FastMCP lifespan - use main app as recommended by FastMCP docs
-                    fastmcp_ctx = None
-                    if fastmcp_lifespan:
-                        try:
-                            fastmcp_ctx = fastmcp_lifespan(main_app)
-                            await fastmcp_ctx.__aenter__()
-                            self.logger.debug(
-                                "Started FastMCP lifespan with main app context"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
-
-                    # Start heartbeat task
-                    heartbeat_task = None
-                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
-                    if heartbeat_task_fn:
-                        heartbeat_task = asyncio.create_task(
-                            heartbeat_task_fn(heartbeat_config)
-                        )
-                        self.logger.info(
-                            f"💓 Started heartbeat task with {heartbeat_config['interval']}s interval"
-                        )
-
-                    try:
-                        yield
-                    finally:
-                        # Graceful shutdown - unregister from registry
-                        await self._graceful_shutdown(main_app)
-
-                        # Clean up heartbeat task
-                        if heartbeat_task:
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            except asyncio.CancelledError:
-                                self.logger.info(
-                                    "🛑 Heartbeat task cancelled during shutdown"
-                                )
-
-                        # Clean up FastMCP lifespan
-                        if fastmcp_ctx:
-                            try:
-                                await fastmcp_ctx.__aexit__(None, None, None)
-                                self.logger.debug("FastMCP lifespan stopped")
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Error closing FastMCP lifespan: {e}"
-                                )
-
-                primary_lifespan = single_fastmcp_with_heartbeat_lifespan
-
-            elif heartbeat_config and len(fastmcp_servers) == 0:
-                # Heartbeat only - no FastMCP servers
-                self.logger.debug(
-                    "Creating lifespan for heartbeat only (no FastMCP servers)"
-                )
-
-                @asynccontextmanager
-                async def heartbeat_only_lifespan(main_app):
-                    """Lifespan manager for heartbeat only."""
-                    # Start heartbeat task
-                    heartbeat_task = None
-                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
-                    if heartbeat_task_fn:
-                        heartbeat_task = asyncio.create_task(
-                            heartbeat_task_fn(heartbeat_config)
-                        )
-                        self.logger.info(
-                            f"💓 Started heartbeat task with {heartbeat_config['interval']}s interval"
-                        )
-
-                    try:
-                        yield
-                    finally:
-                        # Graceful shutdown - unregister from registry
-                        await self._graceful_shutdown(main_app)
-
-                        # Clean up heartbeat task
-                        if heartbeat_task:
-                            heartbeat_task.cancel()
-                            try:
-                                await heartbeat_task
-                            except asyncio.CancelledError:
-                                self.logger.info(
-                                    "🛑 Heartbeat task cancelled during shutdown"
-                                )
-
-                primary_lifespan = heartbeat_only_lifespan
-
-            elif len(fastmcp_servers) > 1:
-                # Multiple FastMCP servers - use combined lifespan
-                self.logger.debug(
-                    "Creating combined lifespan for multiple FastMCP servers"
-                )
-
-                # Collect FastMCP lifespans from pre-created wrappers
-                fastmcp_lifespans = []
-                for server_key, wrapper_data in mcp_wrappers.items():
-                    mcp_wrapper = wrapper_data["wrapper"]
-                    if (
-                        hasattr(mcp_wrapper, "_mcp_app")
-                        and mcp_wrapper._mcp_app
-                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
-                    ):
-                        fastmcp_lifespans.append(mcp_wrapper._mcp_app.lifespan)
-                        self.logger.debug(
-                            f"Collected lifespan from FastMCP wrapper '{server_key}'"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"No lifespan available from wrapper '{server_key}'"
-                        )
-
-                # Create combined lifespan manager for multiple servers
-                @asynccontextmanager
-                async def multiple_fastmcp_lifespan(main_app):
-                    """Combined lifespan manager for multiple FastMCP servers."""
-                    # Start all FastMCP lifespans
-                    lifespan_contexts = []
-                    for lifespan in fastmcp_lifespans:
-                        try:
-                            ctx = lifespan(main_app)
-                            await ctx.__aenter__()
-                            lifespan_contexts.append(ctx)
-                        except Exception as e:
-                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
-
-                    try:
-                        yield
-                    finally:
-                        # Graceful shutdown - unregister from registry
-                        await self._graceful_shutdown(main_app)
-
-                        # Clean up all lifespans in reverse order
-                        for ctx in reversed(lifespan_contexts):
-                            try:
-                                await ctx.__aexit__(None, None, None)
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Error closing FastMCP lifespan: {e}"
-                                )
-
-                primary_lifespan = multiple_fastmcp_lifespan
-
-            elif len(fastmcp_servers) == 1:
-                # Single FastMCP server without heartbeat - wrap lifespan with graceful shutdown
-                self.logger.debug(
-                    "Wrapping FastMCP lifespan for single server with graceful shutdown"
-                )
+            if len(fastmcp_servers) == 1:
+                # Single FastMCP server - simple lifespan with graceful shutdown
+                self.logger.debug("Creating simple lifespan for single FastMCP server")
                 fastmcp_lifespan = get_fastmcp_lifespan()
 
                 if fastmcp_lifespan:
-                    # Wrap the FastMCP lifespan with graceful shutdown
+
                     @asynccontextmanager
-                    async def single_fastmcp_with_graceful_shutdown(main_app):
-                        """Lifespan wrapper for single FastMCP server with graceful shutdown."""
-                        # Start FastMCP lifespan
+                    async def simple_fastmcp_lifespan(main_app):
+                        """Simple lifespan for single FastMCP server."""
                         fastmcp_ctx = None
                         try:
                             fastmcp_ctx = fastmcp_lifespan(main_app)
@@ -413,14 +290,64 @@ class FastAPIServerSetupStep(PipelineStep):
                                         f"Error closing FastMCP lifespan: {e}"
                                     )
 
-                    primary_lifespan = single_fastmcp_with_graceful_shutdown
+                    primary_lifespan = simple_fastmcp_lifespan
                 else:
-                    self.logger.warning(
-                        "No FastMCP lifespan available for single server"
-                    )
                     primary_lifespan = None
 
-            # Add minimal graceful shutdown lifespan if no other lifespan is set
+            elif len(fastmcp_servers) > 1:
+                # Multiple FastMCP servers - combine lifespans
+                self.logger.debug(
+                    "Creating combined lifespan for multiple FastMCP servers"
+                )
+
+                # Collect FastMCP lifespans from pre-created wrappers
+                fastmcp_lifespans = []
+                for server_key, wrapper_data in mcp_wrappers.items():
+                    mcp_wrapper = wrapper_data["wrapper"]
+                    if (
+                        hasattr(mcp_wrapper, "_mcp_app")
+                        and mcp_wrapper._mcp_app
+                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
+                    ):
+                        fastmcp_lifespans.append(mcp_wrapper._mcp_app.lifespan)
+                        self.logger.debug(
+                            f"Collected lifespan from FastMCP wrapper '{server_key}'"
+                        )
+
+                if fastmcp_lifespans:
+
+                    @asynccontextmanager
+                    async def multiple_fastmcp_lifespan(main_app):
+                        """Combined lifespan for multiple FastMCP servers."""
+                        lifespan_contexts = []
+                        for lifespan in fastmcp_lifespans:
+                            try:
+                                ctx = lifespan(main_app)
+                                await ctx.__aenter__()
+                                lifespan_contexts.append(ctx)
+                            except Exception as e:
+                                self.logger.error(
+                                    f"Failed to start FastMCP lifespan: {e}"
+                                )
+
+                        try:
+                            yield
+                        finally:
+                            # Graceful shutdown - unregister from registry
+                            await self._graceful_shutdown(main_app)
+
+                            # Clean up all lifespans in reverse order
+                            for ctx in reversed(lifespan_contexts):
+                                try:
+                                    await ctx.__aexit__(None, None, None)
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"Error closing FastMCP lifespan: {e}"
+                                    )
+
+                    primary_lifespan = multiple_fastmcp_lifespan
+
+            # Add minimal graceful shutdown lifespan if no FastMCP lifespans found
             if primary_lifespan is None:
                 self.logger.debug(
                     "Creating minimal lifespan for graceful shutdown only"
@@ -445,6 +372,9 @@ class FastAPIServerSetupStep(PipelineStep):
                 redoc_url="/redoc",
                 lifespan=primary_lifespan,
             )
+
+            # Store app reference for global shutdown coordination
+            app.state.shutdown_step = self
 
             self.logger.debug(
                 f"Created FastAPI app for agent '{agent_name}' with lifespan: {primary_lifespan is not None}"
@@ -785,3 +715,180 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             "agent_id": context.get("agent_id"),
             "registry_wrapper": context.get("registry_wrapper"),
         }
+
+    async def _handle_existing_server(
+        self,
+        context: dict[str, Any],
+        result: Any,
+        existing_server: dict[str, Any],
+        existing_fastapi_app: dict[str, Any],
+        fastmcp_servers: dict[str, Any],
+        agent_config: dict[str, Any],
+        binding_config: dict[str, Any],
+        advertisement_config: dict[str, Any],
+    ) -> Any:
+        """
+        Handle mounting FastMCP on existing uvicorn server.
+
+        This is used when ServerDiscoveryStep finds an existing uvicorn server
+        (e.g., started immediately in @mesh.agent decorator) and we need to
+        mount FastMCP endpoints on it instead of starting a new server.
+        """
+        try:
+            self.logger.info("🔄 SERVER REUSE: Mounting FastMCP on existing server")
+
+            # Get the existing minimal FastAPI app that's already running
+            existing_app = None
+            if existing_fastapi_app and "app" in existing_fastapi_app:
+                existing_app = existing_fastapi_app["app"]
+            elif existing_fastapi_app and "instance" in existing_fastapi_app:
+                existing_app = existing_fastapi_app["instance"]
+            elif existing_server and "app" in existing_server:
+                existing_app = existing_server["app"]
+            else:
+                # As fallback, try to get the app from DecoratorRegistry
+                from ...engine.decorator_registry import DecoratorRegistry
+
+                server_info = DecoratorRegistry.get_immediate_uvicorn_server()
+                if server_info and "app" in server_info:
+                    existing_app = server_info["app"]
+
+            if not existing_app:
+                raise ValueError("No existing FastAPI app found for server reuse")
+
+            self.logger.info(
+                f"🔄 SERVER REUSE: Using existing FastAPI app '{existing_app.title}' for FastMCP mounting"
+            )
+
+            # Check if FastMCP lifespan is already integrated with the FastAPI app
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            fastmcp_lifespan = DecoratorRegistry.get_fastmcp_lifespan()
+            fastmcp_http_app = DecoratorRegistry.get_fastmcp_http_app()
+
+            mcp_wrappers = {}
+            if fastmcp_servers:
+                if fastmcp_lifespan and fastmcp_http_app:
+                    self.logger.info(
+                        "✅ SERVER REUSE: FastMCP lifespan already integrated, mounting same HTTP app"
+                    )
+
+                    # FastMCP lifespan is already integrated, mount the same HTTP app that was used for lifespan
+                    for server_key, server_instance in fastmcp_servers.items():
+                        try:
+                            # Mount the same FastMCP HTTP app that was used for lifespan integration
+                            # This ensures the session manager is shared between lifespan and routes
+                            existing_app.mount("", fastmcp_http_app)
+                            self.logger.info(
+                                f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' using stored HTTP app (lifespan already integrated)"
+                            )
+
+                            mcp_wrappers[server_key] = {
+                                "fastmcp_app": fastmcp_http_app,
+                                "server_instance": server_instance,
+                                "lifespan_integrated": True,
+                            }
+
+                        except Exception as e:
+                            self.logger.error(
+                                f"❌ SERVER REUSE: Failed to mount FastMCP server '{server_key}': {e}"
+                            )
+                            result.add_error(
+                                f"Failed to mount server '{server_key}': {e}"
+                            )
+                else:
+                    self.logger.info(
+                        "🔄 SERVER REUSE: No FastMCP lifespan integrated, using HttpMcpWrapper"
+                    )
+
+                    # No lifespan integration, use HttpMcpWrapper (fallback method)
+                    for server_key, server_instance in fastmcp_servers.items():
+                        try:
+                            # Create HttpMcpWrapper for proper FastMCP app creation and session routing
+                            from ...engine.http_wrapper import HttpMcpWrapper
+
+                            mcp_wrapper = HttpMcpWrapper(server_instance)
+                            await mcp_wrapper.setup()
+
+                            # Mount using the wrapper's properly configured FastMCP app
+                            if mcp_wrapper._mcp_app:
+                                # Mount at root since FastMCP creates its own /mcp routes internally
+                                existing_app.mount("", mcp_wrapper._mcp_app)
+                                self.logger.info(
+                                    f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' via HttpMcpWrapper at root (provides /mcp routes)"
+                                )
+
+                            mcp_wrappers[server_key] = {
+                                "wrapper": mcp_wrapper,
+                                "server_instance": server_instance,
+                                "lifespan_integrated": False,
+                            }
+                        except Exception as e:
+                            self.logger.error(
+                                f"❌ SERVER REUSE: Failed to create HttpMcpWrapper for server '{server_key}': {e}"
+                            )
+                            result.add_error(
+                                f"Failed to wrap server '{server_key}': {e}"
+                            )
+
+                # Add K8s health endpoints to existing app (if not already present)
+                self._add_k8s_endpoints(existing_app, agent_config, mcp_wrappers)
+
+                # FastMCP servers are already mounted directly - no additional integration needed
+                self.logger.info(
+                    "🔌 SERVER REUSE: All FastMCP servers mounted successfully"
+                )
+
+            # Store context for graceful shutdown access
+            self._store_context_for_shutdown(context)
+
+            # Store agent_id for metadata endpoint access
+            agent_id = context.get("agent_id")
+            if agent_id:
+                self._current_context = self._current_context or {}
+                self._current_context["agent_id"] = agent_id
+
+            # Store mcp_wrappers for session stats access
+            self._current_context = self._current_context or {}
+            self._current_context["mcp_wrappers"] = mcp_wrappers
+
+            # FastMCP is now mounted directly - no server replacement needed
+            self.logger.info(
+                "🔄 SERVER REUSE: FastMCP routes mounted to existing app successfully"
+            )
+
+            # Store results in context (existing app updated, server reused)
+            result.add_context("fastapi_app", existing_app)
+            result.add_context("mcp_wrappers", mcp_wrappers)
+            result.add_context("fastapi_binding_config", binding_config)
+            result.add_context("fastapi_advertisement_config", advertisement_config)
+            result.add_context(
+                "server_reused", True
+            )  # Flag to skip uvicorn.run() in orchestrator
+
+            bind_host = binding_config["bind_host"]
+            bind_port = binding_config["bind_port"]
+            external_host = advertisement_config["external_host"]
+            external_endpoint = (
+                advertisement_config.get("external_endpoint")
+                or f"http://{external_host}:{bind_port}"
+            )
+
+            result.message = f"FastAPI app mounted on existing server {bind_host}:{bind_port} (external: {external_endpoint})"
+            self.logger.info(
+                f"✅ SERVER REUSE: FastMCP mounted on existing server with {len(mcp_wrappers)} MCP wrappers"
+            )
+
+        except Exception as e:
+            self.logger.error(
+                f"❌ SERVER REUSE: Failed to mount on existing server: {e}"
+            )
+            result.status = (
+                result.PipelineStatus.FAILED
+                if hasattr(result, "PipelineStatus")
+                else "failed"
+            )
+            result.message = f"Server reuse failed: {e}"
+            result.add_error(str(e))
+
+        return result
