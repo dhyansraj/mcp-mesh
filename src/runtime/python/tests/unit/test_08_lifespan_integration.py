@@ -425,15 +425,16 @@ class TestLifespanIntegrationErrorHandling:
 
             mock_orchestrator.execute_heartbeat.side_effect = execute_side_effect
 
-            # Cancel after second sleep
+            # Allow first sleep (after exception), then cancel on second sleep
             sleep_call_count = 0
 
             def sleep_side_effect(interval):
                 nonlocal sleep_call_count
                 sleep_call_count += 1
-                if sleep_call_count >= 2:
-                    raise asyncio.CancelledError()
-                return None  # Return immediately for first sleep
+                if sleep_call_count == 1:
+                    return None  # Return immediately for first sleep (after exception)
+                else:
+                    raise asyncio.CancelledError()  # Cancel on second sleep (after successful heartbeat)
 
             mock_sleep.side_effect = sleep_side_effect
 
