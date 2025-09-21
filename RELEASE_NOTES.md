@@ -1,5 +1,15 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.3...v0.5.5)
+
+## v0.5.5 (2025-09-20)
+
+### 🔧 DNS Threading Fix
+
+- Fixed DNS atexit threading bug causing sporadic FastMCP connection failures in Kubernetes environments
+- Resolved "can't register atexit after shutdown" errors in Python 3.8+ ThreadPoolExecutor
+- Improved reliability of DNS service discovery for load balancing
+
 ## v0.5.3 (2025-08-16)
 
 ### GitHub Pipeline Fixes

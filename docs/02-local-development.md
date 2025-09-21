@@ -304,7 +304,7 @@ stats.print_stats()
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "0.5.5",
   "configurations": [
     {
       "name": "Debug Agent",
