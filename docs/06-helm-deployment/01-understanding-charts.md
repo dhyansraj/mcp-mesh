@@ -340,7 +340,7 @@ global:
 # Image configuration (updated to match working examples)
 image:
   repository: mcp-mesh-base  # 🎯 Updated from mcp-mesh/registry
-  tag: "0.5"  # 🎯 Updated for local development
+  tag: "0.5.6"  # 🎯 Updated for local development
   pullPolicy: Never  # 🎯 For local development
 
 # Deployment settings
@@ -466,7 +466,7 @@ version: 1.0.0
 appVersion: "1.0.0"
 dependencies:
   - name: mcp-mesh-agent
-    version: "0.5.5"
+    version: "0.5.6"
     repository: "https://charts.mcp-mesh.io"
 ```
 
