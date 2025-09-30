@@ -206,6 +206,8 @@ This project is open source. License details will be provided in the LICENSE fil
 
 ## 🚀 Get Started
 
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://dhyansraj.github.io/mcp-mesh/)
+
 1. **[⚡ Quick Tutorial](docs/01-getting-started.md)** - Build your first distributed MCP agent
 2. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
 3. **[🔧 Contribute](https://github.com/dhyansraj/mcp-mesh/issues)** - Help build the future of AI orchestration
