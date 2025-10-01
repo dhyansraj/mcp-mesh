@@ -5,6 +5,21 @@
   --md-accent-fg-color: #88c0d0;
 }
 
+/* Logo styling */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.5rem !important;
+  width: auto !important;
+  filter: brightness(0) invert(1);
+}
+
+.md-logo img,
+.md-logo svg {
+  height: 2.5rem !important;
+  width: auto !important;
+  filter: brightness(0) invert(1);
+}
+
 /* Grid cards styling */
 .grid.cards {
   display: grid;

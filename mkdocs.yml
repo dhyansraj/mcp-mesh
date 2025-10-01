@@ -12,8 +12,8 @@ copyright: Copyright &copy; 2024-2025 MCP Mesh Contributors
 theme:
   name: material
   custom_dir: docs/overrides
-  logo: assets/images/logo.png
-  favicon: assets/images/favicon.png
+  logo: assets/images/logo.svg
+  # favicon: assets/images/favicon.png
   
   palette:
     # Light mode
@@ -40,8 +40,8 @@ theme:
   
   features:
     - announce.dismiss
-    - content.action.edit
-    - content.action.view
+    # - content.action.edit
+    # - content.action.view
     - content.code.annotate
     - content.code.copy
     - content.tabs.link

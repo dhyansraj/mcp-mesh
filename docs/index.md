@@ -7,9 +7,6 @@ template: home.html
 
 MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into an enterprise-grade distributed system. Build production-ready AI agent networks with zero boilerplate.
 
-[Get Started](01-getting-started.md){ .md-button .md-button--primary }
-[View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
-
 ---
 
 ## :rocket: Quick Start
@@ -104,7 +101,7 @@ class MyAgent:
     - Domain-driven design with focused, composable agents
     - Mix and match agents to create new capabilities
 
-=== "For DevOps & Platform Teams"
+=== "For DevOps Teams"
 
     **Production-ready AI infrastructure out of the box.**
 
@@ -112,6 +109,26 @@ class MyAgent:
     - Enterprise observability with Grafana, Tempo, and Redis
     - Zero-touch operations with auto-discovery
     - Scale from 2 agents to 200+ with same complexity
+
+=== "For Support & Operations"
+
+    **Complete visibility and zero-downtime operations.**
+
+    - **Real-Time Network Monitoring**: See every agent, dependency, and health status in live dashboards
+    - **Intelligent Scaling**: Agents scale independently based on demand - no cascading performance issues
+    - **Graceful Failure Handling**: Agents degrade gracefully when dependencies are unavailable, automatically reconnect when services return
+    - **One-Click Diagnostics**: `meshctl status` provides instant network health assessment with actionable insights
+
+=== "For Engineering Leadership"
+
+    **Transform AI experiments into production revenue.**
+
+    - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
+    - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
+    - **Risk Mitigation**: Battle-tested enterprise patterns ensure reliable AI deployments that scale with your business
+    - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
+
+    Turn your AI strategy from "promising experiments" to "competitive advantage in production."
 
 ---
 
