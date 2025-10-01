@@ -334,48 +334,48 @@ Use Go templates for dynamic values:
 # values/templates/dynamic-values.yaml
 # Dynamic value generation
 
-{{- $environment := .Values.global.environment | default "development" -}}
-{{- $domain := .Values.global.domain | default "local" -}}
+{%raw%}{{- $environment := .Values.global.environment | default "development" -}}{%endraw%}
+{%raw%}{{- $domain := .Values.global.domain | default "local" -}}{%endraw%}
 
 # Generate URLs based on environment
 urls:
   registry:
-    internal: "http://{{ .Release.Name }}-registry.{{ .Release.Namespace }}.svc.cluster.local:8080"
-    external: "https://registry.{{ $environment }}.{{ $domain }}"
+    internal: "http://{%raw%}{{ .Release.Name }}{%endraw%}-registry.{%raw%}{{ .Release.Namespace }}{%endraw%}.svc.cluster.local:8080"
+    external: "https://registry.{%raw%}{{ $environment }}{%endraw%}.{%raw%}{{ $domain }}{%endraw%}"
 
   agents:
-    {{- range $name, $agent := .Values.agents }}
-    {{ $name }}:
-      internal: "http://{{ $.Release.Name }}-{{ $name }}.{{ $.Release.Namespace }}.svc.cluster.local:8080"
-      external: "https://{{ $name }}.{{ $environment }}.{{ $domain }}"
-    {{- end }}
+    {%raw%}{{- range $name, $agent := .Values.agents }}{%endraw%}
+    {%raw%}{{ $name }}{%endraw%}:
+      internal: "http://{%raw%}{{ $.Release.Name }}{%endraw%}-{%raw%}{{ $name }}{%endraw%}.{%raw%}{{ $.Release.Namespace }}{%endraw%}.svc.cluster.local:8080"
+      external: "https://{%raw%}{{ $name }}{%endraw%}.{%raw%}{{ $environment }}{%endraw%}.{%raw%}{{ $domain }}{%endraw%}"
+    {%raw%}{{- end }}{%endraw%}
 
 # Environment-specific features
 features:
-  debugMode: {{ eq $environment "development" }}
-  tracing: {{ has $environment (list "staging" "production") }}
-  profiling: {{ eq $environment "development" }}
+  debugMode: {%raw%}{{ eq $environment "development" }}{%endraw%}
+  tracing: {%raw%}{{ has $environment (list "staging" "production") }}{%endraw%}
+  profiling: {%raw%}{{ eq $environment "development" }}{%endraw%}
 
 # Resource multipliers by environment
 resourceMultipliers:
-  {{- if eq $environment "production" }}
+  {%raw%}{{- if eq $environment "production" }}{%endraw%}
   cpu: 2.0
   memory: 2.0
-  {{- else if eq $environment "staging" }}
+  {%raw%}{{- else if eq $environment "staging" }}{%endraw%}
   cpu: 1.5
   memory: 1.5
-  {{- else }}
+  {%raw%}{{- else }}{%endraw%}
   cpu: 0.5
   memory: 0.5
-  {{- end }}
+  {%raw%}{{- end }}{%endraw%}
 
 # Conditional configurations
-{{- if eq $environment "production" }}
+{%raw%}{{- if eq $environment "production" }}{%endraw%}
 backup:
   enabled: true
   schedule: "0 2 * * *"
   retention: 30
-{{- end }}
+{%raw%}{{- end }}{%endraw%}
 ```
 
 ### Step 5: Secrets Management
@@ -498,22 +498,22 @@ featureFlags:
   # Core features
   core:
     newAuthSystem:
-      enabled: {{ eq .Values.global.environment "development" }}
+      enabled: {%raw%}{{ eq .Values.global.environment "development" }}{%endraw%}
       rolloutPercentage: 10
 
     improvedCaching:
       enabled: true
-      rolloutPercentage: {{ .Values.global.featureRollout.improvedCaching | default 50 }}
+      rolloutPercentage: {%raw%}{{ .Values.global.featureRollout.improvedCaching | default 50 }}{%endraw%}
 
   # Agent-specific features
   agents:
     weather:
       mlPredictions:
-        enabled: {{ has .Values.global.environment (list "staging" "production") }}
+        enabled: {%raw%}{{ has .Values.global.environment (list "staging" "production") }}{%endraw%}
         modelVersion: "2.1.0"
 
       premiumApi:
-        enabled: {{ .Values.global.environment | eq "production" }}
+        enabled: {%raw%}{{ .Values.global.environment | eq "production" }}{%endraw%}
         rateLimit: 1000
 
     analytics:
@@ -524,17 +524,17 @@ featureFlags:
           - "customer-456"
 
 # Apply feature flags to agents
-{{- range $agent, $features := .Values.featureFlags.agents }}
+{%raw%}{{- range $agent, $features := .Values.featureFlags.agents }}{%endraw%}
 agents:
-  {{ $agent }}:
+  {%raw%}{{ $agent }}{%endraw%}:
     env:
-      {{- range $feature, $config := $features }}
-      FEATURE_{{ $feature | upper }}_ENABLED: {{ $config.enabled | quote }}
-      {{- if $config.rolloutPercentage }}
-      FEATURE_{{ $feature | upper }}_ROLLOUT: {{ $config.rolloutPercentage | quote }}
-      {{- end }}
-      {{- end }}
-{{- end }}
+      {%raw%}{{- range $feature, $config := $features }}{%endraw%}
+      FEATURE_{%raw%}{{ $feature | upper }}{%endraw%}_ENABLED: {%raw%}{{ $config.enabled | quote }}{%endraw%}
+      {%raw%}{{- if $config.rolloutPercentage }}{%endraw%}
+      FEATURE_{%raw%}{{ $feature | upper }}{%endraw%}_ROLLOUT: {%raw%}{{ $config.rolloutPercentage | quote }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 ```
 
 ## Best Practices
@@ -723,13 +723,13 @@ helm upgrade my-release ./chart \
 # Move templates to tpl files:
 
 # templates/values-helper.tpl
-{{- define "dynamic.values" -}}
-environment: {{ .Values.global.environment }}
-url: https://{{ .Values.global.environment }}.example.com
-{{- end }}
+{%raw%}{{- define "dynamic.values" -}}{%endraw%}
+environment: {%raw%}{{ .Values.global.environment }}{%endraw%}
+url: https://{%raw%}{{ .Values.global.environment }}{%endraw%}.example.com
+{%raw%}{{- end }}{%endraw%}
 
 # Use in templates
-{{- $dynamicValues := include "dynamic.values" . | fromYaml }}
+{%raw%}{{- $dynamicValues := include "dynamic.values" . | fromYaml }}{%endraw%}
 ```
 
 For more issues, see the [section troubleshooting guide](./troubleshooting.md).

@@ -1561,7 +1561,7 @@ data:
           severity: warning
         annotations:
           summary: "Low log ingestion rate"
-          description: "Log ingestion rate is {{ $value }} logs/sec"
+          description: "Log ingestion rate is {%raw%}{{ $value }}{%endraw%} logs/sec"
 
       - alert: ElasticsearchDiskSpace
         expr: |
