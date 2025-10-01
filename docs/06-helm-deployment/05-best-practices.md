@@ -1,3 +1,7 @@
+---
+render_with_liquid: false
+---
+
 # Helm Best Practices
 
 > Production-ready patterns and practices for MCP Mesh Helm deployments

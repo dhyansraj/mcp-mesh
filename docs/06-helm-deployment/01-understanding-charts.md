@@ -1,11 +1,14 @@
+---
+render_with_liquid: false
+---
+
 # Understanding MCP Mesh Helm Charts
 
-> Deep dive into the structure and components of MCP Mesh Helm charts
+> Learn the structure and components of MCP Mesh Helm charts
 
 ## Overview
 
 MCP Mesh provides two primary Helm charts: `mcp-mesh-registry` for the central registry service and `mcp-mesh-agent` for deploying agents. This guide explains the chart structure, templates, values, and how to use them effectively. Understanding these charts is essential for customizing deployments and creating your own agent charts.
-
 We'll explore each component, explain the templating patterns used, and show how to extend the charts for your specific needs.
 
 ## Key Concepts
