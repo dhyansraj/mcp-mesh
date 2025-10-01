@@ -847,7 +847,7 @@ data:
                 "type": "graph",
                 "targets": [
                     {
-                        "expr": f'rate(mcp_mesh_requests_total{{agent="{agent}"}}[5m])',
+                        "expr": f'rate(mcp_mesh_requests_total{% raw %}{{agent="{agent}"}}{% endraw %}[5m])',
                         "refId": "A"
                     }
                 ]
