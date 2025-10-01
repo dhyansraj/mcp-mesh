@@ -25,7 +25,7 @@ docker-compose version > /dev/null 2>&1 && echo "INSTALLED" || echo "NOT FOUND"
 
 # Check running containers
 echo -e "\nRunning containers:"
-docker ps --format "table {%raw%}{{.Names}}{%endraw%}\t{%raw%}{{.Status}}{%endraw%}\t{%raw%}{{.Ports}}{%endraw%}"
+docker ps --format "table {% raw %}{{.Names}}{% endraw %}\t{% raw %}{{.Status}}{% endraw %}\t{% raw %}{{.Ports}}{% endraw %}"
 
 # Check networks
 echo -e "\nDocker networks:"
@@ -41,7 +41,7 @@ docker system df
 
 # Check container health
 echo -e "\nContainer health:"
-docker ps --format "table {%raw%}{{.Names}}{%endraw%}\t{%raw%}{{.Status}}{%endraw%}" | grep -E "(healthy|unhealthy|starting)"
+docker ps --format "table {% raw %}{{.Names}}{% endraw %}\t{% raw %}{{.Status}}{% endraw %}" | grep -E "(healthy|unhealthy|starting)"
 
 # Check registry connectivity
 echo -e "\nRegistry status:"
@@ -477,7 +477,7 @@ Invalid compose file
 
 ```bash
 # Find CPU-hungry containers
-docker stats --no-stream --format "table {%raw%}{{.Container}}{%endraw%}\t{%raw%}{{.CPUPerc}}{%endraw%}"
+docker stats --no-stream --format "table {% raw %}{{.Container}}{% endraw %}\t{% raw %}{{.CPUPerc}}{% endraw %}"
 
 # Limit CPU usage
 services:

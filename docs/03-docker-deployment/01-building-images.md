@@ -343,7 +343,7 @@ docker run --rm test-agent:latest whoami | grep -q "mcp" || exit 1
 # Test health check
 docker run -d --name test-health test-agent:latest
 sleep 5
-docker inspect test-health --format='{%raw%}{{.State.Health.Status}}{%endraw%}' | grep -q "healthy" || exit 1
+docker inspect test-health --format='{% raw %}{{.State.Health.Status}}{% endraw %}' | grep -q "healthy" || exit 1
 docker rm -f test-health
 ```
 

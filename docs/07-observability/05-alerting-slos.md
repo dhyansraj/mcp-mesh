@@ -137,9 +137,9 @@ spec:
       sli:
         raw:
           error_ratio_query: |
-            sum(rate(mcp_mesh_requests_total{status="error"}[{%raw%}{{.window}}{%endraw%}]))
+            sum(rate(mcp_mesh_requests_total{status="error"}[{% raw %}{{.window}}{% endraw %}]))
             /
-            sum(rate(mcp_mesh_requests_total[{%raw%}{{.window}}{%endraw%}]))
+            sum(rate(mcp_mesh_requests_total[{% raw %}{{.window}}{% endraw %}]))
 
       alerting:
         name: MCP_Mesh_HighErrorRate
@@ -161,9 +161,9 @@ spec:
         raw:
           error_ratio_query: |
             (
-              sum(rate(mcp_mesh_request_duration_seconds_bucket{le="0.5"}[{%raw%}{{.window}}{%endraw%}]))
+              sum(rate(mcp_mesh_request_duration_seconds_bucket{le="0.5"}[{% raw %}{{.window}}{% endraw %}]))
               /
-              sum(rate(mcp_mesh_request_duration_seconds_count[{%raw%}{{.window}}{%endraw%}]))
+              sum(rate(mcp_mesh_request_duration_seconds_count[{% raw %}{{.window}}{% endraw %}]))
             )
 
       alerting:
@@ -251,7 +251,7 @@ spec:
             team: platform
           annotations:
             summary: "MCP Mesh Registry is down"
-            description: "Registry {%raw%}{{ $labels.instance }}{%endraw%} has been down for more than 2 minutes"
+            description: "Registry {% raw %}{{ $labels.instance }}{% endraw %} has been down for more than 2 minutes"
             runbook_url: "https://wiki.mcp-mesh.io/runbooks/registry-down"
             dashboard_url: "https://grafana.mcp-mesh.io/d/registry/overview"
 
@@ -268,7 +268,7 @@ spec:
             team: platform
           annotations:
             summary: "High error rate detected"
-            description: "Error rate is {%raw%}{{ $value | humanizePercentage }}{%endraw%} (threshold: 5%)"
+            description: "Error rate is {% raw %}{{ $value | humanizePercentage }}{% endraw %} (threshold: 5%)"
             runbook_url: "https://wiki.mcp-mesh.io/runbooks/high-error-rate"
 
         - alert: MCP_Mesh_SLO_BurnRate_High
@@ -289,7 +289,7 @@ spec:
             team: platform
           annotations:
             summary: "SLO burn rate is critically high"
-            description: "At this rate, the error budget will be exhausted in {%raw%}{{ $value | humanizeDuration }}{%endraw%}"
+            description: "At this rate, the error budget will be exhausted in {% raw %}{{ $value | humanizeDuration }}{% endraw %}"
             runbook_url: "https://wiki.mcp-mesh.io/runbooks/slo-burn-rate"
 
     # Warning Alerts - Create ticket
@@ -308,9 +308,9 @@ spec:
             severity: warning
             team: platform
           annotations:
-            summary: "High latency on {%raw%}{{ $labels.agent }}{%endraw%}"
-            description: "P95 latency is {%raw%}{{ $value }}{%endraw%}s (threshold: 0.5s)"
-            dashboard_url: "https://grafana.mcp-mesh.io/d/agents/{%raw%}{{ $labels.agent }}{%endraw%}"
+            summary: "High latency on {% raw %}{{ $labels.agent }}{% endraw %}"
+            description: "P95 latency is {% raw %}{{ $value }}{% endraw %}s (threshold: 0.5s)"
+            dashboard_url: "https://grafana.mcp-mesh.io/d/agents/{% raw %}{{ $labels.agent }}{% endraw %}"
 
         - alert: MCP_Mesh_HighMemoryUsage
           expr: |
@@ -324,8 +324,8 @@ spec:
             severity: warning
             team: platform
           annotations:
-            summary: "High memory usage in {%raw%}{{ $labels.pod }}{%endraw%}"
-            description: "Memory usage is {%raw%}{{ $value | humanizePercentage }}{%endraw%} of limit"
+            summary: "High memory usage in {% raw %}{{ $labels.pod }}{% endraw %}"
+            description: "Memory usage is {% raw %}{{ $value | humanizePercentage }}{% endraw %} of limit"
 
         - alert: MCP_Mesh_PodRestarts
           expr: |
@@ -334,8 +334,8 @@ spec:
             severity: warning
             team: platform
           annotations:
-            summary: "Pod {%raw%}{{ $labels.pod }}{%endraw%} is restarting frequently"
-            description: "{%raw%}{{ $value }}{%endraw%} restarts in the last hour"
+            summary: "Pod {% raw %}{{ $labels.pod }}{% endraw %} is restarting frequently"
+            description: "{% raw %}{{ $value }}{% endraw %} restarts in the last hour"
 
     # Info Alerts - Dashboard only
     - name: mcp-mesh.info
@@ -350,8 +350,8 @@ spec:
             severity: info
             team: platform
           annotations:
-            summary: "Deployment in progress for {%raw%}{{ $labels.deployment }}{%endraw%}"
-            description: "{%raw%}{{ $labels.deployment }}{%endraw%} has {%raw%}{{ $value }}{%endraw%} replicas updating"
+            summary: "Deployment in progress for {% raw %}{{ $labels.deployment }}{% endraw %}"
+            description: "{% raw %}{{ $labels.deployment }}{% endraw %} has {% raw %}{{ $value }}{% endraw %} replicas updating"
 
         - alert: MCP_Mesh_CertificateExpiring
           expr: |
@@ -361,7 +361,7 @@ spec:
             team: platform
           annotations:
             summary: "Certificate expiring soon"
-            description: "Certificate {%raw%}{{ $labels.name }}{%endraw%} expires in {%raw%}{{ $value }}{%endraw%} days"
+            description: "Certificate {% raw %}{{ $labels.name }}{% endraw %} expires in {% raw %}{{ $value }}{% endraw %} days"
 ```
 
 ### Step 4: Create Runbooks
@@ -661,42 +661,42 @@ stringData:
       slack_configs:
       - channel: '#alerts-default'
         title: 'MCP Mesh Alert'
-        text: '{%raw%}{{ range .Alerts }}{%endraw%}{%raw%}{{ .Annotations.summary }}{%endraw%}{%raw%}{{ end }}{%endraw%}'
+        text: '{% raw %}{{ range .Alerts }}{% endraw %}{% raw %}{{ .Annotations.summary }}{% endraw %}{% raw %}{{ end }}{% endraw %}'
 
     - name: 'pagerduty-critical'
       pagerduty_configs:
       - service_key: ${PAGERDUTY_SERVICE_KEY}
-        description: '{%raw%}{{ .GroupLabels.alertname }}{%endraw%}: {%raw%}{{ .CommonAnnotations.summary }}{%endraw%}'
+        description: '{% raw %}{{ .GroupLabels.alertname }}{% endraw %}: {% raw %}{{ .CommonAnnotations.summary }}{% endraw %}'
         details:
-          firing: '{%raw%}{{ .Alerts.Firing | len }}{%endraw%}'
-          resolved: '{%raw%}{{ .Alerts.Resolved | len }}{%endraw%}'
-          labels: '{%raw%}{{ .CommonLabels }}{%endraw%}'
+          firing: '{% raw %}{{ .Alerts.Firing | len }}{% endraw %}'
+          resolved: '{% raw %}{{ .Alerts.Resolved | len }}{% endraw %}'
+          labels: '{% raw %}{{ .CommonLabels }}{% endraw %}'
         links:
-        - href: '{%raw%}{{ .CommonAnnotations.dashboard_url }}{%endraw%}'
+        - href: '{% raw %}{{ .CommonAnnotations.dashboard_url }}{% endraw %}'
           text: 'Dashboard'
-        - href: '{%raw%}{{ .CommonAnnotations.runbook_url }}{%endraw%}'
+        - href: '{% raw %}{{ .CommonAnnotations.runbook_url }}{% endraw %}'
           text: 'Runbook'
 
     - name: 'slack-critical'
       slack_configs:
       - channel: '#alerts-critical'
         color: 'danger'
-        title: '🚨 CRITICAL: {%raw%}{{ .GroupLabels.alertname }}{%endraw%}'
+        title: '🚨 CRITICAL: {% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
         text: |
-          {%raw%}{{ range .Alerts.Firing }}{%endraw%}
-          *Alert:* {%raw%}{{ .Annotations.summary }}{%endraw%}
-          *Description:* {%raw%}{{ .Annotations.description }}{%endraw%}
-          *Runbook:* <{%raw%}{{ .Annotations.runbook_url }}{%endraw%}|View Runbook>
-          *Dashboard:* <{%raw%}{{ .Annotations.dashboard_url }}{%endraw%}|View Dashboard>
-          {%raw%}{{ end }}{%endraw%}
+          {% raw %}{{ range .Alerts.Firing }}{% endraw %}
+          *Alert:* {% raw %}{{ .Annotations.summary }}{% endraw %}
+          *Description:* {% raw %}{{ .Annotations.description }}{% endraw %}
+          *Runbook:* <{% raw %}{{ .Annotations.runbook_url }}{% endraw %}|View Runbook>
+          *Dashboard:* <{% raw %}{{ .Annotations.dashboard_url }}{% endraw %}|View Dashboard>
+          {% raw %}{{ end }}{% endraw %}
         send_resolved: true
 
     - name: 'slack-warnings'
       slack_configs:
       - channel: '#alerts-warning'
         color: 'warning'
-        title: '⚠️ Warning: {%raw%}{{ .GroupLabels.alertname }}{%endraw%}'
-        text: '{%raw%}{{ .CommonAnnotations.summary }}{%endraw%}'
+        title: '⚠️ Warning: {% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
+        text: '{% raw %}{{ .CommonAnnotations.summary }}{% endraw %}'
         send_resolved: true
 
     - name: 'platform-team'
@@ -735,9 +735,9 @@ spec:
       sli:
         raw:
           error_ratio_query: |
-            sum(rate(mcp_mesh_business_transactions_total{status="failed"}[{%raw%}{{.window}}{%endraw%}]))
+            sum(rate(mcp_mesh_business_transactions_total{status="failed"}[{% raw %}{{.window}}{% endraw %}]))
             /
-            sum(rate(mcp_mesh_business_transactions_total[{%raw%}{{.window}}{%endraw%}]))
+            sum(rate(mcp_mesh_business_transactions_total[{% raw %}{{.window}}{% endraw %}]))
 
       alerting:
         name: BusinessTransactionFailures
@@ -754,9 +754,9 @@ spec:
         raw:
           error_ratio_query: |
             (
-              sum(rate(mcp_mesh_api_calls_total{cost_exceeded="true"}[{%raw%}{{.window}}{%endraw%}]))
+              sum(rate(mcp_mesh_api_calls_total{cost_exceeded="true"}[{% raw %}{{.window}}{% endraw %}]))
               /
-              sum(rate(mcp_mesh_api_calls_total[{%raw%}{{.window}}{%endraw%}]))
+              sum(rate(mcp_mesh_api_calls_total[{% raw %}{{.window}}{% endraw %}]))
             )
 ```
 
@@ -838,7 +838,7 @@ class AdaptiveAlerting:
           annotations:
             summary: "{metric_name} exceeds dynamic threshold"
             description: |
-              Current value: {%raw%}{{{{ $value }}{%endraw%}}}
+              Current value: {% raw %}{{{{ $value }}{% endraw %}}}
               Dynamic threshold: {threshold_info['threshold']:.2f}
               Based on mean: {threshold_info['mean']:.2f} (±{threshold_info['std']:.2f})
               P95: {threshold_info['p95']:.2f}, P99: {threshold_info['p99']:.2f}
@@ -884,8 +884,8 @@ print(f"Based on historical mean: {threshold['mean']:.2f} (±{threshold['std']:.
 - alert: AlertQualityLow
   expr: alerts:quality:actionable_ratio < 0.5
   annotations:
-    summary: "Alert {%raw%}{{ $labels.alertname }}{%endraw%} has low actionable ratio"
-    description: "Only {%raw%}{{ $value | humanizePercentage }}{%endraw%} of alerts were actionable"
+    summary: "Alert {% raw %}{{ $labels.alertname }}{% endraw %} has low actionable ratio"
+    description: "Only {% raw %}{{ $value | humanizePercentage }}{% endraw %} of alerts were actionable"
 ```
 
 ### Pitfall 2: Unrealistic SLOs

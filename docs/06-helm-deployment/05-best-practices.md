@@ -165,78 +165,78 @@ Write maintainable and efficient templates:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
-  namespace: {%raw%}{{ .Release.Namespace }}{%endraw%}
+  name: {% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}
+  namespace: {% raw %}{{ .Release.Namespace }}{% endraw %}
   labels:
-    {%raw%}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{%endraw%}
-    {%raw%}{{- with .Values.commonLabels }}{%endraw%}
-    {%raw%}{{- toYaml . | nindent 4 }}{%endraw%}
-    {%raw%}{{- end }}{%endraw%}
+    {% raw %}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{% endraw %}
+    {% raw %}{{- with .Values.commonLabels }}{% endraw %}
+    {% raw %}{{- toYaml . | nindent 4 }}{% endraw %}
+    {% raw %}{{- end }}{% endraw %}
   annotations:
-    {%raw%}{{- include "mcp-mesh-agent.annotations" . | nindent 4 }}{%endraw%}
-    {%raw%}{{- with .Values.commonAnnotations }}{%endraw%}
-    {%raw%}{{- toYaml . | nindent 4 }}{%endraw%}
-    {%raw%}{{- end }}{%endraw%}
+    {% raw %}{{- include "mcp-mesh-agent.annotations" . | nindent 4 }}{% endraw %}
+    {% raw %}{{- with .Values.commonAnnotations }}{% endraw %}
+    {% raw %}{{- toYaml . | nindent 4 }}{% endraw %}
+    {% raw %}{{- end }}{% endraw %}
 spec:
-  {%raw%}{{- if not .Values.autoscaling.enabled }}{%endraw%}
-  replicas: {%raw%}{{ .Values.replicaCount }}{%endraw%}
-  {%raw%}{{- end }}{%endraw%}
-  revisionHistoryLimit: {%raw%}{{ .Values.revisionHistoryLimit | default 10 }}{%endraw%}
+  {% raw %}{{- if not .Values.autoscaling.enabled }}{% endraw %}
+  replicas: {% raw %}{{ .Values.replicaCount }}{% endraw %}
+  {% raw %}{{- end }}{% endraw %}
+  revisionHistoryLimit: {% raw %}{{ .Values.revisionHistoryLimit | default 10 }}{% endraw %}
   selector:
     matchLabels:
-      {%raw%}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}{%endraw%}
-  {%raw%}{{- with .Values.updateStrategy }}{%endraw%}
+      {% raw %}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}{% endraw %}
+  {% raw %}{{- with .Values.updateStrategy }}{% endraw %}
   strategy:
-    {%raw%}{{- toYaml . | nindent 4 }}{%endraw%}
-  {%raw%}{{- end }}{%endraw%}
+    {% raw %}{{- toYaml . | nindent 4 }}{% endraw %}
+  {% raw %}{{- end }}{% endraw %}
   template:
     metadata:
       annotations:
         # Force pod restart on config change
-        checksum/config: {%raw%}{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}{%endraw%}
-        checksum/secret: {%raw%}{{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}{%endraw%}
-        {%raw%}{{- with .Values.podAnnotations }}{%endraw%}
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-        {%raw%}{{- end }}{%endraw%}
+        checksum/config: {% raw %}{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}{% endraw %}
+        checksum/secret: {% raw %}{{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}{% endraw %}
+        {% raw %}{{- with .Values.podAnnotations }}{% endraw %}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+        {% raw %}{{- end }}{% endraw %}
       labels:
-        {%raw%}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 8 }}{%endraw%}
-        {%raw%}{{- with .Values.podLabels }}{%endraw%}
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-        {%raw%}{{- end }}{%endraw%}
+        {% raw %}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 8 }}{% endraw %}
+        {% raw %}{{- with .Values.podLabels }}{% endraw %}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+        {% raw %}{{- end }}{% endraw %}
     spec:
-      {%raw%}{{- with .Values.imagePullSecrets }}{%endraw%}
+      {% raw %}{{- with .Values.imagePullSecrets }}{% endraw %}
       imagePullSecrets:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      serviceAccountName: {%raw%}{{ include "mcp-mesh-agent.serviceAccountName" . }}{%endraw%}
-      automountServiceAccountToken: {%raw%}{{ .Values.serviceAccount.automountToken | default false }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      serviceAccountName: {% raw %}{{ include "mcp-mesh-agent.serviceAccountName" . }}{% endraw %}
+      automountServiceAccountToken: {% raw %}{{ .Values.serviceAccount.automountToken | default false }}{% endraw %}
       securityContext:
-        {%raw%}{{- toYaml .Values.podSecurityContext | nindent 8 }}{%endraw%}
-      {%raw%}{{- with .Values.priorityClassName }}{%endraw%}
-      priorityClassName: {%raw%}{{ . }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.hostAliases }}{%endraw%}
+        {% raw %}{{- toYaml .Values.podSecurityContext | nindent 8 }}{% endraw %}
+      {% raw %}{{- with .Values.priorityClassName }}{% endraw %}
+      priorityClassName: {% raw %}{{ . }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.hostAliases }}{% endraw %}
       hostAliases:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- if .Values.initContainers }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- if .Values.initContainers }}{% endraw %}
       initContainers:
-        {%raw%}{{- include "mcp-mesh-agent.renderTpl" (dict "value" .Values.initContainers "context" $) | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
+        {% raw %}{{- include "mcp-mesh-agent.renderTpl" (dict "value" .Values.initContainers "context" $) | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
       containers:
-        - name: {%raw%}{{ .Chart.Name }}{%endraw%}
+        - name: {% raw %}{{ .Chart.Name }}{% endraw %}
           securityContext:
-            {%raw%}{{- toYaml .Values.securityContext | nindent 12 }}{%endraw%}
-          image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}"
-          imagePullPolicy: {%raw%}{{ .Values.image.pullPolicy }}{%endraw%}
-          {%raw%}{{- with .Values.command }}{%endraw%}
+            {% raw %}{{- toYaml .Values.securityContext | nindent 12 }}{% endraw %}
+          image: "{% raw %}{{ .Values.image.repository }}{% endraw %}:{% raw %}{{ .Values.image.tag | default .Chart.AppVersion }}{% endraw %}"
+          imagePullPolicy: {% raw %}{{ .Values.image.pullPolicy }}{% endraw %}
+          {% raw %}{{- with .Values.command }}{% endraw %}
           command:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- with .Values.args }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- with .Values.args }}{% endraw %}
           args:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
           env:
             - name: POD_NAME
               valueFrom:
@@ -254,92 +254,92 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-            {%raw%}{{- if .Values.env }}{%endraw%}
-            {%raw%}{{- include "mcp-mesh-agent.renderTpl" (dict "value" .Values.env "context" $) | nindent 12 }}{%endraw%}
-            {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- if or .Values.envFrom .Values.agent.configMap .Values.agent.secret }}{%endraw%}
+            {% raw %}{{- if .Values.env }}{% endraw %}
+            {% raw %}{{- include "mcp-mesh-agent.renderTpl" (dict "value" .Values.env "context" $) | nindent 12 }}{% endraw %}
+            {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- if or .Values.envFrom .Values.agent.configMap .Values.agent.secret }}{% endraw %}
           envFrom:
-            {%raw%}{{- with .Values.envFrom }}{%endraw%}
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-            {%raw%}{{- end }}{%endraw%}
-            {%raw%}{{- if .Values.agent.configMap }}{%endraw%}
+            {% raw %}{{- with .Values.envFrom }}{% endraw %}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+            {% raw %}{{- end }}{% endraw %}
+            {% raw %}{{- if .Values.agent.configMap }}{% endraw %}
             - configMapRef:
-                name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
-            {%raw%}{{- end }}{%endraw%}
-            {%raw%}{{- if .Values.agent.secret }}{%endraw%}
+                name: {% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}
+            {% raw %}{{- end }}{% endraw %}
+            {% raw %}{{- if .Values.agent.secret }}{% endraw %}
             - secretRef:
-                name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
-            {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
+                name: {% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}
+            {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
           ports:
             - name: http
-              containerPort: {%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}
+              containerPort: {% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}
               protocol: TCP
-            {%raw%}{{- if .Values.metrics.enabled }}{%endraw%}
+            {% raw %}{{- if .Values.metrics.enabled }}{% endraw %}
             - name: metrics
-              containerPort: {%raw%}{{ .Values.metrics.port | default 9090 }}{%endraw%}
+              containerPort: {% raw %}{{ .Values.metrics.port | default 9090 }}{% endraw %}
               protocol: TCP
-            {%raw%}{{- end }}{%endraw%}
-            {%raw%}{{- range .Values.extraPorts }}{%endraw%}
-            - name: {%raw%}{{ .name }}{%endraw%}
-              containerPort: {%raw%}{{ .port }}{%endraw%}
-              protocol: {%raw%}{{ .protocol | default "TCP" }}{%endraw%}
-            {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- with .Values.livenessProbe }}{%endraw%}
+            {% raw %}{{- end }}{% endraw %}
+            {% raw %}{{- range .Values.extraPorts }}{% endraw %}
+            - name: {% raw %}{{ .name }}{% endraw %}
+              containerPort: {% raw %}{{ .port }}{% endraw %}
+              protocol: {% raw %}{{ .protocol | default "TCP" }}{% endraw %}
+            {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- with .Values.livenessProbe }}{% endraw %}
           livenessProbe:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- with .Values.readinessProbe }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- with .Values.readinessProbe }}{% endraw %}
           readinessProbe:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- with .Values.startupProbe }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- with .Values.startupProbe }}{% endraw %}
           startupProbe:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
           resources:
-            {%raw%}{{- toYaml .Values.resources | nindent 12 }}{%endraw%}
-          {%raw%}{{- with .Values.volumeMounts }}{%endraw%}
+            {% raw %}{{- toYaml .Values.resources | nindent 12 }}{% endraw %}
+          {% raw %}{{- with .Values.volumeMounts }}{% endraw %}
           volumeMounts:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
-          {%raw%}{{- with .Values.lifecycle }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
+          {% raw %}{{- with .Values.lifecycle }}{% endraw %}
           lifecycle:
-            {%raw%}{{- toYaml . | nindent 12 }}{%endraw%}
-          {%raw%}{{- end }}{%endraw%}
-        {%raw%}{{- with .Values.sidecars }}{%endraw%}
-        {%raw%}{{- include "mcp-mesh-agent.renderTpl" (dict "value" . "context" $) | nindent 8 }}{%endraw%}
-        {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.volumes }}{%endraw%}
+            {% raw %}{{- toYaml . | nindent 12 }}{% endraw %}
+          {% raw %}{{- end }}{% endraw %}
+        {% raw %}{{- with .Values.sidecars }}{% endraw %}
+        {% raw %}{{- include "mcp-mesh-agent.renderTpl" (dict "value" . "context" $) | nindent 8 }}{% endraw %}
+        {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.volumes }}{% endraw %}
       volumes:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.nodeSelector }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.nodeSelector }}{% endraw %}
       nodeSelector:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.affinity }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.affinity }}{% endraw %}
       affinity:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.tolerations }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.tolerations }}{% endraw %}
       tolerations:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.topologySpreadConstraints }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.topologySpreadConstraints }}{% endraw %}
       topologySpreadConstraints:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.terminationGracePeriodSeconds }}{%endraw%}
-      terminationGracePeriodSeconds: {%raw%}{{ . }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.dnsPolicy }}{%endraw%}
-      dnsPolicy: {%raw%}{{ . }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
-      {%raw%}{{- with .Values.dnsConfig }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.terminationGracePeriodSeconds }}{% endraw %}
+      terminationGracePeriodSeconds: {% raw %}{{ . }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.dnsPolicy }}{% endraw %}
+      dnsPolicy: {% raw %}{{ . }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
+      {% raw %}{{- with .Values.dnsConfig }}{% endraw %}
       dnsConfig:
-        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
-      {%raw%}{{- end }}{%endraw%}
+        {% raw %}{{- toYaml . | nindent 8 }}{% endraw %}
+      {% raw %}{{- end }}{% endraw %}
 ```
 
 ### Step 4: Security Best Practices
@@ -348,13 +348,13 @@ Implement comprehensive security measures:
 
 ```yaml
 # templates/podsecuritypolicy.yaml
-{%raw%}{{- if .Values.podSecurityPolicy.enabled }}{%endraw%}
+{% raw %}{{- if .Values.podSecurityPolicy.enabled }}{% endraw %}
 apiVersion: policy/v1beta1
 kind: PodSecurityPolicy
 metadata:
-  name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
+  name: {% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}
   labels:
-    {%raw%}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{%endraw%}
+    {% raw %}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{% endraw %}
 spec:
   privileged: false
   allowPrivilegeEscalation: false
@@ -379,21 +379,21 @@ spec:
   fsGroup:
     rule: 'RunAsAny'
   readOnlyRootFilesystem: true
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- end }}{% endraw %}
 
 ---
 # templates/networkpolicy.yaml
-{%raw%}{{- if .Values.networkPolicy.enabled }}{%endraw%}
+{% raw %}{{- if .Values.networkPolicy.enabled }}{% endraw %}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
+  name: {% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}
   labels:
-    {%raw%}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{%endraw%}
+    {% raw %}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{% endraw %}
 spec:
   podSelector:
     matchLabels:
-      {%raw%}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}{%endraw%}
+      {% raw %}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}{% endraw %}
   policyTypes:
     - Ingress
     - Egress
@@ -405,17 +405,17 @@ spec:
               app.kubernetes.io/name: mcp-mesh-registry
       ports:
         - protocol: TCP
-          port: {%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}
+          port: {% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}
     # Allow metrics scraping
-    {%raw%}{{- if .Values.metrics.enabled }}{%endraw%}
+    {% raw %}{{- if .Values.metrics.enabled }}{% endraw %}
     - from:
         - namespaceSelector:
             matchLabels:
               name: monitoring
       ports:
         - protocol: TCP
-          port: {%raw%}{{ .Values.metrics.port | default 9090 }}{%endraw%}
-    {%raw%}{{- end }}{%endraw%}
+          port: {% raw %}{{ .Values.metrics.port | default 9090 }}{% endraw %}
+    {% raw %}{{- end }}{% endraw %}
   egress:
     # Allow DNS
     - to:
@@ -440,7 +440,7 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- end }}{% endraw %}
 ```
 
 ### Step 5: Performance Optimization
@@ -457,37 +457,37 @@ Efficient helper functions with caching
 Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 */}}
-{%raw%}{{- define "mcp-mesh-agent.fullname" -}}{%endraw%}
-{%raw%}{{- if .Values.fullnameOverride }}{%endraw%}
-{%raw%}{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{%endraw%}
-{%raw%}{{- else }}{%endraw%}
-{%raw%}{{- $name := default .Chart.Name .Values.nameOverride }}{%endraw%}
-{%raw%}{{- if contains $name .Release.Name }}{%endraw%}
-{%raw%}{{- .Release.Name | trunc 63 | trimSuffix "-" }}{%endraw%}
-{%raw%}{{- else }}{%endraw%}
-{%raw%}{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- define "mcp-mesh-agent.fullname" -}}{% endraw %}
+{% raw %}{{- if .Values.fullnameOverride }}{% endraw %}
+{% raw %}{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{% endraw %}
+{% raw %}{{- else }}{% endraw %}
+{% raw %}{{- $name := default .Chart.Name .Values.nameOverride }}{% endraw %}
+{% raw %}{{- if contains $name .Release.Name }}{% endraw %}
+{% raw %}{{- .Release.Name | trunc 63 | trimSuffix "-" }}{% endraw %}
+{% raw %}{{- else }}{% endraw %}
+{% raw %}{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
 
 {{/*
 Render template with caching for performance
 */}}
-{%raw%}{{- define "mcp-mesh-agent.renderTpl" -}}{%endraw%}
-{%raw%}{{- $value := .value -}}{%endraw%}
-{%raw%}{{- $context := .context -}}{%endraw%}
-{%raw%}{{- if typeIs "string" $value -}}{%endraw%}
-{%raw%}{{- tpl $value $context -}}{%endraw%}
-{%raw%}{{- else -}}{%endraw%}
-{%raw%}{{- tpl ($value | toYaml) $context -}}{%endraw%}
-{%raw%}{{- end -}}{%endraw%}
-{%raw%}{{- end -}}{%endraw%}
+{% raw %}{{- define "mcp-mesh-agent.renderTpl" -}}{% endraw %}
+{% raw %}{{- $value := .value -}}{% endraw %}
+{% raw %}{{- $context := .context -}}{% endraw %}
+{% raw %}{{- if typeIs "string" $value -}}{% endraw %}
+{% raw %}{{- tpl $value $context -}}{% endraw %}
+{% raw %}{{- else -}}{% endraw %}
+{% raw %}{{- tpl ($value | toYaml) $context -}}{% endraw %}
+{% raw %}{{- end -}}{% endraw %}
+{% raw %}{{- end -}}{% endraw %}
 
 {{/*
 Common labels with minimal computation
 */}}
-{%raw%}{{- define "mcp-mesh-agent.labels" -}}{%endraw%}
-{%raw%}{{- if not .labels_cached }}{%endraw%}
+{% raw %}{{- define "mcp-mesh-agent.labels" -}}{% endraw %}
+{% raw %}{{- if not .labels_cached }}{% endraw %}
 {{- $_ := set . "labels_cached" (dict
   "helm.sh/chart" (include "mcp-mesh-agent.chart" .)
   "app.kubernetes.io/name" (include "mcp-mesh-agent.name" .)
@@ -495,11 +495,11 @@ Common labels with minimal computation
   "app.kubernetes.io/version" (.Chart.AppVersion | default "0.3" | quote)
   "app.kubernetes.io/managed-by" .Release.Service
 ) }}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- range $key, $value := .labels_cached }}{%endraw%}
-{%raw%}{{ $key }}{%endraw%}: {%raw%}{{ $value }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- range $key, $value := .labels_cached }}{% endraw %}
+{% raw %}{{ $key }}{% endraw %}: {% raw %}{{ $value }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
 ```
 
 ### Step 6: Operational Excellence
@@ -512,9 +512,9 @@ Implement comprehensive operational practices:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: "{%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}-test-connection"
+  name: "{% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}-test-connection"
   labels:
-    {%raw%}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{%endraw%}
+    {% raw %}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{% endraw %}
   annotations:
     "helm.sh/hook": test
 spec:
@@ -525,13 +525,13 @@ spec:
       args:
         - |
           echo "Testing agent health endpoint..."
-          curl -f http://{%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}:{%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}/health
+          curl -f http://{% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}:{% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}/health
           echo "Testing agent readiness..."
-          curl -f http://{%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}:{%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}/ready
+          curl -f http://{% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}:{% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}/ready
           echo "Testing metrics endpoint..."
-          {%raw%}{{- if .Values.metrics.enabled }}{%endraw%}
-          curl -f http://{%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}:{%raw%}{{ .Values.metrics.port | default 9090 }}{%endraw%}/metrics
-          {%raw%}{{- end }}{%endraw%}
+          {% raw %}{{- if .Values.metrics.enabled }}{% endraw %}
+          curl -f http://{% raw %}{{ include "mcp-mesh-agent.fullname" . }}{% endraw %}:{% raw %}{{ .Values.metrics.port | default 9090 }}{% endraw %}/metrics
+          {% raw %}{{- end }}{% endraw %}
           echo "All tests passed!"
   restartPolicy: Never
 ```
@@ -541,78 +541,78 @@ Create comprehensive documentation:
 ```markdown
 # templates/NOTES.txt
 
-{%raw%}{{- $fullName := include "mcp-mesh-agent.fullname" . -}}{%endraw%}
-✨ MCP Mesh Agent {%raw%}{{ .Values.agent.name }}{%endraw%} has been deployed!
+{% raw %}{{- $fullName := include "mcp-mesh-agent.fullname" . -}}{% endraw %}
+✨ MCP Mesh Agent {% raw %}{{ .Values.agent.name }}{% endraw %} has been deployed!
 
 📋 Release Information:
-Name: {%raw%}{{ .Release.Name }}{%endraw%}
-Namespace: {%raw%}{{ .Release.Namespace }}{%endraw%}
-Version: {%raw%}{{ .Chart.Version }}{%endraw%}
-Revision: {%raw%}{{ .Release.Revision }}{%endraw%}
+Name: {% raw %}{{ .Release.Name }}{% endraw %}
+Namespace: {% raw %}{{ .Release.Namespace }}{% endraw %}
+Version: {% raw %}{{ .Chart.Version }}{% endraw %}
+Revision: {% raw %}{{ .Release.Revision }}{% endraw %}
 
 🚀 Application Details:
-Agent Name: {%raw%}{{ .Values.agent.name }}{%endraw%}
-Replicas: {%raw%}{{ .Values.replicaCount }}{%endraw%}
-Image: {%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}
-{%raw%}{{- if .Values.agent.capabilities }}{%endraw%}
-Capabilities: {%raw%}{{ .Values.agent.capabilities | join ", " }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
+Agent Name: {% raw %}{{ .Values.agent.name }}{% endraw %}
+Replicas: {% raw %}{{ .Values.replicaCount }}{% endraw %}
+Image: {% raw %}{{ .Values.image.repository }}{% endraw %}:{% raw %}{{ .Values.image.tag | default .Chart.AppVersion }}{% endraw %}
+{% raw %}{{- if .Values.agent.capabilities }}{% endraw %}
+Capabilities: {% raw %}{{ .Values.agent.capabilities | join ", " }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
 
 📊 Resources:
-CPU Request: {%raw%}{{ .Values.resources.requests.cpu | default "not set" }}{%endraw%}
-Memory Request: {%raw%}{{ .Values.resources.requests.memory | default "not set" }}{%endraw%}
-CPU Limit: {%raw%}{{ .Values.resources.limits.cpu | default "not set" }}{%endraw%}
-Memory Limit: {%raw%}{{ .Values.resources.limits.memory | default "not set" }}{%endraw%}
+CPU Request: {% raw %}{{ .Values.resources.requests.cpu | default "not set" }}{% endraw %}
+Memory Request: {% raw %}{{ .Values.resources.requests.memory | default "not set" }}{% endraw %}
+CPU Limit: {% raw %}{{ .Values.resources.limits.cpu | default "not set" }}{% endraw %}
+Memory Limit: {% raw %}{{ .Values.resources.limits.memory | default "not set" }}{% endraw %}
 
 🔍 Service Discovery:
-Internal DNS: {%raw%}{{ $fullName }}{%endraw%}.{%raw%}{{ .Release.Namespace }}{%endraw%}.svc.cluster.local
-Service Port: {%raw%}{{ .Values.service.port | default 8080 }}{%endraw%}
+Internal DNS: {% raw %}{{ $fullName }}{% endraw %}.{% raw %}{{ .Release.Namespace }}{% endraw %}.svc.cluster.local
+Service Port: {% raw %}{{ .Values.service.port | default 8080 }}{% endraw %}
 
-{%raw%}{{- if .Values.ingress.enabled }}{%endraw%}
+{% raw %}{{- if .Values.ingress.enabled }}{% endraw %}
 🌐 External Access:
-{%raw%}{{- range $host := .Values.ingress.hosts }}{%endraw%}
-{%raw%}{{- range .paths }}{%endraw%}
-URL: http{%raw%}{{ if $.Values.ingress.tls }}{%endraw%}s{%raw%}{{ end }}{%endraw%}://{%raw%}{{ $host.host }}{%endraw%}{%raw%}{{ .path }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- else }}{%endraw%}
+{% raw %}{{- range $host := .Values.ingress.hosts }}{% endraw %}
+{% raw %}{{- range .paths }}{% endraw %}
+URL: http{% raw %}{{ if $.Values.ingress.tls }}{% endraw %}s{% raw %}{{ end }}{% endraw %}://{% raw %}{{ $host.host }}{% endraw %}{% raw %}{{ .path }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- else }}{% endraw %}
 🔒 External Access: Disabled (ingress.enabled=false)
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- end }}{% endraw %}
 
-{%raw%}{{- if .Values.autoscaling.enabled }}{%endraw%}
+{% raw %}{{- if .Values.autoscaling.enabled }}{% endraw %}
 📈 Autoscaling:
-Min Replicas: {%raw%}{{ .Values.autoscaling.minReplicas }}{%endraw%}
-Max Replicas: {%raw%}{{ .Values.autoscaling.maxReplicas }}{%endraw%}
-Target CPU: {%raw%}{{ .Values.autoscaling.targetCPUUtilizationPercentage }}{%endraw%}%
-{%raw%}{{- end }}{%endraw%}
+Min Replicas: {% raw %}{{ .Values.autoscaling.minReplicas }}{% endraw %}
+Max Replicas: {% raw %}{{ .Values.autoscaling.maxReplicas }}{% endraw %}
+Target CPU: {% raw %}{{ .Values.autoscaling.targetCPUUtilizationPercentage }}{% endraw %}%
+{% raw %}{{- end }}{% endraw %}
 
 🏥 Health Checks:
-Liveness: curl http://{%raw%}{{ $fullName }}{%endraw%}:{%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}/health
-Readiness: curl http://{%raw%}{{ $fullName }}{%endraw%}:{%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}/ready
-{%raw%}{{- if .Values.metrics.enabled }}{%endraw%}
-Metrics: curl http://{%raw%}{{ $fullName }}{%endraw%}:{%raw%}{{ .Values.metrics.port | default 9090 }}{%endraw%}/metrics
-{%raw%}{{- end }}{%endraw%}
+Liveness: curl http://{% raw %}{{ $fullName }}{% endraw %}:{% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}/health
+Readiness: curl http://{% raw %}{{ $fullName }}{% endraw %}:{% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %}/ready
+{% raw %}{{- if .Values.metrics.enabled }}{% endraw %}
+Metrics: curl http://{% raw %}{{ $fullName }}{% endraw %}:{% raw %}{{ .Values.metrics.port | default 9090 }}{% endraw %}/metrics
+{% raw %}{{- end }}{% endraw %}
 
 📝 Common Operations:
 
 1. Check deployment status:
-   kubectl rollout status deployment/{%raw%}{{ $fullName }}{%endraw%} -n {%raw%}{{ .Release.Namespace }}{%endraw%}
+   kubectl rollout status deployment/{% raw %}{{ $fullName }}{% endraw %} -n {% raw %}{{ .Release.Namespace }}{% endraw %}
 
 2. View logs:
-   kubectl logs -f deployment/{%raw%}{{ $fullName }}{%endraw%} -n {%raw%}{{ .Release.Namespace }}{%endraw%}
+   kubectl logs -f deployment/{% raw %}{{ $fullName }}{% endraw %} -n {% raw %}{{ .Release.Namespace }}{% endraw %}
 
 3. Scale deployment:
-   kubectl scale deployment/{%raw%}{{ $fullName }}{%endraw%} --replicas=5 -n {%raw%}{{ .Release.Namespace }}{%endraw%}
+   kubectl scale deployment/{% raw %}{{ $fullName }}{% endraw %} --replicas=5 -n {% raw %}{{ .Release.Namespace }}{% endraw %}
 
 4. Port forward for local access:
-   kubectl port-forward deployment/{%raw%}{{ $fullName }}{%endraw%} 8080:{%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%} -n {%raw%}{{ .Release.Namespace }}{%endraw%}
+   kubectl port-forward deployment/{% raw %}{{ $fullName }}{% endraw %} 8080:{% raw %}{{ .Values.agent.port | default 8080 }}{% endraw %} -n {% raw %}{{ .Release.Namespace }}{% endraw %}
 
 5. Run tests:
-   helm test {%raw%}{{ .Release.Name }}{%endraw%} -n {%raw%}{{ .Release.Namespace }}{%endraw%}
+   helm test {% raw %}{{ .Release.Name }}{% endraw %} -n {% raw %}{{ .Release.Namespace }}{% endraw %}
 
-{%raw%}{{- if .Values.debug.enabled }}{%endraw%}
+{% raw %}{{- if .Values.debug.enabled }}{% endraw %}
 ⚠️ DEBUG MODE IS ENABLED - Not recommended for production!
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- end }}{% endraw %}
 
 For more information, visit: https://docs.mcp-mesh.io
 ```
@@ -821,7 +821,7 @@ helm push mcp-mesh-agent-*.tgz oci://registry.mcp-mesh.io/charts
 image: mcp-mesh/agent:1.0.0
 
 # Good
-image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}"
+image: "{% raw %}{{ .Values.image.repository }}{% endraw %}:{% raw %}{{ .Values.image.tag | default .Chart.AppVersion }}{% endraw %}"
 ```
 
 ### Pitfall 2: Missing Resource Limits
@@ -994,13 +994,13 @@ helm template ./mcp-mesh-agent \
 
 ```yaml
 # Cache computed values
-{%raw%}{{- $fullname := include "chart.fullname" . -}}{%endraw%}
-{%raw%}{{- $labels := include "chart.labels" . -}}{%endraw%}
+{% raw %}{{- $fullname := include "chart.fullname" . -}}{% endraw %}
+{% raw %}{{- $labels := include "chart.labels" . -}}{% endraw %}
 
 # Reuse throughout template
-name: {%raw%}{{ $fullname }}{%endraw%}
+name: {% raw %}{{ $fullname }}{% endraw %}
 labels:
-  {%raw%}{{- $labels | nindent 4 }}{%endraw%}
+  {% raw %}{{- $labels | nindent 4 }}{% endraw %}
 ```
 
 For more issues, see the [section troubleshooting guide](./troubleshooting.md).
