@@ -1,3 +1,7 @@
+---
+render_with_liquid: false
+---
+
 # Grafana Dashboards
 
 > Visualize and analyze MCP Mesh metrics with powerful, customizable dashboards
