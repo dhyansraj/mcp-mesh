@@ -1,29 +1,25 @@
 ---
-layout: default
 title: Home
+template: home.html
 ---
 
-# MCP Mesh
-
-> **The future of AI is not one large model, but many specialized agents working together.**
-
-## 🎯 Enterprise-Grade Distributed Service Mesh for AI Agents
+# Enterprise-Grade Distributed Service Mesh for AI Agents
 
 MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into an enterprise-grade distributed system. Build production-ready AI agent networks with zero boilerplate.
 
-[![GitHub](https://img.shields.io/github/stars/dhyansraj/mcp-mesh?style=social)](https://github.com/dhyansraj/mcp-mesh)
-[![PyPI](https://img.shields.io/pypi/v/mcp-mesh)](https://pypi.org/project/mcp-mesh/)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://dhyansraj.github.io/mcp-mesh/)
-[![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
+[Get Started](01-getting-started.md){ .md-button .md-button--primary }
+[View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
 
 ---
 
-## 🚀 Quick Start
+## :rocket: Quick Start
 
 ```bash
 # Install MCP Mesh
 pip install "mcp-mesh>=0.5,<0.6"
+```
 
+```python
 # Create your first agent
 from fastmcp import FastMCP
 import mesh
@@ -44,114 +40,82 @@ class MyAgent:
 
 ---
 
-## ✨ Key Features
+## :sparkles: Key Features
 
-### 🔌 Zero Boilerplate
-Two decorators (`@app.tool()` + `@mesh.tool()`) replace hundreds of lines of networking code. Just write business logic.
+<div class="grid cards" markdown>
 
-### 🎯 Smart Discovery
-Tag-based service resolution with version constraints. Agents automatically find and connect to dependencies.
+-   :electric_plug: **Zero Boilerplate**
 
-### ☸️ Kubernetes Native
-Production-ready Helm charts with horizontal scaling, health checks, and comprehensive observability.
+    ---
 
-### 🔄 Dynamic Updates
-Hot dependency injection without restarts. Add, remove, or upgrade services and agents adapt automatically.
+    Two decorators replace hundreds of lines of networking code. Just write business logic.
 
-### 📊 Built-in Observability
-Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management included.
+-   :dart: **Smart Discovery**
 
-### 🛡️ Enterprise Ready
-Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring for production.
+    ---
 
----
+    Tag-based service resolution with version constraints. Agents automatically find dependencies.
 
-## 📚 Documentation
+-   :material-kubernetes: **Kubernetes Native**
 
-<div class="docs-grid">
-  <div class="doc-card">
-    <h3><a href="01-getting-started">⚡ Getting Started</a></h3>
-    <p>Build your first distributed MCP agent in 10 minutes</p>
-  </div>
-  
-  <div class="doc-card">
-    <h3><a href="mesh-decorators">🔧 Mesh Decorators</a></h3>
-    <p>Complete reference for @mesh.tool, @mesh.agent, and @mesh.route</p>
-  </div>
-  
-  <div class="doc-card">
-    <h3><a href="architecture-and-design">🏗️ Architecture</a></h3>
-    <p>Understand how MCP Mesh works under the hood</p>
-  </div>
-  
-  <div class="doc-card">
-    <h3><a href="04-kubernetes-basics">☸️ Kubernetes</a></h3>
-    <p>Deploy to production with Kubernetes and Helm</p>
-  </div>
-  
-  <div class="doc-card">
-    <h3><a href="07-observability">📊 Observability</a></h3>
-    <p>Monitor and trace your distributed agent network</p>
-  </div>
-  
-  <div class="doc-card">
-    <h3><a href="environment-variables">⚙️ Configuration</a></h3>
-    <p>Environment variables and configuration options</p>
-  </div>
+    ---
+
+    Production-ready Helm charts with horizontal scaling, health checks, and observability.
+
+-   :arrows_counterclockwise: **Dynamic Updates**
+
+    ---
+
+    Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
+
+-   :bar_chart: **Built-in Observability**
+
+    ---
+
+    Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
+
+-   :shield: **Enterprise Ready**
+
+    ---
+
+    Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
+
 </div>
 
 ---
 
-## 🌟 Why MCP Mesh?
+## :fire: Why MCP Mesh?
 
-### For Developers 👩‍💻
-**Stop fighting infrastructure. Start building intelligence.**
+=== "For Developers"
 
-- Zero boilerplate networking code
-- Pure Python simplicity with FastMCP integration
-- End-to-end FastAPI integration with `@mesh.route()`
-- Same code runs locally, in Docker, and Kubernetes
+    **Stop fighting infrastructure. Start building intelligence.**
 
-### For Solution Architects 🏗️
-**Design intelligent systems, not complex integrations.**
+    - Zero boilerplate networking code
+    - Pure Python simplicity with FastMCP integration
+    - End-to-end FastAPI integration with `@mesh.route()`
+    - Same code runs locally, in Docker, and Kubernetes
 
-- Agent-centric architecture with clear capabilities
-- Dynamic intelligence - agents get smarter automatically
-- Domain-driven design with focused, composable agents
-- Mix and match agents to create new capabilities
+=== "For Solution Architects"
 
-### For DevOps & Platform Teams ⚙️
-**Production-ready AI infrastructure out of the box.**
+    **Design intelligent systems, not complex integrations.**
 
-- Kubernetes-native with battle-tested Helm charts
-- Enterprise observability with Grafana, Tempo, and Redis
-- Zero-touch operations with auto-discovery
-- Scale from 2 agents to 200+ with same complexity
+    - Agent-centric architecture with clear capabilities
+    - Dynamic intelligence - agents get smarter automatically
+    - Domain-driven design with focused, composable agents
+    - Mix and match agents to create new capabilities
 
----
+=== "For DevOps & Platform Teams"
 
-## 📦 Installation Options
+    **Production-ready AI infrastructure out of the box.**
 
-### PyPI (Recommended)
-```bash
-pip install "mcp-mesh>=0.5,<0.6"
-```
-
-### Homebrew (macOS)
-```bash
-brew tap dhyansraj/mcp-mesh
-brew install mcp-mesh
-```
-
-### Docker
-```bash
-docker pull mcpmesh/registry:0.5.6
-docker pull mcpmesh/python-runtime:0.5.6
-```
+    - Kubernetes-native with battle-tested Helm charts
+    - Enterprise observability with Grafana, Tempo, and Redis
+    - Zero-touch operations with auto-discovery
+    - Scale from 2 agents to 200+ with same complexity
 
 ---
 
-## 🎯 MCP vs MCP Mesh
+## :chart_with_upwards_trend: MCP vs MCP Mesh
 
 | Challenge | Traditional MCP | MCP Mesh |
 |-----------|----------------|----------|
@@ -163,16 +127,40 @@ docker pull mcpmesh/python-runtime:0.5.6
 
 ---
 
-## 🤝 Community & Support
+## :package: Installation Options
 
-- **[Discord](https://discord.gg/KDFDREphWn)** - Real-time help and discussions
-- **[GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions)** - Share ideas and ask questions
-- **[Issues](https://github.com/dhyansraj/mcp-mesh/issues)** - Report bugs or request features
-- **[Examples](https://github.com/dhyansraj/mcp-mesh/tree/main/examples)** - Working code examples
+=== "PyPI"
+
+    ```bash
+    pip install "mcp-mesh>=0.5,<0.6"
+    ```
+
+=== "Homebrew"
+
+    ```bash
+    brew tap dhyansraj/mcp-mesh
+    brew install mcp-mesh
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker pull mcpmesh/registry:0.5.6
+    docker pull mcpmesh/python-runtime:0.5.6
+    ```
 
 ---
 
-## 📈 Project Status
+## :handshake: Community & Support
+
+- [:fontawesome-brands-discord: Discord](https://discord.gg/KDFDREphWn) - Real-time help and discussions
+- [:fontawesome-brands-github: GitHub Discussions](https://github.com/dhyansraj/mcp-mesh/discussions) - Share ideas and ask questions
+- [:fontawesome-brands-github: Issues](https://github.com/dhyansraj/mcp-mesh/issues) - Report bugs or request features
+- [:material-code-braces: Examples](https://github.com/dhyansraj/mcp-mesh/tree/main/examples) - Working code examples
+
+---
+
+## :star: Project Status
 
 - **Latest Release**: v0.5.6 (September 2025)
 - **License**: MIT
@@ -181,7 +169,7 @@ docker pull mcpmesh/python-runtime:0.5.6
 
 ---
 
-## 🙏 Acknowledgments
+## :pray: Acknowledgments
 
 - **[Anthropic](https://anthropic.com)** for creating the MCP protocol
 - **[FastMCP](https://github.com/jlowin/fastmcp)** for excellent MCP server foundations
@@ -190,56 +178,13 @@ docker pull mcpmesh/python-runtime:0.5.6
 
 ---
 
-<div style="text-align: center; margin-top: 40px;">
-  <p><strong>Ready to get started?</strong></p>
-  <p>
-    <a href="01-getting-started" style="background: #667eea; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: bold;">Get Started →</a>
-    <a href="https://github.com/dhyansraj/mcp-mesh" style="background: #2d3748; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: bold; margin-left: 10px;">View on GitHub →</a>
-  </p>
-  <p style="margin-top: 20px;">
-    <strong>Star the repo</strong> if MCP Mesh helps you build better AI systems! ⭐
-  </p>
+<div class="center" markdown>
+
+**Ready to get started?**
+
+[Quick Tutorial](01-getting-started.md){ .md-button .md-button--primary }
+[View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
+
+**Star the repo** if MCP Mesh helps you build better AI systems! :star:
+
 </div>
-
-<style>
-.docs-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
-  margin: 30px 0;
-}
-
-.doc-card {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 20px;
-  background: #f7fafc;
-  transition: all 0.3s;
-}
-
-.doc-card:hover {
-  border-color: #667eea;
-  box-shadow: 0 4px 6px rgba(102, 126, 234, 0.1);
-  transform: translateY(-2px);
-}
-
-.doc-card h3 {
-  margin-top: 0;
-  margin-bottom: 10px;
-}
-
-.doc-card h3 a {
-  color: #667eea;
-  text-decoration: none;
-}
-
-.doc-card h3 a:hover {
-  text-decoration: underline;
-}
-
-.doc-card p {
-  margin: 0;
-  color: #4a5568;
-  font-size: 0.95em;
-}
-</style>

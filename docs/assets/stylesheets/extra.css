@@ -1,0 +1,61 @@
+/* Custom styles for MCP Mesh documentation */
+
+:root {
+  --md-primary-fg-color: #5e81ac;
+  --md-accent-fg-color: #88c0d0;
+}
+
+/* Grid cards styling */
+.grid.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.grid.cards > div {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.3s;
+}
+
+.grid.cards > div:hover {
+  border-color: var(--md-primary-fg-color);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+}
+
+/* Center content */
+.center {
+  text-align: center;
+  margin: 3rem 0;
+}
+
+/* Better code blocks */
+.highlight {
+  margin: 1.5rem 0;
+}
+
+/* Improve tables */
+table {
+  width: 100%;
+  margin: 2rem 0;
+}
+
+/* Badge styling */
+.md-typeset .md-button {
+  margin: 0.2rem;
+}
+
+/* Emoji sizing */
+.md-typeset .twemoji {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: text-bottom;
+}
+
+/* Admonition styling */
+.md-typeset .admonition {
+  margin: 1.5rem 0;
+}
