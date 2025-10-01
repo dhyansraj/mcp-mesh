@@ -1,3 +1,7 @@
+---
+render_with_liquid: false
+---
+
 # Multi-Agent Deployment
 
 > Deploy multiple MCP Mesh agents with the registry using individual charts
