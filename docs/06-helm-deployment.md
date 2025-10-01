@@ -167,7 +167,7 @@ spec:
     spec:
       containers:
         - name: registry-init
-          image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag }}{%endraw%}"
+          image: "{% raw %}{{ .Values.image.repository }}{% endraw %}:{% raw %}{{ .Values.image.tag }}{% endraw %}"
           command: ["sh", "-c", "echo 'Initializing MCP Mesh Registry...'"]
       restartPolicy: Never
 ```

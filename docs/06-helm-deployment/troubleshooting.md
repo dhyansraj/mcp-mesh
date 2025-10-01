@@ -242,17 +242,17 @@ Error: template: mcp-mesh-agent/templates/deployment.yaml:12:20: executing "..."
 
 ```yaml
 # Add defaults in templates
-image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}"
+image: "{% raw %}{{ .Values.image.repository }}{% endraw %}:{% raw %}{{ .Values.image.tag | default .Chart.AppVersion }}{% endraw %}"
 
 # Check for nil values
-{%raw%}{{- if .Values.agent }}{%endraw%}
-{%raw%}{{- if .Values.agent.config }}{%endraw%}
-config: {%raw%}{{ .Values.agent.config }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
-{%raw%}{{- end }}{%endraw%}
+{% raw %}{{- if .Values.agent }}{% endraw %}
+{% raw %}{{- if .Values.agent.config }}{% endraw %}
+config: {% raw %}{{ .Values.agent.config }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
+{% raw %}{{- end }}{% endraw %}
 
 # Use required function
-namespace: {%raw%}{{ required "A namespace is required!" .Values.namespace }}{%endraw%}
+namespace: {% raw %}{{ required "A namespace is required!" .Values.namespace }}{% endraw %}
 ```
 
 ### 🏃 Runtime Issues

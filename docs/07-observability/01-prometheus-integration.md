@@ -761,7 +761,7 @@ spec:
             severity: warning
           annotations:
             summary: "Prometheus high memory usage"
-            description: "Prometheus {%raw%}{{ $labels.instance }}{%endraw%} memory usage is high"
+            description: "Prometheus {% raw %}{{ $labels.instance }}{% endraw %} memory usage is high"
 
         - alert: PrometheusTargetDown
           expr: up{job=~"mcp-mesh.*"} == 0
@@ -770,7 +770,7 @@ spec:
             severity: critical
           annotations:
             summary: "MCP Mesh target down"
-            description: "Target {%raw%}{{ $labels.instance }}{%endraw%} is down"
+            description: "Target {% raw %}{{ $labels.instance }}{% endraw %} is down"
 ```
 
 ### Debug Metrics Issues
