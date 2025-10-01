@@ -3,5 +3,9 @@
 {% block extrahead %}
   <!-- Google Search Console Verification -->
   <meta name="google-site-verification" content="EtV7XZPdw0d9azFHor7Zq2BeuVZVnwSwD0zzGNMOUoM" />
+  
+  <!-- Sitemap for Search Engines -->
+  <link rel="sitemap" type="application/xml" title="Sitemap" href="{{ config.site_url }}sitemap.xml" />
+  
   {{ super() }}
 {% endblock %}
