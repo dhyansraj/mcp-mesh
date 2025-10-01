@@ -56,6 +56,13 @@ kramdown:
   syntax_highlighter_opts:
     block:
       line_numbers: true
+  parse_block_html: true
+  
+# Liquid settings - prevent processing in code blocks
+liquid:
+  error_mode: warn
+  strict_filters: false
+  strict_variables: false
 
 # Permalink style
 permalink: pretty
