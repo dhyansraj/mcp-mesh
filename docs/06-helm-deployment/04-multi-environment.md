@@ -814,30 +814,30 @@ Enable features per environment:
 
 ```yaml
 # Feature flags template
-{{- define "features" -}}
-{{- $env := .Values.global.environment | default "development" -}}
+{%raw%}{{- define "features" -}}{%endraw%}
+{%raw%}{{- $env := .Values.global.environment | default "development" -}}{%endraw%}
 features:
   # Development features
-  {{- if eq $env "development" }}
+  {%raw%}{{- if eq $env "development" }}{%endraw%}
   debugEndpoints: true
   mockExternalServices: true
   unlimitedRateLimit: true
-  {{- end }}
+  {%raw%}{{- end }}{%endraw%}
 
   # Staging features
-  {{- if eq $env "staging" }}
+  {%raw%}{{- if eq $env "staging" }}{%endraw%}
   canaryDeployment: true
   abTesting: true
   syntheticMonitoring: true
-  {{- end }}
+  {%raw%}{{- end }}{%endraw%}
 
   # Production features
-  {{- if eq $env "production" }}
+  {%raw%}{{- if eq $env "production" }}{%endraw%}
   auditLogging: true
   complianceMode: true
   disasterRecovery: true
-  {{- end }}
-{{- end }}
+  {%raw%}{{- end }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 ```
 
 ## Best Practices

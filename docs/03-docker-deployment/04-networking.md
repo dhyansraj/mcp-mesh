@@ -517,7 +517,7 @@ nc -zv registry 8000
 
 ```bash
 # Monitor network usage
-docker stats --format "table {{.Container}}\t{{.NetIO}}"
+docker stats --format "table {%raw%}{{.Container}}{%endraw%}\t{%raw%}{{.NetIO}}{%endraw%}"
 
 # Check network interfaces
 docker exec weather-agent ip addr

@@ -51,38 +51,38 @@ mcp-mesh-registry/
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "mcp-mesh-registry.fullname" . }}
+  name: {%raw%}{{ include "mcp-mesh-registry.fullname" . }}{%endraw%}
   labels:
-    {{- include "mcp-mesh-registry.labels" . | nindent 4 }}
+    {%raw%}{{- include "mcp-mesh-registry.labels" . | nindent 4 }}{%endraw%}
 spec:
-  serviceName: {{ include "mcp-mesh-registry.fullname" . }}-headless
-  replicas: {{ .Values.replicaCount }}
+  serviceName: {%raw%}{{ include "mcp-mesh-registry.fullname" . }}{%endraw%}-headless
+  replicas: {%raw%}{{ .Values.replicaCount }}{%endraw%}
   selector:
     matchLabels:
-      {{- include "mcp-mesh-registry.selectorLabels" . | nindent 6 }}
+      {%raw%}{{- include "mcp-mesh-registry.selectorLabels" . | nindent 6 }}{%endraw%}
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        checksum/config: {%raw%}{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}{%endraw%}
+        {%raw%}{{- with .Values.podAnnotations }}{%endraw%}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
       labels:
-        {{- include "mcp-mesh-registry.selectorLabels" . | nindent 8 }}
+        {%raw%}{{- include "mcp-mesh-registry.selectorLabels" . | nindent 8 }}{%endraw%}
     spec:
-      serviceAccountName: {{ include "mcp-mesh-registry.serviceAccountName" . }}
+      serviceAccountName: {%raw%}{{ include "mcp-mesh-registry.serviceAccountName" . }}{%endraw%}
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {%raw%}{{- toYaml .Values.podSecurityContext | nindent 8 }}{%endraw%}
       containers:
-      - name: {{ .Chart.Name }}
+      - name: {%raw%}{{ .Chart.Name }}{%endraw%}
         securityContext:
-          {{- toYaml .Values.securityContext | nindent 12 }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {%raw%}{{- toYaml .Values.securityContext | nindent 12 }}{%endraw%}
+        image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}"
+        imagePullPolicy: {%raw%}{{ .Values.image.pullPolicy }}{%endraw%}
         command: ["/app/bin/registry"]  # 🎯 Matches working examples
         ports:
         - name: http
-          containerPort: {{ .Values.registry.port }}  # 🎯 Default 8000
+          containerPort: {%raw%}{{ .Values.registry.port }}{%endraw%}  # 🎯 Default 8000
           protocol: TCP
         - name: metrics
           containerPort: 9090
@@ -101,16 +101,16 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        {{- if ne .Values.registry.database.type "sqlite" }}
+        {%raw%}{{- if ne .Values.registry.database.type "sqlite" }}{%endraw%}
         - name: DATABASE_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ include "mcp-mesh-registry.fullname" . }}-secret
+              name: {%raw%}{{ include "mcp-mesh-registry.fullname" . }}{%endraw%}-secret
               key: database-password
-        {{- end }}
+        {%raw%}{{- end }}{%endraw%}
         envFrom:
         - configMapRef:
-            name: {{ include "mcp-mesh-registry.fullname" . }}-config  # 🎯 Updated naming
+            name: {%raw%}{{ include "mcp-mesh-registry.fullname" . }}{%endraw%}-config  # 🎯 Updated naming
         livenessProbe:
           httpGet:
             path: /health  # 🎯 Consistent health endpoint
@@ -136,36 +136,36 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 30
         resources:
-          {{- toYaml .Values.resources | nindent 12 }}
+          {%raw%}{{- toYaml .Values.resources | nindent 12 }}{%endraw%}
         volumeMounts:
         - name: data
           mountPath: /data
-        {{- if .Values.extraVolumeMounts }}
-        {{- toYaml .Values.extraVolumeMounts | nindent 8 }}
-        {{- end }}
-      {{- with .Values.nodeSelector }}
+        {%raw%}{{- if .Values.extraVolumeMounts }}{%endraw%}
+        {%raw%}{{- toYaml .Values.extraVolumeMounts | nindent 8 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+      {%raw%}{{- with .Values.nodeSelector }}{%endraw%}
       nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
+      {%raw%}{{- with .Values.affinity }}{%endraw%}
       affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
+      {%raw%}{{- with .Values.tolerations }}{%endraw%}
       tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-  {{- if .Values.persistence.enabled }}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
+  {%raw%}{{- if .Values.persistence.enabled }}{%endraw%}
   volumeClaimTemplates:
   - metadata:
       name: data
     spec:
-      accessModes: {{ .Values.persistence.accessModes }}
-      storageClassName: {{ .Values.persistence.storageClassName }}
+      accessModes: {%raw%}{{ .Values.persistence.accessModes }}{%endraw%}
+      storageClassName: {%raw%}{{ .Values.persistence.storageClassName }}{%endraw%}
       resources:
         requests:
-          storage: {{ .Values.persistence.size }}
-  {{- end }}
+          storage: {%raw%}{{ .Values.persistence.size }}{%endraw%}
+  {%raw%}{{- end }}{%endraw%}
 ```
 
 ### Step 3: Agent Chart Deep Dive
@@ -177,55 +177,55 @@ The agent chart is more flexible, supporting various agent configurations:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "mcp-mesh-agent.fullname" . }}
+  name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
   labels:
-    {{- include "mcp-mesh-agent.labels" . | nindent 4 }}
+    {%raw%}{{- include "mcp-mesh-agent.labels" . | nindent 4 }}{%endraw%}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {%raw%}{{ .Values.replicaCount }}{%endraw%}
   selector:
     matchLabels:
-      {{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}
+      {%raw%}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 6 }}{%endraw%}
   template:
     metadata:
       annotations:
-        {{- if .Values.agent.configMap }}
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- end }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {%raw%}{{- if .Values.agent.configMap }}{%endraw%}
+        checksum/config: {%raw%}{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- with .Values.podAnnotations }}{%endraw%}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
       labels:
-        {{- include "mcp-mesh-agent.selectorLabels" . | nindent 8 }}
-        {{- with .Values.agent.labels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {%raw%}{{- include "mcp-mesh-agent.selectorLabels" . | nindent 8 }}{%endraw%}
+        {%raw%}{{- with .Values.agent.labels }}{%endraw%}
+        {%raw%}{{- toYaml . | nindent 8 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
     spec:
-      serviceAccountName: {{ include "mcp-mesh-agent.serviceAccountName" . }}
+      serviceAccountName: {%raw%}{{ include "mcp-mesh-agent.serviceAccountName" . }}{%endraw%}
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if .Values.agent.initContainers }}
+        {%raw%}{{- toYaml .Values.podSecurityContext | nindent 8 }}{%endraw%}
+      {%raw%}{{- if .Values.agent.initContainers }}{%endraw%}
       initContainers:
-        {{- toYaml .Values.agent.initContainers | nindent 8 }}
-      {{- end }}
+        {%raw%}{{- toYaml .Values.agent.initContainers | nindent 8 }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
       containers:
-      - name: {{ .Chart.Name }}
+      - name: {%raw%}{{ .Chart.Name }}{%endraw%}
         securityContext:
-          {{- toYaml .Values.securityContext | nindent 12 }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {%raw%}{{- toYaml .Values.securityContext | nindent 12 }}{%endraw%}
+        image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag | default .Chart.AppVersion }}{%endraw%}"
+        imagePullPolicy: {%raw%}{{ .Values.image.pullPolicy }}{%endraw%}
         command: ["python", "/app/agent.py"]  # 🎯 Matches working examples
         ports:
         - name: http
-          containerPort: {{ .Values.agent.http.port | default 8080 }}  # 🎯 Standard port 8080
+          containerPort: {%raw%}{{ .Values.agent.http.port | default 8080 }}{%endraw%}  # 🎯 Standard port 8080
           protocol: TCP
-        {{- if .Values.metrics.enabled }}
+        {%raw%}{{- if .Values.metrics.enabled }}{%endraw%}
         - name: metrics
           containerPort: 9090
           protocol: TCP
-        {{- end }}
+        {%raw%}{{- end }}{%endraw%}
         env:
         - name: AGENT_NAME
-          value: {{ .Values.agent.name | quote }}
+          value: {%raw%}{{ .Values.agent.name | quote }}{%endraw%}
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -235,48 +235,48 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: MCP_MESH_REGISTRY_URL
-          value: {{ .Values.agent.registryUrl | quote }}
-        {{- if .Values.agent.capabilities }}
+          value: {%raw%}{{ .Values.agent.registryUrl | quote }}{%endraw%}
+        {%raw%}{{- if .Values.agent.capabilities }}{%endraw%}
         - name: MCP_MESH_CAPABILITIES
-          value: {{ .Values.agent.capabilities | join "," | quote }}
-        {{- end }}
-        {{- if .Values.agent.dependencies }}
+          value: {%raw%}{{ .Values.agent.capabilities | join "," | quote }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- if .Values.agent.dependencies }}{%endraw%}
         - name: MCP_MESH_DEPENDENCIES
-          value: {{ .Values.agent.dependencies | join "," | quote }}
-        {{- end }}
-        {{- range $key, $value := .Values.agent.env }}
-        - name: {{ $key }}
-          value: {{ $value | quote }}
-        {{- end }}
-        {{- if or .Values.agent.configMap .Values.agent.secret }}
+          value: {%raw%}{{ .Values.agent.dependencies | join "," | quote }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- range $key, $value := .Values.agent.env }}{%endraw%}
+        - name: {%raw%}{{ $key }}{%endraw%}
+          value: {%raw%}{{ $value | quote }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- if or .Values.agent.configMap .Values.agent.secret }}{%endraw%}
         envFrom:
-        {{- if .Values.agent.configMap }}
+        {%raw%}{{- if .Values.agent.configMap }}{%endraw%}
         - configMapRef:
-            name: {{ include "mcp-mesh-agent.fullname" . }}
-        {{- end }}
-        {{- if .Values.agent.secret }}
+            name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- if .Values.agent.secret }}{%endraw%}
         - secretRef:
-            name: {{ include "mcp-mesh-agent.fullname" . }}
-        {{- end }}
-        {{- end }}
-        {{- if .Values.agent.livenessProbe }}
+            name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- if .Values.agent.livenessProbe }}{%endraw%}
         livenessProbe:
-          {{- toYaml .Values.agent.livenessProbe | nindent 10 }}
-        {{- end }}
-        {{- if .Values.agent.readinessProbe }}
+          {%raw%}{{- toYaml .Values.agent.livenessProbe | nindent 10 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+        {%raw%}{{- if .Values.agent.readinessProbe }}{%endraw%}
         readinessProbe:
-          {{- toYaml .Values.agent.readinessProbe | nindent 10 }}
-        {{- end }}
+          {%raw%}{{- toYaml .Values.agent.readinessProbe | nindent 10 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
         resources:
-          {{- toYaml .Values.resources | nindent 12 }}
-        {{- if .Values.agent.volumeMounts }}
+          {%raw%}{{- toYaml .Values.resources | nindent 12 }}{%endraw%}
+        {%raw%}{{- if .Values.agent.volumeMounts }}{%endraw%}
         volumeMounts:
-          {{- toYaml .Values.agent.volumeMounts | nindent 10 }}
-        {{- end }}
-      {{- if .Values.agent.volumes }}
+          {%raw%}{{- toYaml .Values.agent.volumeMounts | nindent 10 }}{%endraw%}
+        {%raw%}{{- end }}{%endraw%}
+      {%raw%}{{- if .Values.agent.volumes }}{%endraw%}
       volumes:
-        {{- toYaml .Values.agent.volumes | nindent 8 }}
-      {{- end }}
+        {%raw%}{{- toYaml .Values.agent.volumes | nindent 8 }}{%endraw%}
+      {%raw%}{{- end }}{%endraw%}
 ```
 
 ### Step 4: Understanding Template Helpers
@@ -288,45 +288,45 @@ Helper functions provide consistency across templates:
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "mcp-mesh-registry.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-registry.name" -}}{%endraw%}
+{%raw%}{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "mcp-mesh-registry.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-registry.fullname" -}}{%endraw%}
+{%raw%}{{- if .Values.fullnameOverride }}{%endraw%}
+{%raw%}{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{%endraw%}
+{%raw%}{{- else }}{%endraw%}
+{%raw%}{{- $name := default .Chart.Name .Values.nameOverride }}{%endraw%}
+{%raw%}{{- if contains $name .Release.Name }}{%endraw%}
+{%raw%}{{- .Release.Name | trunc 63 | trimSuffix "-" }}{%endraw%}
+{%raw%}{{- else }}{%endraw%}
+{%raw%}{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 {{/*
 Common labels
 */}}
-{{- define "mcp-mesh-registry.labels" -}}
-helm.sh/chart: {{ include "mcp-mesh-registry.chart" . }}
-{{ include "mcp-mesh-registry.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-registry.labels" -}}{%endraw%}
+helm.sh/chart: {%raw%}{{ include "mcp-mesh-registry.chart" . }}{%endraw%}
+{%raw%}{{ include "mcp-mesh-registry.selectorLabels" . }}{%endraw%}
+{%raw%}{{- if .Chart.AppVersion }}{%endraw%}
+app.kubernetes.io/version: {%raw%}{{ .Chart.AppVersion | quote }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
+app.kubernetes.io/managed-by: {%raw%}{{ .Release.Service }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 {{/*
 Selector labels
 */}}
-{{- define "mcp-mesh-registry.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "mcp-mesh-registry.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-registry.selectorLabels" -}}{%endraw%}
+app.kubernetes.io/name: {%raw%}{{ include "mcp-mesh-registry.name" . }}{%endraw%}
+app.kubernetes.io/instance: {%raw%}{{ .Release.Name }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 ```
 
 ### Step 5: Values File Structure
@@ -505,11 +505,11 @@ Add custom templates to extend functionality:
 
 ```yaml
 # templates/custom-job.yaml
-{{- if .Values.agent.migrations.enabled }}
+{%raw%}{{- if .Values.agent.migrations.enabled }}{%endraw%}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "mcp-mesh-agent.fullname" . }}-migrate
+  name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}-migrate
   annotations:
     "helm.sh/hook": pre-upgrade
     "helm.sh/hook-weight": "-1"
@@ -519,15 +519,15 @@ spec:
       restartPolicy: Never
       containers:
       - name: migrate
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: "{%raw%}{{ .Values.image.repository }}{%endraw%}:{%raw%}{{ .Values.image.tag }}{%endraw%}"
         command: ["python", "-m", "migrations.run"]
         env:
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
-              name: {{ include "mcp-mesh-agent.fullname" . }}
+              name: {%raw%}{{ include "mcp-mesh-agent.fullname" . }}{%endraw%}
               key: database-url
-{{- end }}
+{%raw%}{{- end }}{%endraw%}
 ```
 
 ## Best Practices
@@ -648,12 +648,12 @@ helm status my-release -n mcp-mesh
 
 ```yaml
 # Ensure helper is defined in _helpers.tpl
-{{- define "mcp-mesh-agent.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-agent.name" -}}{%endraw%}
+{%raw%}{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 # Use correct name in template
-{{ include "mcp-mesh-agent.name" . }}
+{%raw%}{{ include "mcp-mesh-agent.name" . }}{%endraw%}
 ```
 
 ### Issue 2: Values Not Propagating
@@ -666,7 +666,7 @@ helm status my-release -n mcp-mesh
 
 ```yaml
 # Use default function
-value: {{ .Values.agent.port | default 8080 }}
+value: {%raw%}{{ .Values.agent.port | default 8080 }}{%endraw%}
 
 # Check values path
 helm get values my-release -n mcp-mesh

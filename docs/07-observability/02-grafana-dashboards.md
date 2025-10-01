@@ -225,7 +225,7 @@ Create a comprehensive overview dashboard:
         "targets": [
           {
             "expr": "sum by (agent) (rate(mcp_mesh_requests_total{namespace=~\"$namespace\", agent=~\"$agent\"}[$interval]))",
-            "legendFormat": "{{agent}}",
+            "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%}",
             "refId": "A"
           }
         ],
@@ -362,7 +362,7 @@ Build detailed dashboards for individual agents:
         "targets": [
           {
             "expr": "sum by (method) (increase(mcp_mesh_requests_total{agent=\"$agent\"}[$interval]))",
-            "legendFormat": "{{method}}",
+            "legendFormat": "{%raw%}{%raw%}{{method}}{%endraw%}{%endraw%}",
             "refId": "A"
           }
         ],
@@ -385,7 +385,7 @@ Build detailed dashboards for individual agents:
         "targets": [
           {
             "expr": "mcp_mesh_connections_active{agent=\"$agent\"}",
-            "legendFormat": "{{type}}",
+            "legendFormat": "{%raw%}{%raw%}{{type}}{%endraw%}{%endraw%}",
             "refId": "A"
           }
         ],
@@ -464,7 +464,7 @@ Visualize business-specific KPIs:
         "targets": [
           {
             "expr": "sum by (agent) (increase(mcp_mesh_business_revenue_total[$__range]))",
-            "legendFormat": "{{agent}}",
+            "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%}",
             "refId": "A"
           }
         ],
@@ -495,7 +495,7 @@ Visualize business-specific KPIs:
         "targets": [
           {
             "expr": "sum by (api_provider) (increase(mcp_mesh_business_api_calls_total[$interval]) * 0.001)",
-            "legendFormat": "{{api_provider}} ($0.001/call)",
+            "legendFormat": "{%raw%}{%raw%}{{api_provider}}{%endraw%}{%endraw%} ($0.001/call)",
             "refId": "A"
           }
         ],
@@ -702,7 +702,7 @@ data:
             "targets": [
               {
                 "expr": "histogram_quantile($percentile, sum by (agent, le) (rate(mcp_mesh_request_duration_seconds_bucket{agent=~\"$agent_regex\"}[$interval])))",
-                "legendFormat": "{{agent}} - p${percentile:raw}",
+                "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%} - p${percentile:raw}",
                 "refId": "A"
               }
             ],
@@ -723,17 +723,17 @@ data:
             "targets": [
               {
                 "expr": "mcp_mesh:request_rate{agent=~\"$agent_regex\"}",
-                "legendFormat": "{{agent}} - actual",
+                "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%} - actual",
                 "refId": "A"
               },
               {
                 "expr": "predict_linear(mcp_mesh:request_rate{agent=~\"$agent_regex\"}[1h], 3600)",
-                "legendFormat": "{{agent}} - predicted",
+                "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%} - predicted",
                 "refId": "B"
               },
               {
                 "expr": "mcp_mesh:request_rate{agent=~\"$agent_regex\"} + 2 * stddev_over_time(mcp_mesh:request_rate{agent=~\"$agent_regex\"}[1h])",
-                "legendFormat": "{{agent}} - upper bound",
+                "legendFormat": "{%raw%}{%raw%}{{agent}}{%endraw%}{%endraw%} - upper bound",
                 "refId": "C"
               }
             ],
@@ -847,7 +847,7 @@ data:
                 "type": "graph",
                 "targets": [
                     {
-                        "expr": f'rate(mcp_mesh_requests_total{{agent="{agent}"}}[5m])',
+                        "expr": f'rate(mcp_mesh_requests_total{%raw%}{{agent="{agent}"}}{%endraw%}[5m])',
                         "refId": "A"
                     }
                 ]

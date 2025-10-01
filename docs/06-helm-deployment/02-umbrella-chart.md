@@ -340,33 +340,33 @@ helm install mcp-platform ./mcp-mesh-platform \
 
 Platform-wide labels
 \*/}}
-{{- define "mcp-mesh-platform.labels" -}}
+{%raw%}{{- define "mcp-mesh-platform.labels" -}}{%endraw%}
 app.kubernetes.io/part-of: mcp-mesh-platform
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-helm.sh/chart: {{ include "mcp-mesh-platform.chart" . }}
-{{- end }}
+app.kubernetes.io/managed-by: {%raw%}{{ .Release.Service }}{%endraw%}
+helm.sh/chart: {%raw%}{{ include "mcp-mesh-platform.chart" . }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 {{/*
 Registry URL for agents
 */}}
-{{- define "mcp-mesh-platform.registryUrl" -}}
-{{- if .Values.registry.externalUrl -}}
-{{- .Values.registry.externalUrl -}}
-{{- else -}}
-http://{{ .Release.Name }}-mcp-mesh-registry:{{ .Values.registry.service.port | default 8080 }}
-{{- end -}}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-platform.registryUrl" -}}{%endraw%}
+{%raw%}{{- if .Values.registry.externalUrl -}}{%endraw%}
+{%raw%}{{- .Values.registry.externalUrl -}}{%endraw%}
+{%raw%}{{- else -}}{%endraw%}
+http://{%raw%}{{ .Release.Name }}{%endraw%}-mcp-mesh-registry:{%raw%}{{ .Values.registry.service.port | default 8080 }}{%endraw%}
+{%raw%}{{- end -}}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 {{/*
 Database connection string
 */}}
-{{- define "mcp-mesh-platform.databaseUrl" -}}
-{{- if .Values.postgresql.enabled -}}
-postgresql://{{ .Values.global.postgresql.auth.username | default "postgres" }}:{{ .Values.global.postgresql.auth.postgresPassword }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.global.postgresql.auth.database }}
-{{- else -}}
-{{- required "External database URL required when postgresql.enabled=false" .Values.registry.database.externalUrl -}}
-{{- end -}}
-{{- end }}
+{%raw%}{{- define "mcp-mesh-platform.databaseUrl" -}}{%endraw%}
+{%raw%}{{- if .Values.postgresql.enabled -}}{%endraw%}
+postgresql://{%raw%}{{ .Values.global.postgresql.auth.username | default "postgres" }}{%endraw%}:{%raw%}{{ .Values.global.postgresql.auth.postgresPassword }}{%endraw%}@{%raw%}{{ .Release.Name }}{%endraw%}-postgresql:5432/{%raw%}{{ .Values.global.postgresql.auth.database }}{%endraw%}
+{%raw%}{{- else -}}{%endraw%}
+{%raw%}{{- required "External database URL required when postgresql.enabled=false" .Values.registry.database.externalUrl -}}{%endraw%}
+{%raw%}{{- end -}}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 ````
 
@@ -376,36 +376,36 @@ Create additional resources for the platform:
 
 ```yaml
 # templates/namespace.yaml
-{{- if .Values.createNamespace }}
+{%raw%}{{- if .Values.createNamespace }}{%endraw%}
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Release.Namespace }}
+  name: {%raw%}{{ .Release.Namespace }}{%endraw%}
   labels:
-    {{- include "mcp-mesh-platform.labels" . | nindent 4 }}
-{{- end }}
+    {%raw%}{{- include "mcp-mesh-platform.labels" . | nindent 4 }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 ---
 # templates/resourcequota.yaml
-{{- if .Values.resourceQuota.enabled }}
+{%raw%}{{- if .Values.resourceQuota.enabled }}{%endraw%}
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: {{ .Release.Name }}-quota
-  namespace: {{ .Release.Namespace }}
+  name: {%raw%}{{ .Release.Name }}{%endraw%}-quota
+  namespace: {%raw%}{{ .Release.Namespace }}{%endraw%}
 spec:
   hard:
-    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
-{{- end }}
+    {%raw%}{{- toYaml .Values.resourceQuota.hard | nindent 4 }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 
 ---
 # templates/networkpolicy.yaml
-{{- if .Values.networkPolicies.enabled }}
+{%raw%}{{- if .Values.networkPolicies.enabled }}{%endraw%}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ .Release.Name }}-default-deny
-  namespace: {{ .Release.Namespace }}
+  name: {%raw%}{{ .Release.Name }}{%endraw%}-default-deny
+  namespace: {%raw%}{{ .Release.Namespace }}{%endraw%}
 spec:
   podSelector: {}
   policyTypes:
@@ -422,24 +422,24 @@ spec:
     - protocol: UDP
       port: 53
   # Allow intra-namespace
-  {{- if .Values.networkPolicies.allowIntraNamespace }}
+  {%raw%}{{- if .Values.networkPolicies.allowIntraNamespace }}{%endraw%}
   - to:
     - podSelector: {}
-  {{- end }}
+  {%raw%}{{- end }}{%endraw%}
   ingress:
   # Allow from allowed namespaces
-  {{- range .Values.networkPolicies.allowedNamespaces }}
+  {%raw%}{{- range .Values.networkPolicies.allowedNamespaces }}{%endraw%}
   - from:
     - namespaceSelector:
         matchLabels:
-          name: {{ . }}
-  {{- end }}
+          name: {%raw%}{{ . }}{%endraw%}
+  {%raw%}{{- end }}{%endraw%}
   # Allow intra-namespace
-  {{- if .Values.networkPolicies.allowIntraNamespace }}
+  {%raw%}{{- if .Values.networkPolicies.allowIntraNamespace }}{%endraw%}
   - from:
     - podSelector: {}
-  {{- end }}
-{{- end }}
+  {%raw%}{{- end }}{%endraw%}
+{%raw%}{{- end }}{%endraw%}
 ````
 
 ### Step 5: Create Deployment Scripts
@@ -448,48 +448,48 @@ Add convenient deployment scripts:
 
 ```yaml
 # templates/NOTES.txt
-{{- $registryUrl := include "mcp-mesh-platform.registryUrl" . -}}
+{%raw%}{{- $registryUrl := include "mcp-mesh-platform.registryUrl" . -}}{%endraw%}
 MCP Mesh Platform has been deployed!
 
-Registry URL: {{ $registryUrl }}
+Registry URL: {%raw%}{{ $registryUrl }}{%endraw%}
 
 To access the services:
 
 1. Registry:
-   {{- if .Values.registry.ingress.enabled }}
-   URL: http://{{ (index .Values.registry.ingress.hosts 0).host }}
-   {{- else }}
-   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8080:8080
-   {{- end }}
+   {%raw%}{{- if .Values.registry.ingress.enabled }}{%endraw%}
+   URL: http://{%raw%}{{ (index .Values.registry.ingress.hosts 0).host }}{%endraw%}
+   {%raw%}{{- else }}{%endraw%}
+   kubectl port-forward -n {%raw%}{{ .Release.Namespace }}{%endraw%} svc/{%raw%}{{ .Release.Name }}{%endraw%}-mcp-mesh-registry 8080:8080
+   {%raw%}{{- end }}{%endraw%}
 
 2. Grafana Dashboard:
-   {{- if .Values.monitoring.grafana.enabled }}
-   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-grafana 3000:80
+   {%raw%}{{- if .Values.monitoring.grafana.enabled }}{%endraw%}
+   kubectl port-forward -n {%raw%}{{ .Release.Namespace }}{%endraw%} svc/{%raw%}{{ .Release.Name }}{%endraw%}-grafana 3000:80
    Username: admin
-   Password: {{ .Values.monitoring.grafana.adminPassword }}
-   {{- end }}
+   Password: {%raw%}{{ .Values.monitoring.grafana.adminPassword }}{%endraw%}
+   {%raw%}{{- end }}{%endraw%}
 
 3. Prometheus:
-   {{- if .Values.monitoring.prometheus.enabled }}
-   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-prometheus-server 9090:80
-   {{- end }}
+   {%raw%}{{- if .Values.monitoring.prometheus.enabled }}{%endraw%}
+   kubectl port-forward -n {%raw%}{{ .Release.Namespace }}{%endraw%} svc/{%raw%}{{ .Release.Name }}{%endraw%}-prometheus-server 9090:80
+   {%raw%}{{- end }}{%endraw%}
 
 Deployed Agents:
-{{- if .Values.agents.weather.enabled }}
-- Weather Agent: {{ .Values.agents.weather.replicaCount }} replicas
-{{- end }}
-{{- if .Values.agents.analytics.enabled }}
-- Analytics Agent: {{ .Values.agents.analytics.replicaCount }} replicas
-{{- end }}
-{{- if .Values.agents.notification.enabled }}
-- Notification Agent: {{ .Values.agents.notification.replicaCount }} replicas
-{{- end }}
+{%raw%}{{- if .Values.agents.weather.enabled }}{%endraw%}
+- Weather Agent: {%raw%}{{ .Values.agents.weather.replicaCount }}{%endraw%} replicas
+{%raw%}{{- end }}{%endraw%}
+{%raw%}{{- if .Values.agents.analytics.enabled }}{%endraw%}
+- Analytics Agent: {%raw%}{{ .Values.agents.analytics.replicaCount }}{%endraw%} replicas
+{%raw%}{{- end }}{%endraw%}
+{%raw%}{{- if .Values.agents.notification.enabled }}{%endraw%}
+- Notification Agent: {%raw%}{{ .Values.agents.notification.replicaCount }}{%endraw%} replicas
+{%raw%}{{- end }}{%endraw%}
 
 To check platform status:
-  helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+  helm status {%raw%}{{ .Release.Name }}{%endraw%} -n {%raw%}{{ .Release.Namespace }}{%endraw%}
 
 To view all platform resources:
-  kubectl get all -n {{ .Release.Namespace }} -l app.kubernetes.io/part-of=mcp-mesh-platform
+  kubectl get all -n {%raw%}{{ .Release.Namespace }}{%endraw%} -l app.kubernetes.io/part-of=mcp-mesh-platform
 ```
 
 ## Configuration Options
