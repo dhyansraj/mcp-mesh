@@ -1,0 +1,153 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+{{ super() }}
+
+<style>
+  .md-main__inner {
+    margin-top: 0;
+  }
+  
+  .md-content {
+    padding: 0;
+  }
+  
+  .hero {
+    position: relative;
+    width: 100%;
+    height: 60vh;
+    min-height: 400px;
+    max-height: 600px;
+    overflow: hidden;
+    margin-bottom: 3rem;
+  }
+  
+  .hero-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+  
+  .hero-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.6) 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem;
+    text-align: center;
+  }
+  
+  .hero-title {
+    font-size: 3rem;
+    font-weight: 700;
+    color: white;
+    margin-bottom: 1rem;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    max-width: 900px;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.3rem;
+    color: rgba(255,255,255,0.95);
+    margin-bottom: 2rem;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    max-width: 700px;
+  }
+  
+  .hero-buttons {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .hero-button {
+    padding: 0.8rem 2rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border-radius: 4px;
+    text-decoration: none;
+    transition: all 0.3s;
+    display: inline-block;
+  }
+  
+  .hero-button-primary {
+    background: #5e81ac;
+    color: white;
+  }
+  
+  .hero-button-primary:hover {
+    background: #4c6a8f;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  }
+  
+  .hero-button-secondary {
+    background: rgba(255,255,255,0.2);
+    color: white;
+    border: 2px solid white;
+  }
+  
+  .hero-button-secondary:hover {
+    background: rgba(255,255,255,0.3);
+    transform: translateY(-2px);
+  }
+  
+  .content-wrapper {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem 3rem;
+  }
+  
+  @media screen and (max-width: 768px) {
+    .hero {
+      height: 50vh;
+      min-height: 300px;
+    }
+    
+    .hero-title {
+      font-size: 2rem;
+    }
+    
+    .hero-subtitle {
+      font-size: 1.1rem;
+    }
+    
+    .hero-buttons {
+      flex-direction: column;
+      width: 100%;
+    }
+    
+    .hero-button {
+      width: 100%;
+      text-align: center;
+    }
+  }
+</style>
+
+<section class="hero">
+  <img src="{{ 'assets/images/cover.png' | url }}" alt="MCP Mesh - Distributed Service Mesh for AI Agents" class="hero-image">
+  <div class="hero-overlay">
+    <h1 class="hero-title">MCP Mesh</h1>
+    <p class="hero-subtitle">Enterprise-Grade Distributed Service Mesh for AI Agents</p>
+    <div class="hero-buttons">
+      <a href="{{ '01-getting-started/' | url }}" class="hero-button hero-button-primary">Get Started</a>
+      <a href="https://github.com/dhyansraj/mcp-mesh" class="hero-button hero-button-secondary">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block content %}
+<div class="content-wrapper">
+  {{ super() }}
+</div>
+{% endblock %}
