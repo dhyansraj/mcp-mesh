@@ -154,7 +154,7 @@ class TestAnalyzeInjectionStrategy:
             return_value=[],
         ):
             analyze_injection_strategy(func_single_untyped, ["dep1"])
-        assert "consider typing as McpMeshAgent for clarity" in caplog.text
+        assert "consider typing as McpMeshAgent or McpAgent for clarity" in caplog.text
 
         caplog.clear()
 
@@ -164,7 +164,7 @@ class TestAnalyzeInjectionStrategy:
             return_value=[],
         ):
             analyze_injection_strategy(func_multi_untyped, ["dep1"])
-        assert "none are typed as McpMeshAgent" in caplog.text
+        assert "none are typed as McpMeshAgent or McpAgent" in caplog.text
 
 
 class TestDependencyInjectorInit:
@@ -226,17 +226,15 @@ class TestDependencyRegistration:
         mock_func = MagicMock()
         mock_func._mesh_update_dependency = MagicMock()
 
-        # Set up dependency mapping and function registry
-        injector._dependency_mapping["test_dep"] = {"func1"}
+        # Set up dependency mapping and function registry with composite key
+        injector._dependency_mapping["func1:dep_0"] = {"func1"}
         injector._function_registry["func1"] = mock_func
 
         mock_instance = MagicMock()
-        await injector.register_dependency("test_dep", mock_instance)
+        await injector.register_dependency("func1:dep_0", mock_instance)
 
-        # Verify function was notified
-        mock_func._mesh_update_dependency.assert_called_once_with(
-            "test_dep", mock_instance
-        )
+        # Verify function was notified with index-based call
+        mock_func._mesh_update_dependency.assert_called_once_with(0, mock_instance)
 
     @pytest.mark.asyncio
     async def test_unregister_dependency_simple(self, injector):
@@ -262,20 +260,20 @@ class TestDependencyRegistration:
         mock_func = MagicMock()
         mock_func._mesh_update_dependency = MagicMock()
 
-        # Set up dependency mapping and function registry
-        injector._dependency_mapping["test_dep"] = {"func1"}
+        # Set up dependency mapping and function registry with composite key
+        injector._dependency_mapping["func1:dep_0"] = {"func1"}
         injector._function_registry["func1"] = mock_func
 
         # Register then unregister
         mock_instance = MagicMock()
-        await injector.register_dependency("test_dep", mock_instance)
-        await injector.unregister_dependency("test_dep")
+        await injector.register_dependency("func1:dep_0", mock_instance)
+        await injector.unregister_dependency("func1:dep_0")
 
-        # Verify function was notified with None
+        # Verify function was notified with index-based calls
         calls = mock_func._mesh_update_dependency.call_args_list
         assert len(calls) == 2
-        assert calls[0] == call("test_dep", mock_instance)
-        assert calls[1] == call("test_dep", None)
+        assert calls[0] == call(0, mock_instance)
+        assert calls[1] == call(0, None)
 
     def test_get_dependency_nonexistent(self, injector):
         """Test getting a dependency that doesn't exist."""
@@ -474,7 +472,7 @@ class TestCreateInjectionWrapper:
         assert injector._function_registry[func_id] is wrapper
 
     def test_create_injection_wrapper_tracks_dependencies(self, injector):
-        """Test that dependency mapping is updated."""
+        """Test that dependency mapping is updated with composite keys."""
 
         def test_func(param1, param2):
             return param1, param2
@@ -487,10 +485,11 @@ class TestCreateInjectionWrapper:
 
         func_id = f"{test_func.__module__}.{test_func.__qualname__}"
 
-        assert "dep1" in injector._dependency_mapping
-        assert "dep2" in injector._dependency_mapping
-        assert func_id in injector._dependency_mapping["dep1"]
-        assert func_id in injector._dependency_mapping["dep2"]
+        # Now uses composite keys format: "func_id:dep_N"
+        assert f"{func_id}:dep_0" in injector._dependency_mapping
+        assert f"{func_id}:dep_1" in injector._dependency_mapping
+        assert func_id in injector._dependency_mapping[f"{func_id}:dep_0"]
+        assert func_id in injector._dependency_mapping[f"{func_id}:dep_1"]
 
     def test_create_injection_wrapper_preserves_original(self, injector):
         """Test that original function is preserved."""
@@ -548,8 +547,8 @@ class TestInjectionWrapperExecution:
         ):
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
 
-            # Set up dependency
-            wrapper._mesh_injected_deps["dep1"] = mock_dep
+            # Set up dependency using array index
+            wrapper._mesh_injected_deps[0] = mock_dep
 
             result = wrapper("test_value")
             # The wrapper should inject the dependency
@@ -568,7 +567,7 @@ class TestInjectionWrapperExecution:
             return_value=[1],
         ):
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
-            wrapper._mesh_injected_deps["dep1"] = mock_dep
+            wrapper._mesh_injected_deps[0] = mock_dep
 
             # Provide dependency explicitly
             result = wrapper("test_value", dependency="explicit_value")
@@ -589,8 +588,9 @@ class TestInjectionWrapperExecution:
         ):
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
 
-            # Set up global dependency (not in wrapper storage)
-            injector._dependencies["dep1"] = mock_dep
+            # Set up global dependency with composite key (not in wrapper storage)
+            func_id = f"{test_func.__module__}.{test_func.__qualname__}"
+            injector._dependencies[f"{func_id}:dep_0"] = mock_dep
 
             result = wrapper("test_value")
             assert "global_dependency" in str(result)
@@ -621,7 +621,7 @@ class TestWrapperUpdateMechanism:
         return DependencyInjector()
 
     def test_wrapper_update_dependency_add(self, injector):
-        """Test updating wrapper with new dependency."""
+        """Test updating wrapper with new dependency using index."""
 
         def test_func(param1):
             return param1
@@ -633,12 +633,12 @@ class TestWrapperUpdateMechanism:
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
 
         mock_dep = MagicMock()
-        wrapper._mesh_update_dependency("dep1", mock_dep)
+        wrapper._mesh_update_dependency(0, mock_dep)
 
-        assert wrapper._mesh_injected_deps["dep1"] is mock_dep
+        assert wrapper._mesh_injected_deps[0] is mock_dep
 
     def test_wrapper_update_dependency_remove(self, injector):
-        """Test removing dependency from wrapper."""
+        """Test removing dependency from wrapper using index."""
 
         def test_func(param1):
             return param1
@@ -651,11 +651,11 @@ class TestWrapperUpdateMechanism:
 
         # Add then remove
         mock_dep = MagicMock()
-        wrapper._mesh_update_dependency("dep1", mock_dep)
-        assert "dep1" in wrapper._mesh_injected_deps
+        wrapper._mesh_update_dependency(0, mock_dep)
+        assert wrapper._mesh_injected_deps[0] is mock_dep
 
-        wrapper._mesh_update_dependency("dep1", None)
-        assert "dep1" not in wrapper._mesh_injected_deps
+        wrapper._mesh_update_dependency(0, None)
+        assert wrapper._mesh_injected_deps[0] is None
 
     def test_wrapper_update_dependency_logging(self, injector, caplog):
         """Test that wrapper update logs appropriately."""
@@ -677,10 +677,10 @@ class TestWrapperUpdateMechanism:
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
 
         mock_dep = MagicMock()
-        wrapper._mesh_update_dependency("dep1", mock_dep)
+        wrapper._mesh_update_dependency(0, mock_dep)
 
         assert (
-            f"Updated dep1 for {test_func.__module__}.{test_func.__qualname__}"
+            f"Updated dependency at index 0 for {test_func.__module__}.{test_func.__qualname__}"
             in caplog.text
         )
 
@@ -879,7 +879,7 @@ class TestDebugLogging:
             wrapper = injector.create_injection_wrapper(test_func, ["dep1"])
 
             mock_dep = MagicMock()
-            wrapper._mesh_injected_deps["dep1"] = mock_dep
+            wrapper._mesh_injected_deps[0] = mock_dep
 
             result = wrapper("test_value")
 

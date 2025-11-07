@@ -184,15 +184,18 @@ class TestDependencyStateExtraction:
 
         result = step._extract_dependency_state(heartbeat_response)
 
+        # Expected format is now array-based to preserve order and support duplicates
         expected = {
-            "my_function": {
-                "tool1": {
+            "my_function": [
+                {
+                    "capability": "tool1",
                     "endpoint": "http://agent1:8080/mcp",
                     "function_name": "tool1_impl",
                     "status": "available",
                     "agent_id": "agent1",
+                    "kwargs": {},
                 }
-            }
+            ]
         }
         assert result == expected
 
@@ -230,29 +233,36 @@ class TestDependencyStateExtraction:
 
         result = step._extract_dependency_state(heartbeat_response)
 
+        # Expected format is now array-based to preserve order and support duplicates
         expected = {
-            "function1": {
-                "tool1": {
+            "function1": [
+                {
+                    "capability": "tool1",
                     "endpoint": "http://agent1:8080/mcp",
                     "function_name": "tool1_impl",
                     "status": "available",
                     "agent_id": "agent1",
+                    "kwargs": {},
                 },
-                "tool2": {
+                {
+                    "capability": "tool2",
                     "endpoint": "http://agent2:8080/mcp",
                     "function_name": "tool2_impl",
                     "status": "available",
                     "agent_id": "agent2",
+                    "kwargs": {},
                 },
-            },
-            "function2": {
-                "tool3": {
+            ],
+            "function2": [
+                {
+                    "capability": "tool3",
                     "endpoint": "http://agent3:8080/mcp",
                     "function_name": "tool3_impl",
                     "status": "available",
                     "agent_id": "agent3",
+                    "kwargs": {},
                 }
-            },
+            ],
         }
         assert result == expected
 
@@ -272,15 +282,18 @@ class TestDependencyStateExtraction:
 
         result = step._extract_dependency_state(heartbeat_response)
 
+        # Expected format is now array-based to preserve order and support duplicates
         expected = {
-            "my_function": {
-                "tool1": {
+            "my_function": [
+                {
+                    "capability": "tool1",
                     "endpoint": "",
                     "function_name": "",
                     "status": "available",
                     "agent_id": "",
+                    "kwargs": {},
                 }
-            }
+            ]
         }
         assert result == expected
 
@@ -302,15 +315,18 @@ class TestDependencyStateExtraction:
 
         result = step._extract_dependency_state(heartbeat_response)
 
+        # Expected format is now array-based to preserve order and support duplicates
         expected = {
-            "function2": {
-                "tool1": {
+            "function2": [
+                {
+                    "capability": "tool1",
                     "endpoint": "",
                     "function_name": "",
                     "status": "available",
                     "agent_id": "",
+                    "kwargs": {},
                 }
-            }
+            ]
         }
         assert result == expected
 
@@ -782,11 +798,22 @@ class TestRewiring:
         caplog.set_level(logging.WARNING)
 
         # Mock DecoratorRegistry to return the same agent_id as in heartbeat response
+        # Also need to mock get_mesh_tools for composite key mapping
         with patch(
             "_mcp_mesh.engine.decorator_registry.DecoratorRegistry"
         ) as mock_decorator_registry:
             mock_config = {"agent_id": "current-agent"}
             mock_decorator_registry.get_resolved_agent_config.return_value = mock_config
+
+            # Mock get_mesh_tools to return tool name -> function mapping
+            mock_func = MagicMock()
+            mock_func.__module__ = "test_module"
+            mock_func.__qualname__ = "test_function"
+            mock_decorated = MagicMock()
+            mock_decorated.function = mock_func
+            mock_decorator_registry.get_mesh_tools.return_value = {
+                "function1": mock_decorated
+            }
 
             with patch(
                 "_mcp_mesh.engine.self_dependency_proxy.SelfDependencyProxy"
@@ -800,8 +827,9 @@ class TestRewiring:
                 mock_self_proxy.assert_called_once_with(
                     mock_original_func, "tool1_impl"
                 )
+                # Now expects composite key format: "func_id:dep_0"
                 mock_injector.register_dependency.assert_called_once_with(
-                    "tool1", mock_proxy_instance
+                    "test_module.test_function:dep_0", mock_proxy_instance
                 )
 
     @pytest.mark.asyncio
@@ -812,9 +840,12 @@ class TestRewiring:
         """Test rewiring with dependency unwiring."""
         import logging
 
-        # Mock injector with existing dependencies
+        # Mock injector with existing dependencies (using composite keys)
         mock_injector = MagicMock()
-        mock_injector._dependencies = {"old_tool": MagicMock(), "tool1": MagicMock()}
+        mock_injector._dependencies = {
+            "old_function:dep_0": MagicMock(),  # Old dependency to be removed
+            "test_module.test_function:dep_0": MagicMock(),  # Existing dependency for function1
+        }
         mock_injector.register_dependency = AsyncMock()
         mock_injector.unregister_dependency = AsyncMock()
         mock_get_injector.return_value = mock_injector
@@ -829,16 +860,32 @@ class TestRewiring:
                         "status": "available",
                     }
                 ]
-                # "old_tool" is not in new dependencies, should be unwired
+                # "old_function:dep_0" is not in new dependencies, should be unwired
             }
         }
 
         caplog.set_level(logging.INFO)
 
-        await step.process_heartbeat_response_for_rewiring(heartbeat_response)
+        # Mock DecoratorRegistry for composite key mapping
+        with patch(
+            "_mcp_mesh.engine.decorator_registry.DecoratorRegistry"
+        ) as mock_decorator_registry:
+            # Mock get_mesh_tools to return tool name -> function mapping
+            mock_func = MagicMock()
+            mock_func.__module__ = "test_module"
+            mock_func.__qualname__ = "test_function"
+            mock_decorated = MagicMock()
+            mock_decorated.function = mock_func
+            mock_decorator_registry.get_mesh_tools.return_value = {
+                "function1": mock_decorated
+            }
 
-        assert "Unwired dependency 'old_tool'" in caplog.text
-        mock_injector.unregister_dependency.assert_called_once_with("old_tool")
+            await step.process_heartbeat_response_for_rewiring(heartbeat_response)
+
+            assert "Unwired dependency 'old_function:dep_0'" in caplog.text
+            mock_injector.unregister_dependency.assert_called_once_with(
+                "old_function:dep_0"
+            )
 
 
 class TestContextHandling:

@@ -2,7 +2,7 @@
 Dynamic dependency injection system for MCP Mesh.
 
 Handles both initial injection and runtime updates when topology changes.
-Focused purely on dependency injection - telemetry/tracing is handled at 
+Focused purely on dependency injection - telemetry/tracing is handled at
 the HTTP middleware layer for unified approach across MCP agents and FastAPI apps.
 """
 
@@ -57,17 +57,17 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             logger.warning(
                 f"Single parameter '{param_name}' in function '{func_name}' found, "
                 f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
-                f"(consider typing as McpMeshAgent for clarity)"
+                f"(consider typing as McpMeshAgent or McpAgent for clarity)"
             )
         return [0]  # Inject into the single parameter
 
-    # Multiple parameters rule: only inject into McpMeshAgent typed parameters
+    # Multiple parameters rule: only inject into McpMeshAgent or McpAgent typed parameters
     if param_count > 1:
         if not mesh_positions:
             logger.warning(
                 f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
-                f"typed as McpMeshAgent. Skipping injection of {len(dependencies)} dependencies. "
-                f"Consider typing dependency parameters as McpMeshAgent."
+                f"typed as McpMeshAgent or McpAgent. Skipping injection of {len(dependencies)} dependencies. "
+                f"Consider typing dependency parameters as McpMeshAgent or McpAgent."
             )
             return []
 
@@ -77,7 +77,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 excess_deps = dependencies[len(mesh_positions) :]
                 logger.warning(
                     f"Function '{func_name}' has {len(dependencies)} dependencies "
-                    f"but only {len(mesh_positions)} McpMeshAgent parameters. "
+                    f"but only {len(mesh_positions)} McpMeshAgent/McpAgent parameters. "
                     f"Dependencies {excess_deps} will not be injected."
                 )
             else:
@@ -85,7 +85,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                     params[pos].name for pos in mesh_positions[len(dependencies) :]
                 ]
                 logger.warning(
-                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent parameters "
+                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent/McpAgent parameters "
                     f"but only {len(dependencies)} dependencies declared. "
                     f"Parameters {excess_params} will remain None."
                 )
@@ -118,12 +118,17 @@ class DependencyInjector:
         self._lock = asyncio.Lock()
 
     async def register_dependency(self, name: str, instance: Any) -> None:
-        """Register a new dependency or update existing one."""
+        """Register a new dependency or update existing one.
+
+        Args:
+            name: Composite key in format "function_id:dep_N" or legacy capability name
+            instance: Proxy instance to register
+        """
         async with self._lock:
             logger.info(f"📦 Registering dependency: {name}")
             self._dependencies[name] = instance
 
-            # Notify all functions that depend on this
+            # Notify all functions that depend on this (using composite keys)
             if name in self._dependency_mapping:
                 for func_id in self._dependency_mapping[name]:
                     if func_id in self._function_registry:
@@ -132,10 +137,28 @@ class DependencyInjector:
                             f"🔄 UPDATING dependency '{name}' for {func_id} -> {func} at {hex(id(func))}"
                         )
                         if hasattr(func, "_mesh_update_dependency"):
-                            func._mesh_update_dependency(name, instance)
+                            # Extract dep_index from composite key (format: "function_id:dep_N")
+                            if ":dep_" in name:
+                                dep_index_str = name.split(":dep_")[-1]
+                                try:
+                                    dep_index = int(dep_index_str)
+                                    func._mesh_update_dependency(dep_index, instance)
+                                except ValueError:
+                                    logger.warning(
+                                        f"⚠️ Invalid dep_index in key '{name}', skipping update"
+                                    )
+                            else:
+                                # Legacy format (shouldn't happen with new code)
+                                logger.warning(
+                                    f"⚠️ Legacy dependency key format '{name}' not supported in array-based injection"
+                                )
 
     async def unregister_dependency(self, name: str) -> None:
-        """Remove a dependency (e.g., service went down)."""
+        """Remove a dependency (e.g., service went down).
+
+        Args:
+            name: Composite key in format "function_id:dep_N" or legacy capability name
+        """
         async with self._lock:
             logger.info(f"🗑️ INJECTOR: Unregistering dependency: {name}")
             if name in self._dependencies:
@@ -156,7 +179,21 @@ class DependencyInjector:
                                 logger.info(
                                     f"🗑️ INJECTOR: Removing {name} from function {func_id}"
                                 )
-                                func._mesh_update_dependency(name, None)
+                                # Extract dep_index from composite key
+                                if ":dep_" in name:
+                                    dep_index_str = name.split(":dep_")[-1]
+                                    try:
+                                        dep_index = int(dep_index_str)
+                                        func._mesh_update_dependency(dep_index, None)
+                                    except ValueError:
+                                        logger.warning(
+                                            f"⚠️ Invalid dep_index in key '{name}', skipping removal"
+                                        )
+                                else:
+                                    # Legacy format
+                                    logger.warning(
+                                        f"⚠️ Legacy dependency key format '{name}' not supported in array-based injection"
+                                    )
                             else:
                                 logger.warning(
                                     f"🗑️ INJECTOR: Function {func_id} has no _mesh_update_dependency method"
@@ -266,15 +303,16 @@ class DependencyInjector:
         # Get parameter type information for proxy selection
         parameter_types = get_agent_parameter_types(func)
 
-        # Track which dependencies this function needs
-        for dep in dependencies:
-            if dep not in self._dependency_mapping:
-                self._dependency_mapping[dep] = set()
-            self._dependency_mapping[dep].add(func_id)
+        # Track which dependencies this function needs (using composite keys)
+        for dep_index, dep in enumerate(dependencies):
+            dep_key = f"{func_id}:dep_{dep_index}"
+            if dep_key not in self._dependency_mapping:
+                self._dependency_mapping[dep_key] = set()
+            self._dependency_mapping[dep_key].add(func_id)
 
-        # Store current dependency values on the function itself
+        # Store current dependency values as array (indexed by position)
         if not hasattr(func, "_mesh_injected_deps"):
-            func._mesh_injected_deps = {}
+            func._mesh_injected_deps = [None] * len(dependencies)
 
         # Store original implementation if not already stored
         if not hasattr(func, "_mesh_original_func"):
@@ -292,34 +330,45 @@ class DependencyInjector:
 
             # Check if we need async wrapper for minimal case
             if inspect.iscoroutinefunction(func):
+
                 @functools.wraps(func)
                 async def minimal_wrapper(*args, **kwargs):
                     # Use ExecutionTracer for functions without dependencies (v0.4.0 style)
                     from ..tracing.execution_tracer import ExecutionTracer
-                    wrapper_logger.debug(f"🔧 DI: Executing async function {func.__name__} (no dependencies)")
-                    
+
+                    wrapper_logger.debug(
+                        f"🔧 DI: Executing async function {func.__name__} (no dependencies)"
+                    )
+
                     # For async functions without dependencies, use the async tracer
                     return await ExecutionTracer.trace_function_execution_async(
                         func, args, kwargs, [], [], 0, wrapper_logger
                     )
+
             else:
+
                 @functools.wraps(func)
                 def minimal_wrapper(*args, **kwargs):
                     # Use ExecutionTracer for functions without dependencies (v0.4.0 style)
                     from ..tracing.execution_tracer import ExecutionTracer
-                    wrapper_logger.debug(f"🔧 DI: Executing sync function {func.__name__} (no dependencies)")
-                    
-                    # Use original function tracer for functions without dependencies
-                    return ExecutionTracer.trace_original_function(func, args, kwargs, wrapper_logger)
 
-            # Add minimal metadata for compatibility
-            minimal_wrapper._mesh_injected_deps = {}
+                    wrapper_logger.debug(
+                        f"🔧 DI: Executing sync function {func.__name__} (no dependencies)"
+                    )
+
+                    # Use original function tracer for functions without dependencies
+                    return ExecutionTracer.trace_original_function(
+                        func, args, kwargs, wrapper_logger
+                    )
+
+            # Add minimal metadata for compatibility (use array for consistency)
+            minimal_wrapper._mesh_injected_deps = [None] * len(dependencies)
             minimal_wrapper._mesh_dependencies = dependencies
             minimal_wrapper._mesh_positions = mesh_positions
             minimal_wrapper._mesh_parameter_types = get_agent_parameter_types(func)
             minimal_wrapper._mesh_original_func = func
 
-            def update_dependency(name: str, instance: Any | None) -> None:
+            def update_dependency(dep_index: int, instance: Any | None) -> None:
                 """No-op update for functions without injection positions."""
                 pass
 
@@ -363,7 +412,7 @@ class DependencyInjector:
                 wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: params={params}")
                 wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: original kwargs={kwargs}")
 
-                # Inject dependencies as kwargs
+                # Inject dependencies as kwargs (using array-based lookup)
                 injected_count = 0
                 for dep_index, param_position in enumerate(mesh_positions):
                     if dep_index < len(dependencies):
@@ -379,24 +428,28 @@ class DependencyInjector:
                             param_name not in final_kwargs
                             or final_kwargs.get(param_name) is None
                         ):
-                            # Get the dependency from wrapper's storage
-                            dependency = dependency_wrapper._mesh_injected_deps.get(
-                                dep_name
-                            )
+                            # Get the dependency from wrapper's array storage (by index)
+                            dependency = None
+                            if dep_index < len(dependency_wrapper._mesh_injected_deps):
+                                dependency = dependency_wrapper._mesh_injected_deps[
+                                    dep_index
+                                ]
                             wrapper_logger.debug(
-                                f"🔧 DEPENDENCY_WRAPPER: From wrapper storage: {dependency}"
+                                f"🔧 DEPENDENCY_WRAPPER: From wrapper storage[{dep_index}]: {dependency}"
                             )
 
                             if dependency is None:
-                                dependency = self.get_dependency(dep_name)
+                                # Fallback to global storage with composite key
+                                dep_key = f"{func.__module__}.{func.__qualname__}:dep_{dep_index}"
+                                dependency = self.get_dependency(dep_key)
                                 wrapper_logger.debug(
-                                    f"🔧 DEPENDENCY_WRAPPER: From global storage: {dependency}"
+                                    f"🔧 DEPENDENCY_WRAPPER: From global storage[{dep_key}]: {dependency}"
                                 )
 
                             final_kwargs[param_name] = dependency
                             injected_count += 1
                             wrapper_logger.debug(
-                                f"🔧 DEPENDENCY_WRAPPER: Injected {dep_name} as {param_name}"
+                                f"🔧 DEPENDENCY_WRAPPER: Injected {dep_name} from index {dep_index} as {param_name}"
                             )
                         else:
                             wrapper_logger.debug(
@@ -413,7 +466,7 @@ class DependencyInjector:
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
                 # Use ExecutionTracer for comprehensive execution logging (v0.4.0 style)
                 from ..tracing.execution_tracer import ExecutionTracer
-                
+
                 original_func = func._mesh_original_func
 
                 wrapper_logger.debug(
@@ -460,7 +513,7 @@ class DependencyInjector:
                 params = list(sig.parameters.keys())
                 final_kwargs = kwargs.copy()
 
-                # Inject dependencies as kwargs
+                # Inject dependencies as kwargs (using array-based lookup)
                 injected_count = 0
                 for dep_index, param_position in enumerate(mesh_positions):
                     if dep_index < len(dependencies):
@@ -472,13 +525,17 @@ class DependencyInjector:
                             param_name not in final_kwargs
                             or final_kwargs.get(param_name) is None
                         ):
-                            # Get the dependency from wrapper's storage
-                            dependency = dependency_wrapper._mesh_injected_deps.get(
-                                dep_name
-                            )
+                            # Get the dependency from wrapper's array storage (by index)
+                            dependency = None
+                            if dep_index < len(dependency_wrapper._mesh_injected_deps):
+                                dependency = dependency_wrapper._mesh_injected_deps[
+                                    dep_index
+                                ]
 
                             if dependency is None:
-                                dependency = self.get_dependency(dep_name)
+                                # Fallback to global storage with composite key
+                                dep_key = f"{func.__module__}.{func.__qualname__}:dep_{dep_index}"
+                                dependency = self.get_dependency(dep_key)
 
                             final_kwargs[param_name] = dependency
                             injected_count += 1
@@ -486,7 +543,7 @@ class DependencyInjector:
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
                 # Use ExecutionTracer for comprehensive execution logging (v0.4.0 style)
                 from ..tracing.execution_tracer import ExecutionTracer
-                
+
                 wrapper_logger.debug(
                     f"🔧 DI: Executing sync function {func._mesh_original_func.__name__} with {injected_count} injected dependencies"
                 )
@@ -502,20 +559,28 @@ class DependencyInjector:
                     wrapper_logger,
                 )
 
-        # Store dependency state on wrapper
-        dependency_wrapper._mesh_injected_deps = {}
+        # Store dependency state on wrapper as array (indexed by position)
+        dependency_wrapper._mesh_injected_deps = [None] * len(dependencies)
 
-        # Add update method to wrapper
-        def update_dependency(name: str, instance: Any | None) -> None:
-            """Called when a dependency changes."""
-            if instance is None:
-                dependency_wrapper._mesh_injected_deps.pop(name, None)
-                wrapper_logger.debug(f"Removed {name} from {func_id}")
+        # Add update method to wrapper (now uses index-based updates)
+        def update_dependency(dep_index: int, instance: Any | None) -> None:
+            """Called when a dependency changes (index-based for duplicate capability support)."""
+            if dep_index < len(dependency_wrapper._mesh_injected_deps):
+                dependency_wrapper._mesh_injected_deps[dep_index] = instance
+                if instance is None:
+                    wrapper_logger.debug(
+                        f"Removed dependency at index {dep_index} from {func_id}"
+                    )
+                else:
+                    wrapper_logger.debug(
+                        f"Updated dependency at index {dep_index} for {func_id}"
+                    )
+                    wrapper_logger.debug(
+                        f"🔗 Wrapper pointer receiving dependency: {dependency_wrapper} at {hex(id(dependency_wrapper))}"
+                    )
             else:
-                dependency_wrapper._mesh_injected_deps[name] = instance
-                wrapper_logger.debug(f"Updated {name} for {func_id}")
-                wrapper_logger.debug(
-                    f"🔗 Wrapper pointer receiving dependency: {dependency_wrapper} at {hex(id(dependency_wrapper))}"
+                wrapper_logger.warning(
+                    f"⚠️ Attempted to update dependency at index {dep_index} but wrapper only has {len(dependency_wrapper._mesh_injected_deps)} dependencies"
                 )
 
         # Store update method on wrapper

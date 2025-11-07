@@ -14,7 +14,7 @@ from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 logger = logging.getLogger(__name__)
 
-# Global state for dependency hash tracking across heartbeat cycles  
+# Global state for dependency hash tracking across heartbeat cycles
 _last_api_dependency_hash = None
 
 
@@ -24,7 +24,7 @@ class APIDependencyResolutionStep(PipelineStep):
 
     Takes the dependencies_resolved data from the heartbeat response
     and updates dependency injection for FastAPI route handlers.
-    
+
     Similar to MCP dependency resolution but adapted for:
     - FastAPI route handlers instead of MCP tools
     - Single "api_endpoint_handler" function instead of multiple tools
@@ -54,7 +54,9 @@ class APIDependencyResolutionStep(PipelineStep):
                 result.message = (
                     "No heartbeat response or registry wrapper - completed successfully"
                 )
-                self.logger.info("ℹ️ No heartbeat response to process - this is normal for API services")
+                self.logger.info(
+                    "ℹ️ No heartbeat response to process - this is normal for API services"
+                )
                 return result
 
             # Use the same hash-based change detection pattern as MCP
@@ -72,23 +74,31 @@ class APIDependencyResolutionStep(PipelineStep):
             # Store processed dependencies info for context
             result.add_context("dependency_count", dependency_count)
             result.add_context("dependencies_resolved", dependencies_resolved)
-            
-            result.message = "API dependency resolution completed (efficient hash-based)"
-            
+
+            result.message = (
+                "API dependency resolution completed (efficient hash-based)"
+            )
+
             if dependency_count > 0:
                 self.logger.info(f"🔗 Dependencies resolved: {dependency_count} items")
-                
+
             # Log function registry status for debugging
             injector = get_global_injector()
             function_count = len(injector._function_registry)
-            self.logger.debug(f"🔍 Function registry contains {function_count} functions:")
+            self.logger.debug(
+                f"🔍 Function registry contains {function_count} functions:"
+            )
             for func_id, wrapper_func in injector._function_registry.items():
-                original_func = getattr(wrapper_func, '_mesh_original_func', None)
-                func_name = original_func.__name__ if original_func else 'unknown'
-                dependencies = getattr(wrapper_func, '_mesh_dependencies', [])
-                self.logger.debug(f"  📋 {func_id} -> {func_name} (deps: {dependencies})")
-            
-            self.logger.debug("🔗 API dependency resolution step completed using hash-based change detection")
+                original_func = getattr(wrapper_func, "_mesh_original_func", None)
+                func_name = original_func.__name__ if original_func else "unknown"
+                dependencies = getattr(wrapper_func, "_mesh_dependencies", [])
+                self.logger.debug(
+                    f"  📋 {func_id} -> {func_name} (deps: {dependencies})"
+                )
+
+            self.logger.debug(
+                "🔗 API dependency resolution step completed using hash-based change detection"
+            )
 
         except Exception as e:
             result.status = PipelineStatus.FAILED
@@ -100,14 +110,17 @@ class APIDependencyResolutionStep(PipelineStep):
 
     def _extract_dependency_state(
         self, heartbeat_response: dict[str, Any]
-    ) -> dict[str, dict[str, dict[str, str]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Extract dependency state structure from heartbeat response.
+
+        Preserves array structure and order from registry to support multiple
+        dependencies with the same capability name (e.g., different versions/tags).
 
         For API services, dependencies are typically under a single function
         (usually "api_endpoint_handler") but we still follow the same pattern.
 
         Returns:
-            {function_name: {capability: {endpoint, function_name, status}}}
+            {function_name: [{capability, endpoint, function_name, status, agent_id, kwargs}, ...]}
         """
         state = {}
         dependencies_resolved = heartbeat_response.get("dependencies_resolved", {})
@@ -116,7 +129,7 @@ class APIDependencyResolutionStep(PipelineStep):
             if not isinstance(dependency_list, list):
                 continue
 
-            state[function_name] = {}
+            state[function_name] = []
             for dep_resolution in dependency_list:
                 if (
                     not isinstance(dep_resolution, dict)
@@ -124,14 +137,17 @@ class APIDependencyResolutionStep(PipelineStep):
                 ):
                     continue
 
-                capability = dep_resolution["capability"]
-                state[function_name][capability] = {
-                    "endpoint": dep_resolution.get("endpoint", ""),
-                    "function_name": dep_resolution.get("function_name", ""),
-                    "status": dep_resolution.get("status", ""),
-                    "agent_id": dep_resolution.get("agent_id", ""),
-                    "kwargs": dep_resolution.get("kwargs", {}),  # Include kwargs config
-                }
+                # Preserve array structure to maintain order and support duplicate capabilities
+                state[function_name].append(
+                    {
+                        "capability": dep_resolution["capability"],
+                        "endpoint": dep_resolution.get("endpoint", ""),
+                        "function_name": dep_resolution.get("function_name", ""),
+                        "status": dep_resolution.get("status", ""),
+                        "agent_id": dep_resolution.get("agent_id", ""),
+                        "kwargs": dep_resolution.get("kwargs", {}),
+                    }
+                )
 
         return state
 
@@ -220,44 +236,61 @@ class APIDependencyResolutionStep(PipelineStep):
 
             injector = get_global_injector()
 
-            # Step 1: Collect all capabilities that should exist according to registry
-            target_capabilities = set()
-            for function_name, dependencies in current_state.items():
-                for capability in dependencies.keys():
-                    target_capabilities.add(capability)
+            # Step 1: Collect all dependency keys (func_id:dep_index) that should exist
+            # Map tool names to func_ids first
+            from ...engine.decorator_registry import DecoratorRegistry
 
-            # Step 2: Find existing capabilities that need to be removed (unwired)
+            tool_name_to_func_id = {}
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            for tool_name, decorated_func in mesh_tools.items():
+                func = decorated_func.function
+                func_id = f"{func.__module__}.{func.__qualname__}"
+                tool_name_to_func_id[tool_name] = func_id
+
+            target_dependency_keys = set()
+            for function_name, dependency_list in current_state.items():
+                # Map tool name to func_id
+                func_id = tool_name_to_func_id.get(function_name, function_name)
+                for dep_index in range(len(dependency_list)):
+                    dep_key = f"{func_id}:dep_{dep_index}"
+                    target_dependency_keys.add(dep_key)
+
+            # Step 2: Find existing dependency keys that need to be removed (unwired)
             # This handles the case where registry stops reporting some dependencies
-            existing_capabilities = (
+            existing_dependency_keys = (
                 set(injector._dependencies.keys())
                 if hasattr(injector, "_dependencies")
                 else set()
             )
-            capabilities_to_remove = existing_capabilities - target_capabilities
+            keys_to_remove = existing_dependency_keys - target_dependency_keys
 
             unwired_count = 0
-            for capability in capabilities_to_remove:
-                await injector.unregister_dependency(capability)
+            for dep_key in keys_to_remove:
+                await injector.unregister_dependency(dep_key)
                 unwired_count += 1
                 self.logger.info(
-                    f"🗑️ Unwired API dependency '{capability}' (no longer reported by registry)"
+                    f"🗑️ Unwired API dependency '{dep_key}' (no longer reported by registry)"
                 )
 
-            # Step 3: Apply all dependency updates for capabilities that should exist
+            # Step 3: Apply all dependency updates using positional indexing
             updated_count = 0
-            for function_name, dependencies in current_state.items():
-                for capability, dep_info in dependencies.items():
+            for function_name, dependency_list in current_state.items():
+                # Map tool name to func_id (using mapping from Step 1)
+                func_id = tool_name_to_func_id.get(function_name, function_name)
+
+                for dep_index, dep_info in enumerate(dependency_list):
                     status = dep_info["status"]
                     endpoint = dep_info["endpoint"]
                     dep_function_name = dep_info["function_name"]
-                    kwargs_config = dep_info.get("kwargs", {})  # Extract kwargs config
+                    capability = dep_info["capability"]
+                    kwargs_config = dep_info.get("kwargs", {})
 
                     if status == "available" and endpoint and dep_function_name:
                         # Import here to avoid circular imports
                         import os
 
-                        from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
                         from ...engine.self_dependency_proxy import SelfDependencyProxy
+                        from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
 
                         # Get current agent ID for self-dependency detection
                         current_agent_id = None
@@ -315,27 +348,37 @@ class APIDependencyResolutionStep(PipelineStep):
                                 kwargs_config=kwargs_config,
                             )
 
-                        # Update in injector (this will update ALL route handlers that depend on this capability)
-                        self.logger.debug(f"🔄 Before update: registering {capability} = {type(new_proxy).__name__}")
-                        await injector.register_dependency(capability, new_proxy)
+                        # Register with composite key using func_id (not tool name) to match injector lookup
+                        dep_key = f"{func_id}:dep_{dep_index}"
+                        self.logger.debug(
+                            f"🔄 Before update: registering {dep_key} = {type(new_proxy).__name__}"
+                        )
+                        await injector.register_dependency(dep_key, new_proxy)
                         updated_count += 1
-                        
+
                         # Log which functions will be affected
-                        affected_functions = injector._dependency_mapping.get(capability, set())
-                        self.logger.debug(f"🎯 Functions affected by '{capability}' update: {list(affected_functions)}")
-                        
+                        affected_functions = injector._dependency_mapping.get(
+                            dep_key, set()
+                        )
+                        self.logger.debug(
+                            f"🎯 Functions affected by '{capability}' at position {dep_index}: {list(affected_functions)}"
+                        )
+
                         self.logger.info(
-                            f"🔄 Updated API dependency '{capability}' → {endpoint}/{dep_function_name} "
+                            f"🔄 Updated API dependency '{capability}' at position {dep_index} → {endpoint}/{dep_function_name} "
                             f"(proxy: EnhancedUnifiedMCPProxy - consistent with MCP pipeline)"
+                        )
+                        self.logger.debug(
+                            f"🔗 Registered dependency '{capability}' at position {dep_index} with key '{dep_key}' (func_id: {func_id})"
                         )
                     else:
                         if status != "available":
                             self.logger.debug(
-                                f"⚠️ API dependency '{capability}' not available: {status}"
+                                f"⚠️ API dependency '{capability}' at position {dep_index} not available: {status}"
                             )
                         else:
                             self.logger.warning(
-                                f"⚠️ Cannot update API dependency '{capability}': missing endpoint or function_name"
+                                f"⚠️ Cannot update API dependency '{capability}' at position {dep_index}: missing endpoint or function_name"
                             )
 
             # Store new hash for next comparison (use global variable)
@@ -364,10 +407,12 @@ class APIDependencyResolutionStep(PipelineStep):
             )
             # Don't raise - this should not break the heartbeat loop
 
-    def _determine_api_proxy_type_for_capability(self, capability: str, injector) -> str:
+    def _determine_api_proxy_type_for_capability(
+        self, capability: str, injector
+    ) -> str:
         """
         Determine which proxy type to use for API route handlers.
-        
+
         For API services, we need to check the parameter types used in FastAPI route handlers
         that depend on this capability. This is different from MCP tools because route handlers
         are wrapped differently.
@@ -449,17 +494,21 @@ class APIDependencyResolutionStep(PipelineStep):
             return "MCPClientProxy"  # Safe default
 
     def _create_proxy_for_api(
-        self, proxy_type: str, endpoint: str, dep_function_name: str, kwargs_config: dict
+        self,
+        proxy_type: str,
+        endpoint: str,
+        dep_function_name: str,
+        kwargs_config: dict,
     ):
         """
         Create the appropriate proxy instance for API route handlers.
-        
+
         Args:
             proxy_type: "FullMCPProxy" or "MCPClientProxy"
             endpoint: Target endpoint URL
             dep_function_name: Target function name
             kwargs_config: Additional configuration (timeout, retry, etc.)
-            
+
         Returns:
             Proxy instance
         """
