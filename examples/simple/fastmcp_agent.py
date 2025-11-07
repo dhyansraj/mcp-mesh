@@ -9,7 +9,7 @@ This demonstrates the ideal developer experience:
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import mesh
 from fastmcp import FastMCP
@@ -46,8 +46,15 @@ Focus on delivering {depth} level analysis.
 @app.tool()
 @mesh.tool(capability="time_service", tags=["system"])
 def get_current_time() -> str:
-    """Get the current system time."""
+    """Get the current system time (local)."""
     return datetime.now().isoformat()
+
+
+@app.tool()
+@mesh.tool(capability="time_service", tags=["utc"])
+def get_current_time_utc() -> str:
+    """Get the current UTC time."""
+    return datetime.now(UTC).isoformat()
 
 
 @app.tool()

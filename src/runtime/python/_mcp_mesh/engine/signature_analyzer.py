@@ -151,13 +151,13 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
 
 def get_mesh_agent_parameter_names(func: Any) -> list[str]:
     """
-    Get names of McpMeshAgent parameters in function signature.
+    Get names of McpMeshAgent/McpAgent parameters in function signature.
 
     Args:
         func: Function to analyze
 
     Returns:
-        List of parameter names that are McpMeshAgent types
+        List of parameter names that are McpMeshAgent or McpAgent types
     """
     try:
         type_hints = get_type_hints(func)
@@ -168,22 +168,31 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
             if param_name in type_hints:
                 param_type = type_hints[param_name]
 
-                # Check if it's McpMeshAgent type (handle different import paths and Union types)
+                # Check if it's McpAgent or McpMeshAgent type (handle different import paths and Union types)
                 is_mesh_agent = False
 
-                # Direct McpMeshAgent type
-                if param_type == McpMeshAgent or (
-                    hasattr(param_type, "__origin__")
-                    and param_type.__origin__ is type(McpMeshAgent)
+                # Direct McpAgent or McpMeshAgent type
+                if (
+                    param_type in (McpAgent, McpMeshAgent)
+                    or (
+                        hasattr(param_type, "__name__")
+                        and param_type.__name__ in ("McpAgent", "McpMeshAgent")
+                    )
+                    or (
+                        hasattr(param_type, "__origin__")
+                        and param_type.__origin__
+                        in (type(McpAgent), type(McpMeshAgent))
+                    )
                 ):
                     is_mesh_agent = True
 
-                # Union type (e.g., McpMeshAgent | None)
+                # Union type (e.g., McpAgent | None, McpMeshAgent | None)
                 elif hasattr(param_type, "__args__"):
-                    # Check if any arg in the union is McpMeshAgent
+                    # Check if any arg in the union is McpAgent or McpMeshAgent
                     for arg in param_type.__args__:
-                        if arg == McpMeshAgent or (
-                            hasattr(arg, "__name__") and arg.__name__ == "McpMeshAgent"
+                        if arg in (McpAgent, McpMeshAgent) or (
+                            hasattr(arg, "__name__")
+                            and arg.__name__ in ("McpAgent", "McpMeshAgent")
                         ):
                             is_mesh_agent = True
                             break
@@ -199,7 +208,7 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
 
 def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[bool, str]:
     """
-    Validate that the number of dependencies matches McpMeshAgent parameters.
+    Validate that the number of dependencies matches McpMeshAgent/McpAgent parameters.
 
     Args:
         func: Function to validate
@@ -212,9 +221,9 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
 
     if len(dependencies) != len(mesh_positions):
         return False, (
-            f"Function {func.__name__} has {len(mesh_positions)} McpMeshAgent parameters "
+            f"Function {func.__name__} has {len(mesh_positions)} McpMeshAgent/McpAgent parameters "
             f"but {len(dependencies)} dependencies declared. "
-            f"Each McpMeshAgent parameter needs a corresponding dependency."
+            f"Each McpMeshAgent/McpAgent parameter needs a corresponding dependency."
         )
 
     return True, ""

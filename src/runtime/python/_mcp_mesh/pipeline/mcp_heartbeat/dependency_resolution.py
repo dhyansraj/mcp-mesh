@@ -82,11 +82,14 @@ class DependencyResolutionStep(PipelineStep):
 
     def _extract_dependency_state(
         self, heartbeat_response: dict[str, Any]
-    ) -> dict[str, dict[str, dict[str, str]]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """Extract dependency state structure from heartbeat response.
 
+        Preserves array structure and order from registry to support multiple
+        dependencies with the same capability name (e.g., different versions/tags).
+
         Returns:
-            {function_name: {capability: {endpoint, function_name, status}}}
+            {function_name: [{capability, endpoint, function_name, status, agent_id, kwargs}, ...]}
         """
         state = {}
         dependencies_resolved = heartbeat_response.get("dependencies_resolved", {})
@@ -95,7 +98,7 @@ class DependencyResolutionStep(PipelineStep):
             if not isinstance(dependency_list, list):
                 continue
 
-            state[function_name] = {}
+            state[function_name] = []
             for dep_resolution in dependency_list:
                 if (
                     not isinstance(dep_resolution, dict)
@@ -103,13 +106,17 @@ class DependencyResolutionStep(PipelineStep):
                 ):
                     continue
 
-                capability = dep_resolution["capability"]
-                state[function_name][capability] = {
-                    "endpoint": dep_resolution.get("endpoint", ""),
-                    "function_name": dep_resolution.get("function_name", ""),
-                    "status": dep_resolution.get("status", ""),
-                    "agent_id": dep_resolution.get("agent_id", ""),
-                }
+                # Preserve array structure to maintain order and support duplicate capabilities
+                state[function_name].append(
+                    {
+                        "capability": dep_resolution["capability"],
+                        "endpoint": dep_resolution.get("endpoint", ""),
+                        "function_name": dep_resolution.get("function_name", ""),
+                        "status": dep_resolution.get("status", ""),
+                        "agent_id": dep_resolution.get("agent_id", ""),
+                        "kwargs": dep_resolution.get("kwargs", {}),
+                    }
+                )
 
         return state
 
@@ -194,37 +201,54 @@ class DependencyResolutionStep(PipelineStep):
 
             injector = get_global_injector()
 
-            # Step 1: Collect all capabilities that should exist according to registry
-            target_capabilities = set()
-            for function_name, dependencies in current_state.items():
-                for capability in dependencies.keys():
-                    target_capabilities.add(capability)
+            # Step 1: Collect all dependency keys (func_id:dep_index) that should exist
+            # Map tool names to func_ids first
+            from ...engine.decorator_registry import DecoratorRegistry
 
-            # Step 2: Find existing capabilities that need to be removed (unwired)
+            tool_name_to_func_id = {}
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            for tool_name, decorated_func in mesh_tools.items():
+                func = decorated_func.function
+                func_id = f"{func.__module__}.{func.__qualname__}"
+                tool_name_to_func_id[tool_name] = func_id
+
+            target_dependency_keys = set()
+            for function_name, dependency_list in current_state.items():
+                # Map tool name to func_id
+                func_id = tool_name_to_func_id.get(function_name, function_name)
+                for dep_index in range(len(dependency_list)):
+                    dep_key = f"{func_id}:dep_{dep_index}"
+                    target_dependency_keys.add(dep_key)
+
+            # Step 2: Find existing dependency keys that need to be removed (unwired)
             # This handles the case where registry stops reporting some dependencies
-            existing_capabilities = (
+            existing_dependency_keys = (
                 set(injector._dependencies.keys())
                 if hasattr(injector, "_dependencies")
                 else set()
             )
-            capabilities_to_remove = existing_capabilities - target_capabilities
+            keys_to_remove = existing_dependency_keys - target_dependency_keys
 
             unwired_count = 0
-            for capability in capabilities_to_remove:
-                await injector.unregister_dependency(capability)
+            for dep_key in keys_to_remove:
+                await injector.unregister_dependency(dep_key)
                 unwired_count += 1
                 self.logger.info(
-                    f"🗑️ Unwired dependency '{capability}' (no longer reported by registry)"
+                    f"🗑️ Unwired dependency '{dep_key}' (no longer reported by registry)"
                 )
 
-            # Step 3: Apply all dependency updates for capabilities that should exist
+            # Step 3: Apply all dependency updates using positional indexing
             updated_count = 0
-            for function_name, dependencies in current_state.items():
-                for capability, dep_info in dependencies.items():
+            for function_name, dependency_list in current_state.items():
+                # Map tool name to func_id (using mapping from Step 1)
+                func_id = tool_name_to_func_id.get(function_name, function_name)
+
+                for dep_index, dep_info in enumerate(dependency_list):
                     status = dep_info["status"]
                     endpoint = dep_info["endpoint"]
                     dep_function_name = dep_info["function_name"]
-                    kwargs_config = dep_info.get("kwargs", {})  # NEW: Extract kwargs
+                    capability = dep_info["capability"]
+                    kwargs_config = dep_info.get("kwargs", {})
 
                     if status == "available" and endpoint and dep_function_name:
                         # Import here to avoid circular imports
@@ -311,17 +335,21 @@ class DependencyResolutionStep(PipelineStep):
                                 f"timeout={kwargs_config.get('timeout', 30)}s, streaming={kwargs_config.get('streaming', False)}"
                             )
 
-                        # Update in injector (this will update ALL functions that depend on this capability)
-                        await injector.register_dependency(capability, new_proxy)
+                        # Register with composite key using func_id (not tool name) to match injector lookup
+                        dep_key = f"{func_id}:dep_{dep_index}"
+                        await injector.register_dependency(dep_key, new_proxy)
                         updated_count += 1
+                        self.logger.debug(
+                            f"🔗 Registered dependency '{capability}' at position {dep_index} with key '{dep_key}' (func_id: {func_id})"
+                        )
                     else:
                         if status != "available":
                             self.logger.debug(
-                                f"⚠️ Dependency '{capability}' not available: {status}"
+                                f"⚠️ Dependency '{capability}' at position {dep_index} not available: {status}"
                             )
                         else:
                             self.logger.warning(
-                                f"⚠️ Cannot update dependency '{capability}': missing endpoint or function_name"
+                                f"⚠️ Cannot update dependency '{capability}' at position {dep_index}: missing endpoint or function_name"
                             )
 
             # Store new hash for next comparison (use global variable)

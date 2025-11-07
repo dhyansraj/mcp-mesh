@@ -22,21 +22,30 @@ app = FastMCP("Dependent Service")
     dependencies=[
         {
             "capability": "time_service",
-            "tags": ["system", "+time"],  # tag time is optional (plus to have)
-        }
+            "tags": ["system"],  # Local time
+        },
+        {
+            "capability": "time_service",
+            "tags": ["utc"],  # UTC time
+        },
     ],
 )
 async def generate_report(
-    title: str, content: str = "Sample content", time_service: mesh.McpMeshAgent = None
+    title: str,
+    content: str = "Sample content",
+    time_service_local: mesh.McpMeshAgent = None,
+    time_service_utc: mesh.McpMeshAgent = None,
 ) -> dict:
-    """Generate a timestamped report using the time service."""
-    # Get timestamp from the injected time service using natural async pattern
-    timestamp = await time_service() if time_service else "unknown"
+    """Generate a timestamped report with both local and UTC timestamps."""
+    # Get timestamps from both injected time services
+    local_time = await time_service_local() if time_service_local else "unknown"
+    utc_time = await time_service_utc() if time_service_utc else "unknown"
 
     report = {
         "title": title,
         "content": content,
-        "generated_at": timestamp,
+        "generated_at_local": local_time,
+        "generated_at_utc": utc_time,
         "agent": "dependent-service",
         "status": "completed",
     }
