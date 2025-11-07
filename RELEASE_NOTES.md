@@ -1,5 +1,14 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.6...v0.5.7)
+
+## v0.5.7 (2025-11-06)
+
+### 🎯 Dependency Injection Enhancements
+
+- **Array-based Dependency Injection**: Support for multiple dependencies with the same capability name but different tags/versions
+- **Improved Type Support**: Updated warning messages to reflect support for both `McpAgent` and `McpMeshAgent` types
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.5...v0.5.6)
 
 ## v0.5.6 (2025-09-21)
