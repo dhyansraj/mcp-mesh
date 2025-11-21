@@ -75,6 +75,11 @@ func (Agent) Edges() []ent.Edge {
 				OnDelete: entsql.Cascade,
 			}).
 			Comment("Registry events for this agent"),
+		edge.To("dependency_resolutions", DependencyResolution.Type).
+			Annotations(entsql.Annotation{
+				OnDelete: entsql.Cascade,
+			}).
+			Comment("Dependency resolutions for this agent's tools"),
 	}
 }
 

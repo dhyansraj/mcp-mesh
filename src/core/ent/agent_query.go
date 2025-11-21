@@ -9,6 +9,7 @@ import (
 	"math"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 
@@ -21,12 +22,13 @@ import (
 // AgentQuery is the builder for querying Agent entities.
 type AgentQuery struct {
 	config
-	ctx              *QueryContext
-	order            []agent.OrderOption
-	inters           []Interceptor
-	predicates       []predicate.Agent
-	withCapabilities *CapabilityQuery
-	withEvents       *RegistryEventQuery
+	ctx                       *QueryContext
+	order                     []agent.OrderOption
+	inters                    []Interceptor
+	predicates                []predicate.Agent
+	withCapabilities          *CapabilityQuery
+	withEvents                *RegistryEventQuery
+	withDependencyResolutions *DependencyResolutionQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -100,6 +102,28 @@ func (aq *AgentQuery) QueryEvents() *RegistryEventQuery {
 			sqlgraph.From(agent.Table, agent.FieldID, selector),
 			sqlgraph.To(registryevent.Table, registryevent.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, agent.EventsTable, agent.EventsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(aq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryDependencyResolutions chains the current query on the "dependency_resolutions" edge.
+func (aq *AgentQuery) QueryDependencyResolutions() *DependencyResolutionQuery {
+	query := (&DependencyResolutionClient{config: aq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := aq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := aq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, selector),
+			sqlgraph.To(dependencyresolution.Table, dependencyresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.DependencyResolutionsTable, agent.DependencyResolutionsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(aq.driver.Dialect(), step)
 		return fromU, nil
@@ -294,13 +318,14 @@ func (aq *AgentQuery) Clone() *AgentQuery {
 		return nil
 	}
 	return &AgentQuery{
-		config:           aq.config,
-		ctx:              aq.ctx.Clone(),
-		order:            append([]agent.OrderOption{}, aq.order...),
-		inters:           append([]Interceptor{}, aq.inters...),
-		predicates:       append([]predicate.Agent{}, aq.predicates...),
-		withCapabilities: aq.withCapabilities.Clone(),
-		withEvents:       aq.withEvents.Clone(),
+		config:                    aq.config,
+		ctx:                       aq.ctx.Clone(),
+		order:                     append([]agent.OrderOption{}, aq.order...),
+		inters:                    append([]Interceptor{}, aq.inters...),
+		predicates:                append([]predicate.Agent{}, aq.predicates...),
+		withCapabilities:          aq.withCapabilities.Clone(),
+		withEvents:                aq.withEvents.Clone(),
+		withDependencyResolutions: aq.withDependencyResolutions.Clone(),
 		// clone intermediate query.
 		sql:  aq.sql.Clone(),
 		path: aq.path,
@@ -326,6 +351,17 @@ func (aq *AgentQuery) WithEvents(opts ...func(*RegistryEventQuery)) *AgentQuery 
 		opt(query)
 	}
 	aq.withEvents = query
+	return aq
+}
+
+// WithDependencyResolutions tells the query-builder to eager-load the nodes that are connected to
+// the "dependency_resolutions" edge. The optional arguments are used to configure the query builder of the edge.
+func (aq *AgentQuery) WithDependencyResolutions(opts ...func(*DependencyResolutionQuery)) *AgentQuery {
+	query := (&DependencyResolutionClient{config: aq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	aq.withDependencyResolutions = query
 	return aq
 }
 
@@ -407,9 +443,10 @@ func (aq *AgentQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Agent,
 	var (
 		nodes       = []*Agent{}
 		_spec       = aq.querySpec()
-		loadedTypes = [2]bool{
+		loadedTypes = [3]bool{
 			aq.withCapabilities != nil,
 			aq.withEvents != nil,
+			aq.withDependencyResolutions != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -441,6 +478,15 @@ func (aq *AgentQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Agent,
 		if err := aq.loadEvents(ctx, query, nodes,
 			func(n *Agent) { n.Edges.Events = []*RegistryEvent{} },
 			func(n *Agent, e *RegistryEvent) { n.Edges.Events = append(n.Edges.Events, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := aq.withDependencyResolutions; query != nil {
+		if err := aq.loadDependencyResolutions(ctx, query, nodes,
+			func(n *Agent) { n.Edges.DependencyResolutions = []*DependencyResolution{} },
+			func(n *Agent, e *DependencyResolution) {
+				n.Edges.DependencyResolutions = append(n.Edges.DependencyResolutions, e)
+			}); err != nil {
 			return nil, err
 		}
 	}
@@ -504,6 +550,36 @@ func (aq *AgentQuery) loadEvents(ctx context.Context, query *RegistryEventQuery,
 		node, ok := nodeids[*fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "agent_events" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (aq *AgentQuery) loadDependencyResolutions(ctx context.Context, query *DependencyResolutionQuery, nodes []*Agent, init func(*Agent), assign func(*Agent, *DependencyResolution)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*Agent)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(dependencyresolution.FieldConsumerAgentID)
+	}
+	query.Where(predicate.DependencyResolution(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(agent.DependencyResolutionsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ConsumerAgentID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "consumer_agent_id" returned %v for node %v`, fk, n.ID)
 		}
 		assign(node, n)
 	}

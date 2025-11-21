@@ -5,6 +5,7 @@ package ent
 import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/ent/schema"
 	"time"
@@ -51,15 +52,31 @@ func init() {
 	// capability.DefaultTags holds the default value on creation for the tags field.
 	capability.DefaultTags = capabilityDescTags.Default.([]string)
 	// capabilityDescCreatedAt is the schema descriptor for created_at field.
-	capabilityDescCreatedAt := capabilityFields[8].Descriptor()
+	capabilityDescCreatedAt := capabilityFields[9].Descriptor()
 	// capability.DefaultCreatedAt holds the default value on creation for the created_at field.
 	capability.DefaultCreatedAt = capabilityDescCreatedAt.Default.(func() time.Time)
 	// capabilityDescUpdatedAt is the schema descriptor for updated_at field.
-	capabilityDescUpdatedAt := capabilityFields[9].Descriptor()
+	capabilityDescUpdatedAt := capabilityFields[10].Descriptor()
 	// capability.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	capability.DefaultUpdatedAt = capabilityDescUpdatedAt.Default.(func() time.Time)
 	// capability.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	capability.UpdateDefaultUpdatedAt = capabilityDescUpdatedAt.UpdateDefault.(func() time.Time)
+	dependencyresolutionFields := schema.DependencyResolution{}.Fields()
+	_ = dependencyresolutionFields
+	// dependencyresolutionDescNamespaceRequired is the schema descriptor for namespace_required field.
+	dependencyresolutionDescNamespaceRequired := dependencyresolutionFields[5].Descriptor()
+	// dependencyresolution.DefaultNamespaceRequired holds the default value on creation for the namespace_required field.
+	dependencyresolution.DefaultNamespaceRequired = dependencyresolutionDescNamespaceRequired.Default.(string)
+	// dependencyresolutionDescCreatedAt is the schema descriptor for created_at field.
+	dependencyresolutionDescCreatedAt := dependencyresolutionFields[11].Descriptor()
+	// dependencyresolution.DefaultCreatedAt holds the default value on creation for the created_at field.
+	dependencyresolution.DefaultCreatedAt = dependencyresolutionDescCreatedAt.Default.(func() time.Time)
+	// dependencyresolutionDescUpdatedAt is the schema descriptor for updated_at field.
+	dependencyresolutionDescUpdatedAt := dependencyresolutionFields[12].Descriptor()
+	// dependencyresolution.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	dependencyresolution.DefaultUpdatedAt = dependencyresolutionDescUpdatedAt.Default.(func() time.Time)
+	// dependencyresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	dependencyresolution.UpdateDefaultUpdatedAt = dependencyresolutionDescUpdatedAt.UpdateDefault.(func() time.Time)
 	registryeventFields := schema.RegistryEvent{}.Fields()
 	_ = registryeventFields
 	// registryeventDescTimestamp is the schema descriptor for timestamp field.

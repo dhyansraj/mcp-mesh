@@ -54,9 +54,11 @@ type AgentEdges struct {
 	Capabilities []*Capability `json:"capabilities,omitempty"`
 	// Registry events for this agent
 	Events []*RegistryEvent `json:"events,omitempty"`
+	// Dependency resolutions for this agent's tools
+	DependencyResolutions []*DependencyResolution `json:"dependency_resolutions,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // CapabilitiesOrErr returns the Capabilities value or an error if the edge
@@ -75,6 +77,15 @@ func (e AgentEdges) EventsOrErr() ([]*RegistryEvent, error) {
 		return e.Events, nil
 	}
 	return nil, &NotLoadedError{edge: "events"}
+}
+
+// DependencyResolutionsOrErr returns the DependencyResolutions value or an error if the edge
+// was not loaded in eager-loading.
+func (e AgentEdges) DependencyResolutionsOrErr() ([]*DependencyResolution, error) {
+	if e.loadedTypes[2] {
+		return e.DependencyResolutions, nil
+	}
+	return nil, &NotLoadedError{edge: "dependency_resolutions"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -202,6 +213,11 @@ func (a *Agent) QueryCapabilities() *CapabilityQuery {
 // QueryEvents queries the "events" edge of the Agent entity.
 func (a *Agent) QueryEvents() *RegistryEventQuery {
 	return NewAgentClient(a.config).QueryEvents(a)
+}
+
+// QueryDependencyResolutions queries the "dependency_resolutions" edge of the Agent entity.
+func (a *Agent) QueryDependencyResolutions() *DependencyResolutionQuery {
+	return NewAgentClient(a.config).QueryDependencyResolutions(a)
 }
 
 // Update returns a builder for updating this Agent.

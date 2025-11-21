@@ -12,5 +12,8 @@ type Agent func(*sql.Selector)
 // Capability is the predicate function for capability builders.
 type Capability func(*sql.Selector)
 
+// DependencyResolution is the predicate function for dependencyresolution builders.
+type DependencyResolution func(*sql.Selector)
+
 // RegistryEvent is the predicate function for registryevent builders.
 type RegistryEvent func(*sql.Selector)

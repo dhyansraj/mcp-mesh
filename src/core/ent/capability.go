@@ -35,6 +35,8 @@ type Capability struct {
 	Tags []string `json:"tags,omitempty"`
 	// Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)
 	Kwargs map[string]interface{} `json:"kwargs,omitempty"`
+	// Dependencies required by this capability/function. Stores the raw dependency specifications from the tool registration.
+	Dependencies []map[string]interface{} `json:"dependencies,omitempty"`
 	// Creation timestamp
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Last update timestamp
@@ -71,7 +73,7 @@ func (*Capability) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldTags, capability.FieldKwargs:
+		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldTags, capability.FieldKwargs, capability.FieldDependencies:
 			values[i] = new([]byte)
 		case capability.FieldID:
 			values[i] = new(sql.NullInt64)
@@ -158,6 +160,14 @@ func (c *Capability) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field kwargs: %w", err)
 				}
 			}
+		case capability.FieldDependencies:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field dependencies", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.Dependencies); err != nil {
+					return fmt.Errorf("unmarshal field dependencies: %w", err)
+				}
+			}
 		case capability.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -241,6 +251,9 @@ func (c *Capability) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("kwargs=")
 	builder.WriteString(fmt.Sprintf("%v", c.Kwargs))
+	builder.WriteString(", ")
+	builder.WriteString("dependencies=")
+	builder.WriteString(fmt.Sprintf("%v", c.Dependencies))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(c.CreatedAt.Format(time.ANSIC))

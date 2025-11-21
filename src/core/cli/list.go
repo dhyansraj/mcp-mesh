@@ -91,24 +91,25 @@ type RegistryStatus struct {
 
 // EnhancedAgent contains comprehensive agent information for display
 type EnhancedAgent struct {
-	ID                   string                 `json:"id"`
-	Name                 string                 `json:"name"`
-	AgentType            string                 `json:"agent_type"`
-	Status               string                 `json:"status"`
-	Endpoint             string                 `json:"endpoint"`
-	Tools                []ToolInfo             `json:"tools"`
-	Dependencies         []Dependency           `json:"dependencies"`
-	DependenciesResolved int                    `json:"dependencies_resolved"`
-	DependenciesTotal    int                    `json:"dependencies_total"`
-	LastHeartbeat        *time.Time             `json:"last_heartbeat,omitempty"`
-	CreatedAt            time.Time              `json:"created_at"`
-	UpdatedAt            time.Time              `json:"updated_at"`
-	Version              string                 `json:"version,omitempty"`
-	PID                  int                    `json:"pid,omitempty"`
-	FilePath             string                 `json:"file_path,omitempty"`
-	StartTime            time.Time              `json:"start_time,omitempty"`
-	Config               map[string]interface{} `json:"config,omitempty"`
-	Labels               map[string]interface{} `json:"labels,omitempty"`
+	ID                    string                 `json:"id"`
+	Name                  string                 `json:"name"`
+	AgentType             string                 `json:"agent_type"`
+	Status                string                 `json:"status"`
+	Endpoint              string                 `json:"endpoint"`
+	Tools                 []ToolInfo             `json:"tools"`
+	Dependencies          []Dependency           `json:"dependencies"`
+	DependencyResolutions []DependencyResolution `json:"dependency_resolutions,omitempty"`
+	DependenciesResolved  int                    `json:"dependencies_resolved"`
+	DependenciesTotal     int                    `json:"dependencies_total"`
+	LastHeartbeat         *time.Time             `json:"last_heartbeat,omitempty"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+	Version               string                 `json:"version,omitempty"`
+	PID                   int                    `json:"pid,omitempty"`
+	FilePath              string                 `json:"file_path,omitempty"`
+	StartTime             time.Time              `json:"start_time,omitempty"`
+	Config                map[string]interface{} `json:"config,omitempty"`
+	Labels                map[string]interface{} `json:"labels,omitempty"`
 }
 
 // ToolInfo represents tool/capability information
@@ -128,6 +129,17 @@ type Dependency struct {
 	Status   string `json:"status"` // "resolved", "missing", "unhealthy"
 	AgentID  string `json:"agent_id,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// DependencyResolution represents detailed dependency resolution information from the registry
+type DependencyResolution struct {
+	FunctionName    string   `json:"function_name"`
+	Capability      string   `json:"capability"`
+	Tags            []string `json:"tags,omitempty"`
+	MCPTool         string   `json:"mcp_tool,omitempty"`
+	ProviderAgentID string   `json:"provider_agent_id,omitempty"`
+	Endpoint        string   `json:"endpoint,omitempty"`
+	Status          string   `json:"status"` // "available", "unavailable", "unresolved"
 }
 
 func runListCommand(cmd *cobra.Command, args []string) error {
@@ -278,6 +290,15 @@ type AgentInfoAPI struct {
 		Description  *string  `json:"description,omitempty"`
 		Tags         []string `json:"tags,omitempty"`
 	} `json:"capabilities"`
+	DependencyResolutions []struct {
+		FunctionName    string   `json:"function_name"`
+		Capability      string   `json:"capability"`
+		Tags            []string `json:"tags,omitempty"`
+		MCPTool         string   `json:"mcp_tool,omitempty"`
+		ProviderAgentID string   `json:"provider_agent_id,omitempty"`
+		Endpoint        string   `json:"endpoint,omitempty"`
+		Status          string   `json:"status"`
+	} `json:"dependency_resolutions,omitempty"`
 }
 
 // AgentsListResponseAPI represents the API response structure
@@ -355,6 +376,26 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 			capabilities[j] = capMap
 		}
 		agentMap["capabilities"] = capabilities
+
+		// Convert dependency resolutions to the expected format
+		if len(agent.DependencyResolutions) > 0 {
+			depResolutions := make([]interface{}, len(agent.DependencyResolutions))
+			for j, depRes := range agent.DependencyResolutions {
+				depResMap := map[string]interface{}{
+					"function_name":     depRes.FunctionName,
+					"capability":        depRes.Capability,
+					"mcp_tool":          depRes.MCPTool,
+					"provider_agent_id": depRes.ProviderAgentID,
+					"endpoint":          depRes.Endpoint,
+					"status":            depRes.Status,
+				}
+				if len(depRes.Tags) > 0 {
+					depResMap["tags"] = depRes.Tags
+				}
+				depResolutions[j] = depResMap
+			}
+			agentMap["dependency_resolutions"] = depResolutions
+		}
 
 		agents[i] = agentMap
 	}
@@ -467,6 +508,35 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 	}
 	if resolvedDeps := getFloat(data, "dependencies_resolved"); resolvedDeps >= 0 {
 		agent.DependenciesResolved = int(resolvedDeps)
+	}
+
+	// Parse dependency resolutions from API
+	if depResolutions, ok := data["dependency_resolutions"].([]interface{}); ok {
+		for _, depRes := range depResolutions {
+			if depResMap, ok := depRes.(map[string]interface{}); ok {
+				resolution := DependencyResolution{
+					FunctionName:    getString(depResMap, "function_name"),
+					Capability:      getString(depResMap, "capability"),
+					MCPTool:         getString(depResMap, "mcp_tool"),
+					ProviderAgentID: getString(depResMap, "provider_agent_id"),
+					Endpoint:        getString(depResMap, "endpoint"),
+					Status:          getString(depResMap, "status"),
+				}
+
+				// Parse tags if present
+				if tagsSlice, ok := depResMap["tags"].([]string); ok {
+					resolution.Tags = tagsSlice
+				} else if tagsData, ok := depResMap["tags"].([]interface{}); ok {
+					for _, tag := range tagsData {
+						if tagStr, ok := tag.(string); ok {
+							resolution.Tags = append(resolution.Tags, tagStr)
+						}
+					}
+				}
+
+				agent.DependencyResolutions = append(agent.DependencyResolutions, resolution)
+			}
+		}
 	}
 
 	// For now, use placeholder dependencies list (could be enhanced to show actual dependency details)
@@ -1085,6 +1155,37 @@ func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool)
 				functionName,
 				version,
 				tags)
+		}
+	}
+
+	// Dependency Resolutions
+	if len(targetAgent.DependencyResolutions) > 0 {
+		fmt.Printf("\n%sDependencies (%d):%s\n", colorBlue, len(targetAgent.DependencyResolutions), colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+
+		// Print table header
+		fmt.Printf("%-30s %-30s %-40s\n", "DEPENDENCY", "MCP TOOL", "ENDPOINT")
+		fmt.Println(strings.Repeat("-", 80))
+
+		// Print each dependency as a table row
+		for _, dep := range targetAgent.DependencyResolutions {
+			mcpTool := dep.MCPTool
+			url := dep.Endpoint
+			lineColor := ""
+
+			// Handle unresolved dependencies - show entire line in red
+			if dep.Status == "unresolved" {
+				mcpTool = "NOT FOUND"
+				url = "-"
+				lineColor = colorRed
+			}
+
+			fmt.Printf("%s%-30s %-30s %-40s%s\n",
+				lineColor,
+				dep.Capability,
+				mcpTool,
+				url,
+				colorReset)
 		}
 	}
 

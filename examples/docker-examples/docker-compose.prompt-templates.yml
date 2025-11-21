@@ -56,7 +56,7 @@ services:
   registry:
     build:
       context: ../../
-      dockerfile: src/core/registry/Dockerfile
+      dockerfile: examples/docker-examples/registry/Dockerfile
     container_name: mcp-mesh-registry-prompt-template-test
     ports:
       - "8002:8000" # Different port
@@ -88,7 +88,6 @@ services:
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
       AGENT_NAME: system-agent
-      AGENT_PORT: 8080
       MCP_MESH_NAMESPACE: prompt-template-test
       PYTHONUNBUFFERED: 1
     volumes:
@@ -97,12 +96,18 @@ services:
     entrypoint: >
       sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
     ports:
-      - "8084:8080" # Different port
+      - "8084:9091" # Agent runs on 9091
     depends_on:
       registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9091/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -137,7 +142,13 @@ services:
       registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -174,7 +185,13 @@ services:
       system-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -209,7 +226,13 @@ services:
       registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -246,7 +269,13 @@ services:
       system-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -283,7 +312,13 @@ services:
       system-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -318,7 +353,13 @@ services:
       registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -355,7 +396,13 @@ services:
       test-pt-006-analyzer:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -392,7 +439,13 @@ services:
       system-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10

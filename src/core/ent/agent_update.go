@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 	"time"
@@ -253,6 +254,21 @@ func (au *AgentUpdate) AddEvents(r ...*RegistryEvent) *AgentUpdate {
 	return au.AddEventIDs(ids...)
 }
 
+// AddDependencyResolutionIDs adds the "dependency_resolutions" edge to the DependencyResolution entity by IDs.
+func (au *AgentUpdate) AddDependencyResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.AddDependencyResolutionIDs(ids...)
+	return au
+}
+
+// AddDependencyResolutions adds the "dependency_resolutions" edges to the DependencyResolution entity.
+func (au *AgentUpdate) AddDependencyResolutions(d ...*DependencyResolution) *AgentUpdate {
+	ids := make([]int, len(d))
+	for i := range d {
+		ids[i] = d[i].ID
+	}
+	return au.AddDependencyResolutionIDs(ids...)
+}
+
 // Mutation returns the AgentMutation object of the builder.
 func (au *AgentUpdate) Mutation() *AgentMutation {
 	return au.mutation
@@ -298,6 +314,27 @@ func (au *AgentUpdate) RemoveEvents(r ...*RegistryEvent) *AgentUpdate {
 		ids[i] = r[i].ID
 	}
 	return au.RemoveEventIDs(ids...)
+}
+
+// ClearDependencyResolutions clears all "dependency_resolutions" edges to the DependencyResolution entity.
+func (au *AgentUpdate) ClearDependencyResolutions() *AgentUpdate {
+	au.mutation.ClearDependencyResolutions()
+	return au
+}
+
+// RemoveDependencyResolutionIDs removes the "dependency_resolutions" edge to DependencyResolution entities by IDs.
+func (au *AgentUpdate) RemoveDependencyResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.RemoveDependencyResolutionIDs(ids...)
+	return au
+}
+
+// RemoveDependencyResolutions removes "dependency_resolutions" edges to DependencyResolution entities.
+func (au *AgentUpdate) RemoveDependencyResolutions(d ...*DependencyResolution) *AgentUpdate {
+	ids := make([]int, len(d))
+	for i := range d {
+		ids[i] = d[i].ID
+	}
+	return au.RemoveDependencyResolutionIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -488,6 +525,51 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(registryevent.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if au.mutation.DependencyResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.RemovedDependencyResolutionsIDs(); len(nodes) > 0 && !au.mutation.DependencyResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.DependencyResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -738,6 +820,21 @@ func (auo *AgentUpdateOne) AddEvents(r ...*RegistryEvent) *AgentUpdateOne {
 	return auo.AddEventIDs(ids...)
 }
 
+// AddDependencyResolutionIDs adds the "dependency_resolutions" edge to the DependencyResolution entity by IDs.
+func (auo *AgentUpdateOne) AddDependencyResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.AddDependencyResolutionIDs(ids...)
+	return auo
+}
+
+// AddDependencyResolutions adds the "dependency_resolutions" edges to the DependencyResolution entity.
+func (auo *AgentUpdateOne) AddDependencyResolutions(d ...*DependencyResolution) *AgentUpdateOne {
+	ids := make([]int, len(d))
+	for i := range d {
+		ids[i] = d[i].ID
+	}
+	return auo.AddDependencyResolutionIDs(ids...)
+}
+
 // Mutation returns the AgentMutation object of the builder.
 func (auo *AgentUpdateOne) Mutation() *AgentMutation {
 	return auo.mutation
@@ -783,6 +880,27 @@ func (auo *AgentUpdateOne) RemoveEvents(r ...*RegistryEvent) *AgentUpdateOne {
 		ids[i] = r[i].ID
 	}
 	return auo.RemoveEventIDs(ids...)
+}
+
+// ClearDependencyResolutions clears all "dependency_resolutions" edges to the DependencyResolution entity.
+func (auo *AgentUpdateOne) ClearDependencyResolutions() *AgentUpdateOne {
+	auo.mutation.ClearDependencyResolutions()
+	return auo
+}
+
+// RemoveDependencyResolutionIDs removes the "dependency_resolutions" edge to DependencyResolution entities by IDs.
+func (auo *AgentUpdateOne) RemoveDependencyResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.RemoveDependencyResolutionIDs(ids...)
+	return auo
+}
+
+// RemoveDependencyResolutions removes "dependency_resolutions" edges to DependencyResolution entities.
+func (auo *AgentUpdateOne) RemoveDependencyResolutions(d ...*DependencyResolution) *AgentUpdateOne {
+	ids := make([]int, len(d))
+	for i := range d {
+		ids[i] = d[i].ID
+	}
+	return auo.RemoveDependencyResolutionIDs(ids...)
 }
 
 // Where appends a list predicates to the AgentUpdate builder.
@@ -1003,6 +1121,51 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(registryevent.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if auo.mutation.DependencyResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.RemovedDependencyResolutionsIDs(); len(nodes) > 0 && !auo.mutation.DependencyResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.DependencyResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

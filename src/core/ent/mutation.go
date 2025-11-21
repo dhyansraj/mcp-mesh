@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 	"sync"
@@ -26,42 +27,46 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAgent         = "Agent"
-	TypeCapability    = "Capability"
-	TypeRegistryEvent = "RegistryEvent"
+	TypeAgent                = "Agent"
+	TypeCapability           = "Capability"
+	TypeDependencyResolution = "DependencyResolution"
+	TypeRegistryEvent        = "RegistryEvent"
 )
 
 // AgentMutation represents an operation that mutates the Agent nodes in the graph.
 type AgentMutation struct {
 	config
-	op                       Op
-	typ                      string
-	id                       *string
-	agent_type               *agent.AgentType
-	name                     *string
-	version                  *string
-	http_host                *string
-	http_port                *int
-	addhttp_port             *int
-	namespace                *string
-	status                   *agent.Status
-	total_dependencies       *int
-	addtotal_dependencies    *int
-	dependencies_resolved    *int
-	adddependencies_resolved *int
-	created_at               *time.Time
-	updated_at               *time.Time
-	last_full_refresh        *time.Time
-	clearedFields            map[string]struct{}
-	capabilities             map[int]struct{}
-	removedcapabilities      map[int]struct{}
-	clearedcapabilities      bool
-	events                   map[int]struct{}
-	removedevents            map[int]struct{}
-	clearedevents            bool
-	done                     bool
-	oldValue                 func(context.Context) (*Agent, error)
-	predicates               []predicate.Agent
+	op                            Op
+	typ                           string
+	id                            *string
+	agent_type                    *agent.AgentType
+	name                          *string
+	version                       *string
+	http_host                     *string
+	http_port                     *int
+	addhttp_port                  *int
+	namespace                     *string
+	status                        *agent.Status
+	total_dependencies            *int
+	addtotal_dependencies         *int
+	dependencies_resolved         *int
+	adddependencies_resolved      *int
+	created_at                    *time.Time
+	updated_at                    *time.Time
+	last_full_refresh             *time.Time
+	clearedFields                 map[string]struct{}
+	capabilities                  map[int]struct{}
+	removedcapabilities           map[int]struct{}
+	clearedcapabilities           bool
+	events                        map[int]struct{}
+	removedevents                 map[int]struct{}
+	clearedevents                 bool
+	dependency_resolutions        map[int]struct{}
+	removeddependency_resolutions map[int]struct{}
+	cleareddependency_resolutions bool
+	done                          bool
+	oldValue                      func(context.Context) (*Agent, error)
+	predicates                    []predicate.Agent
 }
 
 var _ ent.Mutation = (*AgentMutation)(nil)
@@ -808,6 +813,60 @@ func (m *AgentMutation) ResetEvents() {
 	m.removedevents = nil
 }
 
+// AddDependencyResolutionIDs adds the "dependency_resolutions" edge to the DependencyResolution entity by ids.
+func (m *AgentMutation) AddDependencyResolutionIDs(ids ...int) {
+	if m.dependency_resolutions == nil {
+		m.dependency_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.dependency_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// ClearDependencyResolutions clears the "dependency_resolutions" edge to the DependencyResolution entity.
+func (m *AgentMutation) ClearDependencyResolutions() {
+	m.cleareddependency_resolutions = true
+}
+
+// DependencyResolutionsCleared reports if the "dependency_resolutions" edge to the DependencyResolution entity was cleared.
+func (m *AgentMutation) DependencyResolutionsCleared() bool {
+	return m.cleareddependency_resolutions
+}
+
+// RemoveDependencyResolutionIDs removes the "dependency_resolutions" edge to the DependencyResolution entity by IDs.
+func (m *AgentMutation) RemoveDependencyResolutionIDs(ids ...int) {
+	if m.removeddependency_resolutions == nil {
+		m.removeddependency_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.dependency_resolutions, ids[i])
+		m.removeddependency_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedDependencyResolutions returns the removed IDs of the "dependency_resolutions" edge to the DependencyResolution entity.
+func (m *AgentMutation) RemovedDependencyResolutionsIDs() (ids []int) {
+	for id := range m.removeddependency_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// DependencyResolutionsIDs returns the "dependency_resolutions" edge IDs in the mutation.
+func (m *AgentMutation) DependencyResolutionsIDs() (ids []int) {
+	for id := range m.dependency_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetDependencyResolutions resets all changes to the "dependency_resolutions" edge.
+func (m *AgentMutation) ResetDependencyResolutions() {
+	m.dependency_resolutions = nil
+	m.cleareddependency_resolutions = false
+	m.removeddependency_resolutions = nil
+}
+
 // Where appends a list predicates to the AgentMutation builder.
 func (m *AgentMutation) Where(ps ...predicate.Agent) {
 	m.predicates = append(m.predicates, ps...)
@@ -1188,12 +1247,15 @@ func (m *AgentMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AgentMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.capabilities != nil {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
 	if m.events != nil {
 		edges = append(edges, agent.EdgeEvents)
+	}
+	if m.dependency_resolutions != nil {
+		edges = append(edges, agent.EdgeDependencyResolutions)
 	}
 	return edges
 }
@@ -1214,18 +1276,27 @@ func (m *AgentMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case agent.EdgeDependencyResolutions:
+		ids := make([]ent.Value, 0, len(m.dependency_resolutions))
+		for id := range m.dependency_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AgentMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.removedcapabilities != nil {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
 	if m.removedevents != nil {
 		edges = append(edges, agent.EdgeEvents)
+	}
+	if m.removeddependency_resolutions != nil {
+		edges = append(edges, agent.EdgeDependencyResolutions)
 	}
 	return edges
 }
@@ -1246,18 +1317,27 @@ func (m *AgentMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case agent.EdgeDependencyResolutions:
+		ids := make([]ent.Value, 0, len(m.removeddependency_resolutions))
+		for id := range m.removeddependency_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AgentMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.clearedcapabilities {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
 	if m.clearedevents {
 		edges = append(edges, agent.EdgeEvents)
+	}
+	if m.cleareddependency_resolutions {
+		edges = append(edges, agent.EdgeDependencyResolutions)
 	}
 	return edges
 }
@@ -1270,6 +1350,8 @@ func (m *AgentMutation) EdgeCleared(name string) bool {
 		return m.clearedcapabilities
 	case agent.EdgeEvents:
 		return m.clearedevents
+	case agent.EdgeDependencyResolutions:
+		return m.cleareddependency_resolutions
 	}
 	return false
 }
@@ -1292,6 +1374,9 @@ func (m *AgentMutation) ResetEdge(name string) error {
 	case agent.EdgeEvents:
 		m.ResetEvents()
 		return nil
+	case agent.EdgeDependencyResolutions:
+		m.ResetDependencyResolutions()
+		return nil
 	}
 	return fmt.Errorf("unknown Agent edge %s", name)
 }
@@ -1299,26 +1384,28 @@ func (m *AgentMutation) ResetEdge(name string) error {
 // CapabilityMutation represents an operation that mutates the Capability nodes in the graph.
 type CapabilityMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *int
-	function_name *string
-	capability    *string
-	version       *string
-	description   *string
-	input_schema  *map[string]interface{}
-	llm_filter    *map[string]interface{}
-	tags          *[]string
-	appendtags    []string
-	kwargs        *map[string]interface{}
-	created_at    *time.Time
-	updated_at    *time.Time
-	clearedFields map[string]struct{}
-	agent         *string
-	clearedagent  bool
-	done          bool
-	oldValue      func(context.Context) (*Capability, error)
-	predicates    []predicate.Capability
+	op                 Op
+	typ                string
+	id                 *int
+	function_name      *string
+	capability         *string
+	version            *string
+	description        *string
+	input_schema       *map[string]interface{}
+	llm_filter         *map[string]interface{}
+	tags               *[]string
+	appendtags         []string
+	kwargs             *map[string]interface{}
+	dependencies       *[]map[string]interface{}
+	appenddependencies []map[string]interface{}
+	created_at         *time.Time
+	updated_at         *time.Time
+	clearedFields      map[string]struct{}
+	agent              *string
+	clearedagent       bool
+	done               bool
+	oldValue           func(context.Context) (*Capability, error)
+	predicates         []predicate.Capability
 }
 
 var _ ent.Mutation = (*CapabilityMutation)(nil)
@@ -1774,6 +1861,71 @@ func (m *CapabilityMutation) ResetKwargs() {
 	delete(m.clearedFields, capability.FieldKwargs)
 }
 
+// SetDependencies sets the "dependencies" field.
+func (m *CapabilityMutation) SetDependencies(value []map[string]interface{}) {
+	m.dependencies = &value
+	m.appenddependencies = nil
+}
+
+// Dependencies returns the value of the "dependencies" field in the mutation.
+func (m *CapabilityMutation) Dependencies() (r []map[string]interface{}, exists bool) {
+	v := m.dependencies
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDependencies returns the old "dependencies" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldDependencies(ctx context.Context) (v []map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDependencies is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDependencies requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDependencies: %w", err)
+	}
+	return oldValue.Dependencies, nil
+}
+
+// AppendDependencies adds value to the "dependencies" field.
+func (m *CapabilityMutation) AppendDependencies(value []map[string]interface{}) {
+	m.appenddependencies = append(m.appenddependencies, value...)
+}
+
+// AppendedDependencies returns the list of values that were appended to the "dependencies" field in this mutation.
+func (m *CapabilityMutation) AppendedDependencies() ([]map[string]interface{}, bool) {
+	if len(m.appenddependencies) == 0 {
+		return nil, false
+	}
+	return m.appenddependencies, true
+}
+
+// ClearDependencies clears the value of the "dependencies" field.
+func (m *CapabilityMutation) ClearDependencies() {
+	m.dependencies = nil
+	m.appenddependencies = nil
+	m.clearedFields[capability.FieldDependencies] = struct{}{}
+}
+
+// DependenciesCleared returns if the "dependencies" field was cleared in this mutation.
+func (m *CapabilityMutation) DependenciesCleared() bool {
+	_, ok := m.clearedFields[capability.FieldDependencies]
+	return ok
+}
+
+// ResetDependencies resets all changes to the "dependencies" field.
+func (m *CapabilityMutation) ResetDependencies() {
+	m.dependencies = nil
+	m.appenddependencies = nil
+	delete(m.clearedFields, capability.FieldDependencies)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *CapabilityMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -1919,7 +2071,7 @@ func (m *CapabilityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CapabilityMutation) Fields() []string {
-	fields := make([]string, 0, 10)
+	fields := make([]string, 0, 11)
 	if m.function_name != nil {
 		fields = append(fields, capability.FieldFunctionName)
 	}
@@ -1943,6 +2095,9 @@ func (m *CapabilityMutation) Fields() []string {
 	}
 	if m.kwargs != nil {
 		fields = append(fields, capability.FieldKwargs)
+	}
+	if m.dependencies != nil {
+		fields = append(fields, capability.FieldDependencies)
 	}
 	if m.created_at != nil {
 		fields = append(fields, capability.FieldCreatedAt)
@@ -1974,6 +2129,8 @@ func (m *CapabilityMutation) Field(name string) (ent.Value, bool) {
 		return m.Tags()
 	case capability.FieldKwargs:
 		return m.Kwargs()
+	case capability.FieldDependencies:
+		return m.Dependencies()
 	case capability.FieldCreatedAt:
 		return m.CreatedAt()
 	case capability.FieldUpdatedAt:
@@ -2003,6 +2160,8 @@ func (m *CapabilityMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldTags(ctx)
 	case capability.FieldKwargs:
 		return m.OldKwargs(ctx)
+	case capability.FieldDependencies:
+		return m.OldDependencies(ctx)
 	case capability.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case capability.FieldUpdatedAt:
@@ -2072,6 +2231,13 @@ func (m *CapabilityMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetKwargs(v)
 		return nil
+	case capability.FieldDependencies:
+		v, ok := value.([]map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDependencies(v)
+		return nil
 	case capability.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -2128,6 +2294,9 @@ func (m *CapabilityMutation) ClearedFields() []string {
 	if m.FieldCleared(capability.FieldKwargs) {
 		fields = append(fields, capability.FieldKwargs)
 	}
+	if m.FieldCleared(capability.FieldDependencies) {
+		fields = append(fields, capability.FieldDependencies)
+	}
 	return fields
 }
 
@@ -2153,6 +2322,9 @@ func (m *CapabilityMutation) ClearField(name string) error {
 		return nil
 	case capability.FieldKwargs:
 		m.ClearKwargs()
+		return nil
+	case capability.FieldDependencies:
+		m.ClearDependencies()
 		return nil
 	}
 	return fmt.Errorf("unknown Capability nullable field %s", name)
@@ -2185,6 +2357,9 @@ func (m *CapabilityMutation) ResetField(name string) error {
 		return nil
 	case capability.FieldKwargs:
 		m.ResetKwargs()
+		return nil
+	case capability.FieldDependencies:
+		m.ResetDependencies()
 		return nil
 	case capability.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -2268,6 +2443,1214 @@ func (m *CapabilityMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown Capability edge %s", name)
+}
+
+// DependencyResolutionMutation represents an operation that mutates the DependencyResolution nodes in the graph.
+type DependencyResolutionMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *int
+	consumer_function_name *string
+	capability_required    *string
+	tags_required          *[]string
+	appendtags_required    []string
+	version_required       *string
+	namespace_required     *string
+	provider_function_name *string
+	endpoint               *string
+	status                 *dependencyresolution.Status
+	resolved_at            *time.Time
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	consumer_agent         *string
+	clearedconsumer_agent  bool
+	provider_agent         *string
+	clearedprovider_agent  bool
+	done                   bool
+	oldValue               func(context.Context) (*DependencyResolution, error)
+	predicates             []predicate.DependencyResolution
+}
+
+var _ ent.Mutation = (*DependencyResolutionMutation)(nil)
+
+// dependencyresolutionOption allows management of the mutation configuration using functional options.
+type dependencyresolutionOption func(*DependencyResolutionMutation)
+
+// newDependencyResolutionMutation creates new mutation for the DependencyResolution entity.
+func newDependencyResolutionMutation(c config, op Op, opts ...dependencyresolutionOption) *DependencyResolutionMutation {
+	m := &DependencyResolutionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeDependencyResolution,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withDependencyResolutionID sets the ID field of the mutation.
+func withDependencyResolutionID(id int) dependencyresolutionOption {
+	return func(m *DependencyResolutionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *DependencyResolution
+		)
+		m.oldValue = func(ctx context.Context) (*DependencyResolution, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().DependencyResolution.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withDependencyResolution sets the old DependencyResolution of the mutation.
+func withDependencyResolution(node *DependencyResolution) dependencyresolutionOption {
+	return func(m *DependencyResolutionMutation) {
+		m.oldValue = func(context.Context) (*DependencyResolution, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m DependencyResolutionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m DependencyResolutionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *DependencyResolutionMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *DependencyResolutionMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().DependencyResolution.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetConsumerAgentID sets the "consumer_agent_id" field.
+func (m *DependencyResolutionMutation) SetConsumerAgentID(s string) {
+	m.consumer_agent = &s
+}
+
+// ConsumerAgentID returns the value of the "consumer_agent_id" field in the mutation.
+func (m *DependencyResolutionMutation) ConsumerAgentID() (r string, exists bool) {
+	v := m.consumer_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerAgentID returns the old "consumer_agent_id" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldConsumerAgentID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerAgentID: %w", err)
+	}
+	return oldValue.ConsumerAgentID, nil
+}
+
+// ResetConsumerAgentID resets all changes to the "consumer_agent_id" field.
+func (m *DependencyResolutionMutation) ResetConsumerAgentID() {
+	m.consumer_agent = nil
+}
+
+// SetConsumerFunctionName sets the "consumer_function_name" field.
+func (m *DependencyResolutionMutation) SetConsumerFunctionName(s string) {
+	m.consumer_function_name = &s
+}
+
+// ConsumerFunctionName returns the value of the "consumer_function_name" field in the mutation.
+func (m *DependencyResolutionMutation) ConsumerFunctionName() (r string, exists bool) {
+	v := m.consumer_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerFunctionName returns the old "consumer_function_name" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldConsumerFunctionName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerFunctionName: %w", err)
+	}
+	return oldValue.ConsumerFunctionName, nil
+}
+
+// ResetConsumerFunctionName resets all changes to the "consumer_function_name" field.
+func (m *DependencyResolutionMutation) ResetConsumerFunctionName() {
+	m.consumer_function_name = nil
+}
+
+// SetCapabilityRequired sets the "capability_required" field.
+func (m *DependencyResolutionMutation) SetCapabilityRequired(s string) {
+	m.capability_required = &s
+}
+
+// CapabilityRequired returns the value of the "capability_required" field in the mutation.
+func (m *DependencyResolutionMutation) CapabilityRequired() (r string, exists bool) {
+	v := m.capability_required
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapabilityRequired returns the old "capability_required" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldCapabilityRequired(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapabilityRequired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapabilityRequired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapabilityRequired: %w", err)
+	}
+	return oldValue.CapabilityRequired, nil
+}
+
+// ResetCapabilityRequired resets all changes to the "capability_required" field.
+func (m *DependencyResolutionMutation) ResetCapabilityRequired() {
+	m.capability_required = nil
+}
+
+// SetTagsRequired sets the "tags_required" field.
+func (m *DependencyResolutionMutation) SetTagsRequired(s []string) {
+	m.tags_required = &s
+	m.appendtags_required = nil
+}
+
+// TagsRequired returns the value of the "tags_required" field in the mutation.
+func (m *DependencyResolutionMutation) TagsRequired() (r []string, exists bool) {
+	v := m.tags_required
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTagsRequired returns the old "tags_required" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldTagsRequired(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTagsRequired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTagsRequired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTagsRequired: %w", err)
+	}
+	return oldValue.TagsRequired, nil
+}
+
+// AppendTagsRequired adds s to the "tags_required" field.
+func (m *DependencyResolutionMutation) AppendTagsRequired(s []string) {
+	m.appendtags_required = append(m.appendtags_required, s...)
+}
+
+// AppendedTagsRequired returns the list of values that were appended to the "tags_required" field in this mutation.
+func (m *DependencyResolutionMutation) AppendedTagsRequired() ([]string, bool) {
+	if len(m.appendtags_required) == 0 {
+		return nil, false
+	}
+	return m.appendtags_required, true
+}
+
+// ClearTagsRequired clears the value of the "tags_required" field.
+func (m *DependencyResolutionMutation) ClearTagsRequired() {
+	m.tags_required = nil
+	m.appendtags_required = nil
+	m.clearedFields[dependencyresolution.FieldTagsRequired] = struct{}{}
+}
+
+// TagsRequiredCleared returns if the "tags_required" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) TagsRequiredCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldTagsRequired]
+	return ok
+}
+
+// ResetTagsRequired resets all changes to the "tags_required" field.
+func (m *DependencyResolutionMutation) ResetTagsRequired() {
+	m.tags_required = nil
+	m.appendtags_required = nil
+	delete(m.clearedFields, dependencyresolution.FieldTagsRequired)
+}
+
+// SetVersionRequired sets the "version_required" field.
+func (m *DependencyResolutionMutation) SetVersionRequired(s string) {
+	m.version_required = &s
+}
+
+// VersionRequired returns the value of the "version_required" field in the mutation.
+func (m *DependencyResolutionMutation) VersionRequired() (r string, exists bool) {
+	v := m.version_required
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVersionRequired returns the old "version_required" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldVersionRequired(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVersionRequired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVersionRequired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVersionRequired: %w", err)
+	}
+	return oldValue.VersionRequired, nil
+}
+
+// ClearVersionRequired clears the value of the "version_required" field.
+func (m *DependencyResolutionMutation) ClearVersionRequired() {
+	m.version_required = nil
+	m.clearedFields[dependencyresolution.FieldVersionRequired] = struct{}{}
+}
+
+// VersionRequiredCleared returns if the "version_required" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) VersionRequiredCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldVersionRequired]
+	return ok
+}
+
+// ResetVersionRequired resets all changes to the "version_required" field.
+func (m *DependencyResolutionMutation) ResetVersionRequired() {
+	m.version_required = nil
+	delete(m.clearedFields, dependencyresolution.FieldVersionRequired)
+}
+
+// SetNamespaceRequired sets the "namespace_required" field.
+func (m *DependencyResolutionMutation) SetNamespaceRequired(s string) {
+	m.namespace_required = &s
+}
+
+// NamespaceRequired returns the value of the "namespace_required" field in the mutation.
+func (m *DependencyResolutionMutation) NamespaceRequired() (r string, exists bool) {
+	v := m.namespace_required
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNamespaceRequired returns the old "namespace_required" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldNamespaceRequired(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNamespaceRequired is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNamespaceRequired requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNamespaceRequired: %w", err)
+	}
+	return oldValue.NamespaceRequired, nil
+}
+
+// ResetNamespaceRequired resets all changes to the "namespace_required" field.
+func (m *DependencyResolutionMutation) ResetNamespaceRequired() {
+	m.namespace_required = nil
+}
+
+// SetProviderAgentID sets the "provider_agent_id" field.
+func (m *DependencyResolutionMutation) SetProviderAgentID(s string) {
+	m.provider_agent = &s
+}
+
+// ProviderAgentID returns the value of the "provider_agent_id" field in the mutation.
+func (m *DependencyResolutionMutation) ProviderAgentID() (r string, exists bool) {
+	v := m.provider_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderAgentID returns the old "provider_agent_id" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldProviderAgentID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderAgentID: %w", err)
+	}
+	return oldValue.ProviderAgentID, nil
+}
+
+// ClearProviderAgentID clears the value of the "provider_agent_id" field.
+func (m *DependencyResolutionMutation) ClearProviderAgentID() {
+	m.provider_agent = nil
+	m.clearedFields[dependencyresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentIDCleared returns if the "provider_agent_id" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) ProviderAgentIDCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldProviderAgentID]
+	return ok
+}
+
+// ResetProviderAgentID resets all changes to the "provider_agent_id" field.
+func (m *DependencyResolutionMutation) ResetProviderAgentID() {
+	m.provider_agent = nil
+	delete(m.clearedFields, dependencyresolution.FieldProviderAgentID)
+}
+
+// SetProviderFunctionName sets the "provider_function_name" field.
+func (m *DependencyResolutionMutation) SetProviderFunctionName(s string) {
+	m.provider_function_name = &s
+}
+
+// ProviderFunctionName returns the value of the "provider_function_name" field in the mutation.
+func (m *DependencyResolutionMutation) ProviderFunctionName() (r string, exists bool) {
+	v := m.provider_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderFunctionName returns the old "provider_function_name" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldProviderFunctionName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderFunctionName: %w", err)
+	}
+	return oldValue.ProviderFunctionName, nil
+}
+
+// ClearProviderFunctionName clears the value of the "provider_function_name" field.
+func (m *DependencyResolutionMutation) ClearProviderFunctionName() {
+	m.provider_function_name = nil
+	m.clearedFields[dependencyresolution.FieldProviderFunctionName] = struct{}{}
+}
+
+// ProviderFunctionNameCleared returns if the "provider_function_name" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) ProviderFunctionNameCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldProviderFunctionName]
+	return ok
+}
+
+// ResetProviderFunctionName resets all changes to the "provider_function_name" field.
+func (m *DependencyResolutionMutation) ResetProviderFunctionName() {
+	m.provider_function_name = nil
+	delete(m.clearedFields, dependencyresolution.FieldProviderFunctionName)
+}
+
+// SetEndpoint sets the "endpoint" field.
+func (m *DependencyResolutionMutation) SetEndpoint(s string) {
+	m.endpoint = &s
+}
+
+// Endpoint returns the value of the "endpoint" field in the mutation.
+func (m *DependencyResolutionMutation) Endpoint() (r string, exists bool) {
+	v := m.endpoint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpoint returns the old "endpoint" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldEndpoint(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpoint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpoint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpoint: %w", err)
+	}
+	return oldValue.Endpoint, nil
+}
+
+// ClearEndpoint clears the value of the "endpoint" field.
+func (m *DependencyResolutionMutation) ClearEndpoint() {
+	m.endpoint = nil
+	m.clearedFields[dependencyresolution.FieldEndpoint] = struct{}{}
+}
+
+// EndpointCleared returns if the "endpoint" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) EndpointCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldEndpoint]
+	return ok
+}
+
+// ResetEndpoint resets all changes to the "endpoint" field.
+func (m *DependencyResolutionMutation) ResetEndpoint() {
+	m.endpoint = nil
+	delete(m.clearedFields, dependencyresolution.FieldEndpoint)
+}
+
+// SetStatus sets the "status" field.
+func (m *DependencyResolutionMutation) SetStatus(d dependencyresolution.Status) {
+	m.status = &d
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *DependencyResolutionMutation) Status() (r dependencyresolution.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldStatus(ctx context.Context) (v dependencyresolution.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *DependencyResolutionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetResolvedAt sets the "resolved_at" field.
+func (m *DependencyResolutionMutation) SetResolvedAt(t time.Time) {
+	m.resolved_at = &t
+}
+
+// ResolvedAt returns the value of the "resolved_at" field in the mutation.
+func (m *DependencyResolutionMutation) ResolvedAt() (r time.Time, exists bool) {
+	v := m.resolved_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResolvedAt returns the old "resolved_at" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldResolvedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResolvedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResolvedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResolvedAt: %w", err)
+	}
+	return oldValue.ResolvedAt, nil
+}
+
+// ClearResolvedAt clears the value of the "resolved_at" field.
+func (m *DependencyResolutionMutation) ClearResolvedAt() {
+	m.resolved_at = nil
+	m.clearedFields[dependencyresolution.FieldResolvedAt] = struct{}{}
+}
+
+// ResolvedAtCleared returns if the "resolved_at" field was cleared in this mutation.
+func (m *DependencyResolutionMutation) ResolvedAtCleared() bool {
+	_, ok := m.clearedFields[dependencyresolution.FieldResolvedAt]
+	return ok
+}
+
+// ResetResolvedAt resets all changes to the "resolved_at" field.
+func (m *DependencyResolutionMutation) ResetResolvedAt() {
+	m.resolved_at = nil
+	delete(m.clearedFields, dependencyresolution.FieldResolvedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *DependencyResolutionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *DependencyResolutionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *DependencyResolutionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *DependencyResolutionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *DependencyResolutionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *DependencyResolutionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearConsumerAgent clears the "consumer_agent" edge to the Agent entity.
+func (m *DependencyResolutionMutation) ClearConsumerAgent() {
+	m.clearedconsumer_agent = true
+	m.clearedFields[dependencyresolution.FieldConsumerAgentID] = struct{}{}
+}
+
+// ConsumerAgentCleared reports if the "consumer_agent" edge to the Agent entity was cleared.
+func (m *DependencyResolutionMutation) ConsumerAgentCleared() bool {
+	return m.clearedconsumer_agent
+}
+
+// ConsumerAgentIDs returns the "consumer_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ConsumerAgentID instead. It exists only for internal usage by the builders.
+func (m *DependencyResolutionMutation) ConsumerAgentIDs() (ids []string) {
+	if id := m.consumer_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetConsumerAgent resets all changes to the "consumer_agent" edge.
+func (m *DependencyResolutionMutation) ResetConsumerAgent() {
+	m.consumer_agent = nil
+	m.clearedconsumer_agent = false
+}
+
+// ClearProviderAgent clears the "provider_agent" edge to the Agent entity.
+func (m *DependencyResolutionMutation) ClearProviderAgent() {
+	m.clearedprovider_agent = true
+	m.clearedFields[dependencyresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentCleared reports if the "provider_agent" edge to the Agent entity was cleared.
+func (m *DependencyResolutionMutation) ProviderAgentCleared() bool {
+	return m.ProviderAgentIDCleared() || m.clearedprovider_agent
+}
+
+// ProviderAgentIDs returns the "provider_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ProviderAgentID instead. It exists only for internal usage by the builders.
+func (m *DependencyResolutionMutation) ProviderAgentIDs() (ids []string) {
+	if id := m.provider_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetProviderAgent resets all changes to the "provider_agent" edge.
+func (m *DependencyResolutionMutation) ResetProviderAgent() {
+	m.provider_agent = nil
+	m.clearedprovider_agent = false
+}
+
+// Where appends a list predicates to the DependencyResolutionMutation builder.
+func (m *DependencyResolutionMutation) Where(ps ...predicate.DependencyResolution) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the DependencyResolutionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *DependencyResolutionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.DependencyResolution, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *DependencyResolutionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *DependencyResolutionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (DependencyResolution).
+func (m *DependencyResolutionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *DependencyResolutionMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.consumer_agent != nil {
+		fields = append(fields, dependencyresolution.FieldConsumerAgentID)
+	}
+	if m.consumer_function_name != nil {
+		fields = append(fields, dependencyresolution.FieldConsumerFunctionName)
+	}
+	if m.capability_required != nil {
+		fields = append(fields, dependencyresolution.FieldCapabilityRequired)
+	}
+	if m.tags_required != nil {
+		fields = append(fields, dependencyresolution.FieldTagsRequired)
+	}
+	if m.version_required != nil {
+		fields = append(fields, dependencyresolution.FieldVersionRequired)
+	}
+	if m.namespace_required != nil {
+		fields = append(fields, dependencyresolution.FieldNamespaceRequired)
+	}
+	if m.provider_agent != nil {
+		fields = append(fields, dependencyresolution.FieldProviderAgentID)
+	}
+	if m.provider_function_name != nil {
+		fields = append(fields, dependencyresolution.FieldProviderFunctionName)
+	}
+	if m.endpoint != nil {
+		fields = append(fields, dependencyresolution.FieldEndpoint)
+	}
+	if m.status != nil {
+		fields = append(fields, dependencyresolution.FieldStatus)
+	}
+	if m.resolved_at != nil {
+		fields = append(fields, dependencyresolution.FieldResolvedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, dependencyresolution.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, dependencyresolution.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *DependencyResolutionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case dependencyresolution.FieldConsumerAgentID:
+		return m.ConsumerAgentID()
+	case dependencyresolution.FieldConsumerFunctionName:
+		return m.ConsumerFunctionName()
+	case dependencyresolution.FieldCapabilityRequired:
+		return m.CapabilityRequired()
+	case dependencyresolution.FieldTagsRequired:
+		return m.TagsRequired()
+	case dependencyresolution.FieldVersionRequired:
+		return m.VersionRequired()
+	case dependencyresolution.FieldNamespaceRequired:
+		return m.NamespaceRequired()
+	case dependencyresolution.FieldProviderAgentID:
+		return m.ProviderAgentID()
+	case dependencyresolution.FieldProviderFunctionName:
+		return m.ProviderFunctionName()
+	case dependencyresolution.FieldEndpoint:
+		return m.Endpoint()
+	case dependencyresolution.FieldStatus:
+		return m.Status()
+	case dependencyresolution.FieldResolvedAt:
+		return m.ResolvedAt()
+	case dependencyresolution.FieldCreatedAt:
+		return m.CreatedAt()
+	case dependencyresolution.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *DependencyResolutionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case dependencyresolution.FieldConsumerAgentID:
+		return m.OldConsumerAgentID(ctx)
+	case dependencyresolution.FieldConsumerFunctionName:
+		return m.OldConsumerFunctionName(ctx)
+	case dependencyresolution.FieldCapabilityRequired:
+		return m.OldCapabilityRequired(ctx)
+	case dependencyresolution.FieldTagsRequired:
+		return m.OldTagsRequired(ctx)
+	case dependencyresolution.FieldVersionRequired:
+		return m.OldVersionRequired(ctx)
+	case dependencyresolution.FieldNamespaceRequired:
+		return m.OldNamespaceRequired(ctx)
+	case dependencyresolution.FieldProviderAgentID:
+		return m.OldProviderAgentID(ctx)
+	case dependencyresolution.FieldProviderFunctionName:
+		return m.OldProviderFunctionName(ctx)
+	case dependencyresolution.FieldEndpoint:
+		return m.OldEndpoint(ctx)
+	case dependencyresolution.FieldStatus:
+		return m.OldStatus(ctx)
+	case dependencyresolution.FieldResolvedAt:
+		return m.OldResolvedAt(ctx)
+	case dependencyresolution.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case dependencyresolution.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown DependencyResolution field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DependencyResolutionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case dependencyresolution.FieldConsumerAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerAgentID(v)
+		return nil
+	case dependencyresolution.FieldConsumerFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerFunctionName(v)
+		return nil
+	case dependencyresolution.FieldCapabilityRequired:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapabilityRequired(v)
+		return nil
+	case dependencyresolution.FieldTagsRequired:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTagsRequired(v)
+		return nil
+	case dependencyresolution.FieldVersionRequired:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVersionRequired(v)
+		return nil
+	case dependencyresolution.FieldNamespaceRequired:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNamespaceRequired(v)
+		return nil
+	case dependencyresolution.FieldProviderAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderAgentID(v)
+		return nil
+	case dependencyresolution.FieldProviderFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderFunctionName(v)
+		return nil
+	case dependencyresolution.FieldEndpoint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpoint(v)
+		return nil
+	case dependencyresolution.FieldStatus:
+		v, ok := value.(dependencyresolution.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case dependencyresolution.FieldResolvedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResolvedAt(v)
+		return nil
+	case dependencyresolution.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case dependencyresolution.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DependencyResolution field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *DependencyResolutionMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *DependencyResolutionMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DependencyResolutionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown DependencyResolution numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *DependencyResolutionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(dependencyresolution.FieldTagsRequired) {
+		fields = append(fields, dependencyresolution.FieldTagsRequired)
+	}
+	if m.FieldCleared(dependencyresolution.FieldVersionRequired) {
+		fields = append(fields, dependencyresolution.FieldVersionRequired)
+	}
+	if m.FieldCleared(dependencyresolution.FieldProviderAgentID) {
+		fields = append(fields, dependencyresolution.FieldProviderAgentID)
+	}
+	if m.FieldCleared(dependencyresolution.FieldProviderFunctionName) {
+		fields = append(fields, dependencyresolution.FieldProviderFunctionName)
+	}
+	if m.FieldCleared(dependencyresolution.FieldEndpoint) {
+		fields = append(fields, dependencyresolution.FieldEndpoint)
+	}
+	if m.FieldCleared(dependencyresolution.FieldResolvedAt) {
+		fields = append(fields, dependencyresolution.FieldResolvedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *DependencyResolutionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *DependencyResolutionMutation) ClearField(name string) error {
+	switch name {
+	case dependencyresolution.FieldTagsRequired:
+		m.ClearTagsRequired()
+		return nil
+	case dependencyresolution.FieldVersionRequired:
+		m.ClearVersionRequired()
+		return nil
+	case dependencyresolution.FieldProviderAgentID:
+		m.ClearProviderAgentID()
+		return nil
+	case dependencyresolution.FieldProviderFunctionName:
+		m.ClearProviderFunctionName()
+		return nil
+	case dependencyresolution.FieldEndpoint:
+		m.ClearEndpoint()
+		return nil
+	case dependencyresolution.FieldResolvedAt:
+		m.ClearResolvedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DependencyResolution nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *DependencyResolutionMutation) ResetField(name string) error {
+	switch name {
+	case dependencyresolution.FieldConsumerAgentID:
+		m.ResetConsumerAgentID()
+		return nil
+	case dependencyresolution.FieldConsumerFunctionName:
+		m.ResetConsumerFunctionName()
+		return nil
+	case dependencyresolution.FieldCapabilityRequired:
+		m.ResetCapabilityRequired()
+		return nil
+	case dependencyresolution.FieldTagsRequired:
+		m.ResetTagsRequired()
+		return nil
+	case dependencyresolution.FieldVersionRequired:
+		m.ResetVersionRequired()
+		return nil
+	case dependencyresolution.FieldNamespaceRequired:
+		m.ResetNamespaceRequired()
+		return nil
+	case dependencyresolution.FieldProviderAgentID:
+		m.ResetProviderAgentID()
+		return nil
+	case dependencyresolution.FieldProviderFunctionName:
+		m.ResetProviderFunctionName()
+		return nil
+	case dependencyresolution.FieldEndpoint:
+		m.ResetEndpoint()
+		return nil
+	case dependencyresolution.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case dependencyresolution.FieldResolvedAt:
+		m.ResetResolvedAt()
+		return nil
+	case dependencyresolution.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case dependencyresolution.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DependencyResolution field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *DependencyResolutionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.consumer_agent != nil {
+		edges = append(edges, dependencyresolution.EdgeConsumerAgent)
+	}
+	if m.provider_agent != nil {
+		edges = append(edges, dependencyresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *DependencyResolutionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case dependencyresolution.EdgeConsumerAgent:
+		if id := m.consumer_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	case dependencyresolution.EdgeProviderAgent:
+		if id := m.provider_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *DependencyResolutionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *DependencyResolutionMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *DependencyResolutionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedconsumer_agent {
+		edges = append(edges, dependencyresolution.EdgeConsumerAgent)
+	}
+	if m.clearedprovider_agent {
+		edges = append(edges, dependencyresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *DependencyResolutionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case dependencyresolution.EdgeConsumerAgent:
+		return m.clearedconsumer_agent
+	case dependencyresolution.EdgeProviderAgent:
+		return m.clearedprovider_agent
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *DependencyResolutionMutation) ClearEdge(name string) error {
+	switch name {
+	case dependencyresolution.EdgeConsumerAgent:
+		m.ClearConsumerAgent()
+		return nil
+	case dependencyresolution.EdgeProviderAgent:
+		m.ClearProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown DependencyResolution unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *DependencyResolutionMutation) ResetEdge(name string) error {
+	switch name {
+	case dependencyresolution.EdgeConsumerAgent:
+		m.ResetConsumerAgent()
+		return nil
+	case dependencyresolution.EdgeProviderAgent:
+		m.ResetProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown DependencyResolution edge %s", name)
 }
 
 // RegistryEventMutation represents an operation that mutates the RegistryEvent nodes in the graph.

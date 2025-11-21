@@ -385,6 +385,16 @@ func KwargsNotNil() predicate.Capability {
 	return predicate.Capability(sql.FieldNotNull(FieldKwargs))
 }
 
+// DependenciesIsNil applies the IsNil predicate on the "dependencies" field.
+func DependenciesIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldDependencies))
+}
+
+// DependenciesNotNil applies the NotNil predicate on the "dependencies" field.
+func DependenciesNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldDependencies))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Capability {
 	return predicate.Capability(sql.FieldEQ(FieldCreatedAt, v))

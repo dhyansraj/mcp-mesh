@@ -19,15 +19,24 @@ func NewStatusCommand() *cobra.Command {
 This includes registry status, agent health, process information, and connectivity status.
 
 Examples:
-  meshctl status                  # Show basic status
-  meshctl status --verbose        # Show detailed information
-  meshctl status --json           # Output in JSON format`,
+  meshctl status                                  # Show basic status
+  meshctl status --verbose                        # Show detailed information
+  meshctl status --json                           # Output in JSON format
+  meshctl status --registry-port 8002             # Connect to registry on custom port
+  meshctl status --registry-url http://remote:8000 # Connect to remote registry
+  meshctl status --registry-host prod.example.com # Connect to remote host`,
 		RunE: runStatusCommand,
 	}
 
 	// Add flags matching Python CLI
 	cmd.Flags().Bool("verbose", false, "Show detailed status information")
 	cmd.Flags().Bool("json", false, "Output status in JSON format")
+
+	// Remote registry connection flags
+	cmd.Flags().String("registry-url", "", "Registry URL (overrides host/port)")
+	cmd.Flags().String("registry-host", "", "Registry host (default: localhost)")
+	cmd.Flags().Int("registry-port", 0, "Registry port (default: 8000)")
+	cmd.Flags().String("registry-scheme", "http", "Registry URL scheme (http/https)")
 
 	return cmd
 }
@@ -84,9 +93,17 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 	// Get flags
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
+	// Registry connection flags
+	registryURL, _ := cmd.Flags().GetString("registry-url")
+	registryHost, _ := cmd.Flags().GetString("registry-host")
+	registryPort, _ := cmd.Flags().GetInt("registry-port")
+	registryScheme, _ := cmd.Flags().GetString("registry-scheme")
+
+	// Determine final registry URL
+	finalRegistryURL := determineRegistryURL(config, registryURL, registryHost, registryPort, registryScheme)
+
 	// Get enhanced agents using the same logic as list command
-	registryURL := determineRegistryURL(config, "", "", 0, "")
-	agents, err := getEnhancedAgents(registryURL)
+	agents, err := getEnhancedAgents(finalRegistryURL)
 	if err != nil {
 		return fmt.Errorf("failed to get agents: %w", err)
 	}

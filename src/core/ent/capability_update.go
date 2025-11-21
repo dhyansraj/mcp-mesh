@@ -140,6 +140,24 @@ func (cu *CapabilityUpdate) ClearKwargs() *CapabilityUpdate {
 	return cu
 }
 
+// SetDependencies sets the "dependencies" field.
+func (cu *CapabilityUpdate) SetDependencies(m []map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.SetDependencies(m)
+	return cu
+}
+
+// AppendDependencies appends m to the "dependencies" field.
+func (cu *CapabilityUpdate) AppendDependencies(m []map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.AppendDependencies(m)
+	return cu
+}
+
+// ClearDependencies clears the value of the "dependencies" field.
+func (cu *CapabilityUpdate) ClearDependencies() *CapabilityUpdate {
+	cu.mutation.ClearDependencies()
+	return cu
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (cu *CapabilityUpdate) SetUpdatedAt(t time.Time) *CapabilityUpdate {
 	cu.mutation.SetUpdatedAt(t)
@@ -264,6 +282,17 @@ func (cu *CapabilityUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if cu.mutation.KwargsCleared() {
 		_spec.ClearField(capability.FieldKwargs, field.TypeJSON)
+	}
+	if value, ok := cu.mutation.Dependencies(); ok {
+		_spec.SetField(capability.FieldDependencies, field.TypeJSON, value)
+	}
+	if value, ok := cu.mutation.AppendedDependencies(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, capability.FieldDependencies, value)
+		})
+	}
+	if cu.mutation.DependenciesCleared() {
+		_spec.ClearField(capability.FieldDependencies, field.TypeJSON)
 	}
 	if value, ok := cu.mutation.UpdatedAt(); ok {
 		_spec.SetField(capability.FieldUpdatedAt, field.TypeTime, value)
@@ -427,6 +456,24 @@ func (cuo *CapabilityUpdateOne) ClearKwargs() *CapabilityUpdateOne {
 	return cuo
 }
 
+// SetDependencies sets the "dependencies" field.
+func (cuo *CapabilityUpdateOne) SetDependencies(m []map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.SetDependencies(m)
+	return cuo
+}
+
+// AppendDependencies appends m to the "dependencies" field.
+func (cuo *CapabilityUpdateOne) AppendDependencies(m []map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.AppendDependencies(m)
+	return cuo
+}
+
+// ClearDependencies clears the value of the "dependencies" field.
+func (cuo *CapabilityUpdateOne) ClearDependencies() *CapabilityUpdateOne {
+	cuo.mutation.ClearDependencies()
+	return cuo
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (cuo *CapabilityUpdateOne) SetUpdatedAt(t time.Time) *CapabilityUpdateOne {
 	cuo.mutation.SetUpdatedAt(t)
@@ -581,6 +628,17 @@ func (cuo *CapabilityUpdateOne) sqlSave(ctx context.Context) (_node *Capability,
 	}
 	if cuo.mutation.KwargsCleared() {
 		_spec.ClearField(capability.FieldKwargs, field.TypeJSON)
+	}
+	if value, ok := cuo.mutation.Dependencies(); ok {
+		_spec.SetField(capability.FieldDependencies, field.TypeJSON, value)
+	}
+	if value, ok := cuo.mutation.AppendedDependencies(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, capability.FieldDependencies, value)
+		})
+	}
+	if cuo.mutation.DependenciesCleared() {
+		_spec.ClearField(capability.FieldDependencies, field.TypeJSON)
 	}
 	if value, ok := cuo.mutation.UpdatedAt(); ok {
 		_spec.SetField(capability.FieldUpdatedAt, field.TypeTime, value)
