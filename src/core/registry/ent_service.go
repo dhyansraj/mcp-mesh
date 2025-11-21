@@ -11,6 +11,7 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
@@ -404,6 +405,13 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 	s.logger.Info("Agent %s registered successfully", req.AgentID)
 
+	// Store dependency resolutions in database
+	err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+	if err != nil {
+		s.logger.Warning("Failed to store dependency resolutions: %v", err)
+		// Don't fail registration over this
+	}
+
 	return &AgentRegistrationResponse{
 		Status:               "success",
 		Message:              "Agent registered successfully",
@@ -411,6 +419,168 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		Timestamp:            now.Format(time.RFC3339),
 		DependenciesResolved: dependenciesResolved,
 	}, nil
+}
+
+// StoreDependencyResolutions persists dependency resolution information to the database
+func (s *EntService) StoreDependencyResolutions(
+	ctx context.Context,
+	agentID string,
+	metadata map[string]interface{},
+	dependenciesResolved map[string][]*DependencyResolution,
+) error {
+	s.logger.Info("StoreDependencyResolutions called for agent %s", agentID)
+
+	// Extract tools from metadata to get requested dependencies
+	toolsData, exists := metadata["tools"]
+	if !exists {
+		s.logger.Info("StoreDependencyResolutions: No tools in metadata for agent %s", agentID)
+		return nil // No tools means no dependencies
+	}
+
+	toolsList, ok := toolsData.([]interface{})
+	if !ok {
+		return fmt.Errorf("tools is not an array")
+	}
+
+	s.logger.Info("StoreDependencyResolutions: Found %d tools for agent %s", len(toolsList), agentID)
+	s.logger.Info("StoreDependencyResolutions: dependenciesResolved map has %d entries", len(dependenciesResolved))
+
+	// Delete existing dependency resolutions for this agent
+	_, err := s.entDB.DependencyResolution.Delete().
+		Where(dependencyresolution.ConsumerAgentIDEQ(agentID)).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete old dependency resolutions: %w", err)
+	}
+
+	// Process each tool and store its dependency resolutions
+	for _, toolData := range toolsList {
+		toolMap, ok := toolData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		functionName, ok := toolMap["function_name"].(string)
+		if !ok {
+			continue
+		}
+
+		// Get requested dependencies for this function
+		deps, exists := toolMap["dependencies"]
+		if !exists {
+			continue // Tool has no dependencies
+		}
+
+		// Handle both []interface{} and []map[string]interface{} types
+		var depsSlice []interface{}
+		switch v := deps.(type) {
+		case []interface{}:
+			depsSlice = v
+		case []map[string]interface{}:
+			// Convert []map[string]interface{} to []interface{}
+			depsSlice = make([]interface{}, len(v))
+			for i, m := range v {
+				depsSlice[i] = m
+			}
+		default:
+			s.logger.Warning("  Tool %s dependencies has unexpected type: %T", functionName, deps)
+			continue
+		}
+
+		if len(depsSlice) == 0 {
+			continue // No dependencies
+		}
+
+		// Get resolved dependencies for this function
+		resolved, hasResolved := dependenciesResolved[functionName]
+
+		// Process each requested dependency
+		for _, depData := range depsSlice {
+			depMap, ok := depData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			capability := getString(depMap, "capability")
+			if capability == "" {
+				continue
+			}
+
+			tags := getStringSlice(depMap, "tags")
+			version := getString(depMap, "version")
+			namespace := getString(depMap, "namespace")
+			if namespace == "" {
+				namespace = "default"
+			}
+
+			// Find matching resolved dependency (if any)
+			var matchedResolution *DependencyResolution
+			if hasResolved {
+				for _, res := range resolved {
+					if res.Capability == capability {
+						matchedResolution = res
+						break
+					}
+				}
+			}
+
+			// Create dependency resolution record
+			create := s.entDB.DependencyResolution.Create().
+				SetConsumerAgentID(agentID).
+				SetConsumerFunctionName(functionName).
+				SetCapabilityRequired(capability).
+				SetNamespaceRequired(namespace)
+
+			if len(tags) > 0 {
+				create = create.SetTagsRequired(tags)
+			}
+			if version != "" {
+				create = create.SetVersionRequired(version)
+			}
+
+			if matchedResolution != nil {
+				// Dependency was resolved
+				create = create.
+					SetNillableProviderAgentID(&matchedResolution.AgentID).
+					SetNillableProviderFunctionName(&matchedResolution.FunctionName).
+					SetNillableEndpoint(&matchedResolution.Endpoint).
+					SetStatus(dependencyresolution.StatusAvailable).
+					SetResolvedAt(time.Now().UTC())
+			} else {
+				// Dependency is unresolved
+				create = create.SetStatus(dependencyresolution.StatusUnresolved)
+			}
+
+			savedResolution, err := create.Save(ctx)
+			if err != nil {
+				s.logger.Warning("Failed to save dependency resolution for %s/%s: %v",
+					agentID, functionName, err)
+				// Continue processing other dependencies
+			} else {
+				s.logger.Info("Saved dependency resolution: %s/%s -> %s (status: %s)",
+					agentID, functionName, capability, savedResolution.Status)
+			}
+		}
+	}
+
+	s.logger.Info("StoreDependencyResolutions completed for agent %s", agentID)
+	return nil
+}
+
+// UpdateDependencyStatusOnAgentOffline marks all dependencies provided by an agent as unavailable
+func (s *EntService) UpdateDependencyStatusOnAgentOffline(ctx context.Context, agentID string) error {
+	_, err := s.entDB.DependencyResolution.Update().
+		Where(dependencyresolution.ProviderAgentIDEQ(agentID)).
+		SetStatus(dependencyresolution.StatusUnavailable).
+		ClearResolvedAt().
+		Save(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to update dependency status: %w", err)
+	}
+
+	s.logger.Info("Updated dependency status for offline agent %s", agentID)
+	return nil
 }
 
 // UpdateHeartbeat handles lightweight agent heartbeat updates using Ent
@@ -653,6 +823,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				s.logger.Warning("Failed to update dependency counts: %v", err)
 			}
 
+			// Store dependency resolutions in database
+			err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+			if err != nil {
+				s.logger.Warning("Failed to store dependency resolutions: %v", err)
+				// Don't fail heartbeat over this
+			}
+
 			// Status change recovery events are now handled automatically by hooks
 			if previousStatus == agent.StatusUnhealthy {
 				if existingAgent.AgentType.String() == "api" {
@@ -715,8 +892,8 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		}
 	}
 
-	// Execute query with capabilities
-	agents, err := query.WithCapabilities().All(ctx)
+	// Execute query with capabilities and dependency resolutions
+	agents, err := query.WithCapabilities().WithDependencyResolutions().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agents: %w", err)
 	}
@@ -792,6 +969,35 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		// Use stored dependency counts (calculated at registration time)
 		agentInfo.TotalDependencies = a.TotalDependencies
 		agentInfo.DependenciesResolved = a.DependenciesResolved
+
+		// Add dependency resolutions
+		var depResolutions []generated.DependencyResolutionInfo
+		for _, depRes := range a.Edges.DependencyResolutions {
+			depInfo := generated.DependencyResolutionInfo{
+				FunctionName: depRes.ConsumerFunctionName,
+				Capability:   depRes.CapabilityRequired,
+				Status:       generated.DependencyResolutionInfoStatus(depRes.Status),
+			}
+
+			// Add tags if present
+			if depRes.TagsRequired != nil {
+				depInfo.Tags = &depRes.TagsRequired
+			}
+
+			// Add resolved provider information (if available)
+			if depRes.ProviderAgentID != nil {
+				depInfo.ProviderAgentId = depRes.ProviderAgentID
+			}
+			if depRes.ProviderFunctionName != nil {
+				depInfo.McpTool = depRes.ProviderFunctionName
+			}
+			if depRes.Endpoint != nil {
+				depInfo.Endpoint = depRes.Endpoint
+			}
+
+			depResolutions = append(depResolutions, depInfo)
+		}
+		agentInfo.DependencyResolutions = &depResolutions
 
 		agentInfos = append(agentInfos, agentInfo)
 	}
@@ -1601,4 +1807,35 @@ func (s *EntService) IsStatusChangeHooksEnabled() bool {
 		return s.hookManager.IsEnabled()
 	}
 	return false
+}
+
+// Helper functions for extracting data from maps
+
+// getString safely extracts a string from a map
+func getString(data map[string]interface{}, key string) string {
+	if val, ok := data[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// getStringSlice safely extracts a string slice from a map
+func getStringSlice(data map[string]interface{}, key string) []string {
+	if val, ok := data[key]; ok {
+		switch v := val.(type) {
+		case []string:
+			return v
+		case []interface{}:
+			result := make([]string, 0, len(v))
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					result = append(result, str)
+				}
+			}
+			return result
+		}
+	}
+	return []string{}
 }

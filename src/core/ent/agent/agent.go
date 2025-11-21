@@ -43,10 +43,14 @@ const (
 	EdgeCapabilities = "capabilities"
 	// EdgeEvents holds the string denoting the events edge name in mutations.
 	EdgeEvents = "events"
+	// EdgeDependencyResolutions holds the string denoting the dependency_resolutions edge name in mutations.
+	EdgeDependencyResolutions = "dependency_resolutions"
 	// CapabilityFieldID holds the string denoting the ID field of the Capability.
 	CapabilityFieldID = "id"
 	// RegistryEventFieldID holds the string denoting the ID field of the RegistryEvent.
 	RegistryEventFieldID = "id"
+	// DependencyResolutionFieldID holds the string denoting the ID field of the DependencyResolution.
+	DependencyResolutionFieldID = "id"
 	// Table holds the table name of the agent in the database.
 	Table = "agents"
 	// CapabilitiesTable is the table that holds the capabilities relation/edge.
@@ -63,6 +67,13 @@ const (
 	EventsInverseTable = "registry_events"
 	// EventsColumn is the table column denoting the events relation/edge.
 	EventsColumn = "agent_events"
+	// DependencyResolutionsTable is the table that holds the dependency_resolutions relation/edge.
+	DependencyResolutionsTable = "dependency_resolutions"
+	// DependencyResolutionsInverseTable is the table name for the DependencyResolution entity.
+	// It exists in this package in order to avoid circular dependency with the "dependencyresolution" package.
+	DependencyResolutionsInverseTable = "dependency_resolutions"
+	// DependencyResolutionsColumn is the table column denoting the dependency_resolutions relation/edge.
+	DependencyResolutionsColumn = "consumer_agent_id"
 )
 
 // Columns holds all SQL columns for agent fields.
@@ -257,6 +268,20 @@ func ByEvents(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newEventsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByDependencyResolutionsCount orders the results by dependency_resolutions count.
+func ByDependencyResolutionsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDependencyResolutionsStep(), opts...)
+	}
+}
+
+// ByDependencyResolutions orders the results by dependency_resolutions terms.
+func ByDependencyResolutions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDependencyResolutionsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newCapabilitiesStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -269,5 +294,12 @@ func newEventsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(EventsInverseTable, RegistryEventFieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, EventsTable, EventsColumn),
+	)
+}
+func newDependencyResolutionsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DependencyResolutionsInverseTable, DependencyResolutionFieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DependencyResolutionsTable, DependencyResolutionsColumn),
 	)
 }

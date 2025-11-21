@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"time"
 
@@ -216,6 +217,21 @@ func (ac *AgentCreate) AddEvents(r ...*RegistryEvent) *AgentCreate {
 		ids[i] = r[i].ID
 	}
 	return ac.AddEventIDs(ids...)
+}
+
+// AddDependencyResolutionIDs adds the "dependency_resolutions" edge to the DependencyResolution entity by IDs.
+func (ac *AgentCreate) AddDependencyResolutionIDs(ids ...int) *AgentCreate {
+	ac.mutation.AddDependencyResolutionIDs(ids...)
+	return ac
+}
+
+// AddDependencyResolutions adds the "dependency_resolutions" edges to the DependencyResolution entity.
+func (ac *AgentCreate) AddDependencyResolutions(d ...*DependencyResolution) *AgentCreate {
+	ids := make([]int, len(d))
+	for i := range d {
+		ids[i] = d[i].ID
+	}
+	return ac.AddDependencyResolutionIDs(ids...)
 }
 
 // Mutation returns the AgentMutation object of the builder.
@@ -434,6 +450,22 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(registryevent.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := ac.mutation.DependencyResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.DependencyResolutionsTable,
+			Columns: []string{agent.DependencyResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

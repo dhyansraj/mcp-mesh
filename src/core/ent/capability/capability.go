@@ -30,6 +30,8 @@ const (
 	FieldTags = "tags"
 	// FieldKwargs holds the string denoting the kwargs field in the database.
 	FieldKwargs = "kwargs"
+	// FieldDependencies holds the string denoting the dependencies field in the database.
+	FieldDependencies = "dependencies"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -60,6 +62,7 @@ var Columns = []string{
 	FieldLlmFilter,
 	FieldTags,
 	FieldKwargs,
+	FieldDependencies,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }

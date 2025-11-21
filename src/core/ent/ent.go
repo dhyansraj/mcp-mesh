@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"reflect"
 	"sync"
@@ -75,9 +76,10 @@ var (
 func checkColumn(table, column string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			agent.Table:         agent.ValidColumn,
-			capability.Table:    capability.ValidColumn,
-			registryevent.Table: registryevent.ValidColumn,
+			agent.Table:                agent.ValidColumn,
+			capability.Table:           capability.ValidColumn,
+			dependencyresolution.Table: dependencyresolution.ValidColumn,
+			registryevent.Table:        registryevent.ValidColumn,
 		})
 	})
 	return columnCheck(table, column)

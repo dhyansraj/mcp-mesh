@@ -16,6 +16,8 @@ type Tx struct {
 	Agent *AgentClient
 	// Capability is the client for interacting with the Capability builders.
 	Capability *CapabilityClient
+	// DependencyResolution is the client for interacting with the DependencyResolution builders.
+	DependencyResolution *DependencyResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
 
@@ -151,6 +153,7 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.Agent = NewAgentClient(tx.config)
 	tx.Capability = NewCapabilityClient(tx.config)
+	tx.DependencyResolution = NewDependencyResolutionClient(tx.config)
 	tx.RegistryEvent = NewRegistryEventClient(tx.config)
 }
 

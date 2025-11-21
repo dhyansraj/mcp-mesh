@@ -13,6 +13,7 @@ import (
 
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 
 	"entgo.io/ent"
@@ -30,6 +31,8 @@ type Client struct {
 	Agent *AgentClient
 	// Capability is the client for interacting with the Capability builders.
 	Capability *CapabilityClient
+	// DependencyResolution is the client for interacting with the DependencyResolution builders.
+	DependencyResolution *DependencyResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
 }
@@ -45,6 +48,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.Agent = NewAgentClient(c.config)
 	c.Capability = NewCapabilityClient(c.config)
+	c.DependencyResolution = NewDependencyResolutionClient(c.config)
 	c.RegistryEvent = NewRegistryEventClient(c.config)
 }
 
@@ -136,11 +140,12 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:           ctx,
-		config:        cfg,
-		Agent:         NewAgentClient(cfg),
-		Capability:    NewCapabilityClient(cfg),
-		RegistryEvent: NewRegistryEventClient(cfg),
+		ctx:                  ctx,
+		config:               cfg,
+		Agent:                NewAgentClient(cfg),
+		Capability:           NewCapabilityClient(cfg),
+		DependencyResolution: NewDependencyResolutionClient(cfg),
+		RegistryEvent:        NewRegistryEventClient(cfg),
 	}, nil
 }
 
@@ -158,11 +163,12 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:           ctx,
-		config:        cfg,
-		Agent:         NewAgentClient(cfg),
-		Capability:    NewCapabilityClient(cfg),
-		RegistryEvent: NewRegistryEventClient(cfg),
+		ctx:                  ctx,
+		config:               cfg,
+		Agent:                NewAgentClient(cfg),
+		Capability:           NewCapabilityClient(cfg),
+		DependencyResolution: NewDependencyResolutionClient(cfg),
+		RegistryEvent:        NewRegistryEventClient(cfg),
 	}, nil
 }
 
@@ -193,6 +199,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	c.Agent.Use(hooks...)
 	c.Capability.Use(hooks...)
+	c.DependencyResolution.Use(hooks...)
 	c.RegistryEvent.Use(hooks...)
 }
 
@@ -201,6 +208,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.Agent.Intercept(interceptors...)
 	c.Capability.Intercept(interceptors...)
+	c.DependencyResolution.Intercept(interceptors...)
 	c.RegistryEvent.Intercept(interceptors...)
 }
 
@@ -211,6 +219,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Agent.mutate(ctx, m)
 	case *CapabilityMutation:
 		return c.Capability.mutate(ctx, m)
+	case *DependencyResolutionMutation:
+		return c.DependencyResolution.mutate(ctx, m)
 	case *RegistryEventMutation:
 		return c.RegistryEvent.mutate(ctx, m)
 	default:
@@ -351,6 +361,22 @@ func (c *AgentClient) QueryEvents(a *Agent) *RegistryEventQuery {
 			sqlgraph.From(agent.Table, agent.FieldID, id),
 			sqlgraph.To(registryevent.Table, registryevent.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, agent.EventsTable, agent.EventsColumn),
+		)
+		fromV = sqlgraph.Neighbors(a.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryDependencyResolutions queries the dependency_resolutions edge of a Agent.
+func (c *AgentClient) QueryDependencyResolutions(a *Agent) *DependencyResolutionQuery {
+	query := (&DependencyResolutionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := a.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, id),
+			sqlgraph.To(dependencyresolution.Table, dependencyresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.DependencyResolutionsTable, agent.DependencyResolutionsColumn),
 		)
 		fromV = sqlgraph.Neighbors(a.driver.Dialect(), step)
 		return fromV, nil
@@ -532,6 +558,171 @@ func (c *CapabilityClient) mutate(ctx context.Context, m *CapabilityMutation) (V
 	}
 }
 
+// DependencyResolutionClient is a client for the DependencyResolution schema.
+type DependencyResolutionClient struct {
+	config
+}
+
+// NewDependencyResolutionClient returns a client for the DependencyResolution from the given config.
+func NewDependencyResolutionClient(c config) *DependencyResolutionClient {
+	return &DependencyResolutionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `dependencyresolution.Hooks(f(g(h())))`.
+func (c *DependencyResolutionClient) Use(hooks ...Hook) {
+	c.hooks.DependencyResolution = append(c.hooks.DependencyResolution, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `dependencyresolution.Intercept(f(g(h())))`.
+func (c *DependencyResolutionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.DependencyResolution = append(c.inters.DependencyResolution, interceptors...)
+}
+
+// Create returns a builder for creating a DependencyResolution entity.
+func (c *DependencyResolutionClient) Create() *DependencyResolutionCreate {
+	mutation := newDependencyResolutionMutation(c.config, OpCreate)
+	return &DependencyResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of DependencyResolution entities.
+func (c *DependencyResolutionClient) CreateBulk(builders ...*DependencyResolutionCreate) *DependencyResolutionCreateBulk {
+	return &DependencyResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *DependencyResolutionClient) MapCreateBulk(slice any, setFunc func(*DependencyResolutionCreate, int)) *DependencyResolutionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &DependencyResolutionCreateBulk{err: fmt.Errorf("calling to DependencyResolutionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*DependencyResolutionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &DependencyResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for DependencyResolution.
+func (c *DependencyResolutionClient) Update() *DependencyResolutionUpdate {
+	mutation := newDependencyResolutionMutation(c.config, OpUpdate)
+	return &DependencyResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *DependencyResolutionClient) UpdateOne(dr *DependencyResolution) *DependencyResolutionUpdateOne {
+	mutation := newDependencyResolutionMutation(c.config, OpUpdateOne, withDependencyResolution(dr))
+	return &DependencyResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *DependencyResolutionClient) UpdateOneID(id int) *DependencyResolutionUpdateOne {
+	mutation := newDependencyResolutionMutation(c.config, OpUpdateOne, withDependencyResolutionID(id))
+	return &DependencyResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for DependencyResolution.
+func (c *DependencyResolutionClient) Delete() *DependencyResolutionDelete {
+	mutation := newDependencyResolutionMutation(c.config, OpDelete)
+	return &DependencyResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *DependencyResolutionClient) DeleteOne(dr *DependencyResolution) *DependencyResolutionDeleteOne {
+	return c.DeleteOneID(dr.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *DependencyResolutionClient) DeleteOneID(id int) *DependencyResolutionDeleteOne {
+	builder := c.Delete().Where(dependencyresolution.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &DependencyResolutionDeleteOne{builder}
+}
+
+// Query returns a query builder for DependencyResolution.
+func (c *DependencyResolutionClient) Query() *DependencyResolutionQuery {
+	return &DependencyResolutionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeDependencyResolution},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a DependencyResolution entity by its id.
+func (c *DependencyResolutionClient) Get(ctx context.Context, id int) (*DependencyResolution, error) {
+	return c.Query().Where(dependencyresolution.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *DependencyResolutionClient) GetX(ctx context.Context, id int) *DependencyResolution {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryConsumerAgent queries the consumer_agent edge of a DependencyResolution.
+func (c *DependencyResolutionClient) QueryConsumerAgent(dr *DependencyResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := dr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(dependencyresolution.Table, dependencyresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, dependencyresolution.ConsumerAgentTable, dependencyresolution.ConsumerAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(dr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryProviderAgent queries the provider_agent edge of a DependencyResolution.
+func (c *DependencyResolutionClient) QueryProviderAgent(dr *DependencyResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := dr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(dependencyresolution.Table, dependencyresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, dependencyresolution.ProviderAgentTable, dependencyresolution.ProviderAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(dr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *DependencyResolutionClient) Hooks() []Hook {
+	return c.hooks.DependencyResolution
+}
+
+// Interceptors returns the client interceptors.
+func (c *DependencyResolutionClient) Interceptors() []Interceptor {
+	return c.inters.DependencyResolution
+}
+
+func (c *DependencyResolutionClient) mutate(ctx context.Context, m *DependencyResolutionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&DependencyResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&DependencyResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&DependencyResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&DependencyResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown DependencyResolution mutation op: %q", m.Op())
+	}
+}
+
 // RegistryEventClient is a client for the RegistryEvent schema.
 type RegistryEventClient struct {
 	config
@@ -684,9 +875,9 @@ func (c *RegistryEventClient) mutate(ctx context.Context, m *RegistryEventMutati
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Agent, Capability, RegistryEvent []ent.Hook
+		Agent, Capability, DependencyResolution, RegistryEvent []ent.Hook
 	}
 	inters struct {
-		Agent, Capability, RegistryEvent []ent.Interceptor
+		Agent, Capability, DependencyResolution, RegistryEvent []ent.Interceptor
 	}
 )

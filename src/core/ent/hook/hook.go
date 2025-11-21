@@ -32,6 +32,18 @@ func (f CapabilityFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.CapabilityMutation", m)
 }
 
+// The DependencyResolutionFunc type is an adapter to allow the use of ordinary
+// function as DependencyResolution mutator.
+type DependencyResolutionFunc func(context.Context, *ent.DependencyResolutionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DependencyResolutionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DependencyResolutionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DependencyResolutionMutation", m)
+}
+
 // The RegistryEventFunc type is an adapter to allow the use of ordinary
 // function as RegistryEvent mutator.
 type RegistryEventFunc func(context.Context, *ent.RegistryEventMutation) (ent.Value, error)

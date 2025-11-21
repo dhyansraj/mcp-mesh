@@ -1043,6 +1043,23 @@ components:
           minimum: 0
           example: 3
           description: "Number of dependencies that have been resolved"
+        dependency_resolutions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DependencyResolutionInfo"
+          description: "List of all dependency resolutions (both resolved and unresolved)"
+          example:
+            - function_name: "analyze_with_enrichment"
+              capability: "date_service"
+              tags: ["system", "time"]
+              mcp_tool: "get_current_time"
+              provider_agent_id: "system-agent-9b5207d9"
+              endpoint: "http://172.18.0.5:9091"
+              status: "available"
+            - function_name: "analyze_with_enrichment"
+              capability: "weather_service"
+              tags: ["weather"]
+              status: "unresolved"
         last_seen:
           type: string
           format: date-time
@@ -1082,6 +1099,46 @@ components:
           type: string
           example: "Provides greeting functionality"
           description: "Human-readable description of the capability"
+
+    # Dependency resolution schema
+    DependencyResolutionInfo:
+      type: object
+      required: [function_name, capability, status]
+      properties:
+        function_name:
+          type: string
+          minLength: 1
+          example: "analyze_with_enrichment"
+          description: "Function requiring this dependency"
+        capability:
+          type: string
+          minLength: 1
+          example: "date_service"
+          description: "Required capability name"
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["system", "time"]
+          description: "Required tags for matching"
+        mcp_tool:
+          type: string
+          example: "get_current_time"
+          description: "MCP tool name on provider (NULL if unresolved)"
+        provider_agent_id:
+          type: string
+          example: "system-agent-9b5207d9"
+          description: "Provider agent ID (NULL if unresolved)"
+        endpoint:
+          type: string
+          example: "http://172.18.0.5:9091"
+          description: "Provider endpoint (NULL if unresolved)"
+        status:
+          type: string
+          enum: [available, unavailable, unresolved]
+          example: "available"
+          description: "Dependency resolution status"
 
     # Dependency resolution schemas
     DependencyInfo:

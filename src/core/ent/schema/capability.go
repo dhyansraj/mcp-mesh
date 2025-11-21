@@ -39,6 +39,9 @@ func (Capability) Fields() []ent.Field {
 		field.JSON("kwargs", map[string]interface{}{}).
 			Optional().
 			Comment("Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)"),
+		field.JSON("dependencies", []map[string]interface{}{}).
+			Optional().
+			Comment("Dependencies required by this capability/function. Stores the raw dependency specifications from the tool registration."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable().

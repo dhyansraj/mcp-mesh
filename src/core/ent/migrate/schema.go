@@ -68,6 +68,7 @@ var (
 		{Name: "llm_filter", Type: field.TypeJSON, Nullable: true},
 		{Name: "tags", Type: field.TypeJSON},
 		{Name: "kwargs", Type: field.TypeJSON, Nullable: true},
+		{Name: "dependencies", Type: field.TypeJSON, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "agent_capabilities", Type: field.TypeString},
@@ -80,7 +81,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "capabilities_agents_capabilities",
-				Columns:    []*schema.Column{CapabilitiesColumns[11]},
+				Columns:    []*schema.Column{CapabilitiesColumns[12]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -95,6 +96,70 @@ var (
 				Name:    "capability_function_name",
 				Unique:  false,
 				Columns: []*schema.Column{CapabilitiesColumns[1]},
+			},
+		},
+	}
+	// DependencyResolutionsColumns holds the columns for the "dependency_resolutions" table.
+	DependencyResolutionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "consumer_function_name", Type: field.TypeString},
+		{Name: "capability_required", Type: field.TypeString},
+		{Name: "tags_required", Type: field.TypeJSON, Nullable: true},
+		{Name: "version_required", Type: field.TypeString, Nullable: true},
+		{Name: "namespace_required", Type: field.TypeString, Default: "default"},
+		{Name: "provider_function_name", Type: field.TypeString, Nullable: true},
+		{Name: "endpoint", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"available", "unavailable", "unresolved"}, Default: "unresolved"},
+		{Name: "resolved_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "consumer_agent_id", Type: field.TypeString},
+		{Name: "provider_agent_id", Type: field.TypeString, Nullable: true},
+	}
+	// DependencyResolutionsTable holds the schema information for the "dependency_resolutions" table.
+	DependencyResolutionsTable = &schema.Table{
+		Name:       "dependency_resolutions",
+		Columns:    DependencyResolutionsColumns,
+		PrimaryKey: []*schema.Column{DependencyResolutionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "dependency_resolutions_agents_dependency_resolutions",
+				Columns:    []*schema.Column{DependencyResolutionsColumns[12]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "dependency_resolutions_agents_provider_agent",
+				Columns:    []*schema.Column{DependencyResolutionsColumns[13]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "dependencyresolution_consumer_agent_id_consumer_function_name",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[12], DependencyResolutionsColumns[1]},
+			},
+			{
+				Name:    "dependencyresolution_provider_agent_id",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[13]},
+			},
+			{
+				Name:    "dependencyresolution_capability_required",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[2]},
+			},
+			{
+				Name:    "dependencyresolution_status",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[8]},
+			},
+			{
+				Name:    "dependencyresolution_consumer_agent_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[12], DependencyResolutionsColumns[8]},
 			},
 		},
 	}
@@ -137,11 +202,14 @@ var (
 	Tables = []*schema.Table{
 		AgentsTable,
 		CapabilitiesTable,
+		DependencyResolutionsTable,
 		RegistryEventsTable,
 	}
 )
 
 func init() {
 	CapabilitiesTable.ForeignKeys[0].RefTable = AgentsTable
+	DependencyResolutionsTable.ForeignKeys[0].RefTable = AgentsTable
+	DependencyResolutionsTable.ForeignKeys[1].RefTable = AgentsTable
 	RegistryEventsTable.ForeignKeys[0].RefTable = AgentsTable
 }
