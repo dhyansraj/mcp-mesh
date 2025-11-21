@@ -1,0 +1,488 @@
+# MCP Mesh LLM Integration Test Stack
+# Manual testing approach - no automation scripts
+#
+# Usage:
+#   1. Start infrastructure: docker compose -f docker-compose.llm-tests.yml up -d postgres redis registry system-agent
+#   2. Verify health: curl http://localhost:8000/health
+#   3. Start test: docker compose -f docker-compose.llm-tests.yml --profile test-001 up -d
+#   4. Test manually: curl -X POST http://localhost:9001/mcp ...
+#   5. View logs: docker compose -f docker-compose.llm-tests.yml logs -f test-001-basic-llm
+#   6. Stop test: docker compose -f docker-compose.llm-tests.yml --profile test-001 down
+#
+# Profiles:
+#   - test-001: Basic LLM (no tools)
+#   - test-002: LLM with time tools
+#   - test-003: Multi-tool LLM
+#   - test-004: Hierarchical LLM (analyst + orchestrator)
+
+services:
+  # ============================================================================
+  # Infrastructure Layer (always running, no profile)
+  # ============================================================================
+
+  # PostgreSQL database for registry
+  postgres:
+    image: postgres:15
+    container_name: mcp-mesh-postgres-llm-test
+    environment:
+      - POSTGRES_DB=mcpmesh
+      - POSTGRES_USER=mcpmesh
+      - POSTGRES_PASSWORD=mcpmesh123
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - mcp-mesh-llm-test
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mcpmesh", "-d", "mcpmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Redis for tracing and session storage
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-mesh-redis-llm-test
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mcp-mesh-llm-test
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # MCP Mesh Registry
+  registry:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/registry/Dockerfile
+    container_name: mcp-mesh-registry-llm-test
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - MCP_MESH_LOG_LEVEL=INFO
+      - MCP_MESH_DEBUG_MODE=false
+      - DATABASE_URL=postgres://mcpmesh:mcpmesh123@postgres:5432/mcpmesh?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ============================================================================
+  # Base Tool Agent (provides tools for LLM tests)
+  # ============================================================================
+
+  # System Agent - provides date_service, info, uptime_info capabilities
+  system-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-system-agent-llm-test
+    hostname: system-agent
+    ports:
+      - "8082:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../simple/system_agent.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=system-agent
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=system-agent
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=system-agent
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ============================================================================
+  # Test Layer - LLM Agents (start with profiles)
+  # ============================================================================
+
+  # Test 1: Basic LLM Agent (no tools)
+  test-001-basic-llm:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-test-001-basic-llm
+    hostname: test-001-basic-llm
+    ports:
+      - "9001:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../llm-examples/test_001_basic_llm_agent.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      # API Key from host environment (REQUIRED)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=test-001-basic-llm
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=test-001-basic-llm
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=basic-llm-test
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    profiles:
+      - test-001
+
+  # Test 2: LLM Agent with Time Tools
+  test-002-chat-with-time:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-test-002-chat-with-time
+    hostname: test-002-chat-with-time
+    ports:
+      - "9002:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../llm-examples/test_002_chat_with_time.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=test-002-chat-with-time
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=test-002-chat-with-time
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=chat-with-time-test
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    profiles:
+      - test-002
+
+  # Test 3: Multi-Tool Chat Agent
+  test-003-multi-tool:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-test-003-multi-tool
+    hostname: test-003-multi-tool
+    ports:
+      - "9003:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../llm-examples/test_003_multi_tool_chat.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=test-003-multi-tool
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=test-003-multi-tool
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=multi-tool-chat-test
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    profiles:
+      - test-003
+
+  # Test 4a: System Analyst LLM Agent (specialist)
+  test-004-analyst:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-test-004-analyst
+    hostname: test-004-analyst
+    ports:
+      - "9004:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../llm-examples/test_004_system_analyst_llm.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=test-004-analyst
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=test-004-analyst
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=system-analyst-llm
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    profiles:
+      - test-004
+
+  # Test 4b: Orchestrator LLM Agent (coordinator)
+  test-004-orchestrator:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev # ← Development build
+    container_name: mcp-mesh-test-004-orchestrator
+    hostname: test-004-orchestrator
+    ports:
+      - "9005:8080"
+    volumes:
+      # Mount runtime source for hot reload (development mode)
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      # Mount agent code
+      - ../llm-examples/test_004_orchestrator_llm.py:/app/agent.py:ro
+    working_dir: /app
+    # Install mcp_mesh in editable mode, then run agent
+    entrypoint: >
+      sh -c "pip install -e /mcp-mesh-runtime && python /app/agent.py"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=test-004-orchestrator
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=test-004-orchestrator
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=orchestrator-llm
+      - MCP_MESH_NAMESPACE=llm-test
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh-llm-test
+    depends_on:
+      registry:
+        condition: service_healthy
+      test-004-analyst:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    profiles:
+      - test-004
+
+networks:
+  mcp-mesh-llm-test:
+    driver: bridge
+    name: mcp-mesh-llm-test-network
+
+volumes:
+  postgres_data:
+    name: mcp-mesh-llm-test-postgres-data
+  redis_data:
+    name: mcp-mesh-llm-test-redis-data

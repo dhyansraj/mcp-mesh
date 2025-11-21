@@ -7,6 +7,7 @@ Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns
 import logging
 import uuid
 from collections.abc import Callable
+from functools import wraps
 from typing import Any, TypeVar
 
 # Import from _mcp_mesh for registry and runtime integration
@@ -758,8 +759,8 @@ def route(
         async def upload_resume(
             request: Request,
             file: UploadFile = File(...),
-            pdf_agent: McpAgent = None,    # Injected by MCP Mesh
-            user_service: McpAgent = None  # Injected by MCP Mesh
+            pdf_agent: mesh.McpMeshAgent = None,    # Injected by MCP Mesh
+            user_service: mesh.McpMeshAgent = None  # Injected by MCP Mesh
         ):
             result = await pdf_agent.extract_text_from_pdf(file)
             await user_service.update_profile(user_data, result)
@@ -929,3 +930,344 @@ def set_shutdown_context(context: dict[str, Any]):
     """Set context for graceful shutdown (called from pipeline)."""
     # Delegate to the shared graceful shutdown manager
     set_global_shutdown_context(context)
+
+
+def llm(
+    filter: dict[str, Any] | list[dict[str, Any] | str] | str | None = None,
+    *,
+    filter_mode: str = "all",
+    provider: str = "claude",
+    model: str | None = None,
+    api_key: str | None = None,
+    max_iterations: int = 10,
+    system_prompt: str | None = None,
+    system_prompt_file: str | None = None,
+    context_param: str | None = None,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """
+    LLM agent decorator with automatic agentic loop.
+
+    This decorator enables LLM agents to automatically access mesh tools via
+    dependency injection. The MeshLlmAgent proxy handles the complete agentic loop:
+    - Tool filtering based on filter parameter
+    - LLM API calls (Claude, OpenAI, etc. via LiteLLM)
+    - Tool execution via MCP proxies
+    - Response parsing to Pydantic models
+
+    Configuration Hierarchy (ENV > Decorator):
+        - MESH_LLM_PROVIDER: Override provider
+        - MESH_LLM_MODEL: Override model
+        - ANTHROPIC_API_KEY: Claude API key
+        - OPENAI_API_KEY: OpenAI API key
+        - MESH_LLM_MAX_ITERATIONS: Override max iterations
+
+    Usage:
+        from pydantic import BaseModel
+        import mesh
+
+        class ChatResponse(BaseModel):
+            answer: str
+            confidence: float
+
+        @mesh.llm(
+            filter={"capability": "document", "tags": ["pdf"]},
+            provider="claude",
+            model="claude-3-5-sonnet-20241022"
+        )
+        @mesh.tool(capability="chat")
+        def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+            llm.set_system_prompt("You are a helpful assistant.")
+            return llm(message)
+
+    Args:
+        filter: Tool filter (string, dict, or list of mixed)
+        filter_mode: Filter mode ("all", "best_match", "*")
+        provider: LLM provider ("claude", "openai", "custom")
+        model: Model name (can be overridden by MESH_LLM_MODEL)
+        api_key: API key (can be overridden by provider-specific env vars)
+        max_iterations: Max agentic loop iterations (can be overridden by MESH_LLM_MAX_ITERATIONS)
+        system_prompt: Default system prompt
+        system_prompt_file: Path to Jinja2 template file
+        **kwargs: Additional configuration
+
+    Returns:
+        Decorated function with MeshLlmAgent injection
+
+    Raises:
+        ValueError: If no MeshLlmAgent parameter found
+        UserWarning: If multiple MeshLlmAgent parameters or non-Pydantic return type
+    """
+    import inspect
+    import warnings
+
+    def decorator(func: T) -> T:
+        # Step 1: Resolve configuration with hierarchy (ENV > decorator params)
+        # Phase 1: Detect file:// prefix for template files
+        is_template = False
+        template_path = None
+
+        if system_prompt:
+            # Check for file:// prefix
+            if system_prompt.startswith("file://"):
+                is_template = True
+                template_path = system_prompt[7:]  # Strip "file://" prefix
+            # Auto-detect .jinja2 or .j2 extension without file:// prefix
+            elif system_prompt.endswith(".jinja2") or system_prompt.endswith(".j2"):
+                is_template = True
+                template_path = system_prompt
+
+        # Backward compatibility: system_prompt_file (deprecated)
+        if system_prompt_file:
+            logger.warning(
+                f"⚠️ @mesh.llm: 'system_prompt_file' parameter is deprecated. "
+                f"Use 'system_prompt=\"file://{system_prompt_file}\"' instead."
+            )
+            if not is_template:  # Only use if system_prompt didn't specify a template
+                is_template = True
+                template_path = system_prompt_file
+
+        # Validate context_param usage
+        if context_param and not is_template:
+            logger.warning(
+                f"⚠️ @mesh.llm: 'context_param' specified for function '{func.__name__}' "
+                f"but system_prompt is not a template (no file:// prefix or .jinja2/.j2 extension). "
+                f"Context parameter will be ignored."
+            )
+
+        resolved_config = {
+            "filter": filter,
+            "filter_mode": get_config_value(
+                "MESH_LLM_FILTER_MODE",
+                override=filter_mode,
+                default="all",
+                rule=ValidationRule.STRING_RULE,
+            ),
+            "provider": get_config_value(
+                "MESH_LLM_PROVIDER",
+                override=provider,
+                default="claude",
+                rule=ValidationRule.STRING_RULE,
+            ),
+            "model": get_config_value(
+                "MESH_LLM_MODEL",
+                override=model,
+                default=None,
+                rule=ValidationRule.STRING_RULE,
+            ),
+            "api_key": api_key,  # Will be resolved from provider-specific env vars later
+            "max_iterations": get_config_value(
+                "MESH_LLM_MAX_ITERATIONS",
+                override=max_iterations,
+                default=10,
+                rule=ValidationRule.NONZERO_RULE,
+            ),
+            "system_prompt": system_prompt,
+            "system_prompt_file": system_prompt_file,
+            # Phase 1: Template metadata
+            "is_template": is_template,
+            "template_path": template_path,
+            "context_param": context_param,
+        }
+        resolved_config.update(kwargs)
+
+        # Step 2: Extract output type from return annotation
+        sig = inspect.signature(func)
+        return_annotation = sig.return_annotation
+
+        output_type = None
+        if return_annotation and return_annotation != inspect.Signature.empty:
+            output_type = return_annotation
+
+            # Warn if not a Pydantic model
+            try:
+                from pydantic import BaseModel
+
+                if not (
+                    inspect.isclass(output_type) and issubclass(output_type, BaseModel)
+                ):
+                    warnings.warn(
+                        f"Function '{func.__name__}' decorated with @mesh.llm should return a Pydantic BaseModel subclass, "
+                        f"got {output_type}. This may cause validation errors at runtime.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            except ImportError:
+                pass  # Pydantic not available, skip validation
+
+        # Step 3: Find MeshLlmAgent parameter
+        from mesh.types import MeshLlmAgent
+
+        llm_params = []
+        for param_name, param in sig.parameters.items():
+            if param.annotation == MeshLlmAgent or (
+                hasattr(param.annotation, "__origin__")
+                and param.annotation.__origin__ == MeshLlmAgent
+            ):
+                llm_params.append(param_name)
+
+        if not llm_params:
+            raise ValueError(
+                f"Function '{func.__name__}' decorated with @mesh.llm must have at least one parameter "
+                f"of type 'mesh.MeshLlmAgent'. Example: def {func.__name__}(..., llm: mesh.MeshLlmAgent = None)"
+            )
+
+        if len(llm_params) > 1:
+            warnings.warn(
+                f"Function '{func.__name__}' has multiple MeshLlmAgent parameters: {llm_params}. "
+                f"Only the first parameter '{llm_params[0]}' will be injected. "
+                f"Additional parameters will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        param_name = llm_params[0]
+
+        # Step 4: Generate unique function ID
+        function_id = f"{func.__name__}_{uuid.uuid4().hex[:8]}"
+
+        # Step 5: Register with DecoratorRegistry
+        DecoratorRegistry.register_mesh_llm(
+            func=func,
+            config=resolved_config,
+            output_type=output_type,
+            param_name=param_name,
+            function_id=function_id,
+        )
+
+        logger.debug(
+            f"@mesh.llm registered: {func.__name__} "
+            f"(provider={resolved_config['provider']}, param={param_name}, filter={filter})"
+        )
+
+        # Step 6: Enhance existing wrapper from @mesh.tool (if present)
+        # or create new wrapper
+        #
+        # This approach:
+        # - Reuses the wrapper created by @mesh.tool (if present)
+        # - Avoids creating multiple wrapper layers
+        # - Ensures FastMCP caches the SAME wrapper instance we update later
+        # - Combines both DI injection and LLM injection in the same wrapper
+
+        # Check if there's an existing wrapper from @mesh.tool
+        mesh_tools = DecoratorRegistry.get_mesh_tools()
+        existing_wrapper = None
+
+        if func.__name__ in mesh_tools:
+            existing_wrapper = mesh_tools[func.__name__].function
+            logger.info(
+                f"🔗 Found existing @mesh.tool wrapper for '{func.__name__}' at {hex(id(existing_wrapper))} - enhancing it"
+            )
+
+        # Trigger debounced processing
+        _trigger_debounced_processing()
+
+        if existing_wrapper:
+            # ENHANCE the existing wrapper with LLM attributes
+            logger.info(
+                f"✨ Enhancing existing wrapper with LLM injection for '{func.__name__}'"
+            )
+
+            # Store the original wrapped function if not already stored
+            if not hasattr(existing_wrapper, "__wrapped__"):
+                existing_wrapper.__wrapped__ = func
+
+            # Store the original call behavior to preserve DI injection
+            original_call = existing_wrapper
+
+            # Create enhanced wrapper that does BOTH DI injection and LLM injection
+            @wraps(func)
+            def combined_injection_wrapper(*args, **kwargs):
+                """Wrapper that injects both MeshLlmAgent and DI parameters."""
+                # Inject LLM parameter if not provided or if it's None
+                if param_name not in kwargs or kwargs.get(param_name) is None:
+                    kwargs[param_name] = combined_injection_wrapper._mesh_llm_agent
+                # Then call the original wrapper (which handles DI injection)
+                return original_call(*args, **kwargs)
+
+            # Add LLM metadata attributes to combined wrapper
+            combined_injection_wrapper._mesh_llm_agent = (
+                None  # Will be updated during heartbeat
+            )
+            combined_injection_wrapper._mesh_llm_param_name = param_name
+            combined_injection_wrapper._mesh_llm_function_id = function_id
+            combined_injection_wrapper._mesh_llm_config = resolved_config
+            combined_injection_wrapper._mesh_llm_output_type = output_type
+            combined_injection_wrapper.__wrapped__ = func
+
+            # Create update method for heartbeat that updates the COMBINED wrapper
+            def update_llm_agent(agent):
+                combined_injection_wrapper._mesh_llm_agent = agent
+                logger.info(
+                    f"🔄 Updated MeshLlmAgent on combined wrapper for {func.__name__} (function_id={function_id})"
+                )
+
+            combined_injection_wrapper._mesh_update_llm_agent = update_llm_agent
+
+            # Copy any other mesh attributes from existing wrapper
+            for attr in dir(existing_wrapper):
+                if attr.startswith("_mesh_") and not hasattr(
+                    combined_injection_wrapper, attr
+                ):
+                    try:
+                        setattr(
+                            combined_injection_wrapper,
+                            attr,
+                            getattr(existing_wrapper, attr),
+                        )
+                    except AttributeError:
+                        pass  # Some attributes might not be settable
+
+            # Update DecoratorRegistry with the combined wrapper
+            DecoratorRegistry.update_mesh_llm_function(
+                function_id, combined_injection_wrapper
+            )
+            DecoratorRegistry.update_mesh_tool_function(
+                func.__name__, combined_injection_wrapper
+            )
+
+            logger.info(
+                f"✅ Enhanced wrapper for '{func.__name__}' with combined DI + LLM injection at {hex(id(combined_injection_wrapper))}"
+            )
+
+            # Return the enhanced wrapper
+            return combined_injection_wrapper
+
+        else:
+            # FALLBACK: Create new wrapper if no existing @mesh.tool wrapper found
+            logger.info(
+                f"📝 No existing wrapper found for '{func.__name__}' - creating new LLM wrapper"
+            )
+
+            @wraps(func)
+            def llm_injection_wrapper(*args, **kwargs):
+                """Wrapper that injects MeshLlmAgent parameter."""
+                # Inject llm parameter if not provided or if it's None
+                if param_name not in kwargs or kwargs.get(param_name) is None:
+                    kwargs[param_name] = llm_injection_wrapper._mesh_llm_agent
+                return func(*args, **kwargs)
+
+            # Create update method for heartbeat - updates the wrapper, not func
+            def update_llm_agent(agent):
+                llm_injection_wrapper._mesh_llm_agent = agent
+                logger.info(
+                    f"🔄 Updated MeshLlmAgent for {func.__name__} (function_id={function_id})"
+                )
+
+            # Copy all metadata attributes to the wrapper
+            llm_injection_wrapper._mesh_llm_agent = None
+            llm_injection_wrapper._mesh_llm_param_name = param_name
+            llm_injection_wrapper._mesh_llm_function_id = function_id
+            llm_injection_wrapper._mesh_llm_config = resolved_config
+            llm_injection_wrapper._mesh_llm_output_type = output_type
+            llm_injection_wrapper._mesh_update_llm_agent = update_llm_agent
+
+            # Update DecoratorRegistry with the wrapper
+            DecoratorRegistry.update_mesh_llm_function(
+                function_id, llm_injection_wrapper
+            )
+
+            # Return the new wrapper
+            return llm_injection_wrapper
+
+    return decorator

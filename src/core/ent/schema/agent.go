@@ -55,8 +55,7 @@ func (Agent) Fields() []ent.Field {
 			Comment("Creation timestamp"),
 		field.Time("updated_at").
 			Default(time.Now).
-			UpdateDefault(time.Now).
-			Comment("Last update timestamp"),
+			Comment("Last update timestamp - manually managed to preserve health check semantics"),
 		field.Time("last_full_refresh").
 			Default(time.Now).
 			Comment("Timestamp of last full heartbeat (vs HEAD check)"),

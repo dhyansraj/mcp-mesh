@@ -355,6 +355,26 @@ func DescriptionContainsFold(v string) predicate.Capability {
 	return predicate.Capability(sql.FieldContainsFold(FieldDescription, v))
 }
 
+// InputSchemaIsNil applies the IsNil predicate on the "input_schema" field.
+func InputSchemaIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldInputSchema))
+}
+
+// InputSchemaNotNil applies the NotNil predicate on the "input_schema" field.
+func InputSchemaNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldInputSchema))
+}
+
+// LlmFilterIsNil applies the IsNil predicate on the "llm_filter" field.
+func LlmFilterIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldLlmFilter))
+}
+
+// LlmFilterNotNil applies the NotNil predicate on the "llm_filter" field.
+func LlmFilterNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldLlmFilter))
+}
+
 // KwargsIsNil applies the IsNil predicate on the "kwargs" field.
 func KwargsIsNil() predicate.Capability {
 	return predicate.Capability(sql.FieldIsNull(FieldKwargs))

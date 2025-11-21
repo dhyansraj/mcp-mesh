@@ -61,6 +61,18 @@ func (cc *CapabilityCreate) SetNillableDescription(s *string) *CapabilityCreate 
 	return cc
 }
 
+// SetInputSchema sets the "input_schema" field.
+func (cc *CapabilityCreate) SetInputSchema(m map[string]interface{}) *CapabilityCreate {
+	cc.mutation.SetInputSchema(m)
+	return cc
+}
+
+// SetLlmFilter sets the "llm_filter" field.
+func (cc *CapabilityCreate) SetLlmFilter(m map[string]interface{}) *CapabilityCreate {
+	cc.mutation.SetLlmFilter(m)
+	return cc
+}
+
 // SetTags sets the "tags" field.
 func (cc *CapabilityCreate) SetTags(s []string) *CapabilityCreate {
 	cc.mutation.SetTags(s)
@@ -229,6 +241,14 @@ func (cc *CapabilityCreate) createSpec() (*Capability, *sqlgraph.CreateSpec) {
 	if value, ok := cc.mutation.Description(); ok {
 		_spec.SetField(capability.FieldDescription, field.TypeString, value)
 		_node.Description = value
+	}
+	if value, ok := cc.mutation.InputSchema(); ok {
+		_spec.SetField(capability.FieldInputSchema, field.TypeJSON, value)
+		_node.InputSchema = value
+	}
+	if value, ok := cc.mutation.LlmFilter(); ok {
+		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)
+		_node.LlmFilter = value
 	}
 	if value, ok := cc.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)

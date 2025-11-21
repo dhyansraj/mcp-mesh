@@ -12,19 +12,18 @@ from datetime import datetime
 
 import mesh
 from fastmcp import FastMCP
-from mesh.types import McpAgent
 
 # Single FastMCP server instance
 app = FastMCP("Dependent Service")
 
 
-# TESTING RACE CONDITION: Put McpAgent function LAST to see if order matters
+# TESTING: Define multiple functions with McpMeshAgent to verify order handling
 @app.tool()
 @mesh.tool(capability="race_test_mcpmesh", dependencies=["time_service"])
 def test_mcpmesh_first(
     test_data: str = "test", time_service: mesh.McpMeshAgent = None
 ) -> dict:
-    """Test function with McpMeshAgent that's defined BEFORE McpAgent function."""
+    """Test function with McpMeshAgent that's defined first."""
     timestamp = time_service() if time_service else "unknown"
     return {
         "test_data": test_data,
@@ -35,16 +34,16 @@ def test_mcpmesh_first(
 
 
 @app.tool()
-@mesh.tool(capability="race_test_mcpagent", dependencies=["time_service"])
-def test_mcpagent_second(
-    test_data: str = "test", time_service: McpAgent = None
+@mesh.tool(capability="race_test_mcpmesh_second", dependencies=["time_service"])
+def test_mcpmesh_second(
+    test_data: str = "test", time_service: mesh.McpMeshAgent = None
 ) -> dict:
-    """Test function with McpAgent that's defined AFTER McpMeshAgent function."""
+    """Test function with McpMeshAgent that's defined second."""
     timestamp = time_service() if time_service else "unknown"
     return {
         "test_data": test_data,
         "timestamp": timestamp,
-        "proxy_type": "should_be_FullMCPProxy",
+        "proxy_type": "unified_mcp_proxy",
         "function_order": "second",
     }
 
@@ -113,9 +112,9 @@ def analyze_data(
 @app.tool()
 @mesh.tool(capability="full_mcp_inspector", dependencies=["time_service"])
 async def inspect_remote_agent(
-    agent_name: str = "fastmcp-service", time_service: McpAgent = None
+    agent_name: str = "fastmcp-service", time_service: mesh.McpMeshAgent = None
 ) -> dict:
-    """Test Full MCP Proxy functionality - uses McpAgent parameter type."""
+    """Test Full MCP Proxy functionality using McpMeshAgent."""
     if not time_service:
         return {"error": "No time service available", "agent": "dependent-service"}
 
@@ -129,7 +128,7 @@ async def inspect_remote_agent(
         "inspection_type": "full_mcp_test",
     }
 
-    # Test Vanilla MCP Protocol methods (only available with McpAgent) - NOW WITH AWAIT!
+    # Test Vanilla MCP Protocol methods (available with McpMeshAgent) - NOW WITH AWAIT!
     try:
         # Test list_tools (vanilla MCP method)
         tools = await time_service.list_tools()
@@ -166,7 +165,7 @@ async def inspect_remote_agent(
 @mesh.tool(capability="session_test", dependencies=["session_counter"])
 async def test_session_affinity(
     test_rounds: int = 3,
-    session_counter: McpAgent = None,  # ✅ Using McpAgent for session support
+    session_counter: mesh.McpMeshAgent = None,  # ✅ Using McpMeshAgent for session support
 ) -> dict:
     """Test session affinity using explicit session management (Phase 6)."""
     if not session_counter:
@@ -312,7 +311,7 @@ def get_secure_config_report(
 )
 async def test_enhanced_session_management(
     test_rounds: int = 3,
-    enhanced_session: McpAgent = None,  # McpAgent for full session support
+    enhanced_session: mesh.McpMeshAgent = None,  # McpMeshAgent for full session support
 ) -> dict:
     """Test enhanced session management - auto-session handling."""
     if not enhanced_session:
@@ -351,7 +350,7 @@ async def test_enhanced_session_management(
 )
 async def consume_streaming_data(
     data_size: int = 5,
-    streaming_service: McpAgent = None,  # McpAgent for streaming support
+    streaming_service: mesh.McpMeshAgent = None,  # McpMeshAgent for streaming support
 ) -> dict:
     """Consume streaming data - enhanced proxy auto-selects streaming."""
     if not streaming_service:

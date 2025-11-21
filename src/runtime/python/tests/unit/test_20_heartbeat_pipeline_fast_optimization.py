@@ -328,6 +328,7 @@ class TestHeartbeatPipelineStepExecution:
             "fast-heartbeat-check",
             "heartbeat-send",  # TODO: Will be renamed to agent-refresh
             "dependency-resolution",
+            "llm-tools-resolution",
         ]
 
         actual_step_names = [step.name for step in heartbeat_pipeline.steps]
@@ -349,7 +350,7 @@ class TestHeartbeatPipelineStepExecution:
     async def test_pipeline_configuration(self, heartbeat_pipeline):
         """Test that pipeline is properly configured."""
         assert heartbeat_pipeline.name == "heartbeat-pipeline"
-        assert len(heartbeat_pipeline.steps) == 4
+        assert len(heartbeat_pipeline.steps) == 5
 
         # Verify each step has required properties
         for step in heartbeat_pipeline.steps:

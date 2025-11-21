@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import DependencyResolutionStep
+from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import (
+    DependencyResolutionStep,
+)
 from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
 
 
@@ -64,8 +66,22 @@ class TestKwargsEndToEndUnit:
         with patch(
             "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
         ) as mock_get_tools:
+            # Create proper mock with function and FastMCP tool
+            mock_function = MagicMock()
+            mock_function.__name__ = "enhanced_function"
+            mock_fastmcp_tool = MagicMock()
+            mock_fastmcp_tool.parameters = {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "description": "Count of items"}
+                },
+                "required": ["count"],
+            }
+            mock_function._fastmcp_tool = mock_fastmcp_tool
+
             mock_decorated_func = MagicMock()
             mock_decorated_func.metadata = test_metadata
+            mock_decorated_func.function = mock_function
             mock_get_tools.return_value = {"enhanced_function": mock_decorated_func}
 
             # Call send_heartbeat_with_dependency_resolution

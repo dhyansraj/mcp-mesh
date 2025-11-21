@@ -38,7 +38,7 @@ type Agent struct {
 	DependenciesResolved int `json:"dependencies_resolved,omitempty"`
 	// Creation timestamp
 	CreatedAt time.Time `json:"created_at,omitempty"`
-	// Last update timestamp
+	// Last update timestamp - manually managed to preserve health check semantics
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// Timestamp of last full heartbeat (vs HEAD check)
 	LastFullRefresh time.Time `json:"last_full_refresh,omitempty"`

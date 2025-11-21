@@ -379,13 +379,13 @@ python ../examples/simple/system_agent.py
 
 ```bash
 # Test weather data
-curl -X POST http://localhost:9091/mcp/ \
+curl -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_weather", "arguments": {"city": "tokyo"}}}'
 
 # Test forecast with dependencies
-curl -X POST http://localhost:9091/mcp/ \
+curl -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_forecast", "arguments": {"city": "london", "days": 5}}}'
@@ -409,7 +409,7 @@ python weather_agent.py
 
 ```bash
 # 1. Test basic weather data (self-dependency)
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -423,7 +423,7 @@ curl -s -X POST http://localhost:9091/mcp/ \
   }' | jq '.result'
 
 # 2. Test forecast (self + external dependencies)
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -437,7 +437,7 @@ curl -s -X POST http://localhost:9091/mcp/ \
   }' | jq '.result'
 
 # 3. Test prompt generation
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -451,7 +451,7 @@ curl -s -X POST http://localhost:9091/mcp/ \
   }' | jq '.result'
 
 # 4. Test resource access
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -472,7 +472,7 @@ curl -s http://localhost:8000/agents | \
   jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
 
 # List all available tools
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \
   jq '.result.tools[] | {name: .name, description: .description}'

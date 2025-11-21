@@ -15,6 +15,7 @@ from ..shared.mesh_pipeline import MeshPipeline
 from .dependency_resolution import DependencyResolutionStep
 from .fast_heartbeat_check import FastHeartbeatStep
 from .heartbeat_send import HeartbeatSendStep
+from .llm_tools_resolution import LLMToolsResolutionStep
 from .registry_connection import RegistryConnectionStep
 
 logger = logging.getLogger(__name__)
@@ -24,13 +25,14 @@ class HeartbeatPipeline(MeshPipeline):
     """
     Specialized pipeline for heartbeat operations with fast optimization.
 
-    Executes the four core heartbeat steps in sequence:
+    Executes the five core heartbeat steps in sequence:
     1. Registry connection preparation
     2. Fast heartbeat check (HEAD request)
     3. Heartbeat sending (conditional POST request)
     4. Dependency resolution (conditional)
+    5. LLM tools resolution (conditional)
 
-    Steps 3 and 4 only run if fast heartbeat indicates changes are needed.
+    Steps 3, 4, and 5 only run if fast heartbeat indicates changes are needed.
     Provides optimization for NO_CHANGES and resilience for error conditions.
     """
 
@@ -45,6 +47,7 @@ class HeartbeatPipeline(MeshPipeline):
             FastHeartbeatStep(),
             HeartbeatSendStep(required=True),
             DependencyResolutionStep(),
+            LLMToolsResolutionStep(),
         ]
 
         self.add_steps(steps)
@@ -142,7 +145,7 @@ class HeartbeatPipeline(MeshPipeline):
             ]  # RegistryConnectionStep, FastHeartbeatStep
             conditional_steps = self.steps[
                 2:
-            ]  # HeartbeatSendStep, DependencyResolutionStep
+            ]  # HeartbeatSendStep, DependencyResolutionStep, LLMToolsResolutionStep
 
             # Execute mandatory steps
             for step in mandatory_steps:

@@ -122,10 +122,11 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	}
 
 	// Convert to heartbeat request format (lighter than full registration)
+	metadata := ConvertMeshAgentRegistrationToMap(req)
 	heartbeatReq := &HeartbeatRequest{
 		AgentID:  req.AgentId,
 		Status:   "healthy", // Default status
-		Metadata: ConvertMeshAgentRegistrationToMap(req),
+		Metadata: metadata,
 	}
 
 	// Call lightweight heartbeat service method using EntService
@@ -192,6 +193,35 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 			}
 		}
 		response.DependenciesResolved = &depsMap
+	}
+
+	// Include LLM tools if available
+	if serviceResp.LLMTools != nil {
+		llmToolsMap := make(map[string][]generated.LLMToolInfo)
+
+		for functionName, tools := range serviceResp.LLMTools {
+			// IMPORTANT: Always add function key, even if tools array is empty.
+			// This supports standalone LLM agents (filter=None case) that don't need tools.
+			// The Python client needs to receive {"function_name": []} to create
+			// a MeshLlmAgent with empty tools (answers using only model + system prompt).
+			generatedTools := make([]generated.LLMToolInfo, len(tools))
+			for i, tool := range tools {
+				// Convert registry.LLMToolInfo to generated.LLMToolInfo
+				generatedTools[i] = generated.LLMToolInfo{
+					Name:        tool.FunctionName,
+					Capability:  tool.Capability,
+					Description: tool.Description,
+					Endpoint:    tool.Endpoint,
+					InputSchema: tool.InputSchema,
+					Tags:        &tool.Tags,
+					Version:     &tool.Version,
+				}
+			}
+			llmToolsMap[functionName] = generatedTools
+		}
+		// Always include llmToolsMap in response (even if empty)
+		// This enables LLM agents to receive {"function_name": []} for standalone agents
+		response.LlmTools = &llmToolsMap
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -277,6 +307,12 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		}
 		if tool.Tags != nil {
 			toolData["tags"] = *tool.Tags
+		}
+		if tool.InputSchema != nil {
+			toolData["inputSchema"] = *tool.InputSchema
+		}
+		if tool.LlmFilter != nil {
+			toolData["llm_filter"] = *tool.LlmFilter
 		}
 		if tool.Dependencies != nil {
 			deps := make([]map[string]interface{}, len(*tool.Dependencies))

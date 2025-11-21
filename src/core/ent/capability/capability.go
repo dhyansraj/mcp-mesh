@@ -22,6 +22,10 @@ const (
 	FieldVersion = "version"
 	// FieldDescription holds the string denoting the description field in the database.
 	FieldDescription = "description"
+	// FieldInputSchema holds the string denoting the input_schema field in the database.
+	FieldInputSchema = "input_schema"
+	// FieldLlmFilter holds the string denoting the llm_filter field in the database.
+	FieldLlmFilter = "llm_filter"
 	// FieldTags holds the string denoting the tags field in the database.
 	FieldTags = "tags"
 	// FieldKwargs holds the string denoting the kwargs field in the database.
@@ -52,6 +56,8 @@ var Columns = []string{
 	FieldCapability,
 	FieldVersion,
 	FieldDescription,
+	FieldInputSchema,
+	FieldLlmFilter,
 	FieldTags,
 	FieldKwargs,
 	FieldCreatedAt,

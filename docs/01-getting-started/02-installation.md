@@ -182,7 +182,7 @@ Run it:
 python hello.py
 
 # Test it (MCP JSON-RPC format)
-curl -X POST http://localhost:8000/mcp/ \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{

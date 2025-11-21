@@ -201,6 +201,14 @@ func (au *AgentUpdate) SetUpdatedAt(t time.Time) *AgentUpdate {
 	return au
 }
 
+// SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableUpdatedAt(t *time.Time) *AgentUpdate {
+	if t != nil {
+		au.SetUpdatedAt(*t)
+	}
+	return au
+}
+
 // SetLastFullRefresh sets the "last_full_refresh" field.
 func (au *AgentUpdate) SetLastFullRefresh(t time.Time) *AgentUpdate {
 	au.mutation.SetLastFullRefresh(t)
@@ -294,7 +302,6 @@ func (au *AgentUpdate) RemoveEvents(r ...*RegistryEvent) *AgentUpdate {
 
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (au *AgentUpdate) Save(ctx context.Context) (int, error) {
-	au.defaults()
 	return withHooks(ctx, au.sqlSave, au.mutation, au.hooks)
 }
 
@@ -317,14 +324,6 @@ func (au *AgentUpdate) Exec(ctx context.Context) error {
 func (au *AgentUpdate) ExecX(ctx context.Context) {
 	if err := au.Exec(ctx); err != nil {
 		panic(err)
-	}
-}
-
-// defaults sets the default values of the builder before save.
-func (au *AgentUpdate) defaults() {
-	if _, ok := au.mutation.UpdatedAt(); !ok {
-		v := agent.UpdateDefaultUpdatedAt()
-		au.mutation.SetUpdatedAt(v)
 	}
 }
 
@@ -687,6 +686,14 @@ func (auo *AgentUpdateOne) SetUpdatedAt(t time.Time) *AgentUpdateOne {
 	return auo
 }
 
+// SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableUpdatedAt(t *time.Time) *AgentUpdateOne {
+	if t != nil {
+		auo.SetUpdatedAt(*t)
+	}
+	return auo
+}
+
 // SetLastFullRefresh sets the "last_full_refresh" field.
 func (auo *AgentUpdateOne) SetLastFullRefresh(t time.Time) *AgentUpdateOne {
 	auo.mutation.SetLastFullRefresh(t)
@@ -793,7 +800,6 @@ func (auo *AgentUpdateOne) Select(field string, fields ...string) *AgentUpdateOn
 
 // Save executes the query and returns the updated Agent entity.
 func (auo *AgentUpdateOne) Save(ctx context.Context) (*Agent, error) {
-	auo.defaults()
 	return withHooks(ctx, auo.sqlSave, auo.mutation, auo.hooks)
 }
 
@@ -816,14 +822,6 @@ func (auo *AgentUpdateOne) Exec(ctx context.Context) error {
 func (auo *AgentUpdateOne) ExecX(ctx context.Context) {
 	if err := auo.Exec(ctx); err != nil {
 		panic(err)
-	}
-}
-
-// defaults sets the default values of the builder before save.
-func (auo *AgentUpdateOne) defaults() {
-	if _, ok := auo.mutation.UpdatedAt(); !ok {
-		v := agent.UpdateDefaultUpdatedAt()
-		auo.mutation.SetUpdatedAt(v)
 	}
 }
 

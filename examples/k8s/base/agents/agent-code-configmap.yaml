@@ -672,13 +672,13 @@ data:
     app = FastMCP("Dependent Service")
 
 
-    # TESTING RACE CONDITION: Put McpAgent function LAST to see if order matters
+    # TESTING: Define multiple functions with McpMeshAgent to verify order handling
     @app.tool()
     @mesh.tool(capability="race_test_mcpmesh", dependencies=["time_service"])
     def test_mcpmesh_first(
         test_data: str = "test", time_service: mesh.McpMeshAgent = None
     ) -> dict:
-        """Test function with McpMeshAgent that's defined BEFORE McpAgent function."""
+        """Test function with McpMeshAgent that's defined first."""
         timestamp = time_service() if time_service else "unknown"
         return {
             "test_data": test_data,

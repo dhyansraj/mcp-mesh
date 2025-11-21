@@ -1,7 +1,9 @@
 site_name: MCP Mesh
 site_url: https://dhyansraj.github.io/mcp-mesh/
 site_author: MCP Mesh Contributors
-site_description: Enterprise-grade distributed service mesh for MCP agents. Kubernetes-native platform with zero-boilerplate dependency injection.
+site_description: >-
+  Enterprise-grade distributed service mesh for MCP agents.
+  Kubernetes-native platform with zero-boilerplate dependency injection.
 
 repo_name: dhyansraj/mcp-mesh
 repo_url: https://github.com/dhyansraj/mcp-mesh
@@ -14,7 +16,7 @@ theme:
   custom_dir: docs/overrides
   logo: assets/images/logo.svg
   # favicon: assets/images/favicon.png
-  
+
   palette:
     # Light mode
     - media: "(prefers-color-scheme: light)"
@@ -24,7 +26,7 @@ theme:
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
-    
+
     # Dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
@@ -33,11 +35,11 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-  
+
   font:
     text: Inter
     code: Roboto Mono
-  
+
   features:
     - announce.dismiss
     # - content.action.edit
@@ -73,15 +75,15 @@ extra:
       link: https://discord.gg/KDFDREphWn
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/mcp-mesh/
-  
+
   analytics:
     provider: google
     property: !ENV GOOGLE_ANALYTICS_KEY
-  
+
   version:
     provider: mike
     default: latest
-  
+
   # Google Search Console verification
   google_site_verification: EtV7XZPdw0d9azFHor7Zq2BeuVZVnwSwD0zzGNMOUoM
 
@@ -102,7 +104,7 @@ markdown_extensions:
   - toc:
       permalink: true
       toc_depth: 3
-  
+
   # Python Markdown Extensions
   - pymdownx.arithmatex:
       generic: true
@@ -150,43 +152,60 @@ plugins:
 
 nav:
   - Home: index.md
-  
+
   - Getting Started:
-    - Quick Start: 01-getting-started.md
-    - Local Development: 02-local-development.md
-  
+      - Overview: 01-getting-started.md
+      - Prerequisites: 01-getting-started/01-prerequisites.md
+      - Installation: 01-getting-started/02-installation.md
+      - Hello World: 01-getting-started/03-hello-world.md
+      - Dependency Injection: 01-getting-started/04-dependency-injection.md
+      - First Agent: 01-getting-started/05-first-agent.md
+      - LLM Integration: 01-getting-started/06-llm-integration.md
+      - Troubleshooting: 01-getting-started/troubleshooting.md
+
+  - Local Development:
+      - Overview: 02-local-development.md
+      - Environment Setup: 02-local-development/01-environment-setup.md
+      - Local Registry: 02-local-development/02-local-registry.md
+      - Debugging: 02-local-development/03-debugging.md
+      - Hot Reload: 02-local-development/04-hot-reload.md
+      - Testing: 02-local-development/05-testing.md
+      - Troubleshooting: 02-local-development/troubleshooting.md
+
   - Deployment:
-    - Docker:
-      - Building Images: 03-docker-deployment/01-building-images.md
-      - Running Locally: 03-docker-deployment/02-running-locally.md
-      - Docker Compose: 03-docker-deployment/03-docker-compose.md
-      - Networking: 03-docker-deployment/04-networking.md
-      - Troubleshooting: 03-docker-deployment/troubleshooting.md
-    
-    - Kubernetes:
-      - Basics: 04-kubernetes-basics.md
-      - kubectl Deployment: 04-kubernetes-basics/03-kubectl-deployment.md
-      - Kustomize: 04-kubernetes-basics/04-kustomize.md
-    
-    - Helm:
-      - Overview: 06-helm-deployment.md
-      - Understanding Charts: 06-helm-deployment/01-understanding-charts.md
-      - Multi-Agent Deployment: 06-helm-deployment/02-umbrella-chart.md
-      - Customizing Values: 06-helm-deployment/03-customizing-values.md
-      - Multi-Environment: 06-helm-deployment/04-multi-environment.md
-      - Best Practices: 06-helm-deployment/05-best-practices.md
-      - Troubleshooting: 06-helm-deployment/troubleshooting.md
-  
+      - Docker:
+          - Overview: 03-docker-deployment.md
+          - Building Images: 03-docker-deployment/01-building-images.md
+          - Compose Setup: 03-docker-deployment/02-compose-setup.md
+          - Multi-Agent: 03-docker-deployment/03-multi-agent.md
+          - Networking: 03-docker-deployment/04-networking.md
+          - Storage: 03-docker-deployment/05-storage.md
+          - Troubleshooting: 03-docker-deployment/troubleshooting.md
+
+      - Kubernetes:
+          - Basics: 04-kubernetes-basics.md
+          - kubectl Deployment: 04-kubernetes-basics/03-kubectl-deployment.md
+          - Kustomize: 04-kubernetes-basics/04-kustomize.md
+
+      - Helm:
+          - Overview: 06-helm-deployment.md
+          - Understanding Charts: 06-helm-deployment/01-understanding-charts.md
+          - Multi-Agent Deployment: 06-helm-deployment/02-umbrella-chart.md
+          - Customizing Values: 06-helm-deployment/03-customizing-values.md
+          - Multi-Environment: 06-helm-deployment/04-multi-environment.md
+          - Best Practices: 06-helm-deployment/05-best-practices.md
+          - Troubleshooting: 06-helm-deployment/troubleshooting.md
+
   - Observability:
-    - Prometheus Integration: 07-observability/01-prometheus-integration.md
-    - Grafana Dashboards: 07-observability/02-grafana-dashboards.md
-    - Distributed Tracing: 07-observability/03-distributed-tracing.md
-    - Centralized Logging: 07-observability/04-centralized-logging.md
-    - Alerting & SLOs: 07-observability/05-alerting-slos.md
-  
+      - Prometheus Integration: 07-observability/01-prometheus-integration.md
+      - Grafana Dashboards: 07-observability/02-grafana-dashboards.md
+      - Distributed Tracing: 07-observability/03-distributed-tracing.md
+      - Centralized Logging: 07-observability/04-centralized-logging.md
+      - Alerting & SLOs: 07-observability/05-alerting-slos.md
+
   - Reference:
-    - Architecture & Design: architecture-and-design.md
-    - Mesh Decorators: mesh-decorators.md
-    - Environment Variables: environment-variables.md
-    - meshctl CLI: meshctl-cli.md
-    - Tag Matching Migration: enhanced-tag-matching-migration.md
+      - Architecture & Design: architecture-and-design.md
+      - Mesh Decorators: mesh-decorators.md
+      - Environment Variables: environment-variables.md
+      - meshctl CLI: meshctl-cli.md
+      - Tag Matching Migration: enhanced-tag-matching-migration.md

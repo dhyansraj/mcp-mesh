@@ -16,9 +16,8 @@ logger = logging.getLogger(__name__)
 class UnifiedMCPProxy:
     """Unified MCP proxy using FastMCP's built-in client.
 
-    This replaces both McpMeshAgent and McpAgent types with a single
-    implementation that provides all MCP protocol features using
-    FastMCP's superior client.
+    This provides the implementation for McpMeshAgent type parameters,
+    offering all MCP protocol features using FastMCP's superior client.
 
     Features:
     - All MCP protocol methods (tools, resources, prompts)
@@ -58,14 +57,15 @@ class UnifiedMCPProxy:
 
     def _is_ip_address(self, hostname: str) -> bool:
         """Check if hostname is an IP address vs DNS name.
-        
+
         Args:
             hostname: Hostname to check
-            
+
         Returns:
             True if IP address, False if DNS name
         """
         import ipaddress
+
         try:
             ipaddress.ip_address(hostname)
             return True
@@ -85,14 +85,15 @@ class UnifiedMCPProxy:
             FastMCP Client instance with or without trace headers
         """
         try:
-            # Extract hostname from endpoint URL for DNS detection  
+            # Extract hostname from endpoint URL for DNS detection
             from urllib.parse import urlparse
+
             parsed = urlparse(endpoint)
-            hostname = parsed.hostname or parsed.netloc.split(':')[0]
-            
+            hostname = parsed.hostname or parsed.netloc.split(":")[0]
+
             # DNS resolution works perfectly with FastMCP - no need to force HTTP fallback
             self.logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
-            
+
             from fastmcp import Client
             from fastmcp.client.transports import StreamableHttpTransport
 
@@ -112,9 +113,11 @@ class UnifiedMCPProxy:
             self.logger.debug(f"🔄 FastMCP client unavailable: {e}")
             raise  # Re-raise to trigger _fallback_http_call
         except Exception as e:
-            # Any other error - this will trigger HTTP fallback  
+            # Any other error - this will trigger HTTP fallback
             self.logger.debug(f"🔄 FastMCP client error: {e}")
-            raise ImportError(f"FastMCP client failed: {e}")  # Convert to ImportError to trigger fallback
+            raise ImportError(
+                f"FastMCP client failed: {e}"
+            )  # Convert to ImportError to trigger fallback
 
     def _get_trace_headers(self) -> dict[str, str]:
         """Extract trace headers from current context for distributed tracing.
@@ -360,7 +363,6 @@ class UnifiedMCPProxy:
         Returns CallToolResult object with structured content parsing.
         """
         import time
-
 
         start_time = time.time()
 

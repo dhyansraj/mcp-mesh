@@ -1,0 +1,45 @@
+# Development Dockerfile for MCP Mesh Python Runtime
+# This version uses editable install with mounted source for rapid iteration
+# Use this when developing the MCP Mesh runtime code itself
+
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies separately for better caching
+# These are the dependencies that mcp_mesh needs
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    httpx \
+    aiohttp \
+    urllib3 \
+    pydantic \
+    python-dateutil \
+    fastmcp \
+    litellm \
+    jinja2
+
+# Create app user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# NOTE: mcp_mesh will be installed in editable mode via volume mount
+# The docker-compose.yml will mount:
+# - /path/to/mcp-mesh/src/runtime/python:/mcp-mesh-runtime:ro
+# And run: pip install -e /mcp-mesh-runtime
+# This allows hot-reloading of runtime code changes
+
+USER appuser
+
+# Default command (to be overridden by specific agents)
+CMD ["python", "-c", "print('MCP Mesh Dev image ready - mount runtime source')"]

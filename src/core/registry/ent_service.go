@@ -88,6 +88,7 @@ type HeartbeatResponse struct {
 	AgentID              string                             `json:"agent_id,omitempty"`
 	ResourceVersion      string                             `json:"resource_version,omitempty"`
 	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
+	LLMTools             map[string][]LLMToolInfo           `json:"llm_tools,omitempty"`
 }
 
 // EntService provides registry operations using Ent ORM instead of raw SQL
@@ -305,6 +306,20 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 								SetNillableDescription(&description).
 								SetTags(tags)
 
+							// Add input_schema if present
+							if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
+								if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
+									capCreate = capCreate.SetInputSchema(inputSchema)
+								}
+							}
+
+							// Add llm_filter if present
+							if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
+								if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
+									capCreate = capCreate.SetLlmFilter(llmFilter)
+								}
+							}
+
 							// Add kwargs if present
 							if kwargsInterface, ok := toolMap["kwargs"]; ok {
 								if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
@@ -423,16 +438,24 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				if err != nil {
 					return &HeartbeatResponse{
 						Status:    "error",
-						Timestamp: now.Format(time.RFC3339),
+						Timestamp:    now.Format(time.RFC3339),
 						Message:   err.Error(),
 					}, nil
 				}
+
+				// Resolve LLM tools for newly registered agent
+				llmTools, err := s.ResolveLLMToolsFromMetadata(ctx, req.AgentID, req.Metadata)
+				if err != nil {
+					llmTools = make(map[string][]LLMToolInfo)
+				}
+
 				return &HeartbeatResponse{
 					Status:               regResp.Status,
 					Timestamp:            now.Format(time.RFC3339),
 					Message:              "Agent registered via heartbeat",
 					AgentID:              regResp.AgentID,
 					DependenciesResolved: regResp.DependenciesResolved,
+					LLMTools:             llmTools,
 				}, nil
 			}
 
@@ -451,7 +474,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 	// If metadata is provided and contains tools, handle metadata updates directly
 	var dependenciesResolved map[string][]*DependencyResolution
 	if req.Metadata != nil {
-		if _, hasTools := req.Metadata["tools"]; hasTools {
+		_, hasTools := req.Metadata["tools"]
+		if hasTools {
 			// Update agent metadata and capabilities within transaction
 			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 				// Extract agent metadata for updates
@@ -565,6 +589,20 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 										SetNillableDescription(&description).
 										SetTags(tags)
 
+									// Add input_schema if present
+									if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
+										if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
+											capCreate = capCreate.SetInputSchema(inputSchema)
+										}
+									}
+
+									// Add llm_filter if present
+									if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
+										if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
+											capCreate = capCreate.SetLlmFilter(llmFilter)
+										}
+									}
+
 									// Add kwargs if present
 									if kwargsInterface, ok := toolMap["kwargs"]; ok {
 										if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
@@ -624,12 +662,19 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}
 			}
 
+			// Resolve LLM tools for functions with llm_filter
+			llmTools, err := s.ResolveLLMToolsFromMetadata(ctx, req.AgentID, req.Metadata)
+			if err != nil {
+				llmTools = make(map[string][]LLMToolInfo)
+			}
+
 			return &HeartbeatResponse{
 				Status:               "success",
 				Timestamp:            now.Format(time.RFC3339),
 				Message:              "Agent updated via heartbeat",
 				AgentID:              req.AgentID,
 				DependenciesResolved: dependenciesResolved,
+				LLMTools:             llmTools,
 			}, nil
 		}
 	}
@@ -899,6 +944,89 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 	}
 
 	return resolved, nil
+}
+
+// ResolveLLMToolsFromMetadata resolves LLM tools for functions with llm_filter
+func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID string, metadata map[string]interface{}) (map[string][]LLMToolInfo, error) {
+	llmTools := make(map[string][]LLMToolInfo)
+
+	// Extract tools from metadata
+	toolsData, exists := metadata["tools"]
+	if !exists {
+		s.logger.Debug("No tools in metadata for agent %s", agentID)
+		return llmTools, nil
+	}
+	s.logger.Info("ResolveLLMTools: agent=%s has tools in metadata", agentID)
+
+	toolsList, ok := toolsData.([]interface{})
+	if !ok {
+		return llmTools, nil
+	}
+
+	// Process each tool and check for llm_filter
+	for _, toolData := range toolsList {
+		toolMap, ok := toolData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		functionName := getStringFromMap(toolMap, "function_name", "")
+		if functionName == "" {
+			continue
+		}
+		s.logger.Info("ResolveLLMTools: checking function '%s' for llm_filter", functionName)
+
+		// Check if tool has llm_filter
+		llmFilterData, exists := toolMap["llm_filter"]
+		if !exists {
+			s.logger.Info("ResolveLLMTools: function '%s' has NO llm_filter", functionName)
+			continue
+		}
+		s.logger.Info("ResolveLLMTools: function '%s' HAS llm_filter!", functionName)
+
+		llmFilterMap, ok := llmFilterData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract filter array
+		filterData, exists := llmFilterMap["filter"]
+		if !exists {
+			s.logger.Warning("No filter array in llm_filter for %s", functionName)
+			continue
+		}
+
+		filterArray, ok := filterData.([]interface{})
+		if !ok {
+			s.logger.Warning("filter is not an array for %s: %T", functionName, filterData)
+			continue
+		}
+		s.logger.Info("Filter array for %s: %+v", functionName, filterArray)
+
+		// Extract filter_mode (default to "all")
+		filterMode := "all"
+		if filterModeData, exists := llmFilterMap["filter_mode"]; exists {
+			if fm, ok := filterModeData.(string); ok {
+				filterMode = fm
+			}
+		}
+		s.logger.Info("Filter mode for %s: %s", functionName, filterMode)
+
+		// Call FilterToolsForLLM to get filtered tools (excluding this agent's own tools)
+		filteredTools, err := FilterToolsForLLM(ctx, s.entDB.Client, filterArray, filterMode, agentID)
+		if err != nil {
+			continue
+		}
+
+		// Add to result map
+		// IMPORTANT: Always add function key, even if filteredTools is empty.
+		// This supports standalone LLM agents that don't need tools (filter=None case).
+		// The Python client needs to receive {"function_name": []} to create
+		// a MeshLlmAgent with empty tools (answers using only model + system prompt).
+		llmTools[functionName] = filteredTools
+	}
+
+	return llmTools, nil
 }
 
 // GetAgentWithCapabilities retrieves agent data with capabilities for testing

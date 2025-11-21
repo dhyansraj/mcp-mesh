@@ -27,6 +27,10 @@ type Capability struct {
 	Version string `json:"version,omitempty"`
 	// Description of what this capability does
 	Description string `json:"description,omitempty"`
+	// JSON Schema for function parameters (MCP tool format). Auto-generated from function signature by FastMCP. Used by LLM agents to understand how to call this tool.
+	InputSchema map[string]interface{} `json:"input_schema,omitempty"`
+	// LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to.
+	LlmFilter map[string]interface{} `json:"llm_filter,omitempty"`
 	// Tags for this capability (e.g., ['prod', 'ml', 'gpu'])
 	Tags []string `json:"tags,omitempty"`
 	// Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)
@@ -67,7 +71,7 @@ func (*Capability) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case capability.FieldTags, capability.FieldKwargs:
+		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldTags, capability.FieldKwargs:
 			values[i] = new([]byte)
 		case capability.FieldID:
 			values[i] = new(sql.NullInt64)
@@ -121,6 +125,22 @@ func (c *Capability) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field description", values[i])
 			} else if value.Valid {
 				c.Description = value.String
+			}
+		case capability.FieldInputSchema:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field input_schema", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.InputSchema); err != nil {
+					return fmt.Errorf("unmarshal field input_schema: %w", err)
+				}
+			}
+		case capability.FieldLlmFilter:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field llm_filter", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.LlmFilter); err != nil {
+					return fmt.Errorf("unmarshal field llm_filter: %w", err)
+				}
 			}
 		case capability.FieldTags:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -209,6 +229,12 @@ func (c *Capability) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("description=")
 	builder.WriteString(c.Description)
+	builder.WriteString(", ")
+	builder.WriteString("input_schema=")
+	builder.WriteString(fmt.Sprintf("%v", c.InputSchema))
+	builder.WriteString(", ")
+	builder.WriteString("llm_filter=")
+	builder.WriteString(fmt.Sprintf("%v", c.LlmFilter))
 	builder.WriteString(", ")
 	builder.WriteString("tags=")
 	builder.WriteString(fmt.Sprintf("%v", c.Tags))

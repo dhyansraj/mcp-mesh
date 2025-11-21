@@ -36,8 +36,6 @@ func init() {
 	agentDescUpdatedAt := agentFields[11].Descriptor()
 	// agent.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	agent.DefaultUpdatedAt = agentDescUpdatedAt.Default.(func() time.Time)
-	// agent.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
-	agent.UpdateDefaultUpdatedAt = agentDescUpdatedAt.UpdateDefault.(func() time.Time)
 	// agentDescLastFullRefresh is the schema descriptor for last_full_refresh field.
 	agentDescLastFullRefresh := agentFields[12].Descriptor()
 	// agent.DefaultLastFullRefresh holds the default value on creation for the last_full_refresh field.
@@ -49,15 +47,15 @@ func init() {
 	// capability.DefaultVersion holds the default value on creation for the version field.
 	capability.DefaultVersion = capabilityDescVersion.Default.(string)
 	// capabilityDescTags is the schema descriptor for tags field.
-	capabilityDescTags := capabilityFields[4].Descriptor()
+	capabilityDescTags := capabilityFields[6].Descriptor()
 	// capability.DefaultTags holds the default value on creation for the tags field.
 	capability.DefaultTags = capabilityDescTags.Default.([]string)
 	// capabilityDescCreatedAt is the schema descriptor for created_at field.
-	capabilityDescCreatedAt := capabilityFields[6].Descriptor()
+	capabilityDescCreatedAt := capabilityFields[8].Descriptor()
 	// capability.DefaultCreatedAt holds the default value on creation for the created_at field.
 	capability.DefaultCreatedAt = capabilityDescCreatedAt.Default.(func() time.Time)
 	// capabilityDescUpdatedAt is the schema descriptor for updated_at field.
-	capabilityDescUpdatedAt := capabilityFields[7].Descriptor()
+	capabilityDescUpdatedAt := capabilityFields[9].Descriptor()
 	// capability.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	capability.DefaultUpdatedAt = capabilityDescUpdatedAt.Default.(func() time.Time)
 	// capability.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

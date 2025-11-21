@@ -92,6 +92,30 @@ func (cu *CapabilityUpdate) ClearDescription() *CapabilityUpdate {
 	return cu
 }
 
+// SetInputSchema sets the "input_schema" field.
+func (cu *CapabilityUpdate) SetInputSchema(m map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.SetInputSchema(m)
+	return cu
+}
+
+// ClearInputSchema clears the value of the "input_schema" field.
+func (cu *CapabilityUpdate) ClearInputSchema() *CapabilityUpdate {
+	cu.mutation.ClearInputSchema()
+	return cu
+}
+
+// SetLlmFilter sets the "llm_filter" field.
+func (cu *CapabilityUpdate) SetLlmFilter(m map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.SetLlmFilter(m)
+	return cu
+}
+
+// ClearLlmFilter clears the value of the "llm_filter" field.
+func (cu *CapabilityUpdate) ClearLlmFilter() *CapabilityUpdate {
+	cu.mutation.ClearLlmFilter()
+	return cu
+}
+
 // SetTags sets the "tags" field.
 func (cu *CapabilityUpdate) SetTags(s []string) *CapabilityUpdate {
 	cu.mutation.SetTags(s)
@@ -214,6 +238,18 @@ func (cu *CapabilityUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if cu.mutation.DescriptionCleared() {
 		_spec.ClearField(capability.FieldDescription, field.TypeString)
+	}
+	if value, ok := cu.mutation.InputSchema(); ok {
+		_spec.SetField(capability.FieldInputSchema, field.TypeJSON, value)
+	}
+	if cu.mutation.InputSchemaCleared() {
+		_spec.ClearField(capability.FieldInputSchema, field.TypeJSON)
+	}
+	if value, ok := cu.mutation.LlmFilter(); ok {
+		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)
+	}
+	if cu.mutation.LlmFilterCleared() {
+		_spec.ClearField(capability.FieldLlmFilter, field.TypeJSON)
 	}
 	if value, ok := cu.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)
@@ -340,6 +376,30 @@ func (cuo *CapabilityUpdateOne) SetNillableDescription(s *string) *CapabilityUpd
 // ClearDescription clears the value of the "description" field.
 func (cuo *CapabilityUpdateOne) ClearDescription() *CapabilityUpdateOne {
 	cuo.mutation.ClearDescription()
+	return cuo
+}
+
+// SetInputSchema sets the "input_schema" field.
+func (cuo *CapabilityUpdateOne) SetInputSchema(m map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.SetInputSchema(m)
+	return cuo
+}
+
+// ClearInputSchema clears the value of the "input_schema" field.
+func (cuo *CapabilityUpdateOne) ClearInputSchema() *CapabilityUpdateOne {
+	cuo.mutation.ClearInputSchema()
+	return cuo
+}
+
+// SetLlmFilter sets the "llm_filter" field.
+func (cuo *CapabilityUpdateOne) SetLlmFilter(m map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.SetLlmFilter(m)
+	return cuo
+}
+
+// ClearLlmFilter clears the value of the "llm_filter" field.
+func (cuo *CapabilityUpdateOne) ClearLlmFilter() *CapabilityUpdateOne {
+	cuo.mutation.ClearLlmFilter()
 	return cuo
 }
 
@@ -495,6 +555,18 @@ func (cuo *CapabilityUpdateOne) sqlSave(ctx context.Context) (_node *Capability,
 	}
 	if cuo.mutation.DescriptionCleared() {
 		_spec.ClearField(capability.FieldDescription, field.TypeString)
+	}
+	if value, ok := cuo.mutation.InputSchema(); ok {
+		_spec.SetField(capability.FieldInputSchema, field.TypeJSON, value)
+	}
+	if cuo.mutation.InputSchemaCleared() {
+		_spec.ClearField(capability.FieldInputSchema, field.TypeJSON)
+	}
+	if value, ok := cuo.mutation.LlmFilter(); ok {
+		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)
+	}
+	if cuo.mutation.LlmFilterCleared() {
+		_spec.ClearField(capability.FieldLlmFilter, field.TypeJSON)
 	}
 	if value, ok := cuo.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)

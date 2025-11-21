@@ -23,6 +23,7 @@ While MCP solved AI tool standardization, scaling MCP applications to production
 - **Zero Boilerplate**: Two decorators (`@app.tool()` + `@mesh.tool()`) replace hundreds of lines of networking code
 - **Pure Python Simplicity**: Write MCP servers as simple functions - no manual client/server setup, no connection management
 - **End-to-End Integration**: Use `@mesh.route()` to inject MCP agents directly into FastAPI APIs - bridge web services and AI agents seamlessly
+- **LLM as Dependencies**: Inject LLMs with `@mesh.llm()` just like MCP agents - dynamic prompts, tool filters, and type-safe contexts built-in
 - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes - same code, zero changes
 - **kubectl-like Management**: `meshctl` - a familiar command-line tool to run, monitor, and manage your entire agent network
 
@@ -143,6 +144,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Automatic agent discovery** without configuration
 - **Smart dependency resolution** with version constraints and tags
 - **Load balancing** across multiple service providers
+- **LLM dependency injection** - treat LLMs as first-class dependencies with `@mesh.llm()`, Jinja2 templates, and automatic tool discovery
 
 ### **Enterprise-Grade Resilience**
 

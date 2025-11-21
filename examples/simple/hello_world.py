@@ -30,7 +30,7 @@ app = FastMCP("Hello World Service")
     dependencies=["date_service"],
     description="Simple greeting with date dependency",
 )
-def hello_mesh_simple(date_service: Any = None) -> str:
+async def hello_mesh_simple(date_service: Any = None) -> str:
     """
     MCP Mesh greeting with simple typing.
 
@@ -42,7 +42,7 @@ def hello_mesh_simple(date_service: Any = None) -> str:
 
     try:
         # Call the injected function - proxy implements __call__()
-        current_date = date_service()
+        current_date = await date_service()
         return f"👋 Hello from MCP Mesh! Today is {current_date}"
     except Exception as e:
         return f"👋 Hello from MCP Mesh! (Error getting date: {e})"
@@ -63,7 +63,7 @@ def hello_mesh_simple(date_service: Any = None) -> str:
     ],
     description="Advanced greeting with smart tag-based dependency resolution",
 )
-def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
+async def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
     """
     MCP Mesh greeting with smart tag-based dependency resolution.
 
@@ -75,7 +75,7 @@ def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
 
     try:
         # This will call the general system info (not disk info) due to smart tag matching!
-        system_info = info()
+        system_info = await info()
         uptime = system_info.get("uptime_formatted", "unknown")
         server_name = system_info.get("server_name", "unknown")
         return f"👋 Hello from smart MCP Mesh! Server: {server_name}, Uptime: {uptime}"
@@ -99,7 +99,7 @@ def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
     ],
     description="Test hybrid dependencies: simple + tag-based resolution",
 )
-def test_dependencies(
+async def test_dependencies(
     date_service: Any = None,
     info: mesh.McpMeshAgent | None = None,  # This will get the DISK info service!
 ) -> dict[str, Any]:
@@ -119,7 +119,7 @@ def test_dependencies(
     # Test simple Any type dependency
     if date_service is not None:
         try:
-            date = date_service()  # Direct call
+            date = await date_service()  # Direct call
             result["date_service"] = f"available: {date}"
         except Exception as e:
             result["date_service"] = f"error: {e}"
@@ -128,7 +128,7 @@ def test_dependencies(
     if info is not None:
         try:
             disk_info = (
-                info()
+                await info()
             )  # This should return disk/OS info, not general system info
             info_type = disk_info.get("info_type", "unknown")
             result["disk_info_service"] = (

@@ -11,7 +11,7 @@ MCP Mesh includes a built-in distributed tracing system that provides real-time 
 By the end of this section, you will:
 
 - ✅ Enable distributed tracing in MCP Mesh
-- ✅ Monitor trace events in real-time  
+- ✅ Monitor trace events in real-time
 - ✅ Query and search completed traces
 - ✅ Analyze multi-agent interactions
 - ✅ Debug performance bottlenecks
@@ -87,7 +87,7 @@ Python agents automatically participate in distributed tracing when the registry
 curl http://localhost:8000/trace/status
 
 # Make a test call to generate traces
-curl -X POST http://localhost:9093/mcp/ \
+curl -X POST http://localhost:9093/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -110,7 +110,7 @@ curl http://localhost:8000/trace/list | jq .
 MCP Mesh generates three types of trace events:
 
 - **span_start**: When an operation begins
-- **span_end**: When an operation completes  
+- **span_end**: When an operation completes
 - **error**: When an operation fails
 
 ### 2. Trace Correlation
@@ -133,42 +133,46 @@ Python Agent → Redis Streams → Registry Consumer → Correlator → Exporter
 
 ### Registry Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false` | Enable/disable tracing |
-| `TRACE_EXPORTER_TYPE` | `console` | Export format: console, json, multi |
-| `TRACE_PRETTY_OUTPUT` | `true` | Pretty-print console output |
-| `TRACE_ENABLE_STATS` | `true` | Collect trace statistics |
-| `TRACE_JSON_OUTPUT_DIR` | - | Directory for JSON export |
-| `TRACE_BATCH_SIZE` | `100` | Redis consumer batch size |
-| `TRACE_TIMEOUT` | `5m` | Trace completion timeout |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| Variable                               | Default                  | Description                         |
+| -------------------------------------- | ------------------------ | ----------------------------------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                  | Enable/disable tracing              |
+| `TRACE_EXPORTER_TYPE`                  | `console`                | Export format: console, json, multi |
+| `TRACE_PRETTY_OUTPUT`                  | `true`                   | Pretty-print console output         |
+| `TRACE_ENABLE_STATS`                   | `true`                   | Collect trace statistics            |
+| `TRACE_JSON_OUTPUT_DIR`                | -                        | Directory for JSON export           |
+| `TRACE_BATCH_SIZE`                     | `100`                    | Redis consumer batch size           |
+| `TRACE_TIMEOUT`                        | `5m`                     | Trace completion timeout            |
+| `REDIS_URL`                            | `redis://localhost:6379` | Redis connection URL                |
 
 ### Exporter Options
 
 #### Console Exporter
+
 ```bash
 export TRACE_EXPORTER_TYPE=console
 export TRACE_PRETTY_OUTPUT=true
 ```
 
 Real-time trace output:
+
 ```
 🔗 TRACE a1b2c3d4 (15ms) - SUCCESS (3 spans across 2 agents)
   📍 Agent: dependent-service
     ✅ tool:generate_report [generate_report] (15ms)
-  📍 Agent: fastmcp-service  
+  📍 Agent: fastmcp-service
     ✅ tool:get_current_time [get_current_time] (2ms)
     ✅ tool:validate_data [validate_data] (8ms)
 ```
 
 #### JSON Exporter
+
 ```bash
 export TRACE_EXPORTER_TYPE=json
 export TRACE_JSON_OUTPUT_DIR=/var/log/traces
 ```
 
 #### Multi Exporter
+
 ```bash
 export TRACE_EXPORTER_TYPE=multi
 export TRACE_JSON_OUTPUT_DIR=/var/log/traces
@@ -177,6 +181,7 @@ export TRACE_JSON_OUTPUT_DIR=/var/log/traces
 ## API Reference
 
 ### Trace Status
+
 ```bash
 GET /trace/status
 ```
@@ -184,6 +189,7 @@ GET /trace/status
 Returns tracing configuration and runtime status.
 
 ### List Traces
+
 ```bash
 GET /trace/list?limit=20&offset=0
 ```
@@ -191,6 +197,7 @@ GET /trace/list?limit=20&offset=0
 List completed traces with pagination.
 
 ### Get Specific Trace
+
 ```bash
 GET /trace/{trace_id}
 ```
@@ -198,25 +205,27 @@ GET /trace/{trace_id}
 Retrieve a specific trace by ID.
 
 ### Search Traces
+
 ```bash
 GET /trace/search?agent_name=weather&success=true&start_time=2024-01-01T00:00:00Z
 ```
 
 Search traces with filtering:
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `parent_span_id` | string | Filter by parent span |
-| `agent_name` | string | Filter by agent name |
-| `operation` | string | Filter by operation name |
-| `success` | boolean | Filter by success status |
-| `start_time` | RFC3339 | Filter by start time |
-| `end_time` | RFC3339 | Filter by end time |
-| `min_duration_ms` | integer | Minimum duration filter |
-| `max_duration_ms` | integer | Maximum duration filter |
-| `limit` | integer | Result limit (max 100) |
+| Parameter         | Type    | Description              |
+| ----------------- | ------- | ------------------------ |
+| `parent_span_id`  | string  | Filter by parent span    |
+| `agent_name`      | string  | Filter by agent name     |
+| `operation`       | string  | Filter by operation name |
+| `success`         | boolean | Filter by success status |
+| `start_time`      | RFC3339 | Filter by start time     |
+| `end_time`        | RFC3339 | Filter by end time       |
+| `min_duration_ms` | integer | Minimum duration filter  |
+| `max_duration_ms` | integer | Maximum duration filter  |
+| `limit`           | integer | Result limit (max 100)   |
 
 ### Trace Statistics
+
 ```bash
 GET /trace/stats
 ```
@@ -321,6 +330,7 @@ curl -s "http://localhost:8000/trace/list?limit=100" | \
 **Symptoms**: Empty trace list despite agent activity
 
 **Checks**:
+
 ```bash
 # 1. Verify tracing is enabled
 curl http://localhost:8000/trace/status | jq .enabled
@@ -337,6 +347,7 @@ curl http://localhost:8000/trace/status | jq .consumer
 **Symptoms**: Traces missing spans or correlation issues
 
 **Checks**:
+
 ```bash
 # Check for orphaned spans
 redis-cli XREVRANGE mcp-mesh:traces + - COUNT 10
@@ -350,6 +361,7 @@ curl http://localhost:8000/trace/status | jq .correlator
 **Symptoms**: Registry memory growing
 
 **Checks**:
+
 ```bash
 # Check active traces count
 curl http://localhost:8000/trace/status | jq .correlator.active_traces

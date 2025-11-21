@@ -1081,6 +1081,551 @@ async def process_data_pipeline(
     return {"status": "completed", "records_processed": len(transformed)}
 ```
 
+## @mesh.llm - LLM Agent Injection
+
+> **New in v0.7**: Inject LLM agents as dependencies with automatic tool discovery and type-safe prompt templates
+
+The `@mesh.llm` decorator enables LLM integration as first-class mesh capabilities, treating LLMs as injectable dependencies like any other agent.
+
+### Parameters
+
+| Parameter        | Type   | Default    | Description                                        |
+| ---------------- | ------ | ---------- | -------------------------------------------------- |
+| `system_prompt`  | `str`  | `None`     | Literal prompt or `file://path/to/template.jinja2` |
+| `filter`         | `dict` | `None`     | Tool discovery filter (capability, tags, version)  |
+| `provider`       | `str`  | `"claude"` | LLM provider (claude, openai, etc.)                |
+| `model`          | `str`  | Required   | Model identifier                                   |
+| `context_param`  | `str`  | `None`     | Parameter name containing template context         |
+| `max_iterations` | `int`  | `5`        | Max agentic loop iterations                        |
+
+### Decorator Order with LLM
+
+**⚠️ IMPORTANT**: LLM decorator order follows the same pattern - mesh decorators come after MCP decorators:
+
+```python
+# ✅ CORRECT ORDER
+@app.tool()           # ← FastMCP decorator FIRST
+@mesh.llm(            # ← LLM decorator SECOND
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(           # ← Mesh tool decorator THIRD
+    capability="chat"
+)
+def chat_function(message: str, llm: mesh.MeshLlmAgent = None):
+    return llm(message)
+
+# ❌ WRONG ORDER
+@mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")  # Wrong
+@app.tool()                                                        # Wrong
+@mesh.tool(capability="chat")                                      # Wrong
+def broken_function(message: str, llm=None):
+    pass
+```
+
+### Simple LLM Injection
+
+```python
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("Chat Service")
+
+@app.tool()
+@mesh.llm(
+    system_prompt="You are a helpful assistant.",
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="chat")
+async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
+    """LLM agent auto-injected with configured system prompt."""
+    if llm is None:
+        return "LLM service unavailable"
+    return await llm(message)
+```
+
+### LLM with Tool Discovery Filter
+
+```python
+@app.tool()
+@mesh.llm(
+    system_prompt="You are a system administrator with monitoring tools.",
+    filter={"tags": ["system", "monitoring"]},  # Auto-discover tools
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="system_admin")
+async def admin_assistant(task: str, llm: mesh.MeshLlmAgent = None):
+    """LLM automatically gets access to all system monitoring tools."""
+    return await llm(task)
+```
+
+### Type-Safe Prompt Templates
+
+Use `file://` prefix to load Jinja2 templates with type-safe context models:
+
+```python
+from mesh import MeshContextModel
+from pydantic import BaseModel, Field
+
+class AnalysisContext(MeshContextModel):
+    """Type-safe context for analysis prompts."""
+    domain: str = Field(
+        ...,
+        description="Analysis domain: infrastructure, security, or performance"
+    )
+    user_level: str = Field(
+        default="beginner",
+        description="User expertise: beginner, intermediate, expert"
+    )
+    focus_areas: list[str] = Field(
+        default_factory=list,
+        description="Specific areas to analyze"
+    )
+
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/analyst.jinja2",  # Load from file
+    context_param="ctx",  # Which parameter contains context
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="analysis")
+async def analyze_system(
+    query: str,
+    ctx: AnalysisContext,  # Type-safe, validated context
+    llm: mesh.MeshLlmAgent = None
+) -> dict:
+    """Template auto-rendered with ctx before LLM call."""
+    if llm is None:
+        return {"error": "LLM unavailable"}
+    return await llm(query)
+```
+
+**Template file** (`prompts/analyst.jinja2`):
+
+```jinja2
+You are a {{ domain }} analysis expert.
+User expertise level: {{ user_level }}
+
+{% if focus_areas %}
+Focus your analysis on: {{ focus_areas | join(", ") }}
+{% endif %}
+
+Provide detailed analysis appropriate for {{ user_level }}-level users.
+Use your monitoring tools when needed.
+```
+
+### Dual Injection: LLM + MCP Agent
+
+**Breakthrough feature**: Inject both LLM agents AND MCP agents into the same function:
+
+```python
+from pydantic import BaseModel
+
+class EnrichedResult(BaseModel):
+    """LLM result enriched with MCP agent data."""
+    analysis: str
+    recommendations: list[str]
+    timestamp: str
+    system_info: str
+
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/dual_injection.jinja2",
+    filter={"tags": ["system"]},  # LLM gets system tools via filter
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(
+    capability="enriched_analysis",
+    dependencies=[{
+        "capability": "date_service",
+        "tags": ["system", "time"]
+    }]  # Direct MCP agent dependency
+)
+async def analyze_with_enrichment(
+    query: str,
+    llm: mesh.MeshLlmAgent = None,        # ← Injected LLM agent
+    date_service: mesh.McpMeshAgent = None  # ← Injected MCP agent
+) -> EnrichedResult:
+    """
+    Demonstrates dual injection pattern.
+
+    - LLM: Intelligent analysis with filtered tool access
+    - MCP agent: Direct capability calls for enrichment
+    - Both orchestrated in one function, zero boilerplate
+    """
+    if llm is None:
+        return EnrichedResult(
+            analysis="LLM unavailable",
+            recommendations=[],
+            timestamp="N/A",
+            system_info="N/A"
+        )
+
+    # Step 1: Get LLM analysis (LLM has access to system tools)
+    llm_result = await llm(query)
+
+    # Step 2: Call MCP agent directly for enrichment data
+    timestamp = await date_service() if date_service else "N/A"
+
+    # Step 3: Combine both results
+    return EnrichedResult(
+        analysis=llm_result.analysis,
+        recommendations=llm_result.recommendations,
+        timestamp=timestamp,
+        system_info="Analysis enriched with real-time data"
+    )
+```
+
+### MeshContextModel for Validation
+
+`MeshContextModel` provides Pydantic-based validation with IDE support:
+
+```python
+from mesh import MeshContextModel
+
+class ChatContext(MeshContextModel):
+    """Type-safe context with validation."""
+    user_name: str = Field(..., description="User's display name")
+    domain: str = Field(..., description="Conversation domain")
+    expertise_level: str = Field(default="beginner")
+
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/chat.jinja2",
+    context_param="ctx",
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="personalized_chat")
+async def chat(
+    message: str,
+    ctx: ChatContext,  # Validated at runtime
+    llm: mesh.MeshLlmAgent = None
+):
+    # ctx guaranteed to have user_name, domain, expertise_level
+    return await llm(message)
+
+# Usage with validation
+chat(
+    "Hello!",
+    ctx=ChatContext(
+        user_name="Alice",
+        domain="technical",
+        expertise_level="expert"
+    )
+)
+```
+
+### Enhanced Schemas for LLM Chains
+
+When orchestrator LLMs call specialist LLMs, Field descriptions are automatically extracted into tool schemas:
+
+```python
+# Specialist LLM with enhanced schema
+class SpecialistContext(MeshContextModel):
+    domain: str = Field(
+        ...,
+        description="Analysis domain: infrastructure, security, or performance"
+    )
+    user_level: str = Field(
+        default="beginner",
+        description="User expertise: beginner, intermediate, expert"
+    )
+
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/specialist.jinja2",
+    context_param="ctx",
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="specialist_analysis", tags=["llm", "specialist"])
+async def specialist_analyze(
+    request: str,
+    ctx: SpecialistContext,
+    llm: mesh.MeshLlmAgent = None
+):
+    return await llm(request)
+
+# Orchestrator LLM discovers specialist with enhanced schema
+@app.tool()
+@mesh.llm(
+    system_prompt="You coordinate analysis tasks across specialists.",
+    filter={"capability": "specialist_analysis"},  # Discovers specialist
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="orchestrator")
+async def orchestrate_analysis(task: str, llm: mesh.MeshLlmAgent = None):
+    """
+    Orchestrator LLM receives enhanced schema with Field descriptions.
+
+    Knows that domain is "infrastructure|security|performance"
+    Knows that user_level is "beginner|intermediate|expert"
+
+    This dramatically improves success rate when constructing contexts!
+    """
+    return await llm(task)
+```
+
+The orchestrator receives:
+
+```json
+{
+  "name": "specialist_analyze",
+  "inputSchema": {
+    "properties": {
+      "ctx": {
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Analysis domain: infrastructure, security, or performance"
+          },
+          "user_level": {
+            "type": "string",
+            "default": "beginner",
+            "description": "User expertise: beginner, intermediate, expert"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### LLM Filter Patterns
+
+Common filter patterns for tool discovery:
+
+```python
+# 1. Filter by tags (most common)
+@mesh.llm(filter={"tags": ["system", "monitoring"]})
+
+# 2. Filter by capability
+@mesh.llm(filter={"capability": "weather_service"})
+
+# 3. Combine capability + tags
+@mesh.llm(filter={
+    "capability": "database",
+    "tags": ["production", "primary"]
+})
+
+# 4. Filter with version constraints
+@mesh.llm(filter={
+    "capability": "api_service",
+    "version": ">=2.0.0",
+    "tags": ["rest", "v2"]
+})
+
+# 5. No filter - LLM has no tools
+@mesh.llm()  # Pure chat, no tool access
+```
+
+### Template Context Detection
+
+MCP Mesh auto-detects context parameters in three ways:
+
+```python
+# 1. Explicit (recommended)
+@mesh.llm(
+    system_prompt="file://prompts/chat.jinja2",
+    context_param="my_context"  # Explicitly named
+)
+def chat(msg: str, my_context: dict, llm=None): ...
+
+# 2. Convention (auto-detected)
+@mesh.llm(system_prompt="file://prompts/chat.jinja2")
+def chat(msg: str, ctx: dict, llm=None): ...  # "ctx" detected
+
+@mesh.llm(system_prompt="file://prompts/chat.jinja2")
+def chat(msg: str, prompt_context: dict, llm=None): ...  # "prompt_context" detected
+
+# 3. Type hint (auto-detected)
+@mesh.llm(system_prompt="file://prompts/chat.jinja2")
+def chat(msg: str, analysis_ctx: AnalysisContext, llm=None): ...
+# ↑ MeshContextModel subclass detected
+```
+
+### Template Features
+
+Full Jinja2 support:
+
+```jinja2
+{# Variables #}
+Hello {{ user_name }}!
+
+{# Conditionals #}
+{% if expertise_level == "expert" %}
+  Technical mode enabled.
+{% else %}
+  Beginner-friendly mode.
+{% endif %}
+
+{# Loops #}
+Focus areas:
+{% for area in focus_areas %}
+  - {{ area }}
+{% endfor %}
+
+{# Filters #}
+{{ capabilities | join(", ") }}
+{{ task_type | upper }}
+
+{# Defaults #}
+{{ optional_field | default("N/A") }}
+```
+
+### LLM Best Practices
+
+#### ✅ DO:
+
+```python
+# Use type-safe contexts
+class AnalysisContext(MeshContextModel):
+    domain: str = Field(..., description="Clear description for LLMs")
+
+# Add Field descriptions for LLM chains
+Field(..., description="infrastructure|security|performance")
+
+# Check for None
+if llm is None:
+    return default_response
+
+# Use filters for dynamic tool discovery
+@mesh.llm(filter={"tags": ["system"]})
+
+# Version templates separately
+system_prompt="file://prompts/analyst_v2.jinja2"
+```
+
+#### ❌ DON'T:
+
+```python
+# Don't hardcode prompts in code
+system_prompt="You are an assistant. Do this. Do that. Do everything..."
+
+# Don't skip Field descriptions
+domain: str  # No description for LLMs
+
+# Don't forget None checks
+return llm(message)  # Crashes if llm is None
+
+# Don't manually list tools in prompts
+system_prompt="You have get_cpu, get_memory, get_disk..."  # Use filters!
+
+# Don't use dict contexts without validation
+ctx: dict  # Use MeshContextModel instead
+```
+
+### Environment Variables
+
+LLM configuration via environment variables:
+
+```bash
+# Provider API keys
+export ANTHROPIC_API_KEY="your-claude-key"
+export OPENAI_API_KEY="your-openai-key"
+
+# Override provider/model at runtime
+export MCP_MESH_LLM_PROVIDER="openai"
+export MCP_MESH_LLM_MODEL="gpt-4"
+
+# Template settings
+export MCP_MESH_TEMPLATE_DIR="/custom/prompts"
+export MCP_MESH_TEMPLATE_CACHE_ENABLED="true"
+```
+
+### Complete LLM Example
+
+```python
+import mesh
+from fastmcp import FastMCP
+from mesh import MeshContextModel
+from pydantic import BaseModel, Field
+
+app = FastMCP("LLM Service")
+
+# 1. Define contexts
+class DocumentContext(MeshContextModel):
+    doc_type: str = Field(..., description="Document type: technical, business, legal")
+    audience: str = Field(..., description="Target audience: engineer, executive, lawyer")
+
+# 2. Specialist LLM
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/doc_analyzer.jinja2",
+    context_param="ctx",
+    filter={"tags": ["document"]},
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="doc_analysis", tags=["llm", "specialist"])
+async def analyze_doc(doc: str, ctx: DocumentContext, llm: mesh.MeshLlmAgent = None):
+    if llm is None:
+        return {"error": "LLM unavailable"}
+    return await llm(doc)
+
+# 3. Orchestrator LLM
+@app.tool()
+@mesh.llm(
+    system_prompt="You orchestrate document workflows.",
+    filter={"capability": "doc_analysis"},
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(capability="doc_orchestrator")
+async def orchestrate(task: str, llm: mesh.MeshLlmAgent = None):
+    if llm is None:
+        return {"error": "LLM unavailable"}
+    return await llm(task)
+
+# 4. Dual injection (LLM + MCP)
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/enriched.jinja2",
+    filter={"tags": ["system"]},
+    provider="claude",
+    model="anthropic/claude-sonnet-4-5"
+)
+@mesh.tool(
+    capability="enriched_analysis",
+    dependencies=[{"capability": "date_service"}]
+)
+async def enriched_analyze(
+    query: str,
+    llm: mesh.MeshLlmAgent = None,
+    date_service: mesh.McpMeshAgent = None
+):
+    if llm is None:
+        return {"error": "LLM unavailable"}
+
+    llm_result = await llm(query)
+    timestamp = await date_service() if date_service else "N/A"
+
+    return {
+        **llm_result,
+        "timestamp": timestamp,
+        "enriched": True
+    }
+
+# 5. Agent configuration
+@mesh.agent(
+    name="llm-service",
+    version="1.0.0",
+    http_port=8080,
+    enable_http=True,
+    auto_run=True
+)
+class LlmServiceAgent:
+    pass
+```
+
+For complete LLM integration guide, see **[LLM Integration Tutorial](01-getting-started/06-llm-integration.md)**.
+
 ## Testing Your Decorators
 
 ### Check Service Registration
@@ -1095,7 +1640,7 @@ curl -s http://localhost:8000/agents | \
 
 ```bash
 # Test a specific tool
-curl -s -X POST http://localhost:9091/mcp/ \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
