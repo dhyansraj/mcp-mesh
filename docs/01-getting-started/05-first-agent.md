@@ -4,7 +4,7 @@
 
 ## Overview
 
-In this guide, you'll create a sophisticated weather service agent using MCP Mesh 0.5.x that demonstrates:
+In this guide, you'll create a sophisticated weather service agent using MCP Mesh 0.6.x that demonstrates:
 
 - 🌤️ **Multiple MCP decorators** - `@app.tool`, `@app.prompt`, `@app.resource`
 - 🔗 **Smart dependency injection** - Type-safe dependencies with tag-based resolution
@@ -33,7 +33,7 @@ Create `weather_agent.py`:
 ```python
 #!/usr/bin/env python3
 """
-Advanced Weather Service Agent - MCP Mesh 0.5.x Pattern
+Advanced Weather Service Agent - MCP Mesh 0.6.x Pattern
 
 Demonstrates:
 - Dual decorator pattern (@app + @mesh)
@@ -344,7 +344,7 @@ class WeatherService:
 Create `requirements.txt`:
 
 ```txt
-mcp-mesh>=0.5,<0.6
+mcp-mesh>=0.6,<0.7
 fastmcp>=2.8.0
 ```
 
@@ -355,7 +355,7 @@ Create `README.md`:
 ````markdown
 # Weather Service Agent
 
-Advanced weather service using MCP Mesh 0.5.x dual decorator pattern.
+Advanced weather service using MCP Mesh 0.6.x dual decorator pattern.
 
 ## Features
 
@@ -482,7 +482,7 @@ curl -s -X POST http://localhost:9091/mcp \
 
 ### The Dual Decorator Pattern
 
-Your agent demonstrates the power of MCP Mesh 0.5.x:
+Your agent demonstrates the power of MCP Mesh 0.6.x:
 
 ```python
 @app.tool()      # ← FastMCP: Handles MCP protocol
@@ -584,7 +584,7 @@ curl -s http://localhost:8000/agents | jq '.agents[].name'
 
 ## Next Steps
 
-Congratulations! You've built a sophisticated agent using MCP Mesh 0.5.x. You've learned:
+Congratulations! You've built a sophisticated agent using MCP Mesh 0.6.x. You've learned:
 
 ✅ **Dual decorator pattern** - FastMCP + Mesh orchestration
 ✅ **All MCP decorators** - Tools, prompts, and resources
@@ -609,4 +609,4 @@ Congratulations! You've built a sophisticated agent using MCP Mesh 0.5.x. You've
 
 🎯 **Pro Tip**: Use self-dependencies for internal coordination and tag-based dependencies for smart external service selection.
 
-🚀 **Achievement Unlocked**: You've mastered the MCP Mesh 0.5.x dual decorator pattern! Ready for production deployment?
+🚀 **Achievement Unlocked**: You've mastered the MCP Mesh 0.6.x dual decorator pattern! Ready for production deployment?

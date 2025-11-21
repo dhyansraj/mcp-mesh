@@ -101,7 +101,7 @@ brew tap dhyansraj/mcp-mesh
 brew install mcp-mesh
 
 # 2. Install Python package with semantic versioning
-pip install "mcp-mesh>=0.5,<0.6"
+pip install "mcp-mesh>=0.6,<0.7"
 
 # 3. Download example agents
 git clone https://github.com/dhyansraj/mcp-mesh.git
@@ -124,7 +124,7 @@ curl -s -X POST http://localhost:8080/mcp \
 
 ```bash
 # 1. Install MCP Mesh with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.5,<0.6"
+pip install "mcp-mesh>=0.6,<0.7"
 
 # 2. Download and start registry (use minor version for latest patches)
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.5
@@ -292,19 +292,16 @@ For detailed solutions, see the troubleshooting sections in each example README.
 After getting started:
 
 1. **Explore the Examples**:
-
    - Modify existing agents to understand the patterns
    - Add new tools to see dependency injection in action
    - Test resilience by stopping and starting agents
 
 2. **Build Your Own Agent**:
-
    - Copy `hello_world.py` as a template
    - Add your own capabilities and dependencies
    - Test integration with existing agents
 
 3. **Scale to Production**:
-
    - Deploy to Kubernetes for production workloads
    - Set up monitoring and alerting
    - Configure security and access controls

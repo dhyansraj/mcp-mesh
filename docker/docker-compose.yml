@@ -4,9 +4,9 @@ version: "3.8"
 # Complete deployment of Go registry + Python agents using published Docker images
 #
 # Services:
-# - registry: Go-based registry with SQLite storage (mcpmesh/registry:0.5)
-# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:0.5)
-# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:0.5)
+# - registry: Go-based registry with SQLite storage (mcpmesh/registry:0.6)
+# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:0.6)
+# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:0.6)
 #
 # Usage:
 #   docker-compose up
@@ -20,7 +20,7 @@ version: "3.8"
 services:
   # Go-based registry service (from Docker Hub)
   registry:
-    image: mcpmesh/registry:0.5
+    image: mcpmesh/registry:0.6
     container_name: mcp-mesh-registry
     ports:
       - "8000:8000"
@@ -52,7 +52,7 @@ services:
 
   # Hello World Python agent - resilient, works standalone or with registry
   hello-world-agent:
-    image: mcpmesh/python-runtime:0.5
+    image: mcpmesh/python-runtime:0.6
     container_name: mcp-mesh-hello-world
     hostname: hello-world-agent
     ports:
@@ -102,7 +102,7 @@ services:
 
   # System Agent Python service - resilient, works standalone or with registry
   system-agent:
-    image: mcpmesh/python-runtime:0.5
+    image: mcpmesh/python-runtime:0.6
     container_name: mcp-mesh-system-agent
     hostname: system-agent
     ports:
