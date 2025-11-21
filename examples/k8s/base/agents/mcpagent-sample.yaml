@@ -16,7 +16,7 @@ spec:
 
   # Deployment configuration
   replicas: 2
-  image: mcpmesh/python-runtime:0.5
+  image: mcpmesh/python-runtime:0.6
   imagePullPolicy: IfNotPresent
 
   # Registry configuration

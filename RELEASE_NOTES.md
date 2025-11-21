@@ -1,5 +1,30 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.7...v0.6.0)
+
+## v0.6.0 (2025-11-20)
+
+### 🎯 Dependency Resolution Tracking
+
+- **Persistent Dependency Tracking**: Track and persist both resolved and unresolved dependencies in database
+- **Enhanced Visibility**: Display dependency status in `meshctl list agents` with clear visual indicators
+- **Topology Awareness**: Automatically update dependency status when provider agents go offline
+- **Comprehensive Testing**: Full test coverage for dependency persistence and topology changes
+
+### 📊 Features
+
+- New `dependency_resolutions` table storing consumer/provider relationships
+- Visual dependency table in meshctl showing: DEPENDENCY | MCP TOOL | ENDPOINT
+- Color-coded status indicators (red for unresolved, green for resolved)
+- Registry connection flags for meshctl (--registry-host, --registry-port, --registry-url)
+- Support for both `[]interface{}` and `[]map[string]interface{}` dependency types
+
+### 🐛 Bug Fixes
+
+- Fixed health check port configuration in Docker Compose
+- Updated health checks to use Python urllib instead of wget
+- Corrected registry Dockerfile path references
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.6...v0.5.7)
 
 ## v0.5.7 (2025-11-06)

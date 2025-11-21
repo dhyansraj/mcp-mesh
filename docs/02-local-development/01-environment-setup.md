@@ -182,7 +182,7 @@ Create `.vscode/launch.json`:
 
 ```json
 {
-  "version": "0.5.7",
+  "version": "0.6.0",
   "configurations": [
     {
       "name": "Debug Weather Agent",
