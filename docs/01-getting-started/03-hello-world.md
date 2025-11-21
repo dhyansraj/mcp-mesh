@@ -16,7 +16,7 @@ meshctl start examples/simple/system_agent.py
 meshctl start examples/simple/hello_world.py
 
 # 3. Test it with MCP JSON-RPC!
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -138,7 +138,7 @@ class SystemAgent:
 
 ```bash
 # Check what tools are available on hello world agent
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -153,7 +153,7 @@ curl -s -X POST http://localhost:9090/mcp/ \
 
 ```bash
 # Test simple greeting
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -164,7 +164,7 @@ curl -s -X POST http://localhost:9090/mcp/ \
   }' | jq '.result'
 
 # Test smart tag-based greeting
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{

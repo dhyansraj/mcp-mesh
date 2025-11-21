@@ -14,7 +14,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .signature_analyzer import get_agent_parameter_types, get_mesh_agent_positions
+from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +57,17 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             logger.warning(
                 f"Single parameter '{param_name}' in function '{func_name}' found, "
                 f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
-                f"(consider typing as McpMeshAgent or McpAgent for clarity)"
+                f"(consider typing as McpMeshAgent for clarity)"
             )
         return [0]  # Inject into the single parameter
 
-    # Multiple parameters rule: only inject into McpMeshAgent or McpAgent typed parameters
+    # Multiple parameters rule: only inject into McpMeshAgent typed parameters
     if param_count > 1:
         if not mesh_positions:
             logger.warning(
                 f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
-                f"typed as McpMeshAgent or McpAgent. Skipping injection of {len(dependencies)} dependencies. "
-                f"Consider typing dependency parameters as McpMeshAgent or McpAgent."
+                f"typed as McpMeshAgent. Skipping injection of {len(dependencies)} dependencies. "
+                f"Consider typing dependency parameters as McpMeshAgent."
             )
             return []
 
@@ -77,7 +77,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 excess_deps = dependencies[len(mesh_positions) :]
                 logger.warning(
                     f"Function '{func_name}' has {len(dependencies)} dependencies "
-                    f"but only {len(mesh_positions)} McpMeshAgent/McpAgent parameters. "
+                    f"but only {len(mesh_positions)} McpMeshAgent parameters. "
                     f"Dependencies {excess_deps} will not be injected."
                 )
             else:
@@ -85,7 +85,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                     params[pos].name for pos in mesh_positions[len(dependencies) :]
                 ]
                 logger.warning(
-                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent/McpAgent parameters "
+                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent parameters "
                     f"but only {len(dependencies)} dependencies declared. "
                     f"Parameters {excess_params} will remain None."
                 )
@@ -101,10 +101,11 @@ class DependencyInjector:
     Manages dynamic dependency injection for mesh agents.
 
     This class:
-    1. Maintains a registry of available dependencies
-    2. Tracks which functions depend on which services
-    3. Updates function bindings when topology changes
-    4. Handles graceful degradation when dependencies unavailable
+    1. Maintains a registry of available dependencies (McpMeshAgent)
+    2. Coordinates with MeshLlmAgentInjector for LLM agent injection
+    3. Tracks which functions depend on which services
+    4. Updates function bindings when topology changes
+    5. Handles graceful degradation when dependencies unavailable
     """
 
     def __init__(self):
@@ -116,6 +117,12 @@ class DependencyInjector:
             {}
         )  # dep_name -> set of function_ids
         self._lock = asyncio.Lock()
+
+        # LLM agent injector for MeshLlmAgent parameters
+        from .mesh_llm_agent_injector import get_global_llm_injector
+
+        self._llm_injector = get_global_llm_injector()
+        logger.debug("🤖 DependencyInjector initialized with MeshLlmAgentInjector")
 
     async def register_dependency(self, name: str, instance: Any) -> None:
         """Register a new dependency or update existing one.
@@ -282,6 +289,49 @@ class DependencyInjector:
         )
         return None
 
+    def process_llm_tools(self, llm_tools: dict[str, list[dict[str, Any]]]) -> None:
+        """
+        Process llm_tools from registry response and delegate to MeshLlmAgentInjector.
+
+        Args:
+            llm_tools: Dict mapping function_id -> list of tool metadata
+                      Format: {"function_id": [{"function_name": "...", "endpoint": {...}, ...}]}
+        """
+        logger.info(
+            f"🤖 DependencyInjector processing llm_tools for {len(llm_tools)} functions"
+        )
+        self._llm_injector.process_llm_tools(llm_tools)
+
+    def update_llm_tools(self, llm_tools: dict[str, list[dict[str, Any]]]) -> None:
+        """
+        Update llm_tools when topology changes (heartbeat updates).
+
+        Args:
+            llm_tools: Updated llm_tools dict from registry
+        """
+        logger.info(
+            f"🔄 DependencyInjector updating llm_tools for {len(llm_tools)} functions"
+        )
+        self._llm_injector.update_llm_tools(llm_tools)
+
+    def create_llm_injection_wrapper(
+        self, func: Callable, function_id: str
+    ) -> Callable:
+        """
+        Create wrapper for function with MeshLlmAgent parameter.
+
+        Delegates to MeshLlmAgentInjector.
+
+        Args:
+            func: Function to wrap
+            function_id: Unique function ID from @mesh.llm decorator
+
+        Returns:
+            Wrapped function with MeshLlmAgent injection
+        """
+        logger.debug(f"🤖 Creating LLM injection wrapper for {function_id}")
+        return self._llm_injector.create_injection_wrapper(func, function_id)
+
     def create_injection_wrapper(
         self, func: Callable, dependencies: list[str]
     ) -> Callable:
@@ -299,9 +349,6 @@ class DependencyInjector:
 
         # Use new smart injection strategy
         mesh_positions = analyze_injection_strategy(func, dependencies)
-
-        # Get parameter type information for proxy selection
-        parameter_types = get_agent_parameter_types(func)
 
         # Track which dependencies this function needs (using composite keys)
         for dep_index, dep in enumerate(dependencies):
@@ -365,7 +412,6 @@ class DependencyInjector:
             minimal_wrapper._mesh_injected_deps = [None] * len(dependencies)
             minimal_wrapper._mesh_dependencies = dependencies
             minimal_wrapper._mesh_positions = mesh_positions
-            minimal_wrapper._mesh_parameter_types = get_agent_parameter_types(func)
             minimal_wrapper._mesh_original_func = func
 
             def update_dependency(dep_index: int, instance: Any | None) -> None:
@@ -463,6 +509,21 @@ class DependencyInjector:
                     f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}"
                 )
 
+                # ===== INJECT LLM AGENT IF PRESENT (Option A) =====
+                # Check if this function has @mesh.llm metadata attached (on the original function)
+                if hasattr(func, "_mesh_llm_param_name"):
+                    llm_param = func._mesh_llm_param_name
+                    # Only inject if not already provided
+                    if (
+                        llm_param not in final_kwargs
+                        or final_kwargs.get(llm_param) is None
+                    ):
+                        llm_agent = getattr(func, "_mesh_llm_agent", None)
+                        final_kwargs[llm_param] = llm_agent
+                        wrapper_logger.debug(
+                            f"🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
+                        )
+
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
                 # Use ExecutionTracer for comprehensive execution logging (v0.4.0 style)
                 from ..tracing.execution_tracer import ExecutionTracer
@@ -540,6 +601,21 @@ class DependencyInjector:
                             final_kwargs[param_name] = dependency
                             injected_count += 1
 
+                # ===== INJECT LLM AGENT IF PRESENT (Option A) =====
+                # Check if this function has @mesh.llm metadata attached (on the original function)
+                if hasattr(func, "_mesh_llm_param_name"):
+                    llm_param = func._mesh_llm_param_name
+                    # Only inject if not already provided
+                    if (
+                        llm_param not in final_kwargs
+                        or final_kwargs.get(llm_param) is None
+                    ):
+                        llm_agent = getattr(func, "_mesh_llm_agent", None)
+                        final_kwargs[llm_param] = llm_agent
+                        wrapper_logger.debug(
+                            f"🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
+                        )
+
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
                 # Use ExecutionTracer for comprehensive execution logging (v0.4.0 style)
                 from ..tracing.execution_tracer import ExecutionTracer
@@ -587,9 +663,6 @@ class DependencyInjector:
         dependency_wrapper._mesh_update_dependency = update_dependency
         dependency_wrapper._mesh_dependencies = dependencies
         dependency_wrapper._mesh_positions = mesh_positions
-        dependency_wrapper._mesh_parameter_types = (
-            parameter_types  # Store for proxy selection
-        )
         dependency_wrapper._mesh_original_func = func
 
         # Register this wrapper for dependency updates

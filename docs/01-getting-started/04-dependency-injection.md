@@ -321,7 +321,7 @@ curl -s http://localhost:8000/agents | \
 
 ```bash
 # Test date service directly
-curl -s -X POST http://localhost:8080/mcp/ \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -332,7 +332,7 @@ curl -s -X POST http://localhost:8080/mcp/ \
   }' | jq '.result'
 
 # Test dependency injection
-curl -s -X POST http://localhost:9090/mcp/ \
+curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -369,7 +369,7 @@ curl -s http://localhost:8000/agents | \
   jq '.agents[] | select(.capabilities | has("date_service"))'
 
 # Check function names vs capabilities
-curl -s -X POST http://localhost:8080/mcp/ \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \

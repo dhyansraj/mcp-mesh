@@ -13,10 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction
-from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.heartbeat_preparation import HeartbeatPreparationStep
+from _mcp_mesh.pipeline.mcp_startup.heartbeat_preparation import (
+    HeartbeatPreparationStep,
+)
+from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 from _mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 
@@ -735,3 +737,560 @@ class TestHeartbeatPreparationToolValidation:
 
             # Should have default capability
             assert capabilities == ["default"]
+
+
+class TestHeartbeatPreparationInputSchemaExtraction:
+    """Test inputSchema extraction from FastMCP tools (Phase 2: LLM Integration)."""
+
+    @pytest.fixture
+    def step(self):
+        """Create a HeartbeatPreparationStep instance."""
+        return HeartbeatPreparationStep()
+
+    @pytest.fixture
+    def mock_agent_config(self):
+        """Mock agent configuration."""
+        return {"agent_id": "schema-test-001"}
+
+    @pytest.mark.asyncio
+    async def test_tool_with_fastmcp_schema_includes_input_schema(
+        self, step, mock_agent_config
+    ):
+        """Test that tools with FastMCP schemas include inputSchema in tool_data."""
+        # Create a mock FastMCP tool with inputSchema
+        mock_fastmcp_tool = MagicMock()
+        mock_fastmcp_tool.name = "test_tool"
+        mock_fastmcp_tool.description = "Test tool with schema"
+        mock_fastmcp_tool.parameters = {
+            "type": "object",
+            "properties": {
+                "user_email": {"type": "string", "description": "User's email"},
+                "count": {"type": "integer", "description": "Count of items"},
+            },
+            "required": ["user_email"],
+        }
+
+        # Create mock function with reference to FastMCP tool
+        mock_func = MagicMock()
+        mock_func.__name__ = "test_tool"
+        mock_func._fastmcp_tool = mock_fastmcp_tool  # Store reference to FastMCP tool
+
+        mock_tools = {
+            "test_tool": DecoratedFunction(
+                decorator_type="mesh_tool",
+                function=mock_func,
+                metadata={
+                    "capability": "test_capability",
+                    "tags": ["test"],
+                    "version": "1.0.0",
+                    "dependencies": [],
+                },
+                registered_at=MagicMock(),
+            )
+        }
+
+        with patch(
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+        ) as mock_registry:
+            mock_registry.get_mesh_tools.return_value = mock_tools
+            mock_registry.get_resolved_agent_config.return_value = mock_agent_config
+
+            result = await step.execute({})
+
+            assert result.status == PipelineStatus.SUCCESS
+            tools_list = result.context["tools_list"]
+            assert len(tools_list) == 1
+
+            tool_data = tools_list[0]
+            # CRITICAL: inputSchema must be included
+            assert (
+                "input_schema" in tool_data
+            ), "inputSchema should be extracted from FastMCP tool"
+            assert tool_data["input_schema"] == mock_fastmcp_tool.parameters
+            assert tool_data["input_schema"]["type"] == "object"
+            assert "user_email" in tool_data["input_schema"]["properties"]
+            assert "count" in tool_data["input_schema"]["properties"]
+
+    @pytest.mark.asyncio
+    async def test_tool_without_fastmcp_schema_has_none_input_schema(
+        self, step, mock_agent_config
+    ):
+        """Test that tools without FastMCP schemas have None for inputSchema."""
+        # Create mock function WITHOUT FastMCP tool reference
+        mock_func = MagicMock(spec=["__name__", "__call__"])
+        mock_func.__name__ = "plain_tool"
+        # Explicitly ensure no _fastmcp_tool attribute
+
+        mock_tools = {
+            "plain_tool": DecoratedFunction(
+                decorator_type="mesh_tool",
+                function=mock_func,
+                metadata={
+                    "capability": "plain_capability",
+                    "dependencies": [],
+                },
+                registered_at=MagicMock(),
+            )
+        }
+
+        with patch(
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+        ) as mock_registry:
+            mock_registry.get_mesh_tools.return_value = mock_tools
+            mock_registry.get_resolved_agent_config.return_value = mock_agent_config
+
+            result = await step.execute({})
+
+            tools_list = result.context["tools_list"]
+            tool_data = tools_list[0]
+
+            # Should have input_schema key but with None value
+            assert "input_schema" in tool_data
+            assert tool_data["input_schema"] is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_tools_with_different_schemas(self, step, mock_agent_config):
+        """Test multiple tools each with their own inputSchema."""
+        # Tool 1: Has schema
+        mock_tool1 = MagicMock()
+        mock_tool1.name = "tool_with_schema"
+        mock_tool1.parameters = {
+            "type": "object",
+            "properties": {"param1": {"type": "string"}},
+        }
+
+        mock_func1 = MagicMock()
+        mock_func1.__name__ = "tool_with_schema"
+        mock_func1._fastmcp_tool = mock_tool1
+
+        # Tool 2: No schema
+        mock_func2 = MagicMock(spec=["__name__", "__call__"])
+        mock_func2.__name__ = "tool_without_schema"
+
+        mock_tools = {
+            "tool_with_schema": DecoratedFunction(
+                decorator_type="mesh_tool",
+                function=mock_func1,
+                metadata={"capability": "cap1", "dependencies": []},
+                registered_at=MagicMock(),
+            ),
+            "tool_without_schema": DecoratedFunction(
+                decorator_type="mesh_tool",
+                function=mock_func2,
+                metadata={"capability": "cap2", "dependencies": []},
+                registered_at=MagicMock(),
+            ),
+        }
+
+        with patch(
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+        ) as mock_registry:
+            mock_registry.get_mesh_tools.return_value = mock_tools
+            mock_registry.get_resolved_agent_config.return_value = mock_agent_config
+
+            result = await step.execute({})
+
+            tools_list = result.context["tools_list"]
+            assert len(tools_list) == 2
+
+            # Find each tool
+            tool_with_schema = next(
+                t for t in tools_list if t["function_name"] == "tool_with_schema"
+            )
+            tool_without_schema = next(
+                t for t in tools_list if t["function_name"] == "tool_without_schema"
+            )
+
+            # Verify schemas
+            assert tool_with_schema["input_schema"] is not None
+            assert tool_with_schema["input_schema"]["type"] == "object"
+
+            assert tool_without_schema["input_schema"] is None
+
+    @pytest.mark.asyncio
+    async def test_schema_extraction_handles_complex_schemas(
+        self, step, mock_agent_config
+    ):
+        """Test extraction of complex nested schemas."""
+        mock_tool = MagicMock()
+        mock_tool.name = "complex_tool"
+        mock_tool.parameters = {
+            "type": "object",
+            "properties": {
+                "simple_param": {"type": "string"},
+                "nested_object": {
+                    "type": "object",
+                    "properties": {
+                        "inner_field": {"type": "number"},
+                        "deep_array": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+                "optional_param": {"type": "boolean"},
+            },
+            "required": ["simple_param", "nested_object"],
+        }
+
+        mock_func = MagicMock()
+        mock_func.__name__ = "complex_tool"
+        mock_func._fastmcp_tool = mock_tool
+
+        mock_tools = {
+            "complex_tool": DecoratedFunction(
+                decorator_type="mesh_tool",
+                function=mock_func,
+                metadata={"capability": "complex_cap", "dependencies": []},
+                registered_at=MagicMock(),
+            )
+        }
+
+        with patch(
+            "_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry"
+        ) as mock_registry:
+            mock_registry.get_mesh_tools.return_value = mock_tools
+            mock_registry.get_resolved_agent_config.return_value = mock_agent_config
+
+            result = await step.execute({})
+
+            tools_list = result.context["tools_list"]
+            tool_data = tools_list[0]
+
+            # Verify complete schema is preserved
+            schema = tool_data["input_schema"]
+            assert schema["type"] == "object"
+            assert "simple_param" in schema["properties"]
+            assert "nested_object" in schema["properties"]
+            assert schema["required"] == ["simple_param", "nested_object"]
+
+            # Verify nested structure is intact
+            nested = schema["properties"]["nested_object"]
+            assert nested["type"] == "object"
+            assert "inner_field" in nested["properties"]
+            assert "deep_array" in nested["properties"]
+
+
+class TestHeartbeatPreparationLLMFilter:
+    """Test LLM filter integration in heartbeat preparation."""
+
+    @pytest.fixture
+    def step(self):
+        """Create a HeartbeatPreparationStep instance."""
+        return HeartbeatPreparationStep()
+
+    @pytest.fixture
+    def mock_agent_config(self):
+        """Mock resolved agent configuration."""
+        return {
+            "agent_id": "llm-agent-123",
+            "name": "llm-agent",
+            "version": "1.0.0",
+            "description": "LLM test agent",
+            "http_host": "localhost",
+            "http_port": 8080,
+            "enable_http": True,
+            "namespace": "default",
+            "health_interval": 30,
+        }
+
+    @pytest.fixture
+    def mock_llm_tool_function(self):
+        """Create a mock LLM tool function."""
+        from pydantic import BaseModel
+
+        class ChatResponse(BaseModel):
+            answer: str
+            confidence: float
+
+        mock_func = MagicMock()
+        mock_func.__name__ = "chat"
+        mock_func.__annotations__ = {
+            "message": str,
+            "llm": "MeshLlmAgent",
+            "return": ChatResponse,
+        }
+        return mock_func
+
+    @pytest.fixture
+    def mock_mesh_tools_with_llm(self, mock_llm_tool_function):
+        """Mock mesh tools with LLM function."""
+        decorated_func = DecoratedFunction(
+            decorator_type="mesh_tool",
+            function=mock_llm_tool_function,
+            metadata={
+                "capability": "chat",
+                "tags": ["llm", "conversational"],
+                "version": "1.0.0",
+                "description": "Chat with LLM and tools",
+                "dependencies": [],
+            },
+            registered_at=MagicMock(),
+        )
+        return {"chat": decorated_func}
+
+    @pytest.mark.asyncio
+    async def test_llm_filter_with_simple_string_filter(
+        self, step, mock_agent_config, mock_mesh_tools_with_llm
+    ):
+        """Test LLM filter integration with simple string filter."""
+        from datetime import datetime
+
+        from _mcp_mesh.engine.decorator_registry import (
+            DecoratorRegistry,
+            LLMAgentMetadata,
+        )
+
+        # Clear registry first to ensure test isolation
+        DecoratorRegistry._mesh_llm_agents.clear()
+
+        # Register LLM agent with simple string filter
+        llm_metadata = LLMAgentMetadata(
+            function=mock_mesh_tools_with_llm["chat"].function,
+            config={
+                "filter": "document_processor",
+                "filter_mode": "all",
+                "provider": "claude",
+            },
+            output_type=None,
+            param_name="llm",
+            function_id="chat_abc123",
+            registered_at=datetime.now(),
+        )
+        DecoratorRegistry._mesh_llm_agents["chat_abc123"] = llm_metadata
+
+        try:
+            with (
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
+                ) as mock_get_tools,
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config"
+                ) as mock_get_config,
+            ):
+                mock_get_tools.return_value = mock_mesh_tools_with_llm
+                mock_get_config.return_value = mock_agent_config
+
+                result = await step.execute({})
+
+                tools_list = result.context["tools_list"]
+                assert len(tools_list) == 1
+
+                tool_data = tools_list[0]
+                assert tool_data["function_name"] == "chat"
+                assert "llm_filter" in tool_data
+                assert tool_data["llm_filter"] is not None
+
+                llm_filter = tool_data["llm_filter"]
+                assert llm_filter["filter"] == [
+                    "document_processor"
+                ]  # Normalized to array
+                assert llm_filter["filter_mode"] == "all"
+        finally:
+            # Cleanup
+            DecoratorRegistry._mesh_llm_agents.clear()
+
+    @pytest.mark.asyncio
+    async def test_llm_filter_with_dict_filter(
+        self, step, mock_agent_config, mock_mesh_tools_with_llm
+    ):
+        """Test LLM filter integration with dict filter."""
+        from datetime import datetime
+
+        from _mcp_mesh.engine.decorator_registry import (
+            DecoratorRegistry,
+            LLMAgentMetadata,
+        )
+
+        # Register LLM agent with dict filter
+        llm_metadata = LLMAgentMetadata(
+            function=mock_mesh_tools_with_llm["chat"].function,
+            config={
+                "filter": {"capability": "document", "tags": ["pdf", "advanced"]},
+                "filter_mode": "best_match",
+                "provider": "openai",
+            },
+            output_type=None,
+            param_name="llm",
+            function_id="chat_def456",
+            registered_at=datetime.now(),
+        )
+        DecoratorRegistry._mesh_llm_agents["chat_def456"] = llm_metadata
+
+        try:
+            with (
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
+                ) as mock_get_tools,
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config"
+                ) as mock_get_config,
+            ):
+                mock_get_tools.return_value = mock_mesh_tools_with_llm
+                mock_get_config.return_value = mock_agent_config
+
+                result = await step.execute({})
+
+                tools_list = result.context["tools_list"]
+                tool_data = tools_list[0]
+
+                llm_filter = tool_data["llm_filter"]
+                assert llm_filter["filter"] == [
+                    {"capability": "document", "tags": ["pdf", "advanced"]}
+                ]
+                assert llm_filter["filter_mode"] == "best_match"
+        finally:
+            DecoratorRegistry._mesh_llm_agents.clear()
+
+    @pytest.mark.asyncio
+    async def test_llm_filter_with_list_filter(
+        self, step, mock_agent_config, mock_mesh_tools_with_llm
+    ):
+        """Test LLM filter integration with list of mixed filters."""
+        from datetime import datetime
+
+        from _mcp_mesh.engine.decorator_registry import (
+            DecoratorRegistry,
+            LLMAgentMetadata,
+        )
+
+        # Register LLM agent with list filter
+        llm_metadata = LLMAgentMetadata(
+            function=mock_mesh_tools_with_llm["chat"].function,
+            config={
+                "filter": [
+                    {"capability": "document", "tags": ["pdf"]},
+                    "web_search",
+                    {"capability": "database", "tags": ["postgres"]},
+                ],
+                "filter_mode": "all",
+                "provider": "claude",
+            },
+            output_type=None,
+            param_name="llm",
+            function_id="chat_ghi789",
+            registered_at=datetime.now(),
+        )
+        DecoratorRegistry._mesh_llm_agents["chat_ghi789"] = llm_metadata
+
+        try:
+            with (
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
+                ) as mock_get_tools,
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config"
+                ) as mock_get_config,
+            ):
+                mock_get_tools.return_value = mock_mesh_tools_with_llm
+                mock_get_config.return_value = mock_agent_config
+
+                result = await step.execute({})
+
+                tools_list = result.context["tools_list"]
+                tool_data = tools_list[0]
+
+                llm_filter = tool_data["llm_filter"]
+                assert isinstance(llm_filter["filter"], list)
+                assert len(llm_filter["filter"]) == 3
+                assert llm_filter["filter"][0] == {
+                    "capability": "document",
+                    "tags": ["pdf"],
+                }
+                assert llm_filter["filter"][1] == "web_search"
+                assert llm_filter["filter"][2] == {
+                    "capability": "database",
+                    "tags": ["postgres"],
+                }
+                assert llm_filter["filter_mode"] == "all"
+        finally:
+            DecoratorRegistry._mesh_llm_agents.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_llm_filter_for_regular_tools(self, step, mock_agent_config):
+        """Test that regular tools (without @mesh.llm) don't have llm_filter."""
+        mock_func = MagicMock()
+        mock_func.__name__ = "regular_tool"
+
+        decorated_func = DecoratedFunction(
+            decorator_type="mesh_tool",
+            function=mock_func,
+            metadata={
+                "capability": "greeting",
+                "tags": ["test"],
+                "version": "1.0.0",
+                "description": "Regular tool without LLM",
+                "dependencies": [],
+            },
+            registered_at=MagicMock(),
+        )
+        mock_mesh_tools = {"regular_tool": decorated_func}
+
+        with (
+            patch(
+                "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
+            ) as mock_get_tools,
+            patch(
+                "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config"
+            ) as mock_get_config,
+        ):
+            mock_get_tools.return_value = mock_mesh_tools
+            mock_get_config.return_value = mock_agent_config
+
+            result = await step.execute({})
+
+            tools_list = result.context["tools_list"]
+            tool_data = tools_list[0]
+
+            # Regular tool should have llm_filter as None
+            assert tool_data["llm_filter"] is None
+
+    @pytest.mark.asyncio
+    async def test_llm_filter_with_none_filter(
+        self, step, mock_agent_config, mock_mesh_tools_with_llm
+    ):
+        """Test LLM filter when filter is None (edge case)."""
+        from datetime import datetime
+
+        from _mcp_mesh.engine.decorator_registry import (
+            DecoratorRegistry,
+            LLMAgentMetadata,
+        )
+
+        # Register LLM agent with None filter
+        llm_metadata = LLMAgentMetadata(
+            function=mock_mesh_tools_with_llm["chat"].function,
+            config={
+                "filter": None,
+                "filter_mode": "all",
+                "provider": "claude",
+            },
+            output_type=None,
+            param_name="llm",
+            function_id="chat_jkl012",
+            registered_at=datetime.now(),
+        )
+        DecoratorRegistry._mesh_llm_agents["chat_jkl012"] = llm_metadata
+
+        try:
+            with (
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_mesh_tools"
+                ) as mock_get_tools,
+                patch(
+                    "_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config"
+                ) as mock_get_config,
+            ):
+                mock_get_tools.return_value = mock_mesh_tools_with_llm
+                mock_get_config.return_value = mock_agent_config
+
+                result = await step.execute({})
+
+                tools_list = result.context["tools_list"]
+                tool_data = tools_list[0]
+
+                llm_filter = tool_data["llm_filter"]
+                assert llm_filter["filter"] == []  # Empty array for None filter
+                assert llm_filter["filter_mode"] == "all"
+        finally:
+            DecoratorRegistry._mesh_llm_agents.clear()

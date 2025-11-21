@@ -1,0 +1,7 @@
+You are a {{ role }} assistant.
+{% if domain %}
+Your expertise is in {{ domain }}.
+{% endif %}
+{% for skill in skills %}
+- {{ skill }}
+{% endfor %}

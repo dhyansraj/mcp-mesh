@@ -32,6 +32,18 @@ class DecoratedFunction:
             self.metadata["function_name"] = self.function.__name__
 
 
+@dataclass
+class LLMAgentMetadata:
+    """Metadata for a function decorated with @mesh.llm."""
+
+    function: Callable
+    config: dict[str, Any]  # LLM configuration (provider, model, filter, etc.)
+    output_type: Optional[type]  # Pydantic model type from return annotation
+    param_name: str  # Name of MeshLlmAgent parameter
+    function_id: str  # Unique function ID for registry
+    registered_at: datetime
+
+
 class DecoratorRegistry:
     """
     Central registry for ALL MCP Mesh decorators.
@@ -52,18 +64,22 @@ class DecoratorRegistry:
     _mesh_tools: dict[str, DecoratedFunction] = {}  # Future use
     _mesh_resources: dict[str, DecoratedFunction] = {}  # Future use
     _mesh_workflows: dict[str, DecoratedFunction] = {}  # Future use
+    _mesh_llm_agents: dict[str, "LLMAgentMetadata"] = {}  # LLM agents with agentic loop
 
     # Registry for new decorator types (extensibility)
     _custom_decorators: dict[str, dict[str, DecoratedFunction]] = {}
-    
+
     # Immediate uvicorn server storage (for preventing shutdown state)
     _immediate_uvicorn_server: Optional[dict[str, Any]] = None
-    
+
     # FastMCP lifespan storage (for proper integration with FastAPI)
     _fastmcp_lifespan: Optional[Any] = None
-    
+
     # FastMCP HTTP app storage (the same app instance whose lifespan was extracted)
     _fastmcp_http_app: Optional[Any] = None
+
+    # FastMCP server info storage (for schema extraction during heartbeat)
+    _fastmcp_server_info: Optional[dict[str, Any]] = None
 
     @classmethod
     def register_mesh_agent(cls, func: Callable, metadata: dict[str, Any]) -> None:
@@ -132,6 +148,53 @@ class DecoratorRegistry:
         cls._mesh_workflows[func.__name__] = decorated_func
 
     @classmethod
+    def register_mesh_llm(
+        cls,
+        func: Callable,
+        config: dict[str, Any],
+        output_type: Optional[type],
+        param_name: str,
+        function_id: str,
+    ) -> None:
+        """
+        Register a @mesh.llm decorated function.
+
+        Args:
+            func: The decorated function
+            config: LLM configuration (provider, model, filter, etc.)
+            output_type: Pydantic model type from return annotation
+            param_name: Name of MeshLlmAgent parameter
+            function_id: Unique function ID for registry
+        """
+        llm_metadata = LLMAgentMetadata(
+            function=func,
+            config=config.copy(),
+            output_type=output_type,
+            param_name=param_name,
+            function_id=function_id,
+            registered_at=datetime.now(),
+        )
+
+        cls._mesh_llm_agents[function_id] = llm_metadata
+        logger.info(
+            f"🤖 Registered LLM agent: {func.__name__} (function_id={function_id}, param={param_name}, filter={config.get('filter')}, provider={config.get('provider')})"
+        )
+
+    @classmethod
+    def update_mesh_llm_function(cls, function_id: str, new_func: Callable) -> None:
+        """Update the function reference for a registered LLM agent (used for wrapper injection)."""
+        if function_id in cls._mesh_llm_agents:
+            old_func = cls._mesh_llm_agents[function_id].function
+            cls._mesh_llm_agents[function_id].function = new_func
+            logger.info(
+                f"🔄 DecoratorRegistry: Updated LLM function '{function_id}' from {hex(id(old_func))} to {hex(id(new_func))}"
+            )
+        else:
+            logger.warning(
+                f"⚠️ DecoratorRegistry: LLM function '{function_id}' not found for update"
+            )
+
+    @classmethod
     def register_custom_decorator(
         cls, decorator_type: str, func: Callable, metadata: dict[str, Any]
     ) -> None:
@@ -174,6 +237,11 @@ class DecoratorRegistry:
     def get_mesh_workflows(cls) -> dict[str, DecoratedFunction]:
         """Get all @mesh_workflow decorated functions."""
         return cls._mesh_workflows.copy()
+
+    @classmethod
+    def get_mesh_llm_agents(cls) -> dict[str, LLMAgentMetadata]:
+        """Get all @mesh.llm decorated functions."""
+        return cls._mesh_llm_agents.copy()
 
     @classmethod
     def get_all_by_type(cls, decorator_type: str) -> dict[str, DecoratedFunction]:
@@ -256,6 +324,7 @@ class DecoratorRegistry:
         cls._mesh_tools.clear()
         cls._mesh_resources.clear()
         cls._mesh_workflows.clear()
+        cls._mesh_llm_agents.clear()
         cls._custom_decorators.clear()
 
         # Also clear the shared agent ID from mesh.decorators
@@ -290,23 +359,21 @@ class DecoratorRegistry:
     def update_agent_config(cls, updates: dict[str, Any]) -> None:
         """
         Update the cached agent configuration with new values.
-        
+
         This is useful for API services that generate their agent ID
         during pipeline execution and need to store it for telemetry.
-        
+
         Args:
             updates: Dictionary of config values to update
         """
         if cls._cached_agent_config is None:
             # Initialize with current resolved config if not cached yet
             cls._cached_agent_config = cls.get_resolved_agent_config().copy()
-        
+
         # Update with new values
         cls._cached_agent_config.update(updates)
-        
-        logger.debug(
-            f"🔧 Updated cached agent configuration with: {updates}"
-        )
+
+        logger.debug(f"🔧 Updated cached agent configuration with: {updates}")
 
     @classmethod
     def get_resolved_agent_config(cls) -> dict[str, Any]:
@@ -320,7 +387,9 @@ class DecoratorRegistry:
             dict: Pre-resolved configuration with consistent agent_id
         """
         # Step 1: Check if cached configuration already has agent_id (from API pipeline)
-        if cls._cached_agent_config is not None and cls._cached_agent_config.get('agent_id'):
+        if cls._cached_agent_config is not None and cls._cached_agent_config.get(
+            "agent_id"
+        ):
             logger.debug(
                 f"🔧 Using cached agent configuration: agent_id='{cls._cached_agent_config.get('agent_id')}'"
             )
@@ -348,15 +417,16 @@ class DecoratorRegistry:
         # Check if we're in an API context (have mesh_route decorators)
         mesh_routes = cls.get_all_by_type("mesh_route")
         is_api_context = len(mesh_routes) > 0
-        
+
         if is_api_context:
             # Use API service ID generation logic for consistency
             agent_id = cls._generate_api_service_id_fallback()
         else:
             # Use standard MCP agent ID generation
             from mesh.decorators import _get_or_create_agent_id
+
             agent_id = _get_or_create_agent_id()
-        
+
         fallback_config = {
             "name": None,
             "version": get_config_value(
@@ -415,44 +485,44 @@ class DecoratorRegistry:
     def _generate_api_service_id_fallback(cls) -> str:
         """
         Generate API service ID as fallback using same priority logic as API pipeline.
-        
+
         Priority order:
-        1. MCP_MESH_API_NAME environment variable 
+        1. MCP_MESH_API_NAME environment variable
         2. MCP_MESH_AGENT_NAME environment variable (fallback)
         3. Default to "api-{uuid8}"
-        
+
         Returns:
             Generated service ID with UUID suffix matching API service format
         """
         import uuid
-        
+
         from ..shared.config_resolver import ValidationRule, get_config_value
-        
+
         # Check for API-specific environment variable first (same as API pipeline)
         api_name = get_config_value(
             "MCP_MESH_API_NAME",
             default=None,
             rule=ValidationRule.STRING_RULE,
         )
-        
+
         # Fallback to general agent name env var
         if not api_name:
             api_name = get_config_value(
-                "MCP_MESH_AGENT_NAME", 
+                "MCP_MESH_AGENT_NAME",
                 default=None,
                 rule=ValidationRule.STRING_RULE,
             )
-        
+
         # Clean the service name if provided
         if api_name:
             cleaned_name = api_name.lower().replace(" ", "-").replace("_", "-")
             cleaned_name = "-".join(part for part in cleaned_name.split("-") if part)
         else:
             cleaned_name = ""
-        
+
         # Generate UUID suffix
         uuid_suffix = str(uuid.uuid4())[:8]
-        
+
         # Apply same naming logic as API pipeline
         if not cleaned_name:
             # No name provided: default to "api-{uuid8}"
@@ -463,8 +533,10 @@ class DecoratorRegistry:
         else:
             # Name doesn't contain "api": use "{name}-api-{uuid8}"
             service_id = f"{cleaned_name}-api-{uuid_suffix}"
-        
-        logger.debug(f"Generated fallback API service ID: '{service_id}' from env name: '{api_name}'")
+
+        logger.debug(
+            f"Generated fallback API service ID: '{service_id}' from env name: '{api_name}'"
+        )
         return service_id
 
     @classmethod
@@ -521,23 +593,25 @@ class DecoratorRegistry:
     def store_immediate_uvicorn_server(cls, server_info: dict[str, Any]) -> None:
         """
         Store reference to immediate uvicorn server started in decorator.
-        
+
         Args:
             server_info: Dictionary containing server information:
                 - 'app': FastAPI app instance
                 - 'host': Server host
-                - 'port': Server port  
+                - 'port': Server port
                 - 'thread': Thread object
                 - Any other relevant server metadata
         """
         cls._immediate_uvicorn_server = server_info
-        logger.debug(f"🔄 REGISTRY: Stored immediate uvicorn server reference: {server_info.get('host')}:{server_info.get('port')}")
+        logger.debug(
+            f"🔄 REGISTRY: Stored immediate uvicorn server reference: {server_info.get('host')}:{server_info.get('port')}"
+        )
 
     @classmethod
     def get_immediate_uvicorn_server(cls) -> Optional[dict[str, Any]]:
         """
         Get stored immediate uvicorn server reference.
-        
+
         Returns:
             Server info dict if available, None otherwise
         """
@@ -553,7 +627,7 @@ class DecoratorRegistry:
     def store_fastmcp_lifespan(cls, lifespan: Any) -> None:
         """
         Store FastMCP lifespan for integration with FastAPI.
-        
+
         Args:
             lifespan: FastMCP lifespan function
         """
@@ -564,7 +638,7 @@ class DecoratorRegistry:
     def get_fastmcp_lifespan(cls) -> Optional[Any]:
         """
         Get stored FastMCP lifespan.
-        
+
         Returns:
             FastMCP lifespan if available, None otherwise
         """
@@ -580,7 +654,7 @@ class DecoratorRegistry:
     def store_fastmcp_http_app(cls, http_app: Any) -> None:
         """
         Store FastMCP HTTP app (the same instance whose lifespan was extracted).
-        
+
         Args:
             http_app: FastMCP HTTP app instance
         """
@@ -591,7 +665,7 @@ class DecoratorRegistry:
     def get_fastmcp_http_app(cls) -> Optional[Any]:
         """
         Get stored FastMCP HTTP app.
-        
+
         Returns:
             FastMCP HTTP app if available, None otherwise
         """
@@ -602,6 +676,35 @@ class DecoratorRegistry:
         """Clear stored FastMCP HTTP app reference."""
         cls._fastmcp_http_app = None
         logger.debug("🔄 REGISTRY: Cleared FastMCP HTTP app reference")
+
+    @classmethod
+    def store_fastmcp_server_info(cls, server_info: dict[str, Any]) -> None:
+        """
+        Store FastMCP server info for schema extraction during heartbeat.
+
+        Args:
+            server_info: Dictionary of server_name -> server metadata (including tools)
+        """
+        cls._fastmcp_server_info = server_info
+        logger.debug(
+            f"🔄 REGISTRY: Stored FastMCP server info for {len(server_info)} servers"
+        )
+
+    @classmethod
+    def get_fastmcp_server_info(cls) -> Optional[dict[str, Any]]:
+        """
+        Get stored FastMCP server info.
+
+        Returns:
+            FastMCP server info if available, None otherwise
+        """
+        return cls._fastmcp_server_info
+
+    @classmethod
+    def clear_fastmcp_server_info(cls) -> None:
+        """Clear stored FastMCP server info reference."""
+        cls._fastmcp_server_info = None
+        logger.debug("🔄 REGISTRY: Cleared FastMCP server info reference")
 
 
 # Convenience functions for external access

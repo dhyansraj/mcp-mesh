@@ -170,6 +170,7 @@ logs/
 .logs/
 capability_store/
 *.db
+*.pid
 
 # Go binaries
 mcp-mesh-dev

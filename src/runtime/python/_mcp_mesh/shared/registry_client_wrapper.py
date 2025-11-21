@@ -7,7 +7,7 @@ that handles conversion between simple Python dicts and Pydantic models.
 
 import logging
 from datetime import UTC, datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from _mcp_mesh.generated.mcp_mesh_registry_client.api.agents_api import AgentsApi
 from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
@@ -72,7 +72,7 @@ class RegistryClientWrapper:
                 )
 
             registration_json = json.dumps(registration_dict, indent=2, default=str)
-            self.logger.debug(
+            self.logger.info(
                 f"🔍 Full heartbeat registration payload:\n{registration_json}"
             )
 
@@ -80,7 +80,9 @@ class RegistryClientWrapper:
             response = self.agents_api.send_heartbeat(agent_registration)
 
             # Convert response to dict
-            return self._response_to_dict(response)
+            response_dict = self._response_to_dict(response)
+
+            return response_dict
 
         except Exception as e:
             self.logger.error(
@@ -332,6 +334,7 @@ class RegistryClientWrapper:
 
         # Import here to avoid circular imports
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
 
         # Get current tools from registry
         mesh_tools = DecoratorRegistry.get_mesh_tools()
@@ -374,7 +377,58 @@ class RegistryClientWrapper:
                 k: v for k, v in metadata.items() if k not in standard_fields
             }
 
-            # Create tool registration with kwargs support
+            # Extract inputSchema from FastMCP tool (Phase 2: Schema Collection)
+            # First try to get FastMCP server info from DecoratorRegistry
+            fastmcp_servers = DecoratorRegistry.get_fastmcp_server_info()
+            input_schema = None
+
+            if fastmcp_servers:
+                # Try comprehensive extraction using server context
+                input_schema = FastMCPSchemaExtractor.extract_from_fastmcp_servers(
+                    decorated_func.function, fastmcp_servers
+                )
+
+            # Fallback to direct attribute check if server lookup didn't work
+            if input_schema is None:
+                input_schema = FastMCPSchemaExtractor.extract_input_schema(
+                    decorated_func.function
+                )
+
+            # Extract llm_filter from @mesh.llm decorator (Phase 3: LLM Integration)
+            llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+            llm_filter_data = None
+
+            for llm_agent_id, llm_metadata in llm_agents.items():
+                # Match by function name (decorated_func.function is the wrapper, need to check original)
+                if llm_metadata.function.__name__ == func_name:
+                    # Found matching LLM agent - extract filter config
+                    raw_filter = llm_metadata.config.get("filter")
+                    filter_mode = llm_metadata.config.get("filter_mode", "all")
+
+                    # Normalize filter to array format
+                    if raw_filter is None:
+                        normalized_filter = []
+                    elif isinstance(raw_filter, list):
+                        normalized_filter = raw_filter
+                    elif isinstance(raw_filter, dict):
+                        # Single dict filter like {'capability': 'date_service'}
+                        normalized_filter = [raw_filter]
+                    elif isinstance(raw_filter, str):
+                        normalized_filter = [raw_filter] if raw_filter else []
+                    else:
+                        normalized_filter = []
+
+                    llm_filter_data = {
+                        "filter": normalized_filter,
+                        "filter_mode": filter_mode,
+                    }
+
+                    self.logger.debug(
+                        f"🤖 Extracted llm_filter for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}"
+                    )
+                    break
+
+            # Create tool registration with llm_filter as separate top-level field (not in kwargs)
             tool_reg = MeshToolRegistration(
                 function_name=func_name,
                 capability=metadata.get("capability"),
@@ -382,6 +436,8 @@ class RegistryClientWrapper:
                 version=metadata.get("version", "1.0.0"),
                 dependencies=dep_registrations,
                 description=metadata.get("description"),
+                llm_filter=llm_filter_data,  # Pass llm_filter as top-level parameter
+                input_schema=input_schema,  # Pass inputSchema as top-level parameter (not in kwargs)
                 kwargs=kwargs_data if kwargs_data else None,
             )
             tools.append(tool_reg)

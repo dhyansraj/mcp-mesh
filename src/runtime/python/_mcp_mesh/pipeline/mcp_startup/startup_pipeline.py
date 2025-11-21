@@ -49,9 +49,9 @@ class StartupPipeline(MeshPipeline):
         steps = [
             DecoratorCollectionStep(),
             ConfigurationStep(),
-            HeartbeatPreparationStep(),  # Prepare heartbeat payload structure
+            FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances (MOVED UP for Phase 2)
+            HeartbeatPreparationStep(),  # Prepare heartbeat payload structure (can now access FastMCP schemas)
             ServerDiscoveryStep(),  # Discover existing uvicorn servers from immediate startup
-            FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances
             HeartbeatLoopStep(),  # Setup background heartbeat config (handles no registry gracefully)
             FastAPIServerSetupStep(),  # Setup FastAPI app with background heartbeat
             # Note: Registry connection is handled in heartbeat pipeline for retry behavior

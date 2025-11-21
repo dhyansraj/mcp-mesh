@@ -57,6 +57,13 @@ class FastMCPServerDiscoveryStep(PipelineStep):
             result.add_context("fastmcp_server_count", len(discovered_servers))
             result.add_context("fastmcp_total_functions", total_registered_functions)
 
+            # Store server info in DecoratorRegistry for heartbeat schema extraction (Phase 2)
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            # Convert server_info list to dict for easier lookup
+            server_info_dict = {info["server_name"]: info for info in server_info}
+            DecoratorRegistry.store_fastmcp_server_info(server_info_dict)
+
             result.message = (
                 f"Discovered {len(discovered_servers)} FastMCP servers "
                 f"with {total_registered_functions} total functions"

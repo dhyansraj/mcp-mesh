@@ -170,32 +170,12 @@ class HttpMcpWrapper:
     async def setup(self):
         """Set up FastMCP app for integration (no separate wrapper app)."""
 
-        # Debug the FastMCP server instance first
-        logger.debug(f"🔍 DEBUG: FastMCP server type: {type(self.mcp_server)}")
-        logger.debug(
-            f"🔍 DEBUG: FastMCP server module: {type(self.mcp_server).__module__}"
-        )
-
         # Using FastMCP library (fastmcp>=2.8.0)
         logger.info(
             "🆕 HTTP Wrapper: Server instance is from FastMCP library (fastmcp)"
         )
 
-        logger.debug(
-            f"🔍 DEBUG: FastMCP server dir: {[attr for attr in dir(self.mcp_server) if 'app' in attr.lower()]}"
-        )
-        logger.debug(f"🔍 DEBUG: Has http_app: {hasattr(self.mcp_server, 'http_app')}")
-
         if self._mcp_app is not None:
-            logger.debug("🔍 DEBUG: FastMCP app prepared for integration")
-            logger.debug(f"🔍 DEBUG: FastMCP app type: {type(self._mcp_app)}")
-
-            # Debug: Check what routes the FastMCP app has
-            if hasattr(self._mcp_app, "routes"):
-                logger.debug(
-                    f"🔍 DEBUG: FastMCP app routes: {[route.path for route in self._mcp_app.routes if hasattr(route, 'path')]}"
-                )
-
             # Phase 5: Add session routing middleware to FastMCP app
             self._add_session_routing_middleware()
 
@@ -396,10 +376,11 @@ class HttpMcpWrapper:
 
         class MCPSessionRoutingMiddleware(BaseHTTPMiddleware):
             """Clean session routing middleware for MCP requests (v0.4.0 style).
-            
+
             Handles session affinity and basic trace context setup only.
             Function execution tracing is handled by ExecutionTracer in DependencyInjector.
             """
+
             def __init__(self, app, http_wrapper):
                 super().__init__(app)
                 self.http_wrapper = http_wrapper
@@ -455,7 +436,9 @@ class HttpMcpWrapper:
 
         # Add the middleware to FastMCP app
         self._mcp_app.add_middleware(MCPSessionRoutingMiddleware, http_wrapper=self)
-        logger.info("✅ Clean session routing middleware added to FastMCP app (v0.4.0 style)")
+        logger.info(
+            "✅ Clean session routing middleware added to FastMCP app (v0.4.0 style)"
+        )
 
     async def _extract_session_id(self, request) -> str:
         """Extract session ID from request headers or body."""

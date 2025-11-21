@@ -27,6 +27,12 @@ func (Capability) Fields() []ent.Field {
 		field.String("description").
 			Optional().
 			Comment("Description of what this capability does"),
+		field.JSON("input_schema", map[string]interface{}{}).
+			Optional().
+			Comment("JSON Schema for function parameters (MCP tool format). Auto-generated from function signature by FastMCP. Used by LLM agents to understand how to call this tool."),
+		field.JSON("llm_filter", map[string]interface{}{}).
+			Optional().
+			Comment("LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to."),
 		field.JSON("tags", []string{}).
 			Default([]string{}).
 			Comment("Tags for this capability (e.g., ['prod', 'ml', 'gpu'])"),

@@ -1306,6 +1306,8 @@ type CapabilityMutation struct {
 	capability    *string
 	version       *string
 	description   *string
+	input_schema  *map[string]interface{}
+	llm_filter    *map[string]interface{}
 	tags          *[]string
 	appendtags    []string
 	kwargs        *map[string]interface{}
@@ -1574,6 +1576,104 @@ func (m *CapabilityMutation) ResetDescription() {
 	delete(m.clearedFields, capability.FieldDescription)
 }
 
+// SetInputSchema sets the "input_schema" field.
+func (m *CapabilityMutation) SetInputSchema(value map[string]interface{}) {
+	m.input_schema = &value
+}
+
+// InputSchema returns the value of the "input_schema" field in the mutation.
+func (m *CapabilityMutation) InputSchema() (r map[string]interface{}, exists bool) {
+	v := m.input_schema
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInputSchema returns the old "input_schema" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldInputSchema(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInputSchema is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInputSchema requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInputSchema: %w", err)
+	}
+	return oldValue.InputSchema, nil
+}
+
+// ClearInputSchema clears the value of the "input_schema" field.
+func (m *CapabilityMutation) ClearInputSchema() {
+	m.input_schema = nil
+	m.clearedFields[capability.FieldInputSchema] = struct{}{}
+}
+
+// InputSchemaCleared returns if the "input_schema" field was cleared in this mutation.
+func (m *CapabilityMutation) InputSchemaCleared() bool {
+	_, ok := m.clearedFields[capability.FieldInputSchema]
+	return ok
+}
+
+// ResetInputSchema resets all changes to the "input_schema" field.
+func (m *CapabilityMutation) ResetInputSchema() {
+	m.input_schema = nil
+	delete(m.clearedFields, capability.FieldInputSchema)
+}
+
+// SetLlmFilter sets the "llm_filter" field.
+func (m *CapabilityMutation) SetLlmFilter(value map[string]interface{}) {
+	m.llm_filter = &value
+}
+
+// LlmFilter returns the value of the "llm_filter" field in the mutation.
+func (m *CapabilityMutation) LlmFilter() (r map[string]interface{}, exists bool) {
+	v := m.llm_filter
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLlmFilter returns the old "llm_filter" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldLlmFilter(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLlmFilter is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLlmFilter requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLlmFilter: %w", err)
+	}
+	return oldValue.LlmFilter, nil
+}
+
+// ClearLlmFilter clears the value of the "llm_filter" field.
+func (m *CapabilityMutation) ClearLlmFilter() {
+	m.llm_filter = nil
+	m.clearedFields[capability.FieldLlmFilter] = struct{}{}
+}
+
+// LlmFilterCleared returns if the "llm_filter" field was cleared in this mutation.
+func (m *CapabilityMutation) LlmFilterCleared() bool {
+	_, ok := m.clearedFields[capability.FieldLlmFilter]
+	return ok
+}
+
+// ResetLlmFilter resets all changes to the "llm_filter" field.
+func (m *CapabilityMutation) ResetLlmFilter() {
+	m.llm_filter = nil
+	delete(m.clearedFields, capability.FieldLlmFilter)
+}
+
 // SetTags sets the "tags" field.
 func (m *CapabilityMutation) SetTags(s []string) {
 	m.tags = &s
@@ -1819,7 +1919,7 @@ func (m *CapabilityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CapabilityMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 10)
 	if m.function_name != nil {
 		fields = append(fields, capability.FieldFunctionName)
 	}
@@ -1831,6 +1931,12 @@ func (m *CapabilityMutation) Fields() []string {
 	}
 	if m.description != nil {
 		fields = append(fields, capability.FieldDescription)
+	}
+	if m.input_schema != nil {
+		fields = append(fields, capability.FieldInputSchema)
+	}
+	if m.llm_filter != nil {
+		fields = append(fields, capability.FieldLlmFilter)
 	}
 	if m.tags != nil {
 		fields = append(fields, capability.FieldTags)
@@ -1860,6 +1966,10 @@ func (m *CapabilityMutation) Field(name string) (ent.Value, bool) {
 		return m.Version()
 	case capability.FieldDescription:
 		return m.Description()
+	case capability.FieldInputSchema:
+		return m.InputSchema()
+	case capability.FieldLlmFilter:
+		return m.LlmFilter()
 	case capability.FieldTags:
 		return m.Tags()
 	case capability.FieldKwargs:
@@ -1885,6 +1995,10 @@ func (m *CapabilityMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldVersion(ctx)
 	case capability.FieldDescription:
 		return m.OldDescription(ctx)
+	case capability.FieldInputSchema:
+		return m.OldInputSchema(ctx)
+	case capability.FieldLlmFilter:
+		return m.OldLlmFilter(ctx)
 	case capability.FieldTags:
 		return m.OldTags(ctx)
 	case capability.FieldKwargs:
@@ -1929,6 +2043,20 @@ func (m *CapabilityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDescription(v)
+		return nil
+	case capability.FieldInputSchema:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInputSchema(v)
+		return nil
+	case capability.FieldLlmFilter:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLlmFilter(v)
 		return nil
 	case capability.FieldTags:
 		v, ok := value.([]string)
@@ -1991,6 +2119,12 @@ func (m *CapabilityMutation) ClearedFields() []string {
 	if m.FieldCleared(capability.FieldDescription) {
 		fields = append(fields, capability.FieldDescription)
 	}
+	if m.FieldCleared(capability.FieldInputSchema) {
+		fields = append(fields, capability.FieldInputSchema)
+	}
+	if m.FieldCleared(capability.FieldLlmFilter) {
+		fields = append(fields, capability.FieldLlmFilter)
+	}
 	if m.FieldCleared(capability.FieldKwargs) {
 		fields = append(fields, capability.FieldKwargs)
 	}
@@ -2010,6 +2144,12 @@ func (m *CapabilityMutation) ClearField(name string) error {
 	switch name {
 	case capability.FieldDescription:
 		m.ClearDescription()
+		return nil
+	case capability.FieldInputSchema:
+		m.ClearInputSchema()
+		return nil
+	case capability.FieldLlmFilter:
+		m.ClearLlmFilter()
 		return nil
 	case capability.FieldKwargs:
 		m.ClearKwargs()
@@ -2033,6 +2173,12 @@ func (m *CapabilityMutation) ResetField(name string) error {
 		return nil
 	case capability.FieldDescription:
 		m.ResetDescription()
+		return nil
+	case capability.FieldInputSchema:
+		m.ResetInputSchema()
+		return nil
+	case capability.FieldLlmFilter:
+		m.ResetLlmFilter()
 		return nil
 	case capability.FieldTags:
 		m.ResetTags()

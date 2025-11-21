@@ -413,85 +413,22 @@ class APIDependencyResolutionStep(PipelineStep):
         """
         Determine which proxy type to use for API route handlers.
 
-        For API services, we need to check the parameter types used in FastAPI route handlers
-        that depend on this capability. This is different from MCP tools because route handlers
-        are wrapped differently.
-
-        Logic:
-        1. Check if any API route handlers use McpAgent for this capability
-        2. If yes → use FullMCPProxy
-        3. Otherwise → use MCPClientProxy (for McpMeshAgent or untyped)
+        Since McpAgent has been removed, all API route handlers now use MCPClientProxy
+        for McpMeshAgent parameters.
 
         Args:
             capability: The capability name to check
             injector: The dependency injector instance
 
         Returns:
-            "FullMCPProxy" or "MCPClientProxy"
+            "MCPClientProxy"
         """
-        try:
-            # Get functions that depend on this capability
-            if capability not in injector._dependency_mapping:
-                self.logger.debug(
-                    f"🔍 No API route handlers depend on capability '{capability}', using MCPClientProxy"
-                )
-                return "MCPClientProxy"
-
-            affected_function_ids = injector._dependency_mapping[capability]
-
-            # Scan ALL route handlers to detect ANY McpAgent usage
-            mcpagent_functions = []
-            mcpmeshagent_functions = []
-
-            for func_id in affected_function_ids:
-                if func_id in injector._function_registry:
-                    wrapper_func = injector._function_registry[func_id]
-
-                    # Get stored parameter types from wrapper (same pattern as MCP)
-                    if hasattr(wrapper_func, "_mesh_parameter_types") and hasattr(
-                        wrapper_func, "_mesh_dependencies"
-                    ):
-                        parameter_types = wrapper_func._mesh_parameter_types
-                        dependencies = wrapper_func._mesh_dependencies
-                        mesh_positions = wrapper_func._mesh_positions
-
-                        # Find which parameter position corresponds to this capability
-                        for dep_index, dep_name in enumerate(dependencies):
-                            if dep_name == capability and dep_index < len(
-                                mesh_positions
-                            ):
-                                param_position = mesh_positions[dep_index]
-
-                                # Check the parameter type at this position
-                                if param_position in parameter_types:
-                                    param_type = parameter_types[param_position]
-                                    if param_type == "McpAgent":
-                                        mcpagent_functions.append(func_id)
-                                    elif param_type == "McpMeshAgent":
-                                        mcpmeshagent_functions.append(func_id)
-
-            # Make deterministic decision based on complete analysis
-            if mcpagent_functions:
-                self.logger.debug(
-                    f"🔍 Found McpAgent in API route handlers {mcpagent_functions} for capability '{capability}' → using FullMCPProxy"
-                )
-                if mcpmeshagent_functions:
-                    self.logger.info(
-                        f"ℹ️ API capability '{capability}' used by both McpAgent {mcpagent_functions} and McpMeshAgent {mcpmeshagent_functions} → upgrading ALL to FullMCPProxy"
-                    )
-                return "FullMCPProxy"
-            else:
-                # Only McpMeshAgent or untyped parameters
-                self.logger.debug(
-                    f"🔍 Only McpMeshAgent/untyped API route handlers {mcpmeshagent_functions} for capability '{capability}' → using MCPClientProxy"
-                )
-                return "MCPClientProxy"
-
-        except Exception as e:
-            self.logger.warning(
-                f"⚠️ Failed to determine proxy type for API capability '{capability}': {e}"
-            )
-            return "MCPClientProxy"  # Safe default
+        # Note: This method always returns "MCPClientProxy" since McpAgent was removed.
+        # All McpMeshAgent parameters use MCPClientProxy.
+        self.logger.debug(
+            f"🔍 API route handlers for capability '{capability}' → using MCPClientProxy"
+        )
+        return "MCPClientProxy"
 
     def _create_proxy_for_api(
         self,

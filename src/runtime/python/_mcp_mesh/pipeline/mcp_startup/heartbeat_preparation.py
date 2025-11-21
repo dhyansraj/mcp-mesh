@@ -9,6 +9,7 @@ from ...engine.decorator_registry import DecoratorRegistry
 from ...engine.signature_analyzer import validate_mesh_dependencies
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.support_types import HealthStatus, HealthStatusType
+from ...utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
@@ -39,8 +40,17 @@ class HeartbeatPreparationStep(PipelineStep):
             agent_config = DecoratorRegistry.get_resolved_agent_config()
             agent_id = agent_config["agent_id"]
 
-            # Build tools list for registration
-            tools_list = self._build_tools_list(mesh_tools)
+            # Get FastMCP server info from context (set by fastmcp-server-discovery step)
+            fastmcp_server_info = context.get("fastmcp_server_info", [])
+
+            # Convert server_info list to dict for schema extractor
+            fastmcp_servers = {}
+            for server_info in fastmcp_server_info:
+                server_name = server_info.get("server_name", "unknown")
+                fastmcp_servers[server_name] = server_info
+
+            # Build tools list for registration (with FastMCP schemas)
+            tools_list = self._build_tools_list(mesh_tools, fastmcp_servers)
 
             # Build agent registration payload
             registration_data = self._build_registration_payload(
@@ -71,8 +81,10 @@ class HeartbeatPreparationStep(PipelineStep):
 
         return result
 
-    def _build_tools_list(self, mesh_tools: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build tools list from mesh_tools, validating function signatures."""
+    def _build_tools_list(
+        self, mesh_tools: dict[str, Any], fastmcp_servers: dict[str, Any] = None
+    ) -> list[dict[str, Any]]:
+        """Build tools list from mesh_tools, validating function signatures and extracting schemas."""
         tools_list = []
         skipped_tools = []
 
@@ -93,6 +105,53 @@ class HeartbeatPreparationStep(PipelineStep):
                     skipped_tools.append(func_name)
                     continue
 
+            # Extract inputSchema from FastMCP tool (if available)
+            # First try matching with FastMCP servers, then fallback to direct attribute
+            input_schema = FastMCPSchemaExtractor.extract_from_fastmcp_servers(
+                current_function, fastmcp_servers
+            )
+            if input_schema is None:
+                input_schema = FastMCPSchemaExtractor.extract_input_schema(
+                    current_function
+                )
+
+            # Check if this function has @mesh.llm decorator (Phase 3)
+            llm_filter_data = None
+            llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+            self.logger.info(
+                f"🤖 Checking for LLM filter: function={func_name}, total_llm_agents_registered={len(llm_agents)}"
+            )
+
+            for llm_agent_id, llm_metadata in llm_agents.items():
+                if llm_metadata.function.__name__ == func_name:
+                    # Found matching LLM agent - extract filter config
+                    raw_filter = llm_metadata.config.get("filter")
+                    filter_mode = llm_metadata.config.get("filter_mode", "all")
+
+                    # Normalize filter to array format (OpenAPI schema requirement)
+                    if raw_filter is None:
+                        normalized_filter = []
+                    elif isinstance(raw_filter, str):
+                        normalized_filter = [raw_filter]
+                    elif isinstance(raw_filter, dict):
+                        normalized_filter = [raw_filter]
+                    elif isinstance(raw_filter, list):
+                        normalized_filter = raw_filter
+                    else:
+                        self.logger.warning(
+                            f"⚠️ Invalid filter type for {func_name}: {type(raw_filter)}"
+                        )
+                        normalized_filter = []
+
+                    llm_filter_data = {
+                        "filter": normalized_filter,
+                        "filter_mode": filter_mode,
+                    }
+                    self.logger.info(
+                        f"🤖 LLM filter found for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}, raw_filter={raw_filter}"
+                    )
+                    break
+
             # Build tool registration data
             tool_data = {
                 "function_name": func_name,
@@ -101,6 +160,8 @@ class HeartbeatPreparationStep(PipelineStep):
                 "version": metadata.get("version", "1.0.0"),
                 "description": metadata.get("description"),
                 "dependencies": self._process_dependencies(dependencies),
+                "input_schema": input_schema,  # Add inputSchema for LLM integration (Phase 2)
+                "llm_filter": llm_filter_data,  # Add LLM filter for LLM integration (Phase 3)
             }
 
             # Add debug pointer information only if debug flag is enabled

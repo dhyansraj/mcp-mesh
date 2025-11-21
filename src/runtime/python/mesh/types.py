@@ -180,113 +180,95 @@ class McpMeshAgent(Protocol):
             }
 
 
-class McpAgent(Protocol):
+class MeshLlmAgent(Protocol):
     """
-    DEPRECATED: Use McpMeshAgent instead.
+    LLM agent proxy with automatic agentic loop.
 
-    This type has been unified with McpMeshAgent. All features previously exclusive
-    to McpAgent are now available in McpMeshAgent using FastMCP's superior client.
+    This protocol defines the interface for LLM agents that are automatically injected
+    by the @mesh.llm decorator. The proxy handles the entire agentic loop internally:
+    - Tool formatting for provider (Claude, OpenAI, etc.)
+    - LLM API calls
+    - Tool execution via MCP proxies
+    - Response parsing to Pydantic models
 
-    Migration:
-        # Old way (deprecated)
-        def process_files(file_service: McpAgent) -> str:
-            pass
+    The MeshLlmAgent is injected by the mesh framework and configured via the
+    @mesh.llm decorator. Users only need to call the proxy with their message.
 
-        # New way (recommended)
-        def process_files(file_service: McpMeshAgent) -> str:
-            pass
+    Usage Example:
+        from pydantic import BaseModel
+        import mesh
 
-    McpMeshAgent now provides all MCP protocol features including streaming,
-    session management, and CallToolResult objects via FastMCP client.
+        class ChatResponse(BaseModel):
+            answer: str
+            confidence: float
+
+        @mesh.llm(
+            filter={"capability": "document", "tags": ["pdf"]},
+            provider="claude",
+            model="claude-3-5-sonnet-20241022"
+        )
+        @mesh.tool(capability="chat")
+        def chat(message: str, llm: MeshLlmAgent = None) -> ChatResponse:
+            # Optional: Override system prompt
+            llm.set_system_prompt("You are a helpful document assistant.")
+
+            # Execute automatic agentic loop
+            return llm(message)
+
+    Configuration Hierarchy:
+        - Decorator parameters provide defaults
+        - Environment variables override decorator settings:
+          * MESH_LLM_PROVIDER: Override provider
+          * MESH_LLM_MODEL: Override model
+          * ANTHROPIC_API_KEY: Claude API key
+          * OPENAI_API_KEY: OpenAI API key
+          * MESH_LLM_MAX_ITERATIONS: Override max iterations
+
+    The proxy is automatically injected with:
+        - Filtered tools from registry (based on @mesh.llm filter)
+        - Provider configuration (provider, model, api_key)
+        - Output type (inferred from function return annotation)
+        - System prompt (from decorator or file)
     """
 
-    # Basic compatibility with McpMeshAgent
-    def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
-        """Call the bound remote function (McpMeshAgent compatibility)."""
-        ...
-
-    def invoke(self, arguments: Optional[dict[str, Any]] = None) -> Any:
-        """Explicitly invoke the bound remote function (McpMeshAgent compatibility)."""
-        ...
-
-    # Vanilla MCP Protocol Methods (100% compatibility)
-    async def list_tools(self) -> list:
-        """List available tools from remote agent (vanilla MCP method)."""
-        ...
-
-    async def list_resources(self) -> list:
-        """List available resources from remote agent (vanilla MCP method)."""
-        ...
-
-    async def read_resource(self, uri: str) -> Any:
-        """Read resource contents from remote agent (vanilla MCP method)."""
-        ...
-
-    async def list_prompts(self) -> list:
-        """List available prompts from remote agent (vanilla MCP method)."""
-        ...
-
-    async def get_prompt(self, name: str, arguments: Optional[dict] = None) -> Any:
-        """Get prompt template from remote agent (vanilla MCP method)."""
-        ...
-
-    # Streaming Support - THE BREAKTHROUGH METHOD!
-    async def call_tool_streaming(
-        self, name: str, arguments: dict | None = None
-    ) -> AsyncIterator[dict]:
+    def set_system_prompt(self, prompt: str) -> None:
         """
-        Call a tool with streaming response using FastMCP's text/event-stream.
-
-        This enables multihop streaming (A→B→C chains) by leveraging FastMCP's
-        built-in streaming support with Accept: text/event-stream header.
+        Override the system prompt at runtime.
 
         Args:
-            name: Tool name to call
-            arguments: Tool arguments
+            prompt: System prompt to use for LLM calls
 
-        Yields:
-            Streaming response chunks as dictionaries
+        Example:
+            llm.set_system_prompt("You are an expert document analyst.")
         """
         ...
 
-    # Phase 6: Explicit Session Management
-    async def create_session(self) -> str:
+    def __call__(self, message: str, **kwargs) -> Any:
         """
-        Create a new session and return session ID.
+        Execute automatic agentic loop and return typed response.
 
-        For Phase 6 explicit session management. In Phase 8, this will be
-        automated based on @mesh.tool(session_required=True) annotations.
-
-        Returns:
-            New session ID string
-        """
-        ...
-
-    async def call_with_session(self, session_id: str, **kwargs) -> Any:
-        """
-        Call tool with explicit session ID for stateful operations.
-
-        This ensures all calls with the same session_id route to the same
-        agent instance for session affinity.
+        This method handles the complete agentic loop:
+        1. Format tools for provider (via LiteLLM)
+        2. Call LLM API with tools
+        3. If tool_use: execute via MCP proxies, loop back to LLM
+        4. If final response: parse into output type (Pydantic model)
+        5. Return typed response
 
         Args:
-            session_id: Session ID to include in request headers
-            **kwargs: Tool arguments to pass
+            message: User message to send to LLM
+            **kwargs: Additional context passed to LLM (provider-specific)
 
         Returns:
-            Tool response
-        """
-        ...
+            Pydantic model instance (type inferred from function return annotation)
 
-    async def close_session(self, session_id: str) -> bool:
-        """
-        Close session and cleanup session state.
+        Raises:
+            MaxIterationsError: If max_iterations exceeded without final response
+            ValidationError: If LLM response doesn't match output type schema
+            ToolExecutionError: If tool execution fails during agentic loop
 
-        Args:
-            session_id: Session ID to close
-
-        Returns:
-            True if session was closed successfully
+        Example:
+            response = llm("Analyze this document: /path/to/file.pdf")
+            # Returns ChatResponse(answer="...", confidence=0.95)
         """
         ...
 
@@ -299,13 +281,15 @@ class McpAgent(Protocol):
             handler: Any,
         ) -> core_schema.CoreSchema:
             """
-            Custom Pydantic core schema for McpAgent.
+            Custom Pydantic core schema for MeshLlmAgent.
 
-            Similar to McpMeshAgent, this makes McpAgent parameters appear as
-            optional/nullable in MCP schemas, preventing serialization errors
-            while maintaining type safety for dependency injection.
+            This makes MeshLlmAgent parameters appear as optional/nullable in MCP schemas,
+            preventing serialization errors while maintaining type safety for dependency injection.
+
+            The MeshLlmAgentInjector will replace None values with actual proxy objects
+            at runtime, so MCP callers never need to provide these parameters.
             """
-            # Treat McpAgent as an optional Any type for MCP serialization
+            # Treat MeshLlmAgent as an optional Any type for MCP serialization
             return core_schema.with_default_schema(
                 core_schema.nullable_schema(core_schema.any_schema()),
                 default=None,
@@ -320,3 +304,70 @@ class McpAgent(Protocol):
                 "schema": {"type": "nullable", "schema": {"type": "any"}},
                 "default": None,
             }
+
+
+# Import BaseModel for MeshContextModel
+try:
+    from pydantic import BaseModel
+
+    class MeshContextModel(BaseModel):
+        """
+        Base model for LLM prompt template contexts.
+
+        Use this to create type-safe, validated context models for
+        Jinja2 prompt templates in @mesh.llm decorated functions.
+
+        The MeshContextModel provides:
+        - Type safety via Pydantic validation
+        - Field descriptions for LLM schema generation
+        - Strict mode (extra fields forbidden)
+        - Automatic .model_dump() for template rendering
+
+        Example:
+            from mesh import MeshContextModel
+            from pydantic import Field
+
+            class ChatContext(MeshContextModel):
+                user_name: str = Field(description="Name of the user")
+                domain: str = Field(description="Chat domain: support, sales, etc.")
+                expertise_level: str = Field(
+                    default="beginner",
+                    description="User expertise: beginner, intermediate, expert"
+                )
+
+            @mesh.llm(
+                system_prompt="file://prompts/chat.jinja2",
+                context_param="ctx"
+            )
+            @mesh.tool(capability="chat")
+            def chat(message: str, ctx: ChatContext, llm: MeshLlmAgent = None):
+                return llm(message)  # Template auto-rendered with ctx!
+
+        Field Descriptions in LLM Chains:
+            When a specialist LLM agent has MeshContextModel parameters, the Field
+            descriptions are extracted and included in the tool schema sent to
+            calling LLM agents. This helps orchestrator LLMs construct context
+            objects correctly.
+
+            Without descriptions:
+                {"domain": "string"}  # LLM doesn't know what this means
+
+            With descriptions:
+                {"domain": {"type": "string", "description": "Chat domain: support, sales"}}
+                # LLM understands what to provide!
+
+        Template Rendering:
+            When used with @mesh.llm(system_prompt="file://..."), the context is
+            automatically converted to a dict via .model_dump() and passed to the
+            Jinja2 template renderer.
+        """
+
+        class Config:
+            extra = "forbid"  # Strict mode - reject unexpected fields
+
+except ImportError:
+    # Fallback if Pydantic not available (should not happen in practice)
+    class MeshContextModel:  # type: ignore
+        """Placeholder when Pydantic unavailable."""
+
+        pass

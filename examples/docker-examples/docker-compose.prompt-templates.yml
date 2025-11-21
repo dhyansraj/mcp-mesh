@@ -1,0 +1,405 @@
+version: "3.8"
+
+# MCP Mesh - LLM Prompt Template Integration Tests
+# Docker Compose configuration for testing prompt template features
+#
+# Tests cover:
+#   - Basic template rendering with dict context
+#   - MeshContextModel with Field descriptions
+#   - Convention-based context detection
+#   - Jinja2 control structures
+#   - Hierarchical/nested context models
+#   - LLM chains with enhanced schemas
+#
+# Usage:
+#   # Start infrastructure
+#   docker compose -f docker-compose.prompt-templates.yml up -d postgres redis registry system-agent
+#
+#   # Run specific test
+#   docker compose -f docker-compose.prompt-templates.yml --profile test-pt-001 up -d
+#
+#   # Run all tests
+#   docker compose -f docker-compose.prompt-templates.yml --profile test-pt-all up -d
+
+services:
+  # Infrastructure services (shared with LLM tests)
+  postgres:
+    image: postgres:15-alpine
+    container_name: mcp-mesh-postgres-prompt-template-test
+    environment:
+      POSTGRES_USER: mcpmesh
+      POSTGRES_PASSWORD: mcpmesh
+      POSTGRES_DB: mcpmesh
+    ports:
+      - "5434:5432" # Different port to avoid conflict with LLM tests
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-mesh-redis-prompt-template-test
+    ports:
+      - "6381:6379" # Different port
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  registry:
+    build:
+      context: ../../
+      dockerfile: src/core/registry/Dockerfile
+    container_name: mcp-mesh-registry-prompt-template-test
+    ports:
+      - "8002:8000" # Different port
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: postgresql://mcpmesh:mcpmesh@postgres:5432/mcpmesh?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      MESH_NAMESPACE: prompt-template-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # System agent (provides base tools for tests)
+  system-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-system-agent-prompt-template-test
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: system-agent
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../simple/system_agent.py:/app/agent.py:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "8084:8080" # Different port
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-001: Basic Template with Dict Context
+  test-pt-001-basic-template:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-001-basic-template
+    profiles:
+      - test-pt-001
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-001-basic-template
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_001_basic_template.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9011:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-002: MeshContextModel with Field Descriptions
+  test-pt-002-context-model:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-002-context-model
+    profiles:
+      - test-pt-002
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-002-context-model
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_002_context_model.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9012:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-003: Convention-Based Context Detection
+  test-pt-003-convention:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-003-convention
+    profiles:
+      - test-pt-003
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-003-convention
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_003_convention_detection.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9013:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-004: Control Structures
+  test-pt-004-control-structures:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-004-control-structures
+    profiles:
+      - test-pt-004
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-004-control-structures
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_004_control_structures.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9014:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-005: Hierarchical Context Models
+  test-pt-005-hierarchical:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-005-hierarchical
+    profiles:
+      - test-pt-005
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-005-hierarchical
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_005_hierarchical.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9015:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-006: LLM Chain - Analyzer
+  test-pt-006-analyzer:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-006-analyzer
+    profiles:
+      - test-pt-006
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-006-analyzer
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_006_analyzer.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9016:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-006: LLM Chain - Orchestrator
+  test-pt-006-orchestrator:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-006-orchestrator
+    profiles:
+      - test-pt-006
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-006-orchestrator
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_006_orchestrator.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9017:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+      test-pt-006-analyzer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+  # Test PT-007: Dual Injection (LLM + MCP Agent)
+  test-pt-007-dual-injection:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-007-dual-injection
+    profiles:
+      - test-pt-007
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-007-dual-injection
+      AGENT_PORT: 8080
+      MCP_MESH_NAMESPACE: prompt-template-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-examples/prompt-templates/test_007_dual_injection.py:/app/agent.py:ro
+      - ../llm-examples/prompt-templates/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9018:8080"
+    depends_on:
+      registry:
+        condition: service_healthy
+      system-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-prompt-template-test
+
+networks:
+  mcp-mesh-prompt-template-test:
+    name: mcp-mesh-prompt-template-test
+    driver: bridge

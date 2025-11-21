@@ -331,7 +331,9 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/MeshToolRegistration"
-          description: Array of tools provided by this agent (@mesh.tool functions)
+          description: |
+            Array of tools provided by this agent (@mesh.tool functions).
+            Tools can optionally include llm_filter if decorated with @mesh.llm.
 
     MeshToolRegistration:
       type: object
@@ -370,6 +372,30 @@ components:
           type: string
           example: "Simple greeting function"
           description: Function description
+        inputSchema:
+          type: object
+          description: |
+            JSON Schema for function parameters (MCP tool format).
+            Auto-generated from function signature by FastMCP.
+            Used by LLM agents to understand how to call this tool.
+          example:
+            type: "object"
+            properties:
+              name:
+                type: "string"
+                description: "Name to greet"
+              greeting_type:
+                type: "string"
+                enum: ["formal", "casual"]
+                description: "Type of greeting"
+            required: ["name"]
+        llm_filter:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional LLM tool filter specification when function is decorated with @mesh.llm.
+            Defines which tools this LLM agent needs access to.
+            Stored as JSON, follows LLMToolFilter schema structure.
         kwargs:
           type: object
           additionalProperties: true
@@ -410,6 +436,131 @@ components:
           example: "default"
           description: Namespace filter
       additionalProperties: false
+
+    LLMToolFilter:
+      type: object
+      required: [filter]
+      description: |
+        Tool filter specification for an @mesh.llm decorated function.
+        Embedded within MeshToolRegistration - function_name is implicit from parent tool.
+        Registry matches tools based on filter criteria and returns filtered list in llm_tools response.
+      properties:
+        filter:
+          type: array
+          items:
+            oneOf:
+              - type: string
+                description: Simple capability name filter
+                example: "pdf_extractor"
+              - type: object
+                description: Rich filter with capability, tags, and version
+                required: [capability]
+                properties:
+                  capability:
+                    type: string
+                    minLength: 1
+                    example: "document"
+                    description: Capability name to match
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                    default: []
+                    example: ["pdf", "advanced"]
+                    description: Tags for tag-based filtering (subset matching)
+                  version:
+                    type: string
+                    example: ">=1.0.0"
+                    description: Version constraint
+          minItems: 1
+          description: |
+            List of capability filters. Can be simple strings (capability names)
+            or rich objects with tags and version constraints.
+          example:
+            - capability: "document"
+              tags: ["pdf", "advanced"]
+            - "web_search"
+            - capability: "command_executor"
+              tags: ["local"]
+        filter_mode:
+          type: string
+          enum: [all, best_match, "*"]
+          default: "all"
+          example: "all"
+          description: |
+            Filter mode for tool matching:
+            - "all": Include all tools matching any filter criteria
+            - "best_match": One tool per capability (best tag match)
+            - "*": All available tools in mesh (ignores filter)
+        inject_param:
+          type: string
+          default: "llm_tools"
+          example: "llm_tools"
+          description: Parameter name to inject tools into (for Python runtime)
+
+    LLMToolInfo:
+      type: object
+      required: [name, capability, description, inputSchema, endpoint]
+      description: |
+        Complete tool information for LLM consumption.
+        Includes everything an LLM needs to understand and call the tool via MCP protocol.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: "extract_pdf"
+          description: Function name (MCP protocol level)
+        capability:
+          type: string
+          minLength: 1
+          example: "pdf_extractor"
+          description: Capability name this tool provides
+        description:
+          type: string
+          example: "Extract text and metadata from PDF files"
+          description: Human-readable tool description for LLM context
+        inputSchema:
+          type: object
+          description: |
+            JSON Schema for tool parameters (MCP format).
+            LLM uses this to understand required and optional parameters.
+          example:
+            type: "object"
+            properties:
+              file_path:
+                type: "string"
+                description: "Path to the PDF file"
+              extract_images:
+                type: "boolean"
+                description: "Whether to extract embedded images"
+                default: false
+            required: ["file_path"]
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["document", "pdf", "extraction"]
+          description: Capability tags
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Tool version
+        endpoint:
+          type: string
+          example: "http://pdf-agent:8080"
+          description: Agent endpoint for MCP protocol calls
+        kwargs:
+          type: object
+          additionalProperties: true
+          description: |
+            Proxy configuration for tool execution (timeout, retry, streaming, etc.).
+            Passed to UnifiedMCPProxy for enhanced client behavior.
+          example:
+            timeout: 60
+            retry_count: 3
+            streaming: false
 
     MeshRegistrationResponse:
       type: object
@@ -458,6 +609,46 @@ components:
           description: |
             Function name to array of resolved dependencies mapping.
             🤖 AI NOTE: This enables immediate dependency injection setup.
+        llm_tools:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/LLMToolInfo"
+          description: |
+            Map of function_name to filtered tool list for LLM agents.
+            Enables LLM agents to receive auto-filtered, up-to-date tool lists based on llm_filter in tool registration.
+            🤖 AI NOTE: This is populated only when tool includes llm_filter.
+            Registry applies filtering logic and returns matching tools with full schemas.
+          example:
+            "chat":
+              - name: "extract_pdf"
+                capability: "pdf_extractor"
+                description: "Extract text and metadata from PDF files"
+                inputSchema:
+                  type: "object"
+                  properties:
+                    file_path:
+                      type: "string"
+                      description: "Path to PDF file"
+                  required: ["file_path"]
+                tags: ["document", "pdf"]
+                version: "1.0.0"
+                endpoint: "http://pdf-agent:8080"
+                kwargs:
+                  timeout: 60
+              - name: "search_web"
+                capability: "web_search"
+                description: "Search the web for information"
+                inputSchema:
+                  type: "object"
+                  properties:
+                    query:
+                      type: "string"
+                  required: ["query"]
+                tags: ["search", "web"]
+                version: "1.0.0"
+                endpoint: "http://search-agent:8080"
 
     # Core response schemas
     HealthResponse:
