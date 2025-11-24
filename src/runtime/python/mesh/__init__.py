@@ -19,8 +19,10 @@ Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
 from . import decorators
-from .helpers import llm_provider
 from .types import McpMeshAgent, MeshContextModel, MeshLlmAgent, MeshLlmRequest
+
+# Note: helpers.llm_provider is imported lazily in __getattr__ to avoid
+# initialization timing issues with @mesh.agent auto_run in tests
 
 __version__ = "1.0.0"
 
@@ -99,6 +101,9 @@ def __getattr__(name):
     elif name == "llm":
         return decorators.llm
     elif name == "llm_provider":
+        # Lazy import to avoid initialization timing issues
+        from .helpers import llm_provider
+
         return llm_provider
     elif name == "McpMeshAgent":
         return McpMeshAgent
