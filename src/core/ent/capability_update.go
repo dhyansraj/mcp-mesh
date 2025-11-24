@@ -116,6 +116,18 @@ func (cu *CapabilityUpdate) ClearLlmFilter() *CapabilityUpdate {
 	return cu
 }
 
+// SetLlmProvider sets the "llm_provider" field.
+func (cu *CapabilityUpdate) SetLlmProvider(m map[string]interface{}) *CapabilityUpdate {
+	cu.mutation.SetLlmProvider(m)
+	return cu
+}
+
+// ClearLlmProvider clears the value of the "llm_provider" field.
+func (cu *CapabilityUpdate) ClearLlmProvider() *CapabilityUpdate {
+	cu.mutation.ClearLlmProvider()
+	return cu
+}
+
 // SetTags sets the "tags" field.
 func (cu *CapabilityUpdate) SetTags(s []string) *CapabilityUpdate {
 	cu.mutation.SetTags(s)
@@ -268,6 +280,12 @@ func (cu *CapabilityUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if cu.mutation.LlmFilterCleared() {
 		_spec.ClearField(capability.FieldLlmFilter, field.TypeJSON)
+	}
+	if value, ok := cu.mutation.LlmProvider(); ok {
+		_spec.SetField(capability.FieldLlmProvider, field.TypeJSON, value)
+	}
+	if cu.mutation.LlmProviderCleared() {
+		_spec.ClearField(capability.FieldLlmProvider, field.TypeJSON)
 	}
 	if value, ok := cu.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)
@@ -429,6 +447,18 @@ func (cuo *CapabilityUpdateOne) SetLlmFilter(m map[string]interface{}) *Capabili
 // ClearLlmFilter clears the value of the "llm_filter" field.
 func (cuo *CapabilityUpdateOne) ClearLlmFilter() *CapabilityUpdateOne {
 	cuo.mutation.ClearLlmFilter()
+	return cuo
+}
+
+// SetLlmProvider sets the "llm_provider" field.
+func (cuo *CapabilityUpdateOne) SetLlmProvider(m map[string]interface{}) *CapabilityUpdateOne {
+	cuo.mutation.SetLlmProvider(m)
+	return cuo
+}
+
+// ClearLlmProvider clears the value of the "llm_provider" field.
+func (cuo *CapabilityUpdateOne) ClearLlmProvider() *CapabilityUpdateOne {
+	cuo.mutation.ClearLlmProvider()
 	return cuo
 }
 
@@ -614,6 +644,12 @@ func (cuo *CapabilityUpdateOne) sqlSave(ctx context.Context) (_node *Capability,
 	}
 	if cuo.mutation.LlmFilterCleared() {
 		_spec.ClearField(capability.FieldLlmFilter, field.TypeJSON)
+	}
+	if value, ok := cuo.mutation.LlmProvider(); ok {
+		_spec.SetField(capability.FieldLlmProvider, field.TypeJSON, value)
+	}
+	if cuo.mutation.LlmProviderCleared() {
+		_spec.ClearField(capability.FieldLlmProvider, field.TypeJSON)
 	}
 	if value, ok := cuo.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)

@@ -203,7 +203,7 @@ func (h *HealthMonitor) CheckUnhealthyAgents() {
 	for _, agent := range agents {
 		// Check if agent is unhealthy based on last update time AND not already unhealthy
 		timeSinceLastSeen := now.Sub(agent.UpdatedAt)
-		if timeSinceLastSeen > h.heartbeatTimeout && agent.Status != "unhealthy" {
+		if timeSinceLastSeen >= h.heartbeatTimeout && agent.Status != "unhealthy" {
 			h.MarkAgentUnhealthy(agent.ID, "heartbeat_timeout")
 		}
 	}

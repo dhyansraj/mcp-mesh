@@ -153,11 +153,13 @@ class TestLLMToolsStateExtraction:
 
         state = step._extract_llm_tools_state(heartbeat_response)
 
-        assert len(state) == 2
-        assert "func1" in state
-        assert "func2" in state
-        assert len(state["func1"]) == 2
-        assert len(state["func2"]) == 1
+        assert "llm_tools" in state
+        assert "llm_providers" in state
+        assert len(state["llm_tools"]) == 2
+        assert "func1" in state["llm_tools"]
+        assert "func2" in state["llm_tools"]
+        assert len(state["llm_tools"]["func1"]) == 2
+        assert len(state["llm_tools"]["func2"]) == 1
 
     def test_extract_llm_tools_state_empty(self):
         """Test extracting empty LLM tools state."""
@@ -167,7 +169,7 @@ class TestLLMToolsStateExtraction:
 
         state = step._extract_llm_tools_state(heartbeat_response)
 
-        assert state == {}
+        assert state == {"llm_tools": {}, "llm_providers": {}}
 
     def test_extract_llm_tools_state_no_field(self):
         """Test extracting when llm_tools field is missing."""
@@ -177,7 +179,7 @@ class TestLLMToolsStateExtraction:
 
         state = step._extract_llm_tools_state(heartbeat_response)
 
-        assert state == {}
+        assert state == {"llm_tools": {}, "llm_providers": {}}
 
     def test_extract_llm_tools_state_filters_invalid(self):
         """Test that extraction filters out invalid data."""
@@ -194,19 +196,22 @@ class TestLLMToolsStateExtraction:
 
         state = step._extract_llm_tools_state(heartbeat_response)
 
-        assert len(state) == 2  # Only func1 and func4
-        assert "func1" in state
-        assert "func4" in state
-        assert "func2" not in state
-        assert "func3" not in state
+        assert len(state["llm_tools"]) == 2  # Only func1 and func4
+        assert "func1" in state["llm_tools"]
+        assert "func4" in state["llm_tools"]
+        assert "func2" not in state["llm_tools"]
+        assert "func3" not in state["llm_tools"]
 
     def test_hash_llm_tools_state_deterministic(self):
         """Test that hashing is deterministic."""
         step = LLMToolsResolutionStep()
 
         state = {
-            "func1": [{"name": "tool1", "capability": "doc"}],
-            "func2": [{"name": "tool2", "capability": "search"}],
+            "llm_tools": {
+                "func1": [{"name": "tool1", "capability": "doc"}],
+                "func2": [{"name": "tool2", "capability": "search"}],
+            },
+            "llm_providers": {}
         }
 
         hash1 = step._hash_llm_tools_state(state)
@@ -219,13 +224,73 @@ class TestLLMToolsStateExtraction:
         """Test that different states produce different hashes."""
         step = LLMToolsResolutionStep()
 
-        state1 = {"func1": [{"name": "tool1"}]}
-        state2 = {"func1": [{"name": "tool2"}]}
+        state1 = {
+            "llm_tools": {"func1": [{"name": "tool1"}]},
+            "llm_providers": {}
+        }
+        state2 = {
+            "llm_tools": {"func1": [{"name": "tool2"}]},
+            "llm_providers": {}
+        }
 
         hash1 = step._hash_llm_tools_state(state1)
         hash2 = step._hash_llm_tools_state(state2)
 
         assert hash1 != hash2
+
+    def test_hash_changes_when_provider_changes(self):
+        """Test that hash changes when only llm_provider changes (tools unchanged)."""
+        step = LLMToolsResolutionStep()
+
+        # Same tools, different providers
+        state1 = {
+            "llm_tools": {"func1": [{"name": "tool1"}]},
+            "llm_providers": {"chat": {"endpoint": "claude:9101", "name": "claude"}}
+        }
+        state2 = {
+            "llm_tools": {"func1": [{"name": "tool1"}]},  # Same tools
+            "llm_providers": {"chat": {"endpoint": "openai:9104", "name": "openai"}}  # Different provider
+        }
+
+        hash1 = step._hash_llm_tools_state(state1)
+        hash2 = step._hash_llm_tools_state(state2)
+
+        assert hash1 != hash2, "Hash should change when provider changes even if tools are the same"
+
+    def test_extract_llm_providers_with_tools(self):
+        """Test extracting both LLM tools and providers from heartbeat response."""
+        step = LLMToolsResolutionStep()
+
+        heartbeat_response = {
+            "llm_tools": {
+                "chat": [
+                    {"function_name": "develop", "capability": "software_development"},
+                    {"function_name": "validate", "capability": "quality_assurance"},
+                ]
+            },
+            "llm_providers": {
+                "chat": {
+                    "name": "process_chat",
+                    "endpoint": "http://claude:9101",
+                    "agent_id": "claude-provider-123",
+                    "capability": "llm",
+                    "tags": ["llm", "claude"]
+                }
+            }
+        }
+
+        state = step._extract_llm_tools_state(heartbeat_response)
+
+        # Verify tools are extracted
+        assert "llm_tools" in state
+        assert "chat" in state["llm_tools"]
+        assert len(state["llm_tools"]["chat"]) == 2
+
+        # Verify providers are extracted
+        assert "llm_providers" in state
+        assert "chat" in state["llm_providers"]
+        assert state["llm_providers"]["chat"]["endpoint"] == "http://claude:9101"
+        assert state["llm_providers"]["chat"]["agent_id"] == "claude-provider-123"
 
 
 class TestLLMToolsProcessing:
@@ -454,3 +519,38 @@ class TestHashTracking:
             hash2 = module._last_llm_tools_hash
 
             assert hash1 != hash2
+
+    @pytest.mark.asyncio
+    async def test_hash_changes_with_different_providers(self):
+        """Test that hash changes when providers change (even if tools stay the same)."""
+        import _mcp_mesh.pipeline.mcp_heartbeat.llm_tools_resolution as module
+
+        step = LLMToolsResolutionStep()
+        mock_injector = MagicMock()
+
+        with patch(
+            "_mcp_mesh.pipeline.mcp_heartbeat.llm_tools_resolution.get_global_injector"
+        ) as mock_get_injector:
+            mock_get_injector.return_value = mock_injector
+
+            # First call with Claude provider
+            llm_tools = {"func1": [{"name": "tool1"}]}
+            llm_providers1 = {"chat": {"endpoint": "claude:9101", "name": "claude"}}
+            await step.process_llm_tools_from_heartbeat({
+                "llm_tools": llm_tools,
+                "llm_providers": llm_providers1
+            })
+            hash1 = module._last_llm_tools_hash
+
+            # Second call with OpenAI provider (same tools, different provider)
+            llm_providers2 = {"chat": {"endpoint": "openai:9104", "name": "openai"}}
+            await step.process_llm_tools_from_heartbeat({
+                "llm_tools": llm_tools,  # Same tools
+                "llm_providers": llm_providers2  # Different provider
+            })
+            hash2 = module._last_llm_tools_hash
+
+            assert hash1 != hash2, "Hash should change when provider changes even if tools are the same"
+            # Verify that update was called (not skipped)
+            assert mock_injector.update_llm_tools.call_count == 1
+            assert mock_injector.process_llm_providers.call_count == 2

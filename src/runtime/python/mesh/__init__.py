@@ -19,7 +19,8 @@ Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
 from . import decorators
-from .types import McpMeshAgent, MeshContextModel, MeshLlmAgent
+from .helpers import llm_provider
+from .types import McpMeshAgent, MeshContextModel, MeshLlmAgent, MeshLlmRequest
 
 __version__ = "1.0.0"
 
@@ -87,7 +88,7 @@ def create_server(name: str | None = None) -> "FastMCP":
     return FastMCP(name=name)
 
 
-# Make decorators available as mesh.tool, mesh.agent, mesh.route, and mesh.llm
+# Make decorators available as mesh.tool, mesh.agent, mesh.route, mesh.llm, and mesh.llm_provider
 def __getattr__(name):
     if name == "tool":
         return decorators.tool
@@ -97,12 +98,16 @@ def __getattr__(name):
         return decorators.route
     elif name == "llm":
         return decorators.llm
+    elif name == "llm_provider":
+        return llm_provider
     elif name == "McpMeshAgent":
         return McpMeshAgent
     elif name == "MeshContextModel":
         return MeshContextModel
     elif name == "MeshLlmAgent":
         return MeshLlmAgent
+    elif name == "MeshLlmRequest":
+        return MeshLlmRequest
     elif name == "create_server":
         return create_server
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

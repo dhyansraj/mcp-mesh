@@ -86,6 +86,128 @@ class MeshLlmAgentInjector(BaseInjector):
                     exc_info=True,
                 )
 
+    def process_llm_providers(
+        self, llm_providers: dict[str, dict[str, Any]]
+    ) -> None:
+        """
+        Process llm_providers from registry response (v0.6.1 mesh delegation).
+
+        Creates UnifiedMCPProxy instances for each resolved LLM provider
+        and updates existing MeshLlmAgent instances.
+
+        Args:
+            llm_providers: Dict mapping function_name -> ResolvedLLMProvider
+                         Format: {"function_name": {"agent_id": "...", "endpoint": "...", ...}}
+        """
+        logger.info(f"🔌 Processing llm_providers for {len(llm_providers)} functions")
+
+        # Build mapping from function_name to function_id
+        function_name_to_id = self._build_function_name_to_id_mapping()
+
+        for function_name, provider_data in llm_providers.items():
+            try:
+                # Map function_name to function_id
+                if function_name not in function_name_to_id:
+                    logger.warning(
+                        f"⚠️ Function name '{function_name}' not found in DecoratorRegistry for provider, skipping"
+                    )
+                    continue
+
+                function_id = function_name_to_id[function_name]
+                self._process_function_provider(function_id, provider_data)
+            except Exception as e:
+                logger.error(
+                    f"❌ Error processing llm_provider for {function_name}: {e}",
+                    exc_info=True,
+                )
+
+    def _process_function_provider(
+        self, function_id: str, provider_data: dict[str, Any]
+    ) -> None:
+        """
+        Process LLM provider for a single function.
+
+        Args:
+            function_id: Unique function ID from @mesh.llm decorator
+            provider_data: ResolvedLLMProvider data from registry
+        """
+        # Create UnifiedMCPProxy for the provider
+        provider_proxy = self._create_provider_proxy(provider_data)
+
+        # Update llm_agents data with provider_proxy and vendor (Phase 2)
+        if function_id in self._llm_agents:
+            self._llm_agents[function_id]["provider_proxy"] = provider_proxy
+
+            # Phase 2: Extract vendor from provider_data for handler selection
+            vendor = provider_data.get("vendor", "unknown")
+            self._llm_agents[function_id]["vendor"] = vendor
+
+            logger.info(
+                f"✅ Set provider proxy for '{function_id}': {provider_proxy.function_name} at {provider_proxy.endpoint} (vendor={vendor})"
+            )
+
+            # Re-create and update MeshLlmAgent with new provider
+            # Get the function wrapper from DecoratorRegistry
+            llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+            wrapper = None
+            for agent_func_id, metadata in llm_agents.items():
+                if metadata.function_id == function_id:
+                    wrapper = metadata.function
+                    break
+
+            if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
+                llm_agent = self._create_llm_agent(function_id)
+                wrapper._mesh_update_llm_agent(llm_agent)
+                logger.info(
+                    f"🔄 Updated wrapper with new MeshLlmAgent (with provider) for '{function_id}'"
+                )
+        else:
+            logger.warning(
+                f"⚠️ Function '{function_id}' not found in _llm_agents, cannot set provider proxy"
+            )
+
+    def _create_provider_proxy(self, provider_data: dict[str, Any]) -> UnifiedMCPProxy:
+        """
+        Create UnifiedMCPProxy for an LLM provider.
+
+        Args:
+            provider_data: ResolvedLLMProvider data from registry
+
+        Returns:
+            UnifiedMCPProxy instance
+
+        Raises:
+            ValueError: If endpoint is missing or invalid
+        """
+        function_name = provider_data.get("name")
+        if not function_name:
+            raise ValueError(
+                f"Provider missing required 'name' field: {provider_data}"
+            )
+
+        endpoint = provider_data.get("endpoint")
+        if not endpoint:
+            raise ValueError(f"Provider {function_name} missing endpoint")
+
+        if not isinstance(endpoint, str):
+            raise ValueError(
+                f"Provider {function_name} has invalid endpoint (expected string): {endpoint}"
+            )
+
+        # Create proxy with endpoint URL
+        proxy = UnifiedMCPProxy(
+            endpoint=endpoint,
+            function_name=function_name,
+            kwargs_config={
+                "capability": provider_data.get("capability", "llm"),
+                "agent_id": provider_data.get("agent_id"),
+            },
+        )
+
+        logger.debug(f"🔧 Created provider proxy for {function_name} at {endpoint}")
+
+        return proxy
+
     def _process_function_tools(
         self, function_id: str, tools: list[dict[str, Any]]
     ) -> None:
@@ -126,6 +248,10 @@ class MeshLlmAgentInjector(BaseInjector):
                 logger.error(f"❌ Error creating proxy for tool {tool_name}: {e}")
                 # Continue processing other tools
 
+        # Provider proxy will be set separately via process_llm_providers()
+        # (v0.6.1 - providers come from llm_providers field, not dependencies)
+        provider_proxy = None
+
         # Store LLM agent data with both metadata and proxies
         # Keep original tool metadata for schema building
         self._llm_agents[function_id] = {
@@ -135,6 +261,7 @@ class MeshLlmAgentInjector(BaseInjector):
             "tools_metadata": tools,  # Original metadata for schema building
             "tools_proxies": tool_proxies_map,  # Proxies for execution
             "function": llm_metadata.function,
+            "provider_proxy": provider_proxy,  # Provider proxy for mesh delegation
         }
 
         logger.info(
@@ -376,11 +503,14 @@ class MeshLlmAgentInjector(BaseInjector):
             tool_proxies=llm_agent_data["tools_proxies"],  # Proxies for execution
             template_path=template_path if is_template else None,
             context_value=context_value if is_template else None,
+            provider_proxy=llm_agent_data.get("provider_proxy"),  # Provider proxy for mesh delegation
+            vendor=llm_agent_data.get("vendor"),  # Phase 2: Vendor for provider handler selection
         )
 
         logger.debug(
             f"🤖 Created MeshLlmAgent for {function_id} with {len(llm_agent_data['tools_metadata'])} tools"
             + (f", template={template_path}" if is_template else "")
+            + (f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}" if isinstance(config_dict.get("provider"), dict) else "")
         )
 
         return llm_agent

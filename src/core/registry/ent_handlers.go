@@ -224,6 +224,17 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		response.LlmTools = &llmToolsMap
 	}
 
+	// Include LLM providers if available (v0.6.1 mesh delegation)
+	if serviceResp.LLMProviders != nil && len(serviceResp.LLMProviders) > 0 {
+		llmProvidersMap := make(map[string]generated.ResolvedLLMProvider)
+		for functionName, provider := range serviceResp.LLMProviders {
+			if provider != nil {
+				llmProvidersMap[functionName] = *provider
+			}
+		}
+		response.LlmProviders = &llmProvidersMap
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -313,6 +324,9 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		}
 		if tool.LlmFilter != nil {
 			toolData["llm_filter"] = *tool.LlmFilter
+		}
+		if tool.LlmProvider != nil {
+			toolData["llm_provider"] = *tool.LlmProvider
 		}
 		if tool.Dependencies != nil {
 			deps := make([]map[string]interface{}, len(*tool.Dependencies))

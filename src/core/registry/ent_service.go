@@ -83,13 +83,14 @@ type HeartbeatRequest struct {
 
 // HeartbeatResponse matches Python response format exactly
 type HeartbeatResponse struct {
-	Status               string                             `json:"status"`
-	Timestamp            string                             `json:"timestamp"`
-	Message              string                             `json:"message"`
-	AgentID              string                             `json:"agent_id,omitempty"`
-	ResourceVersion      string                             `json:"resource_version,omitempty"`
-	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
-	LLMTools             map[string][]LLMToolInfo           `json:"llm_tools,omitempty"`
+	Status               string                                    `json:"status"`
+	Timestamp            string                                    `json:"timestamp"`
+	Message              string                                    `json:"message"`
+	AgentID              string                                    `json:"agent_id,omitempty"`
+	ResourceVersion      string                                    `json:"resource_version,omitempty"`
+	DependenciesResolved map[string][]*DependencyResolution        `json:"dependencies_resolved,omitempty"`
+	LLMTools             map[string][]LLMToolInfo                  `json:"llm_tools,omitempty"`
+	LLMProviders         map[string]*generated.ResolvedLLMProvider `json:"llm_providers,omitempty"`
 }
 
 // EntService provides registry operations using Ent ORM instead of raw SQL
@@ -318,6 +319,13 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 							if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
 								if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
 									capCreate = capCreate.SetLlmFilter(llmFilter)
+								}
+							}
+
+							// Add llm_provider if present (v0.6.1)
+							if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
+								if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
+									capCreate = capCreate.SetLlmProvider(llmProvider)
 								}
 							}
 
@@ -619,6 +627,12 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					llmTools = make(map[string][]LLMToolInfo)
 				}
 
+				// Resolve LLM providers for newly registered agent (v0.6.1)
+				llmProviders, err := s.ResolveLLMProvidersFromMetadata(ctx, req.AgentID, req.Metadata)
+				if err != nil {
+					llmProviders = make(map[string]*generated.ResolvedLLMProvider)
+				}
+
 				return &HeartbeatResponse{
 					Status:               regResp.Status,
 					Timestamp:            now.Format(time.RFC3339),
@@ -626,6 +640,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					AgentID:              regResp.AgentID,
 					DependenciesResolved: regResp.DependenciesResolved,
 					LLMTools:             llmTools,
+					LLMProviders:         llmProviders,
 				}, nil
 			}
 
@@ -773,6 +788,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 										}
 									}
 
+									// Add llm_provider if present (v0.6.1)
+									if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
+										if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
+											capCreate = capCreate.SetLlmProvider(llmProvider)
+										}
+									}
+
 									// Add kwargs if present
 									if kwargsInterface, ok := toolMap["kwargs"]; ok {
 										if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
@@ -845,6 +867,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				llmTools = make(map[string][]LLMToolInfo)
 			}
 
+			// Resolve LLM providers for functions with llm_provider (v0.6.1)
+			llmProviders, err := s.ResolveLLMProvidersFromMetadata(ctx, req.AgentID, req.Metadata)
+			if err != nil {
+				llmProviders = make(map[string]*generated.ResolvedLLMProvider)
+			}
+			s.logger.Info("DEBUG: llmProviders map before response: %d entries, content: %+v", len(llmProviders), llmProviders)
+
 			return &HeartbeatResponse{
 				Status:               "success",
 				Timestamp:            now.Format(time.RFC3339),
@@ -852,6 +881,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				AgentID:              req.AgentID,
 				DependenciesResolved: dependenciesResolved,
 				LLMTools:             llmTools,
+				LLMProviders:         llmProviders,
 			}, nil
 		}
 	}

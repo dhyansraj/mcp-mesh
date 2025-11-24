@@ -73,6 +73,12 @@ func (cc *CapabilityCreate) SetLlmFilter(m map[string]interface{}) *CapabilityCr
 	return cc
 }
 
+// SetLlmProvider sets the "llm_provider" field.
+func (cc *CapabilityCreate) SetLlmProvider(m map[string]interface{}) *CapabilityCreate {
+	cc.mutation.SetLlmProvider(m)
+	return cc
+}
+
 // SetTags sets the "tags" field.
 func (cc *CapabilityCreate) SetTags(s []string) *CapabilityCreate {
 	cc.mutation.SetTags(s)
@@ -255,6 +261,10 @@ func (cc *CapabilityCreate) createSpec() (*Capability, *sqlgraph.CreateSpec) {
 	if value, ok := cc.mutation.LlmFilter(); ok {
 		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)
 		_node.LlmFilter = value
+	}
+	if value, ok := cc.mutation.LlmProvider(); ok {
+		_spec.SetField(capability.FieldLlmProvider, field.TypeJSON, value)
+		_node.LlmProvider = value
 	}
 	if value, ok := cc.mutation.Tags(); ok {
 		_spec.SetField(capability.FieldTags, field.TypeJSON, value)

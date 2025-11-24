@@ -1393,6 +1393,7 @@ type CapabilityMutation struct {
 	description        *string
 	input_schema       *map[string]interface{}
 	llm_filter         *map[string]interface{}
+	llm_provider       *map[string]interface{}
 	tags               *[]string
 	appendtags         []string
 	kwargs             *map[string]interface{}
@@ -1761,6 +1762,55 @@ func (m *CapabilityMutation) ResetLlmFilter() {
 	delete(m.clearedFields, capability.FieldLlmFilter)
 }
 
+// SetLlmProvider sets the "llm_provider" field.
+func (m *CapabilityMutation) SetLlmProvider(value map[string]interface{}) {
+	m.llm_provider = &value
+}
+
+// LlmProvider returns the value of the "llm_provider" field in the mutation.
+func (m *CapabilityMutation) LlmProvider() (r map[string]interface{}, exists bool) {
+	v := m.llm_provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLlmProvider returns the old "llm_provider" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldLlmProvider(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLlmProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLlmProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLlmProvider: %w", err)
+	}
+	return oldValue.LlmProvider, nil
+}
+
+// ClearLlmProvider clears the value of the "llm_provider" field.
+func (m *CapabilityMutation) ClearLlmProvider() {
+	m.llm_provider = nil
+	m.clearedFields[capability.FieldLlmProvider] = struct{}{}
+}
+
+// LlmProviderCleared returns if the "llm_provider" field was cleared in this mutation.
+func (m *CapabilityMutation) LlmProviderCleared() bool {
+	_, ok := m.clearedFields[capability.FieldLlmProvider]
+	return ok
+}
+
+// ResetLlmProvider resets all changes to the "llm_provider" field.
+func (m *CapabilityMutation) ResetLlmProvider() {
+	m.llm_provider = nil
+	delete(m.clearedFields, capability.FieldLlmProvider)
+}
+
 // SetTags sets the "tags" field.
 func (m *CapabilityMutation) SetTags(s []string) {
 	m.tags = &s
@@ -2071,7 +2121,7 @@ func (m *CapabilityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CapabilityMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.function_name != nil {
 		fields = append(fields, capability.FieldFunctionName)
 	}
@@ -2089,6 +2139,9 @@ func (m *CapabilityMutation) Fields() []string {
 	}
 	if m.llm_filter != nil {
 		fields = append(fields, capability.FieldLlmFilter)
+	}
+	if m.llm_provider != nil {
+		fields = append(fields, capability.FieldLlmProvider)
 	}
 	if m.tags != nil {
 		fields = append(fields, capability.FieldTags)
@@ -2125,6 +2178,8 @@ func (m *CapabilityMutation) Field(name string) (ent.Value, bool) {
 		return m.InputSchema()
 	case capability.FieldLlmFilter:
 		return m.LlmFilter()
+	case capability.FieldLlmProvider:
+		return m.LlmProvider()
 	case capability.FieldTags:
 		return m.Tags()
 	case capability.FieldKwargs:
@@ -2156,6 +2211,8 @@ func (m *CapabilityMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldInputSchema(ctx)
 	case capability.FieldLlmFilter:
 		return m.OldLlmFilter(ctx)
+	case capability.FieldLlmProvider:
+		return m.OldLlmProvider(ctx)
 	case capability.FieldTags:
 		return m.OldTags(ctx)
 	case capability.FieldKwargs:
@@ -2216,6 +2273,13 @@ func (m *CapabilityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetLlmFilter(v)
+		return nil
+	case capability.FieldLlmProvider:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLlmProvider(v)
 		return nil
 	case capability.FieldTags:
 		v, ok := value.([]string)
@@ -2291,6 +2355,9 @@ func (m *CapabilityMutation) ClearedFields() []string {
 	if m.FieldCleared(capability.FieldLlmFilter) {
 		fields = append(fields, capability.FieldLlmFilter)
 	}
+	if m.FieldCleared(capability.FieldLlmProvider) {
+		fields = append(fields, capability.FieldLlmProvider)
+	}
 	if m.FieldCleared(capability.FieldKwargs) {
 		fields = append(fields, capability.FieldKwargs)
 	}
@@ -2319,6 +2386,9 @@ func (m *CapabilityMutation) ClearField(name string) error {
 		return nil
 	case capability.FieldLlmFilter:
 		m.ClearLlmFilter()
+		return nil
+	case capability.FieldLlmProvider:
+		m.ClearLlmProvider()
 		return nil
 	case capability.FieldKwargs:
 		m.ClearKwargs()
@@ -2351,6 +2421,9 @@ func (m *CapabilityMutation) ResetField(name string) error {
 		return nil
 	case capability.FieldLlmFilter:
 		m.ResetLlmFilter()
+		return nil
+	case capability.FieldLlmProvider:
+		m.ResetLlmProvider()
 		return nil
 	case capability.FieldTags:
 		m.ResetTags()

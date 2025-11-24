@@ -66,6 +66,7 @@ var (
 		{Name: "description", Type: field.TypeString, Nullable: true},
 		{Name: "input_schema", Type: field.TypeJSON, Nullable: true},
 		{Name: "llm_filter", Type: field.TypeJSON, Nullable: true},
+		{Name: "llm_provider", Type: field.TypeJSON, Nullable: true},
 		{Name: "tags", Type: field.TypeJSON},
 		{Name: "kwargs", Type: field.TypeJSON, Nullable: true},
 		{Name: "dependencies", Type: field.TypeJSON, Nullable: true},
@@ -81,7 +82,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "capabilities_agents_capabilities",
-				Columns:    []*schema.Column{CapabilitiesColumns[12]},
+				Columns:    []*schema.Column{CapabilitiesColumns[13]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},

@@ -122,12 +122,23 @@ class TestMeshAgentDetection:
     """Test basic @mesh.agent decorator detection and metadata storage."""
 
     def setup_method(self):
-        """Clear registry and debounce coordinator before each test."""
+        """Clear registry, environment, and debounce coordinator before each test."""
         DecoratorRegistry.clear_all()
         # Clear debounce coordinator to prevent background thread interference
         from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
 
         clear_debounce_coordinator()
+
+        # Clear environment variables that may be auto-set by runtime initialization
+        env_vars = [
+            "MCP_MESH_NAMESPACE",
+            "MCP_MESH_AUTO_RUN",
+            "MCP_MESH_AUTO_RUN_INTERVAL",
+            "MCP_MESH_HEALTH_INTERVAL",
+            "MCP_MESH_HTTP_ENABLED",
+        ]
+        for var in env_vars:
+            os.environ.pop(var, None)
 
     def test_mesh_agent_with_required_name(self):
         """Test @mesh.agent with required name parameter."""

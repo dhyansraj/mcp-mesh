@@ -48,15 +48,15 @@ func init() {
 	// capability.DefaultVersion holds the default value on creation for the version field.
 	capability.DefaultVersion = capabilityDescVersion.Default.(string)
 	// capabilityDescTags is the schema descriptor for tags field.
-	capabilityDescTags := capabilityFields[6].Descriptor()
+	capabilityDescTags := capabilityFields[7].Descriptor()
 	// capability.DefaultTags holds the default value on creation for the tags field.
 	capability.DefaultTags = capabilityDescTags.Default.([]string)
 	// capabilityDescCreatedAt is the schema descriptor for created_at field.
-	capabilityDescCreatedAt := capabilityFields[9].Descriptor()
+	capabilityDescCreatedAt := capabilityFields[10].Descriptor()
 	// capability.DefaultCreatedAt holds the default value on creation for the created_at field.
 	capability.DefaultCreatedAt = capabilityDescCreatedAt.Default.(func() time.Time)
 	// capabilityDescUpdatedAt is the schema descriptor for updated_at field.
-	capabilityDescUpdatedAt := capabilityFields[10].Descriptor()
+	capabilityDescUpdatedAt := capabilityFields[11].Descriptor()
 	// capability.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	capability.DefaultUpdatedAt = capabilityDescUpdatedAt.Default.(func() time.Time)
 	// capability.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

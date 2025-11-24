@@ -1,0 +1,319 @@
+version: "3.8"
+
+# MCP Mesh - Multi-Agent Proof of Concept
+# Simple setup with Executor Agent providing basic tools
+#
+# Usage:
+#   docker compose -f docker-compose.multi-agent-poc.yml up -d
+
+services:
+  # Infrastructure
+  postgres:
+    image: postgres:15-alpine
+    container_name: mcp-mesh-postgres-ma-poc
+    environment:
+      POSTGRES_USER: mcpmesh
+      POSTGRES_PASSWORD: mcpmesh
+      POSTGRES_DB: mcpmesh
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mcp-mesh-ma-poc
+
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-mesh-redis-ma-poc
+    ports:
+      - "6382:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mcp-mesh-ma-poc
+
+  registry:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/registry/Dockerfile
+    container_name: mcp-mesh-registry-ma-poc
+    ports:
+      - "8003:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: postgresql://mcpmesh:mcpmesh@postgres:5432/mcpmesh?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      MCP_MESH_NAMESPACE: multi-agent-poc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # Executor Agent - Provides basic tools (bash, write_file, read_file, grep_files)
+  executor-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-executor-agent
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: executor-agent
+      AGENT_PORT: 9100
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      WORKSPACE_DIR: /workspace
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/executor_agent.py:/app/agent.py:ro
+      - ../multi-agent-poc/workspace:/workspace:rw # Mounted workspace
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9100:9100"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9100/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # Claude Provider - LLM provider for specialist agents (Preferred)
+  claude-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-claude-provider
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: claude-provider
+      AGENT_PORT: 9101
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/claude_provider.py:/app/agent.py:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9101:9101"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9101/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # OpenAI Provider - LLM provider for specialist agents (Fallback)
+  openai-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-openai-provider
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: openai-provider
+      AGENT_PORT: 9104
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/openai_provider.py:/app/agent.py:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9104:9104"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9104/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # Developer Agent - Software development specialist using mesh delegation
+  developer-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-developer-agent
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: developer-agent
+      AGENT_PORT: 9102
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/developer_agent.py:/app/agent.py:ro
+      - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9102:9102"
+    depends_on:
+      registry:
+        condition: service_healthy
+      executor-agent:
+        condition: service_healthy
+      claude-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9102/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # QA Agent - Quality Assurance specialist
+  qa-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-qa-agent
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: qa-agent
+      AGENT_PORT: 9103
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/qa_agent.py:/app/agent.py:ro
+      - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9103:9103"
+    depends_on:
+      registry:
+        condition: service_healthy
+      executor-agent:
+        condition: service_healthy
+      claude-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9103/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+  # Intent Agent - Conversational orchestrator
+  intent-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-intent-agent
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: intent-agent
+      AGENT_PORT: 9200
+      MCP_MESH_NAMESPACE: multi-agent-poc
+      MCP_MESH_LOG_LEVEL: "DEBUG"
+      MCP_MESH_DEBUG_MODE: true
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../multi-agent-poc/intent_agent.py:/app/agent.py:ro
+      - ../multi-agent-poc/prompts:/app/prompts:ro # Mount prompts directory
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9200:9200"
+    depends_on:
+      registry:
+        condition: service_healthy
+      developer-agent:
+        condition: service_healthy
+      qa-agent:
+        condition: service_healthy
+      claude-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9200/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-ma-poc
+
+networks:
+  mcp-mesh-ma-poc:
+    name: mcp-mesh-ma-poc
+    driver: bridge

@@ -20,11 +20,13 @@ mcp_mesh_registry_client/models/decorator_agent_metadata.py
 mcp_mesh_registry_client/models/decorator_agent_request.py
 mcp_mesh_registry_client/models/decorator_info.py
 mcp_mesh_registry_client/models/dependency_info.py
+mcp_mesh_registry_client/models/dependency_resolution_info.py
 mcp_mesh_registry_client/models/error_response.py
 mcp_mesh_registry_client/models/health_response.py
 mcp_mesh_registry_client/models/heartbeat_request.py
 mcp_mesh_registry_client/models/heartbeat_request_metadata.py
 mcp_mesh_registry_client/models/heartbeat_response.py
+mcp_mesh_registry_client/models/llm_provider.py
 mcp_mesh_registry_client/models/llm_tool_filter.py
 mcp_mesh_registry_client/models/llm_tool_filter_filter_inner.py
 mcp_mesh_registry_client/models/llm_tool_filter_filter_inner_one_of.py
@@ -37,6 +39,7 @@ mcp_mesh_registry_client/models/mesh_tool_dependency_registration.py
 mcp_mesh_registry_client/models/mesh_tool_register_metadata.py
 mcp_mesh_registry_client/models/mesh_tool_registration.py
 mcp_mesh_registry_client/models/registration_response.py
+mcp_mesh_registry_client/models/resolved_llm_provider.py
 mcp_mesh_registry_client/models/rich_dependency.py
 mcp_mesh_registry_client/models/root_response.py
 mcp_mesh_registry_client/models/standardized_dependency.py
