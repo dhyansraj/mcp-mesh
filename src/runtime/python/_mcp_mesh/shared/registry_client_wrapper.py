@@ -72,7 +72,7 @@ class RegistryClientWrapper:
                 )
 
             registration_json = json.dumps(registration_dict, indent=2, default=str)
-            self.logger.info(
+            self.logger.debug(
                 f"🔍 Full heartbeat registration payload:\n{registration_json}"
             )
 
@@ -214,7 +214,7 @@ class RegistryClientWrapper:
 
             # Handle 410 Gone specifically (agent unknown)
             if "(410)" in error_str or "Gone" in error_str:
-                self.logger.info(
+                self.logger.debug(
                     f"🔍 Fast heartbeat: Agent '{agent_id}' unknown (410 Gone) - re-registration needed"
                 )
                 return FastHeartbeatStatus.AGENT_UNKNOWN
@@ -376,16 +376,6 @@ class RegistryClientWrapper:
             kwargs_data = {
                 k: v for k, v in metadata.items() if k not in standard_fields
             }
-
-            # DEBUG: Trace kwargs extraction
-            print(f"🔑 REGISTRY WRAPPER DEBUG - Function: {func_name}", flush=True)
-            print(f"🔑 REGISTRY WRAPPER DEBUG - Metadata keys: {list(metadata.keys())}", flush=True)
-            print(f"🔑 REGISTRY WRAPPER DEBUG - kwargs_data: {kwargs_data}", flush=True)
-            print(f"🔑 REGISTRY WRAPPER DEBUG - Vendor in kwargs: {kwargs_data.get('vendor', 'NOT FOUND')}", flush=True)
-
-            # DEBUG: Log kwargs extraction
-            if kwargs_data:
-                self.logger.info(f"🔑 Extracted kwargs for {func_name}: {kwargs_data}")
 
             # Extract inputSchema from FastMCP tool (Phase 2: Schema Collection)
             # First try to get FastMCP server info from DecoratorRegistry

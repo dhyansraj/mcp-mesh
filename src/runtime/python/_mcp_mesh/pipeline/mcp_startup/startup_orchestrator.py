@@ -228,7 +228,7 @@ class DebounceCoordinator:
                                     fastapi_app, binding_config
                                 )
                         elif server_status == "running":
-                            self.logger.info(
+                            self.logger.debug(
                                 "🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()"
                             )
                             self.logger.info(
@@ -493,7 +493,7 @@ class MeshOrchestrator:
 
         This replaces the background polling with explicit execution.
         """
-        self.logger.info(f"🚀 Starting single pipeline execution: {self.name}")
+        self.logger.debug(f"🚀 Starting single pipeline execution: {self.name}")
 
         result = await self.pipeline.execute()
 

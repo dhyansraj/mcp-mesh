@@ -6,7 +6,7 @@ Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -33,7 +33,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
     This prevents the DNS threading conflicts by ensuring uvicorn takes control
     before the script ends and Python enters shutdown state.
     """
-    logger.info(
+    logger.debug(
         f"🎯 IMMEDIATE UVICORN: _start_uvicorn_immediately() called with host={http_host}, port={http_port}"
     )
 
@@ -43,9 +43,9 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         import time
 
         import uvicorn
-        from fastapi import FastAPI
+        from fastapi import FastAPI, Response
 
-        logger.info(
+        logger.debug(
             "📦 IMMEDIATE UVICORN: Successfully imported uvicorn, FastAPI, threading, asyncio"
         )
 
@@ -56,11 +56,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
 
             fastmcp_lifespan = DecoratorRegistry.get_fastmcp_lifespan()
             if fastmcp_lifespan:
-                logger.info(
+                logger.debug(
                     "✅ IMMEDIATE UVICORN: Found stored FastMCP lifespan, will integrate with FastAPI"
                 )
             else:
-                logger.info(
+                logger.debug(
                     "🔍 IMMEDIATE UVICORN: No FastMCP lifespan found, creating basic FastAPI app"
                 )
         except Exception as e:
@@ -69,20 +69,61 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         # Create FastAPI app with FastMCP lifespan if available
         if fastmcp_lifespan:
             app = FastAPI(title="MCP Mesh Agent (Starting)", lifespan=fastmcp_lifespan)
-            logger.info(
+            logger.debug(
                 "📦 IMMEDIATE UVICORN: Created FastAPI app with FastMCP lifespan integration"
             )
         else:
             app = FastAPI(title="MCP Mesh Agent (Starting)")
-            logger.info("📦 IMMEDIATE UVICORN: Created minimal FastAPI app")
+            logger.debug("📦 IMMEDIATE UVICORN: Created minimal FastAPI app")
 
-        # Add basic health endpoint
+        # Add health endpoint that can be updated by pipeline
+        # Store health check result in a shared location that can be updated
+        health_result = {"status": "starting", "message": "Agent is starting"}
+
         @app.get("/health")
-        def health():
-            return {
-                "status": "immediate_uvicorn",
-                "message": "MCP Mesh agent started via immediate uvicorn",
-            }
+        @app.head("/health")
+        async def health(response: Response):
+            """Health check endpoint that supports custom health checks."""
+            # Check if a custom health check has been configured
+            # The pipeline will update this via DecoratorRegistry
+            custom_health = DecoratorRegistry.get_health_check_result()
+            health_data = custom_health if custom_health else health_result
+
+            # Set HTTP status code based on health status
+            # K8s expects non-200 status for unhealthy services
+            status = health_data.get("status", "starting")
+            if status == "healthy":
+                response.status_code = 200
+            else:
+                # Return 503 for unhealthy, degraded, starting, or unknown
+                response.status_code = 503
+
+            return health_data
+
+        @app.get("/ready")
+        @app.head("/ready")
+        async def ready(response: Response):
+            """Kubernetes readiness probe - service ready to serve traffic."""
+            custom_health = DecoratorRegistry.get_health_check_result()
+            health_data = custom_health if custom_health else health_result
+
+            status = health_data.get("status", "starting")
+            if status == "healthy":
+                response.status_code = 200
+                return {"ready": True, "status": status}
+            else:
+                response.status_code = 503
+                return {
+                    "ready": False,
+                    "status": status,
+                    "reason": f"Service is {status}",
+                }
+
+        @app.get("/livez")
+        @app.head("/livez")
+        async def livez():
+            """Kubernetes liveness probe - always returns 200 if app is running."""
+            return {"alive": True, "message": "Application is running"}
 
         @app.get("/immediate-status")
         def immediate_status():
@@ -91,17 +132,17 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 "message": "This server was started immediately in decorator",
             }
 
-        logger.info("📦 IMMEDIATE UVICORN: Added health endpoints")
+        logger.debug("📦 IMMEDIATE UVICORN: Added status endpoints")
 
         # Determine port (0 means auto-assign)
         port = http_port if http_port > 0 else 8080
 
-        logger.info(
+        logger.debug(
             f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
         )
 
         # Use uvicorn.run() for proper signal handling (enables FastAPI lifespan shutdown)
-        logger.info(
+        logger.debug(
             "⚡ IMMEDIATE UVICORN: Starting server with uvicorn.run() for proper signal handling"
         )
 
@@ -109,7 +150,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         def run_server():
             """Run uvicorn server in background thread with proper signal handling."""
             try:
-                logger.info(
+                logger.debug(
                     f"🌟 IMMEDIATE UVICORN: Starting server on {http_host}:{port}"
                 )
                 # Use uvicorn.run() instead of Server().run() for proper signal handling
@@ -131,7 +172,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         thread = threading.Thread(target=run_server, daemon=False)
         thread.start()
 
-        logger.info(
+        logger.debug(
             "🔒 IMMEDIATE UVICORN: Server thread started (daemon=False) - can handle signals"
         )
 
@@ -152,14 +193,14 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
 
         DecoratorRegistry.store_immediate_uvicorn_server(server_info)
 
-        logger.info(
+        logger.debug(
             "🔄 IMMEDIATE UVICORN: Server reference stored in DecoratorRegistry BEFORE pipeline starts"
         )
 
         # Give server a moment to start
         time.sleep(1)
 
-        logger.info(
+        logger.debug(
             f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
         )
 
@@ -365,13 +406,6 @@ def tool(
         # Store metadata on function
         target._mesh_tool_metadata = metadata
 
-        # DEBUG: Trace vendor in metadata
-        print(f"🔍 DECORATOR DEBUG - Function: {target.__name__}", flush=True)
-        print(f"🔍 DECORATOR DEBUG - Metadata keys: {list(metadata.keys())}", flush=True)
-        print(f"🔍 DECORATOR DEBUG - Vendor value: {metadata.get('vendor', 'NOT FOUND')}", flush=True)
-        extra_kwargs = {k: v for k, v in metadata.items() if k not in ['capability', 'tags', 'version', 'dependencies', 'description']}
-        print(f"🔍 DECORATOR DEBUG - Full kwargs: {extra_kwargs}", flush=True)
-
         # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
 
@@ -460,6 +494,8 @@ def agent(
     enable_http: bool = True,
     namespace: str = "default",
     health_interval: int = 5,  # Will be overridden by centralized defaults
+    health_check: Callable[[], Awaitable[Any]] | None = None,
+    health_check_ttl: int = 15,
     auto_run: bool = True,  # Changed to True by default!
     auto_run_interval: int = 10,
     **kwargs: Any,
@@ -484,6 +520,10 @@ def agent(
             Environment variable: MCP_MESH_NAMESPACE (takes precedence)
         health_interval: Health check interval in seconds (default: 30)
             Environment variable: MCP_MESH_HEALTH_INTERVAL (takes precedence)
+        health_check: Optional async function that returns HealthStatus
+            Called before heartbeat and on /health endpoint with TTL caching
+        health_check_ttl: Cache TTL for health check results in seconds (default: 15)
+            Reduces expensive health check calls by caching results
         auto_run: Automatically start service and keep process alive (default: True)
             Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
         auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
@@ -559,6 +599,14 @@ def agent(
         if auto_run_interval < 1:
             raise ValueError("auto_run_interval must be at least 1 second")
 
+        if health_check is not None and not callable(health_check):
+            raise ValueError("health_check must be a callable (async function)")
+
+        if not isinstance(health_check_ttl, int):
+            raise ValueError("health_check_ttl must be an integer")
+        if health_check_ttl < 1:
+            raise ValueError("health_check_ttl must be at least 1 second")
+
         # Separate binding host (for uvicorn server) from external host (for registry)
         from _mcp_mesh.shared.host_resolver import HostResolver
 
@@ -630,6 +678,8 @@ def agent(
             "enable_http": final_enable_http,
             "namespace": final_namespace,
             "health_interval": final_health_interval,
+            "health_check": health_check,
+            "health_check_ttl": health_check_ttl,
             "auto_run": final_auto_run,
             "auto_run_interval": final_auto_run_interval,
             "agent_id": agent_id,
@@ -654,7 +704,7 @@ def agent(
 
         # Auto-run functionality: start uvicorn immediately to prevent Python shutdown state
         if final_auto_run:
-            logger.info(
+            logger.debug(
                 f"🚀 AGENT DECORATOR: Auto-run enabled for agent '{name}' - starting uvicorn immediately to prevent shutdown state"
             )
 
@@ -662,7 +712,7 @@ def agent(
             fastmcp_lifespan = None
             try:
                 # Try to create FastMCP server and extract lifespan
-                logger.info(
+                logger.debug(
                     "🔍 AGENT DECORATOR: Creating FastMCP server for lifespan extraction"
                 )
 
@@ -674,7 +724,7 @@ def agent(
                     # Look for 'app' attribute (standard FastMCP pattern)
                     if hasattr(current_module, "app"):
                         fastmcp_server = current_module.app
-                        logger.info(
+                        logger.debug(
                             f"🔍 AGENT DECORATOR: Found FastMCP server: {type(fastmcp_server)}"
                         )
 
@@ -688,7 +738,7 @@ def agent(
                                 )
                                 if hasattr(fastmcp_http_app, "lifespan"):
                                     fastmcp_lifespan = fastmcp_http_app.lifespan
-                                    logger.info(
+                                    logger.debug(
                                         "✅ AGENT DECORATOR: Extracted FastMCP lifespan for FastAPI integration"
                                     )
 
@@ -699,7 +749,7 @@ def agent(
                                     DecoratorRegistry.store_fastmcp_http_app(
                                         fastmcp_http_app
                                     )
-                                    logger.info(
+                                    logger.debug(
                                         "✅ AGENT DECORATOR: Stored FastMCP HTTP app for proper mounting"
                                     )
                                 else:
@@ -715,7 +765,7 @@ def agent(
                                 "⚠️ AGENT DECORATOR: FastMCP server has no http_app method"
                             )
                     else:
-                        logger.info(
+                        logger.debug(
                             "🔍 AGENT DECORATOR: No FastMCP 'app' found in current module - will handle in pipeline"
                         )
                 else:
@@ -728,12 +778,12 @@ def agent(
                     f"⚠️ AGENT DECORATOR: FastMCP lifespan creation failed: {e}"
                 )
 
-            logger.info(
+            logger.debug(
                 f"🎯 AGENT DECORATOR: About to call _start_uvicorn_immediately({binding_host}, {final_http_port})"
             )
             # Start basic uvicorn server immediately to prevent interpreter shutdown
             _start_uvicorn_immediately(binding_host, final_http_port)
-            logger.info(
+            logger.debug(
                 "✅ AGENT DECORATOR: _start_uvicorn_immediately() call completed"
             )
 

@@ -381,8 +381,8 @@ class TestHeartbeatPipelineLogging:
                 # Execute
                 result = await heartbeat_pipeline.execute_heartbeat_cycle(context)
 
-                # Verify optimization is logged
-                mock_logger.info.assert_called()
+                # Verify optimization is logged (using DEBUG level)
+                mock_logger.debug.assert_called()
 
     @pytest.mark.asyncio
     async def test_resilience_logging(self, heartbeat_pipeline):

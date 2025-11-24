@@ -72,15 +72,15 @@ class FastHeartbeatStep(PipelineStep):
 
             # Log status and action
             if status == FastHeartbeatStatus.NO_CHANGES:
-                self.logger.info(
+                self.logger.debug(
                     f"✅ Fast heartbeat: No changes detected for agent '{agent_id}'"
                 )
             elif status == FastHeartbeatStatus.TOPOLOGY_CHANGED:
-                self.logger.info(
+                self.logger.debug(
                     f"🔄 Fast heartbeat: Topology changed for agent '{agent_id}' - full refresh needed"
                 )
             elif status == FastHeartbeatStatus.AGENT_UNKNOWN:
-                self.logger.info(
+                self.logger.debug(
                     f"❓ Fast heartbeat: Agent '{agent_id}' unknown - re-registration needed"
                 )
             elif status == FastHeartbeatStatus.REGISTRY_ERROR:

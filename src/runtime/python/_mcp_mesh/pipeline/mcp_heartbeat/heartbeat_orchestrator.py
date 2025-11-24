@@ -8,7 +8,7 @@ context management and error handling.
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from ...shared.support_types import HealthStatus, HealthStatusType
 from .heartbeat_pipeline import HeartbeatPipeline
@@ -44,15 +44,24 @@ class HeartbeatOrchestrator:
 
         try:
 
-
             # Prepare heartbeat context with validation
-            heartbeat_context = self._prepare_heartbeat_context(agent_id, context)
+            heartbeat_context = await self._prepare_heartbeat_context(agent_id, context)
 
             # Validate required context before proceeding
             if not self._validate_heartbeat_context(heartbeat_context):
                 self.logger.error(
                     f"❌ Heartbeat #{self._heartbeat_count} failed: invalid context"
                 )
+                return False
+
+            # Check if health status is unhealthy - skip heartbeat if so
+            health_status = heartbeat_context.get("health_status")
+            if health_status and health_status.status == HealthStatusType.UNHEALTHY:
+                self.logger.warning(
+                    f"⚠️ Heartbeat #{self._heartbeat_count} skipped for agent '{agent_id}': Health status is UNHEALTHY"
+                )
+                self.logger.warning(f"   Health checks failed: {health_status.checks}")
+                self.logger.warning(f"   Errors: {health_status.errors}")
                 return False
 
             # Log heartbeat request details for debugging
@@ -104,13 +113,13 @@ class HeartbeatOrchestrator:
             )
             return False
 
-    def _prepare_heartbeat_context(
+    async def _prepare_heartbeat_context(
         self, agent_id: str, startup_context: dict[str, Any]
     ) -> dict[str, Any]:
         """Prepare context for heartbeat pipeline execution."""
 
         # Build health status from startup context
-        health_status = self._build_health_status_from_context(
+        health_status = await self._build_health_status_from_context(
             startup_context, agent_id
         )
 
@@ -151,12 +160,30 @@ class HeartbeatOrchestrator:
 
         return True
 
-    def _build_health_status_from_context(
+    async def _build_health_status_from_context(
         self, startup_context: dict[str, Any], agent_id: str
     ) -> HealthStatus:
-        """Build health status object from startup context."""
+        """Build health status object from startup context with optional user health check."""
 
-        # Get existing health status from context or build from current state
+        agent_config = startup_context.get("agent_config", {})
+
+        # Check if user provided a health_check function
+        health_check_fn = agent_config.get("health_check")
+        health_check_ttl = agent_config.get("health_check_ttl", 15)
+
+        # If health check is configured, use the cache
+        if health_check_fn:
+            from ...shared.health_check_cache import get_health_status_with_cache
+
+            return await get_health_status_with_cache(
+                agent_id=agent_id,
+                health_check_fn=health_check_fn,
+                agent_config=agent_config,
+                startup_context=startup_context,
+                ttl=health_check_ttl,
+            )
+
+        # No health check configured - use existing logic
         existing_health_status = startup_context.get("health_status")
 
         if existing_health_status:
@@ -166,8 +193,6 @@ class HeartbeatOrchestrator:
             return existing_health_status
 
         # Build minimal health status from context if none exists
-        agent_config = startup_context.get("agent_config", {})
-
         return HealthStatus(
             agent_name=agent_id,
             status=HealthStatusType.HEALTHY,

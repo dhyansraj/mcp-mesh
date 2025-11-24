@@ -119,7 +119,7 @@ class HeartbeatPreparationStep(PipelineStep):
             llm_filter_data = None
             llm_provider_data = None
             llm_agents = DecoratorRegistry.get_mesh_llm_agents()
-            self.logger.info(
+            self.logger.debug(
                 f"🤖 Checking for LLM filter: function={func_name}, total_llm_agents_registered={len(llm_agents)}"
             )
 
@@ -148,7 +148,7 @@ class HeartbeatPreparationStep(PipelineStep):
                         "filter": normalized_filter,
                         "filter_mode": filter_mode,
                     }
-                    self.logger.info(
+                    self.logger.debug(
                         f"🤖 LLM filter found for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}, raw_filter={raw_filter}"
                     )
 
@@ -156,7 +156,7 @@ class HeartbeatPreparationStep(PipelineStep):
                     # If so, add it as llm_provider field (NOT in dependencies array)
                     provider = llm_metadata.config.get("provider")
                     if isinstance(provider, dict):
-                        self.logger.info(
+                        self.logger.debug(
                             f"🔌 LLM provider is dict (mesh delegation) for {func_name}: {provider}"
                         )
                         # Set llm_provider field (separate from dependencies)
@@ -167,19 +167,19 @@ class HeartbeatPreparationStep(PipelineStep):
                             "version": provider.get("version", ""),
                             "namespace": provider.get("namespace", "default"),
                         }
-                        self.logger.info(
+                        self.logger.debug(
                             f"✅ LLM provider spec prepared for {func_name}: {llm_provider_data}"
                         )
 
                     break
 
             # Build tool registration data
-            self.logger.info(
-                f"DEBUG: Building tool_data for {func_name}, dependencies={dependencies}"
+            self.logger.debug(
+                f"Building tool_data for {func_name}, dependencies={dependencies}"
             )
             processed_deps = self._process_dependencies(dependencies)
-            self.logger.info(
-                f"DEBUG: Processed dependencies for {func_name}: {processed_deps}"
+            self.logger.debug(
+                f"Processed dependencies for {func_name}: {processed_deps}"
             )
 
             # Extract kwargs (any extra fields not in standard set)
@@ -194,11 +194,6 @@ class HeartbeatPreparationStep(PipelineStep):
                 k: v for k, v in metadata.items() if k not in standard_fields
             }
 
-            # DEBUG: Trace kwargs extraction
-            print(f"🔧 HEARTBEAT PREP DEBUG - Function: {func_name}", flush=True)
-            print(f"🔧 HEARTBEAT PREP DEBUG - Metadata keys: {list(metadata.keys())}", flush=True)
-            print(f"🔧 HEARTBEAT PREP DEBUG - kwargs_data: {kwargs_data}", flush=True)
-
             tool_data = {
                 "function_name": func_name,
                 "capability": metadata.get("capability"),
@@ -209,7 +204,9 @@ class HeartbeatPreparationStep(PipelineStep):
                 "input_schema": input_schema,  # Add inputSchema for LLM integration (Phase 2)
                 "llm_filter": llm_filter_data,  # Add LLM filter for LLM integration (Phase 3)
                 "llm_provider": llm_provider_data,  # Add LLM provider for mesh delegation (v0.6.1)
-                "kwargs": kwargs_data if kwargs_data else None,  # Add kwargs for vendor and other metadata
+                "kwargs": (
+                    kwargs_data if kwargs_data else None
+                ),  # Add kwargs for vendor and other metadata
             }
 
             # Add debug pointer information only if debug flag is enabled

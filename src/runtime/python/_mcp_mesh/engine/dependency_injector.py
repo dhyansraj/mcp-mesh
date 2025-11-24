@@ -132,7 +132,7 @@ class DependencyInjector:
             instance: Proxy instance to register
         """
         async with self._lock:
-            logger.info(f"📦 Registering dependency: {name}")
+            logger.debug(f"📦 Registering dependency: {name}")
             self._dependencies[name] = instance
 
             # Notify all functions that depend on this (using composite keys)
@@ -302,9 +302,7 @@ class DependencyInjector:
         )
         self._llm_injector.process_llm_tools(llm_tools)
 
-    def process_llm_providers(
-        self, llm_providers: dict[str, dict[str, Any]]
-    ) -> None:
+    def process_llm_providers(self, llm_providers: dict[str, dict[str, Any]]) -> None:
         """
         Process llm_providers from registry response and delegate to MeshLlmAgentInjector (v0.6.1).
 
