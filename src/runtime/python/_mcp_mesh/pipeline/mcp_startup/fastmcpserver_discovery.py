@@ -46,7 +46,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                 server_info.append(info)
                 total_registered_functions += info.get("function_count", 0)
 
-                self.logger.info(
+                self.logger.debug(
                     f"📡 Discovered FastMCP server '{server_name}': "
                     f"{info.get('function_count', 0)} functions"
                 )

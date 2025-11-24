@@ -54,7 +54,7 @@ class FastAPIServerSetupStep(PipelineStep):
 
             # Handle existing server case - mount FastMCP with proper lifespan integration
             if server_reuse and existing_server:
-                self.logger.info(
+                self.logger.debug(
                     "🔄 SERVER REUSE: Found existing server, will mount FastMCP with proper lifespan integration"
                 )
                 return await self._handle_existing_server(
@@ -103,7 +103,9 @@ class FastAPIServerSetupStep(PipelineStep):
             )
 
             # Add K8s health endpoints
-            self._add_k8s_endpoints(fastapi_app, agent_config, mcp_wrappers)
+            await self._add_k8s_endpoints(
+                fastapi_app, agent_config, mcp_wrappers, context
+            )
 
             # Integrate MCP wrappers into the main FastAPI app
             for server_key, wrapper_data in mcp_wrappers.items():
@@ -235,7 +237,7 @@ class FastAPIServerSetupStep(PipelineStep):
             import asyncio
             from contextlib import asynccontextmanager
 
-            from fastapi import FastAPI
+            from fastapi import FastAPI, Response
 
             agent_name = agent_config.get("name", "mcp-mesh-agent")
             agent_description = agent_config.get(
@@ -420,34 +422,113 @@ class FastAPIServerSetupStep(PipelineStep):
         except ImportError as e:
             raise Exception(f"FastAPI not available: {e}")
 
-    def _add_k8s_endpoints(
-        self, app: Any, agent_config: dict[str, Any], mcp_wrappers: dict[str, Any]
+    async def _add_k8s_endpoints(
+        self,
+        app: Any,
+        agent_config: dict[str, Any],
+        mcp_wrappers: dict[str, Any],
+        context: dict[str, Any],
     ) -> None:
-        """Add Kubernetes health and metrics endpoints."""
-        agent_name = agent_config.get("name", "mcp-mesh-agent")
+        """
+        Set up health check result updates for K8s endpoints.
 
-        @app.get("/health")
-        @app.head("/health")
-        async def health():
-            """Basic health check endpoint for Kubernetes."""
-            return {
-                "status": "healthy",
-                "agent": agent_name,
-                "timestamp": self._get_timestamp(),
-            }
+        Note: The /health endpoint is already registered by immediate uvicorn.
+        We just need to update the result it returns via DecoratorRegistry.
+        """
+        from fastapi import Response
+
+        agent_name = agent_config.get("name", "mcp-mesh-agent")
+        health_check_fn = agent_config.get("health_check")
+        health_check_ttl = agent_config.get("health_check_ttl", 15)
+
+        # Create a background task to update health check results periodically
+        async def update_health_result():
+            """Update health check result in DecoratorRegistry."""
+            if health_check_fn:
+                # Use health check cache if configured
+                from ...engine.decorator_registry import DecoratorRegistry
+                from ...shared.health_check_cache import get_health_status_with_cache
+
+                health_status = await get_health_status_with_cache(
+                    agent_id=agent_name,
+                    health_check_fn=health_check_fn,
+                    agent_config=agent_config,
+                    startup_context=context,
+                    ttl=health_check_ttl,
+                )
+
+                result = {
+                    "status": health_status.status.value,
+                    "agent": agent_name,
+                    "checks": health_status.checks,
+                    "errors": health_status.errors,
+                    "timestamp": health_status.timestamp.isoformat(),
+                }
+            else:
+                # No health check configured - return default healthy status
+                result = {
+                    "status": "healthy",
+                    "agent": agent_name,
+                    "timestamp": self._get_timestamp(),
+                }
+
+            # Store result for /health endpoint to use
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            DecoratorRegistry.store_health_check_result(result)
+
+        # Run once immediately to populate initial result
+        # We're already in an async context (called from execute()), so just await it
+
+        await update_health_result()
+
+        # Note: /health endpoint is already registered by immediate uvicorn
+        # It will call DecoratorRegistry.get_health_check_result() to get this data
 
         @app.get("/ready")
         @app.head("/ready")
-        async def ready():
-            """Readiness check for Kubernetes."""
-            # Simple readiness check - always ready for now
-            # TODO: Update this to check MCP wrapper status
-            return {
-                "ready": True,
-                "agent": agent_name,
-                "mcp_wrappers": len(mcp_wrappers),
-                "timestamp": self._get_timestamp(),
-            }
+        async def ready(response: Response):
+            """
+            Readiness check for Kubernetes.
+
+            Returns 200 when the service is ready to serve traffic.
+            Returns 503 when unhealthy - K8s will remove pod from service endpoints.
+            """
+            # Get health check result if available
+            from ...engine.decorator_registry import DecoratorRegistry
+
+            custom_health = DecoratorRegistry.get_health_check_result()
+
+            if custom_health:
+                status = custom_health.get("status", "starting")
+                if status == "healthy":
+                    response.status_code = 200
+                    return {
+                        "ready": True,
+                        "agent": agent_name,
+                        "status": status,
+                        "mcp_wrappers": len(mcp_wrappers),
+                        "timestamp": self._get_timestamp(),
+                    }
+                else:
+                    # Not ready to serve traffic
+                    response.status_code = 503
+                    return {
+                        "ready": False,
+                        "agent": agent_name,
+                        "status": status,
+                        "reason": f"Service is {status}",
+                        "errors": custom_health.get("errors", []),
+                    }
+            else:
+                # No custom health check - assume ready
+                response.status_code = 200
+                return {
+                    "ready": True,
+                    "agent": agent_name,
+                    "mcp_wrappers": len(mcp_wrappers),
+                    "timestamp": self._get_timestamp(),
+                }
 
         @app.get("/livez")
         @app.head("/livez")
@@ -771,7 +852,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         mount FastMCP endpoints on it instead of starting a new server.
         """
         try:
-            self.logger.info("🔄 SERVER REUSE: Mounting FastMCP on existing server")
+            self.logger.debug("🔄 SERVER REUSE: Mounting FastMCP on existing server")
 
             # Get the existing minimal FastAPI app that's already running
             existing_app = None
@@ -792,7 +873,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             if not existing_app:
                 raise ValueError("No existing FastAPI app found for server reuse")
 
-            self.logger.info(
+            self.logger.debug(
                 f"🔄 SERVER REUSE: Using existing FastAPI app '{existing_app.title}' for FastMCP mounting"
             )
 
@@ -805,7 +886,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             mcp_wrappers = {}
             if fastmcp_servers:
                 if fastmcp_lifespan and fastmcp_http_app:
-                    self.logger.info(
+                    self.logger.debug(
                         "✅ SERVER REUSE: FastMCP lifespan already integrated, mounting same HTTP app"
                     )
 
@@ -815,7 +896,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             # Mount the same FastMCP HTTP app that was used for lifespan integration
                             # This ensures the session manager is shared between lifespan and routes
                             existing_app.mount("", fastmcp_http_app)
-                            self.logger.info(
+                            self.logger.debug(
                                 f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' using stored HTTP app (lifespan already integrated)"
                             )
 
@@ -833,7 +914,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                                 f"Failed to mount server '{server_key}': {e}"
                             )
                 else:
-                    self.logger.info(
+                    self.logger.debug(
                         "🔄 SERVER REUSE: No FastMCP lifespan integrated, using HttpMcpWrapper"
                     )
 
@@ -850,7 +931,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             if mcp_wrapper._mcp_app:
                                 # Mount at root since FastMCP creates its own /mcp routes internally
                                 existing_app.mount("", mcp_wrapper._mcp_app)
-                                self.logger.info(
+                                self.logger.debug(
                                     f"🔌 SERVER REUSE: Mounted FastMCP server '{server_key}' via HttpMcpWrapper at root (provides /mcp routes)"
                                 )
 
@@ -868,10 +949,12 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                             )
 
                 # Add K8s health endpoints to existing app (if not already present)
-                self._add_k8s_endpoints(existing_app, agent_config, mcp_wrappers)
+                await self._add_k8s_endpoints(
+                    existing_app, agent_config, mcp_wrappers, context
+                )
 
                 # FastMCP servers are already mounted directly - no additional integration needed
-                self.logger.info(
+                self.logger.debug(
                     "🔌 SERVER REUSE: All FastMCP servers mounted successfully"
                 )
 
@@ -889,7 +972,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self._current_context["mcp_wrappers"] = mcp_wrappers
 
             # FastMCP is now mounted directly - no server replacement needed
-            self.logger.info(
+            self.logger.debug(
                 "🔄 SERVER REUSE: FastMCP routes mounted to existing app successfully"
             )
 
@@ -911,7 +994,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             )
 
             result.message = f"FastAPI app mounted on existing server {bind_host}:{bind_port} (external: {external_endpoint})"
-            self.logger.info(
+            self.logger.debug(
                 f"✅ SERVER REUSE: FastMCP mounted on existing server with {len(mcp_wrappers)} MCP wrappers"
             )
 

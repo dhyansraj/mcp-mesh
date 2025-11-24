@@ -277,7 +277,6 @@ class TestFastHeartbeatStep:
             # Verify logging occurred
             assert result.is_success()
             mock_logger.debug.assert_called()
-            mock_logger.info.assert_called()
 
     @pytest.mark.asyncio
     async def test_error_logging_behavior(

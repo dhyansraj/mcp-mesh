@@ -9,7 +9,7 @@ function finding without requiring actual MCP mesh infrastructure.
 import asyncio
 import inspect
 import weakref
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -285,7 +285,9 @@ class TestDependencyRegistration:
         """Test that dependency registration logs appropriately."""
         import logging
 
-        caplog.set_level(logging.INFO)
+        # Set both caplog and the specific logger to DEBUG level
+        caplog.set_level(logging.DEBUG)
+        caplog.set_level(logging.DEBUG, logger="_mcp_mesh.engine.dependency_injector")
 
         mock_instance = MagicMock()
         await injector.register_dependency("test_dep", mock_instance)

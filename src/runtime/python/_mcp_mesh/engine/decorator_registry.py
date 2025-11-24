@@ -117,11 +117,13 @@ class DecoratorRegistry:
         if func_name in cls._mesh_tools:
             old_func = cls._mesh_tools[func_name].function
             cls._mesh_tools[func_name].function = new_func
-            print(
+            logger.debug(
                 f"🔄 DecoratorRegistry: Updated '{func_name}' from {hex(id(old_func))} to {hex(id(new_func))}"
             )
         else:
-            print(f"⚠️ DecoratorRegistry: Function '{func_name}' not found for update")
+            logger.debug(
+                f"⚠️ DecoratorRegistry: Function '{func_name}' not found for update"
+            )
 
     @classmethod
     def register_mesh_resource(cls, func: Callable, metadata: dict[str, Any]) -> None:
@@ -622,6 +624,28 @@ class DecoratorRegistry:
         """Clear stored immediate uvicorn server reference."""
         cls._immediate_uvicorn_server = None
         logger.debug("🔄 REGISTRY: Cleared immediate uvicorn server reference")
+
+    # Health check result storage
+    _health_check_result: dict | None = None
+
+    @classmethod
+    def store_health_check_result(cls, result: dict) -> None:
+        """Store health check result for /health endpoint."""
+        cls._health_check_result = result
+        logger.debug(
+            f"💾 REGISTRY: Stored health check result: {result.get('status', 'unknown')}"
+        )
+
+    @classmethod
+    def get_health_check_result(cls) -> dict | None:
+        """Get stored health check result."""
+        return cls._health_check_result
+
+    @classmethod
+    def clear_health_check_result(cls) -> None:
+        """Clear stored health check result."""
+        cls._health_check_result = None
+        logger.debug("🗑️ REGISTRY: Cleared health check result")
 
     @classmethod
     def store_fastmcp_lifespan(cls, lifespan: Any) -> None:

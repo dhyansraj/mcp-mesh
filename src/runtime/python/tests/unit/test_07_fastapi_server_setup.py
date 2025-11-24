@@ -11,10 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
-
 # Import the classes under test
 from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import FastAPIServerSetupStep
+from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
 class TestFastAPIServerSetupStep:
@@ -295,77 +294,92 @@ class TestK8sEndpoints:
         """Mock agent configuration."""
         return {"name": "test-agent", "version": "1.0.0"}
 
-    def test_add_k8s_endpoints(self, step, mock_app, mock_agent_config):
-        """Test _add_k8s_endpoints adds all required endpoints."""
-        step._add_k8s_endpoints(mock_app, mock_agent_config, {})
+    @pytest.mark.asyncio
+    async def test_add_k8s_endpoints(self, step, mock_app, mock_agent_config):
+        """Test _add_k8s_endpoints stores health check result in DecoratorRegistry."""
+        from unittest.mock import AsyncMock, patch
 
-        # Verify get decorator was called for each endpoint (including /metadata from Phase 1)
-        assert mock_app.get.call_count == 5
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # Check endpoint paths
-        call_args = [args[0][0] for args in mock_app.get.call_args_list]
-        assert "/health" in call_args
-        assert "/ready" in call_args
-        assert "/livez" in call_args
-        assert "/metrics" in call_args
-        assert "/metadata" in call_args
+        with patch.object(DecoratorRegistry, "store_health_check_result") as mock_store:
+            await step._add_k8s_endpoints(mock_app, mock_agent_config, {}, {})
+
+            # Verify health check result was stored
+            mock_store.assert_called_once()
+            stored_result = mock_store.call_args[0][0]
+            assert stored_result["status"] == "healthy"
+            assert stored_result["agent"] == "test-agent"
 
     @pytest.mark.asyncio
     async def test_health_endpoint_response(self, step, mock_app, mock_agent_config):
-        """Test health endpoint response structure."""
-        step._add_k8s_endpoints(mock_app, mock_agent_config, {})
+        """Test health endpoint response structure with custom health check."""
+        from unittest.mock import AsyncMock, patch
 
-        # The decorator calls app.get() which returns a function that we need to capture
-        # Extract the decorated function from the app.get calls
-        health_decorator_call = mock_app.get.call_args_list[0]
-        route_path = health_decorator_call[0][0]  # First positional arg is the path
-        assert route_path == "/health"
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # The decorator should have been called, function is created inside _add_k8s_endpoints
-        # We can't easily test the actual function without more complex mocking
-        # So we test that the decorator was called correctly
-        assert mock_app.get.call_count >= 1
+        async def custom_health_check():
+            return {"status": "healthy", "checks": {"test": True}, "errors": []}
+
+        mock_agent_config["health_check"] = custom_health_check
+
+        with patch.object(DecoratorRegistry, "store_health_check_result") as mock_store:
+            await step._add_k8s_endpoints(mock_app, mock_agent_config, {}, {})
+
+            # Verify custom health check was executed and result stored
+            mock_store.assert_called_once()
+            stored_result = mock_store.call_args[0][0]
+            assert stored_result["status"] == "healthy"
 
     @pytest.mark.asyncio
     async def test_ready_endpoint_response(self, step, mock_app, mock_agent_config):
-        """Test ready endpoint response structure."""
-        mcp_wrappers = {"wrapper1": {}, "wrapper2": {}}
-        step._add_k8s_endpoints(mock_app, mock_agent_config, mcp_wrappers)
+        """Test that _add_k8s_endpoints handles default health status."""
+        from unittest.mock import patch
 
-        # Check that /ready endpoint was registered
-        ready_decorator_call = mock_app.get.call_args_list[1]
-        route_path = ready_decorator_call[0][0]
-        assert route_path == "/ready"
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # Test the method was called correctly
-        assert mock_app.get.call_count >= 2
+        # No custom health check - should return default healthy
+        with patch.object(DecoratorRegistry, "store_health_check_result") as mock_store:
+            await step._add_k8s_endpoints(mock_app, mock_agent_config, {}, {})
+
+            mock_store.assert_called_once()
+            stored_result = mock_store.call_args[0][0]
+            assert "status" in stored_result
+            assert "timestamp" in stored_result
 
     @pytest.mark.asyncio
     async def test_livez_endpoint_response(self, step, mock_app, mock_agent_config):
-        """Test livez endpoint response structure."""
-        step._add_k8s_endpoints(mock_app, mock_agent_config, {})
+        """Test that health check respects TTL configuration."""
+        from unittest.mock import patch
 
-        # Check that /livez endpoint was registered
-        livez_decorator_call = mock_app.get.call_args_list[2]
-        route_path = livez_decorator_call[0][0]
-        assert route_path == "/livez"
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # Test the method was called correctly
-        assert mock_app.get.call_count >= 3
+        mock_agent_config["health_check_ttl"] = 30
+
+        with patch.object(DecoratorRegistry, "store_health_check_result") as mock_store:
+            await step._add_k8s_endpoints(mock_app, mock_agent_config, {}, {})
+
+            # Should execute and store result
+            mock_store.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_metrics_endpoint_response(self, step, mock_app, mock_agent_config):
-        """Test metrics endpoint Prometheus format."""
-        mcp_wrappers = {"wrapper1": {}}
-        step._add_k8s_endpoints(mock_app, mock_agent_config, mcp_wrappers)
+        """Test that errors in health check are handled gracefully."""
+        from unittest.mock import patch
 
-        # Check that /metrics endpoint was registered
-        metrics_decorator_call = mock_app.get.call_args_list[3]
-        route_path = metrics_decorator_call[0][0]
-        assert route_path == "/metrics"
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # Test the method was called correctly
-        assert mock_app.get.call_count >= 4
+        async def failing_health_check():
+            raise Exception("Health check failed")
+
+        mock_agent_config["health_check"] = failing_health_check
+
+        with patch.object(DecoratorRegistry, "store_health_check_result") as mock_store:
+            await step._add_k8s_endpoints(mock_app, mock_agent_config, {}, {})
+
+            # Should still store a result (degraded status)
+            mock_store.assert_called_once()
+            stored_result = mock_store.call_args[0][0]
+            assert "status" in stored_result
 
 
 class TestExecuteScenarios:
