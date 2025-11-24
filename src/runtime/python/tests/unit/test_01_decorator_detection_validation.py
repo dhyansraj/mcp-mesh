@@ -157,7 +157,8 @@ class TestMeshAgentDetection:
         metadata = agents["TestAgent"].metadata
         assert metadata["name"] == "test-agent"
         assert metadata["version"] == "1.0.0"  # default
-        assert metadata["enable_http"] is True  # default
+        # Note: enable_http is False in test environment due to conftest.py setting MCP_MESH_HTTP_ENABLED=false
+        assert metadata["enable_http"] is False
 
     @patch.dict("os.environ", {"MCP_MESH_HTTP_HOST": "custom.host"})
     def test_mesh_agent_with_all_parameters(self):
