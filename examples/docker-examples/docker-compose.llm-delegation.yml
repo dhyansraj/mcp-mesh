@@ -1,0 +1,210 @@
+version: "3.8"
+
+# MCP Mesh - LLM Mesh Delegation Tests
+# Docker Compose configuration for testing LLM delegation features
+#
+# Tests cover:
+#   - PT-008: LLM Provider Registration (@mesh.llm_provider)
+#   - PT-009: Basic Mesh Delegation (consumer -> provider via mesh)
+#   - PT-010: Tag-Based Provider Selection
+#   - PT-011: Model-Specific Routing
+#   - PT-012: LLM Failover and Load Balancing
+#
+# Usage:
+#   # Start infrastructure
+#   docker compose -f docker-compose.llm-delegation.yml up -d postgres redis registry
+#
+#   # Run specific test
+#   docker compose -f docker-compose.llm-delegation.yml --profile test-pt-008 up -d
+#
+#   # Run all tests
+#   docker compose -f docker-compose.llm-delegation.yml --profile test-pt-all up -d
+
+services:
+  # Infrastructure services
+  postgres:
+    image: postgres:15-alpine
+    container_name: mcp-mesh-postgres-llm-delegation-test
+    environment:
+      POSTGRES_USER: mcpmesh
+      POSTGRES_PASSWORD: mcpmesh
+      POSTGRES_DB: mcpmesh
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-mesh-redis-llm-delegation-test
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+  registry:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/registry/Dockerfile
+    container_name: mcp-mesh-registry-llm-delegation-test
+    ports:
+      - "8002:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: postgresql://mcpmesh:mcpmesh@postgres:5432/mcpmesh?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      MESH_NAMESPACE: llm-delegation-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+  # Test PT-008: LLM Provider Registration
+  test-pt-008-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-008-provider
+    profiles:
+      - test-pt-008
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-008-provider
+      AGENT_PORT: 9019
+      MCP_MESH_NAMESPACE: llm-delegation-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-mesh-delegation/test_008_provider_registration.py:/app/agent.py:ro
+      - ../llm-mesh-delegation/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9019:9019"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9019/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+  # Test PT-009: Basic Mesh Delegation - Provider
+  test-pt-009-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-009-provider
+    profiles:
+      - test-pt-009
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-009-provider
+      AGENT_PORT: 9020
+      MCP_MESH_NAMESPACE: llm-delegation-test
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-mesh-delegation/test_009_provider.py:/app/agent.py:ro
+      - ../llm-mesh-delegation/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9020:9020"
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9020/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+  # Test PT-009: Basic Mesh Delegation - Consumer
+  test-pt-009-consumer:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.dev
+    container_name: mcp-mesh-test-pt-009-consumer
+    profiles:
+      - test-pt-009
+      - test-pt-all
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: test-pt-009-consumer
+      AGENT_PORT: 9021
+      MCP_MESH_NAMESPACE: llm-delegation-test
+      PYTHONUNBUFFERED: 1
+      MCP_MESH_LOG_LEVEL: DEBUG
+      MCP_MESH_DEBUG_MODE: "true"
+    volumes:
+      - ../../src/runtime/python:/mcp-mesh-runtime:ro
+      - ../llm-mesh-delegation/test_009_consumer.py:/app/agent.py:ro
+      - ../llm-mesh-delegation/prompts:/app/prompts:ro
+    entrypoint: >
+      sh -c "pip install -q -e /mcp-mesh-runtime && python /app/agent.py"
+    ports:
+      - "9021:9021"
+    depends_on:
+      registry:
+        condition: service_healthy
+      test-pt-009-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9021/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-mesh-llm-delegation-test
+
+networks:
+  mcp-mesh-llm-delegation-test:
+    name: mcp-mesh-llm-delegation-test
+    driver: bridge

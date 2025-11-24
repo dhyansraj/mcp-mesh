@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Module-level compiled regex for code fence stripping (compile once, use many times)
 _CODE_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
-# REMOVE_LATER: Regex to extract JSON from code fences in mixed content
+# Regex to extract JSON from code fences in mixed content
 _JSON_BLOCK_PATTERN = re.compile(r"```json\s*\n(.+?)\n```", re.DOTALL)
 
 T = TypeVar("T", bound=BaseModel)
@@ -56,29 +56,12 @@ class ResponseParser:
         """
         logger.debug(f"📝 Parsing response into {output_type.__name__}...")
 
-        # REMOVE_LATER: Debug raw content
-        logger.warning(f"🔍 REMOVE_LATER: Raw content length: {len(content)}")
-        logger.warning(
-            f"🔍 REMOVE_LATER: Raw content (first 500 chars): {content[:500]!r}"
-        )
-        logger.warning(
-            f"🔍 REMOVE_LATER: Raw content (last 200 chars): {content[-200:]!r}"
-        )
-
         try:
-            # REMOVE_LATER: Extract JSON from mixed content (narrative + XML + JSON)
+            # Extract JSON from mixed content (narrative + XML + JSON)
             extracted_content = ResponseParser._extract_json_from_mixed_content(content)
 
             # Strip markdown code fences if present
             cleaned_content = ResponseParser._strip_markdown_fences(extracted_content)
-
-            # REMOVE_LATER: Debug cleaned content
-            logger.warning(
-                f"🔍 REMOVE_LATER: Cleaned content length: {len(cleaned_content)}"
-            )
-            logger.warning(
-                f"🔍 REMOVE_LATER: Cleaned content: {cleaned_content[:500]!r}"
-            )
 
             # Try to parse as JSON
             response_data = ResponseParser._parse_json_with_fallback(
@@ -97,7 +80,7 @@ class ResponseParser:
     @staticmethod
     def _extract_json_from_mixed_content(content: str) -> str:
         """
-        REMOVE_LATER: Extract JSON from mixed content (narrative + XML + JSON).
+        Extract JSON from mixed content (narrative + XML + JSON).
 
         Tries multiple strategies to find JSON in mixed responses:
         1. Find ```json ... ``` code fence blocks
@@ -110,19 +93,10 @@ class ResponseParser:
         Returns:
             Extracted JSON string or original content
         """
-        # REMOVE_LATER: Debug extraction attempt
-        logger.warning(
-            f"🔍 REMOVE_LATER: Attempting JSON extraction from content length: {len(content)}"
-        )
-
         # Strategy 1: Try to find ```json ... ``` blocks
         json_match = _JSON_BLOCK_PATTERN.search(content)
         if json_match:
             extracted = json_match.group(1).strip()
-            logger.warning(
-                f"🔍 REMOVE_LATER: Extracted JSON from code fence, length: {len(extracted)}"
-            )
-            logger.warning(f"🔍 REMOVE_LATER: Extracted content: {extracted[:200]}...")
             return extracted
 
         # Strategy 2: Try to find any JSON object {...} in content
@@ -139,18 +113,9 @@ class ResponseParser:
                     if brace_count == 0:
                         # Found matching brace
                         extracted = content[brace_start : i + 1]
-                        logger.warning(
-                            f"🔍 REMOVE_LATER: Extracted JSON from braces, length: {len(extracted)}"
-                        )
-                        logger.warning(
-                            f"🔍 REMOVE_LATER: Extracted content: {extracted[:200]}..."
-                        )
                         return extracted
 
         # No JSON found, return original
-        logger.warning(
-            "🔍 REMOVE_LATER: No JSON extraction needed, returning original"
-        )
         return content
 
     @staticmethod

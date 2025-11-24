@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from _mcp_mesh.generated.mcp_mesh_registry_client.models.capability_info import CapabilityInfo
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.dependency_resolution_info import DependencyResolutionInfo
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -38,9 +39,10 @@ class AgentInfo(BaseModel):
     capabilities: List[CapabilityInfo]
     total_dependencies: Annotated[int, Field(strict=True, ge=0)] = Field(description="Total number of dependencies required by this agent")
     dependencies_resolved: Annotated[int, Field(strict=True, ge=0)] = Field(description="Number of dependencies that have been resolved")
+    dependency_resolutions: Optional[List[DependencyResolutionInfo]] = Field(default=None, description="List of all dependency resolutions (both resolved and unresolved)")
     last_seen: Optional[datetime] = None
     version: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["id", "name", "agent_type", "status", "endpoint", "capabilities", "total_dependencies", "dependencies_resolved", "last_seen", "version"]
+    __properties: ClassVar[List[str]] = ["id", "name", "agent_type", "status", "endpoint", "capabilities", "total_dependencies", "dependencies_resolved", "dependency_resolutions", "last_seen", "version"]
 
     @field_validator('agent_type')
     def agent_type_validate_enum(cls, value):
@@ -102,6 +104,13 @@ class AgentInfo(BaseModel):
                 if _item_capabilities:
                     _items.append(_item_capabilities.to_dict())
             _dict['capabilities'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in dependency_resolutions (list)
+        _items = []
+        if self.dependency_resolutions:
+            for _item_dependency_resolutions in self.dependency_resolutions:
+                if _item_dependency_resolutions:
+                    _items.append(_item_dependency_resolutions.to_dict())
+            _dict['dependency_resolutions'] = _items
         return _dict
 
     @classmethod
@@ -122,6 +131,7 @@ class AgentInfo(BaseModel):
             "capabilities": [CapabilityInfo.from_dict(_item) for _item in obj["capabilities"]] if obj.get("capabilities") is not None else None,
             "total_dependencies": obj.get("total_dependencies"),
             "dependencies_resolved": obj.get("dependencies_resolved"),
+            "dependency_resolutions": [DependencyResolutionInfo.from_dict(_item) for _item in obj["dependency_resolutions"]] if obj.get("dependency_resolutions") is not None else None,
             "last_seen": obj.get("last_seen"),
             "version": obj.get("version")
         })

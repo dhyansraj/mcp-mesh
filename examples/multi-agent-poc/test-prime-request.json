@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "chat",
+    "arguments": {
+      "messages": [
+        { "role": "user", "content": "Hi! I need help with a Python script." },
+        {
+          "role": "assistant",
+          "content": "{\"message\": \"Hi there! I'd be happy to help you with your Python script. \\n\\nCould you tell me a bit more about what you need? For example:\\n- Are you looking to create a new Python script from scratch?\\n- Do you need help modifying or debugging an existing script?\\n- What should the script do? What problem are you trying to solve?\\n\\nThe more details you can share about what you're working on, the better I can assist you!\", \"action_taken\": \"Asked clarifying questions to understand the user's needs\", \"specialist_used\": null, \"specialist_response\": null}"
+        },
+        {
+          "role": "user",
+          "content": "I need a Python script that calculates prime numbers up to a given limit. Can you create one for me?"
+        }
+      ]
+    }
+  }
+}

@@ -377,6 +377,16 @@ class RegistryClientWrapper:
                 k: v for k, v in metadata.items() if k not in standard_fields
             }
 
+            # DEBUG: Trace kwargs extraction
+            print(f"🔑 REGISTRY WRAPPER DEBUG - Function: {func_name}", flush=True)
+            print(f"🔑 REGISTRY WRAPPER DEBUG - Metadata keys: {list(metadata.keys())}", flush=True)
+            print(f"🔑 REGISTRY WRAPPER DEBUG - kwargs_data: {kwargs_data}", flush=True)
+            print(f"🔑 REGISTRY WRAPPER DEBUG - Vendor in kwargs: {kwargs_data.get('vendor', 'NOT FOUND')}", flush=True)
+
+            # DEBUG: Log kwargs extraction
+            if kwargs_data:
+                self.logger.info(f"🔑 Extracted kwargs for {func_name}: {kwargs_data}")
+
             # Extract inputSchema from FastMCP tool (Phase 2: Schema Collection)
             # First try to get FastMCP server info from DecoratorRegistry
             fastmcp_servers = DecoratorRegistry.get_fastmcp_server_info()
@@ -428,6 +438,32 @@ class RegistryClientWrapper:
                     )
                     break
 
+            # Extract llm_provider from @mesh.llm decorator (v0.6.1: LLM Mesh Delegation)
+            llm_provider_data = None
+
+            for llm_agent_id, llm_metadata in llm_agents.items():
+                if llm_metadata.function.__name__ == func_name:
+                    # Check if provider is a dict (mesh delegation mode)
+                    provider = llm_metadata.config.get("provider")
+                    if isinstance(provider, dict):
+                        # Import generated client model
+                        from _mcp_mesh.generated.mcp_mesh_registry_client.models.llm_provider import (
+                            LLMProvider,
+                        )
+
+                        # Convert dict to LLMProvider model
+                        llm_provider_data = LLMProvider(
+                            capability=provider.get("capability", "llm"),
+                            tags=provider.get("tags", []),
+                            version=provider.get("version", ""),
+                            namespace=provider.get("namespace", "default"),
+                        )
+
+                        self.logger.debug(
+                            f"🔌 Extracted llm_provider for {func_name}: {llm_provider_data.model_dump()}"
+                        )
+                    break
+
             # Create tool registration with llm_filter as separate top-level field (not in kwargs)
             tool_reg = MeshToolRegistration(
                 function_name=func_name,
@@ -437,6 +473,7 @@ class RegistryClientWrapper:
                 dependencies=dep_registrations,
                 description=metadata.get("description"),
                 llm_filter=llm_filter_data,  # Pass llm_filter as top-level parameter
+                llm_provider=llm_provider_data,  # Pass llm_provider as top-level parameter (v0.6.1)
                 input_schema=input_schema,  # Pass inputSchema as top-level parameter (not in kwargs)
                 kwargs=kwargs_data if kwargs_data else None,
             )

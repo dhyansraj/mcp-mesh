@@ -31,6 +31,8 @@ type Capability struct {
 	InputSchema map[string]interface{} `json:"input_schema,omitempty"`
 	// LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to.
 	LlmFilter map[string]interface{} `json:"llm_filter,omitempty"`
+	// LLM provider specification for mesh delegation mode (v0.6.1). When present, this function uses mesh DI to find and delegate LLM calls to a matching provider agent instead of calling LiteLLM directly.
+	LlmProvider map[string]interface{} `json:"llm_provider,omitempty"`
 	// Tags for this capability (e.g., ['prod', 'ml', 'gpu'])
 	Tags []string `json:"tags,omitempty"`
 	// Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration (timeout, retry_count, custom_headers, streaming, auth_required, etc.)
@@ -73,7 +75,7 @@ func (*Capability) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldTags, capability.FieldKwargs, capability.FieldDependencies:
+		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldLlmProvider, capability.FieldTags, capability.FieldKwargs, capability.FieldDependencies:
 			values[i] = new([]byte)
 		case capability.FieldID:
 			values[i] = new(sql.NullInt64)
@@ -142,6 +144,14 @@ func (c *Capability) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &c.LlmFilter); err != nil {
 					return fmt.Errorf("unmarshal field llm_filter: %w", err)
+				}
+			}
+		case capability.FieldLlmProvider:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field llm_provider", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.LlmProvider); err != nil {
+					return fmt.Errorf("unmarshal field llm_provider: %w", err)
 				}
 			}
 		case capability.FieldTags:
@@ -245,6 +255,9 @@ func (c *Capability) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("llm_filter=")
 	builder.WriteString(fmt.Sprintf("%v", c.LlmFilter))
+	builder.WriteString(", ")
+	builder.WriteString("llm_provider=")
+	builder.WriteString(fmt.Sprintf("%v", c.LlmProvider))
 	builder.WriteString(", ")
 	builder.WriteString("tags=")
 	builder.WriteString(fmt.Sprintf("%v", c.Tags))

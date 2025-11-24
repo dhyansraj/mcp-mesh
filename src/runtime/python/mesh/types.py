@@ -3,7 +3,8 @@ MCP Mesh type definitions for dependency injection.
 """
 
 from collections.abc import AsyncIterator
-from typing import Any, Optional, Protocol
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol
 
 try:
     from pydantic_core import core_schema
@@ -243,7 +244,7 @@ class MeshLlmAgent(Protocol):
         """
         ...
 
-    def __call__(self, message: str, **kwargs) -> Any:
+    def __call__(self, message: str | list[dict[str, Any]], **kwargs) -> Any:
         """
         Execute automatic agentic loop and return typed response.
 
@@ -255,7 +256,10 @@ class MeshLlmAgent(Protocol):
         5. Return typed response
 
         Args:
-            message: User message to send to LLM
+            message: Either:
+                - str: Single user message (will be wrapped in messages array)
+                - list[dict]: Full conversation history with messages in format
+                  [{"role": "user|assistant|system", "content": "..."}]
             **kwargs: Additional context passed to LLM (provider-specific)
 
         Returns:
@@ -266,9 +270,18 @@ class MeshLlmAgent(Protocol):
             ValidationError: If LLM response doesn't match output type schema
             ToolExecutionError: If tool execution fails during agentic loop
 
-        Example:
+        Example (single-turn):
             response = llm("Analyze this document: /path/to/file.pdf")
             # Returns ChatResponse(answer="...", confidence=0.95)
+
+        Example (multi-turn):
+            messages = [
+                {"role": "user", "content": "Hello, I need help with Python."},
+                {"role": "assistant", "content": "I'd be happy to help! What do you need?"},
+                {"role": "user", "content": "How do I read a file?"}
+            ]
+            response = llm(messages)
+            # Returns ChatResponse with contextual answer
         """
         ...
 
@@ -371,3 +384,39 @@ except ImportError:
         """Placeholder when Pydantic unavailable."""
 
         pass
+
+
+@dataclass
+class MeshLlmRequest:
+    """
+    Standard LLM request format for mesh-delegated LLM calls.
+
+    This dataclass is used when delegating LLM calls to mesh-registered LLM provider
+    agents via @mesh.llm_provider. It standardizes the request format across the mesh.
+
+    Usage:
+        Provider side (automatic with @mesh.llm_provider):
+            @mesh.llm_provider(model="anthropic/claude-sonnet-4-5", capability="llm")
+            def claude_provider():
+                pass  # Automatically handles MeshLlmRequest
+
+        Consumer side (future with provider=dict):
+            @mesh.llm(provider={"capability": "llm", "tags": ["claude"]})
+            def chat(message: str, llm: MeshLlmAgent = None):
+                return llm(message)  # Converts to MeshLlmRequest internally
+
+    Attributes:
+        messages: List of message dicts with "role" and "content" keys (and optionally "tool_calls")
+        tools: Optional list of tool definitions (MCP format)
+        model_params: Optional parameters to pass to the model (temperature, max_tokens, etc.)
+        context: Optional arbitrary context data for debugging/tracing
+        request_id: Optional request ID for tracking
+        caller_agent: Optional agent name that initiated the request
+    """
+
+    messages: List[Dict[str, Any]]  # Changed from Dict[str, str] to allow tool_calls
+    tools: Optional[List[Dict]] = None
+    model_params: Optional[Dict] = None
+    context: Optional[Dict] = None
+    request_id: Optional[str] = None
+    caller_agent: Optional[str] = None

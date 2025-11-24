@@ -375,6 +375,16 @@ func LlmFilterNotNil() predicate.Capability {
 	return predicate.Capability(sql.FieldNotNull(FieldLlmFilter))
 }
 
+// LlmProviderIsNil applies the IsNil predicate on the "llm_provider" field.
+func LlmProviderIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldLlmProvider))
+}
+
+// LlmProviderNotNil applies the NotNil predicate on the "llm_provider" field.
+func LlmProviderNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldLlmProvider))
+}
+
 // KwargsIsNil applies the IsNil predicate on the "kwargs" field.
 func KwargsIsNil() predicate.Capability {
 	return predicate.Capability(sql.FieldIsNull(FieldKwargs))

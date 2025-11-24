@@ -33,6 +33,9 @@ func (Capability) Fields() []ent.Field {
 		field.JSON("llm_filter", map[string]interface{}{}).
 			Optional().
 			Comment("LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to."),
+		field.JSON("llm_provider", map[string]interface{}{}).
+			Optional().
+			Comment("LLM provider specification for mesh delegation mode (v0.6.1). When present, this function uses mesh DI to find and delegate LLM calls to a matching provider agent instead of calling LiteLLM directly."),
 		field.JSON("tags", []string{}).
 			Default([]string{}).
 			Comment("Tags for this capability (e.g., ['prod', 'ml', 'gpu'])"),

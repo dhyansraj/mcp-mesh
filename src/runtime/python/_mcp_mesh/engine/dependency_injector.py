@@ -302,6 +302,21 @@ class DependencyInjector:
         )
         self._llm_injector.process_llm_tools(llm_tools)
 
+    def process_llm_providers(
+        self, llm_providers: dict[str, dict[str, Any]]
+    ) -> None:
+        """
+        Process llm_providers from registry response and delegate to MeshLlmAgentInjector (v0.6.1).
+
+        Args:
+            llm_providers: Dict mapping function_name -> ResolvedLLMProvider
+                          Format: {"function_name": {"agent_id": "...", "endpoint": "...", ...}}
+        """
+        logger.info(
+            f"🔌 DependencyInjector processing llm_providers for {len(llm_providers)} functions"
+        )
+        self._llm_injector.process_llm_providers(llm_providers)
+
     def update_llm_tools(self, llm_tools: dict[str, list[dict[str, Any]]]) -> None:
         """
         Update llm_tools when topology changes (heartbeat updates).

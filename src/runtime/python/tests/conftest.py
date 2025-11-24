@@ -4,6 +4,17 @@ Pytest configuration for MCP Mesh SDK tests.
 Provides shared fixtures and test configuration across all test modules.
 """
 
+# CRITICAL: Set test environment variables BEFORE any imports
+# This prevents server startups during unit tests caused by @mesh.agent auto_run
+# The issue: mesh/__init__.py now imports helpers.py at module level, changing
+# initialization order. By setting ENV vars here (pytest loads conftest.py FIRST),
+# we ensure they're in place before any mesh code runs.
+import os
+
+os.environ["MCP_MESH_AUTO_RUN"] = "false"
+os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
+os.environ["PYTEST_RUNNING"] = "true"
+
 import asyncio
 import shutil
 import tempfile
@@ -101,7 +112,7 @@ def sample_directory_structure(temp_dir) -> dict:
         "tests": {"test_main.py": "def test_main(): assert True"},
     }
 
-    created_structure = {}
+    created_structure: dict[str, Any] = {}
 
     def create_structure(base_path: Path, struct: dict, result: dict):
         for name, content in struct.items():

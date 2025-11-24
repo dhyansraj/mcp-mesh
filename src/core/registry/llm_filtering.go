@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -91,14 +92,20 @@ func matchFilter(ctx context.Context, client *ent.Client, filter interface{}) ([
 			return nil, err
 		}
 
-		// Apply tag filtering (subset matching)
+		// Apply tag filtering (enhanced matching with +/- operators)
 		if tags, ok := f["tags"]; ok {
-			caps = filterByTags(caps, tags)
+			caps = filterByEnhancedTags(caps, tags)
 		}
 
-		// Apply version constraints
+		// Apply version constraints (uses matchesVersion from ent_service.go)
 		if version, ok := f["version"].(string); ok {
-			caps = filterByVersion(caps, version)
+			var filtered []*ent.Capability
+			for _, cap := range caps {
+				if matchesVersion(cap.Version, version) {
+					filtered = append(filtered, cap)
+				}
+			}
+			caps = filtered
 		}
 
 		return caps, nil
@@ -108,8 +115,11 @@ func matchFilter(ctx context.Context, client *ent.Client, filter interface{}) ([
 	}
 }
 
-// filterByTags filters capabilities where requested tags are a subset of capability tags
-func filterByTags(caps []*ent.Capability, requestedTags interface{}) []*ent.Capability {
+// filterByEnhancedTags filters and scores capabilities using enhanced tag matching
+// Supports +/- operators: + for preference (bonus points), - for exclusion (hard filter)
+// Returns capabilities sorted by score (highest first)
+// Uses matchesEnhancedTags() from ent_service.go for consistency with mesh.tool dependency resolution
+func filterByEnhancedTags(caps []*ent.Capability, requestedTags interface{}) []*ent.Capability {
 	// Convert requested tags to string slice
 	var reqTags []string
 	switch t := requestedTags.(type) {
@@ -129,48 +139,30 @@ func filterByTags(caps []*ent.Capability, requestedTags interface{}) []*ent.Capa
 		return caps
 	}
 
-	var filtered []*ent.Capability
+	// Score each capability using enhanced tag matching (same logic as mesh.tool)
+	type scoredCap struct {
+		cap   *ent.Capability
+		score int
+	}
+	var scored []scoredCap
+
 	for _, cap := range caps {
-		if isSubset(reqTags, cap.Tags) {
-			filtered = append(filtered, cap)
+		// Use the same matchesEnhancedTags() function from ent_service.go
+		matches, score := matchesEnhancedTags(cap.Tags, reqTags)
+		if matches {
+			scored = append(scored, scoredCap{cap: cap, score: score})
 		}
 	}
-	return filtered
-}
 
-// isSubset checks if all elements in 'subset' are present in 'set'
-func isSubset(subset, set []string) bool {
-	setMap := make(map[string]bool)
-	for _, item := range set {
-		setMap[item] = true
-	}
+	// Sort by score descending (highest score first)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
 
-	for _, item := range subset {
-		if !setMap[item] {
-			return false
-		}
-	}
-	return true
-}
-
-// filterByVersion filters capabilities by semantic version constraint
-func filterByVersion(caps []*ent.Capability, versionConstraint string) []*ent.Capability {
-	constraint, err := semver.NewConstraint(versionConstraint)
-	if err != nil {
-		// If constraint is invalid, return all
-		return caps
-	}
-
+	// Extract capabilities in score order
 	var filtered []*ent.Capability
-	for _, cap := range caps {
-		v, err := semver.NewVersion(cap.Version)
-		if err != nil {
-			continue // Skip capabilities with invalid versions
-		}
-
-		if constraint.Check(v) {
-			filtered = append(filtered, cap)
-		}
+	for _, s := range scored {
+		filtered = append(filtered, s.cap)
 	}
 	return filtered
 }

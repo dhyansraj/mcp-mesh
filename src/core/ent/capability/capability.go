@@ -26,6 +26,8 @@ const (
 	FieldInputSchema = "input_schema"
 	// FieldLlmFilter holds the string denoting the llm_filter field in the database.
 	FieldLlmFilter = "llm_filter"
+	// FieldLlmProvider holds the string denoting the llm_provider field in the database.
+	FieldLlmProvider = "llm_provider"
 	// FieldTags holds the string denoting the tags field in the database.
 	FieldTags = "tags"
 	// FieldKwargs holds the string denoting the kwargs field in the database.
@@ -60,6 +62,7 @@ var Columns = []string{
 	FieldDescription,
 	FieldInputSchema,
 	FieldLlmFilter,
+	FieldLlmProvider,
 	FieldTags,
 	FieldKwargs,
 	FieldDependencies,

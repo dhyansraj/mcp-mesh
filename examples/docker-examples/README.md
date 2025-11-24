@@ -104,10 +104,10 @@ curl -s -X POST http://localhost:8081/mcp \
     "id": 1,
     "method": "tools/list",
     "params": {}
-  }' 
+  }'
 
 # FastMCP Agent Tools
-curl -s -X POST http://localhost:8083/mcp/ \
+curl -s -X POST http://localhost:8083/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -118,7 +118,7 @@ curl -s -X POST http://localhost:8083/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq '.result.tools[] | {name: .name, description: .description}'
 
 # System Agent Tools
-curl -s -X POST http://localhost:8082/mcp/ \
+curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -137,7 +137,7 @@ curl -s -X POST http://localhost:8084/mcp \
     "id": 1,
     "method": "tools/list",
     "params": {}
-  }' 
+  }'
 ```
 
 ## Tool Examples
@@ -152,7 +152,7 @@ curl -s -X POST http://localhost:8084/mcp \
 
 ```bash
 # Simple greeting
-curl -s -X POST http://localhost:8081/mcp/ \
+curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -166,7 +166,7 @@ curl -s -X POST http://localhost:8081/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Typed greeting with dependency resolution
-curl -s -X POST http://localhost:8081/mcp/ \
+curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -190,7 +190,7 @@ curl -s -X POST http://localhost:8081/mcp/ \
 
 ```bash
 # Get current time
-curl -s -X POST http://localhost:8083/mcp/ \
+curl -s -X POST http://localhost:8083/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -204,7 +204,7 @@ curl -s -X POST http://localhost:8083/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Math calculation with timestamp
-curl -s -X POST http://localhost:8083/mcp/ \
+curl -s -X POST http://localhost:8083/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -222,7 +222,7 @@ curl -s -X POST http://localhost:8083/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
 # Process data
-curl -s -X POST http://localhost:8083/mcp/ \
+curl -s -X POST http://localhost:8083/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -250,7 +250,7 @@ curl -s -X POST http://localhost:8083/mcp/ \
 
 ```bash
 # Get current time
-curl -s -X POST http://localhost:8082/mcp/ \
+curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -264,7 +264,7 @@ curl -s -X POST http://localhost:8082/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 
 # Get system overview
-curl -s -X POST http://localhost:8082/mcp/ \
+curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -278,7 +278,7 @@ curl -s -X POST http://localhost:8082/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
 # Check system uptime
-curl -s -X POST http://localhost:8082/mcp/ \
+curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -318,10 +318,10 @@ curl -s -X POST http://localhost:8084/mcp \
         "include_system_data": true
       }
     }
-  }' 
+  }'
 
 # Generate report (uses FastMCP agent's time service)
-curl -s -X POST http://localhost:8084/mcp/ \
+curl -s -X POST http://localhost:8084/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -338,7 +338,7 @@ curl -s -X POST http://localhost:8084/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 
 # Analyze data (uses dependency injection for timestamps)
-curl -s -X POST http://localhost:8084/mcp/ \
+curl -s -X POST http://localhost:8084/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{

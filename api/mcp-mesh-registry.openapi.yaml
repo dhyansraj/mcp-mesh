@@ -396,6 +396,13 @@ components:
             Optional LLM tool filter specification when function is decorated with @mesh.llm.
             Defines which tools this LLM agent needs access to.
             Stored as JSON, follows LLMToolFilter schema structure.
+        llm_provider:
+          $ref: "#/components/schemas/LLMProvider"
+          description: |
+            Optional LLM provider specification for mesh delegation mode.
+            When present, this function uses mesh DI to find and delegate LLM calls
+            to a matching provider agent instead of calling LiteLLM directly.
+            🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature).
         kwargs:
           type: object
           additionalProperties: true
@@ -430,6 +437,42 @@ components:
           type: string
           example: ">=1.0.0"
           description: Version constraint
+        namespace:
+          type: string
+          default: "default"
+          example: "default"
+          description: Namespace filter
+      additionalProperties: false
+
+    LLMProvider:
+      type: object
+      required: [capability]
+      description: |
+        LLM provider specification for mesh delegation mode.
+        When @mesh.llm uses provider=dict, the registry resolves a matching LLM provider
+        agent and returns its endpoint in llm_providers response field.
+        🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature).
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          example: "llm"
+          description: Required capability name (typically "llm")
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["claude", "+budget", "-nsfw"]
+          description: |
+            Tags for smart matching with operators:
+            - "tag" = required
+            - "+tag" = preferred
+            - "-tag" = excluded
+        version:
+          type: string
+          example: ">=1.0.0"
+          description: Version constraint (semver format)
         namespace:
           type: string
           default: "default"
@@ -562,6 +605,67 @@ components:
             retry_count: 3
             streaming: false
 
+    ResolvedLLMProvider:
+      type: object
+      required: [name, endpoint, agent_id, capability, status, vendor]
+      description: |
+        Resolved LLM provider information for mesh delegation.
+        Contains all necessary data to create a proxy and delegate LLM calls to this provider.
+        🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: "process_chat"
+          description: Function name of the LLM provider tool
+        endpoint:
+          type: string
+          example: "http://claude-provider:9020"
+          description: Provider agent endpoint for MCP protocol calls
+        agent_id:
+          type: string
+          example: "claude-provider-abc123"
+          description: ID of the provider agent
+        capability:
+          type: string
+          example: "llm"
+          description: Capability name (typically "llm")
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["claude", "sonnet", "production"]
+          description: Provider capability tags
+        version:
+          type: string
+          default: "1.0.0"
+          example: "1.0.0"
+          description: Provider version
+        vendor:
+          type: string
+          minLength: 1
+          example: "anthropic"
+          description: |
+            LLM vendor/provider name extracted from model string.
+            Used by consumer to select appropriate ProviderHandler for optimal LLM interaction.
+            Automatically extracted using LiteLLM's get_llm_provider() function during provider registration.
+            Common values: "anthropic", "openai", "google", "cohere", "ollama", "together", etc.
+        status:
+          type: string
+          enum: [available, unavailable, degraded]
+          example: "available"
+          description: Current status of the provider
+        kwargs:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional proxy configuration (timeout, retry, etc.).
+            Passed to UnifiedMCPProxy for enhanced client behavior.
+          example:
+            timeout: 120
+            retry_count: 2
+
     MeshRegistrationResponse:
       type: object
       required: [status, timestamp, message, agent_id]
@@ -649,6 +753,24 @@ components:
                 tags: ["search", "web"]
                 version: "1.0.0"
                 endpoint: "http://search-agent:8080"
+        llm_providers:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ResolvedLLMProvider"
+          description: |
+            Map of function_name to resolved LLM provider for mesh delegation.
+            Populated only when tool includes llm_provider specification.
+            Registry resolves matching LLM provider agent based on capability/tags/version.
+            🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature).
+          example:
+            "chat":
+              name: "process_chat"
+              endpoint: "http://claude-provider:9020"
+              agent_id: "claude-provider-abc123"
+              capability: "llm"
+              tags: ["claude", "sonnet", "production"]
+              version: "1.0.0"
+              status: "available"
 
     # Core response schemas
     HealthResponse:

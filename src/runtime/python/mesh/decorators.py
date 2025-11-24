@@ -365,6 +365,13 @@ def tool(
         # Store metadata on function
         target._mesh_tool_metadata = metadata
 
+        # DEBUG: Trace vendor in metadata
+        print(f"🔍 DECORATOR DEBUG - Function: {target.__name__}", flush=True)
+        print(f"🔍 DECORATOR DEBUG - Metadata keys: {list(metadata.keys())}", flush=True)
+        print(f"🔍 DECORATOR DEBUG - Vendor value: {metadata.get('vendor', 'NOT FOUND')}", flush=True)
+        extra_kwargs = {k: v for k, v in metadata.items() if k not in ['capability', 'tags', 'version', 'dependencies', 'description']}
+        print(f"🔍 DECORATOR DEBUG - Full kwargs: {extra_kwargs}", flush=True)
+
         # Register with DecoratorRegistry for processor discovery (will be updated with wrapper if needed)
         DecoratorRegistry.register_mesh_tool(target, metadata)
 
@@ -936,7 +943,7 @@ def llm(
     filter: dict[str, Any] | list[dict[str, Any] | str] | str | None = None,
     *,
     filter_mode: str = "all",
-    provider: str = "claude",
+    provider: str | dict[str, Any] = "claude",
     model: str | None = None,
     api_key: str | None = None,
     max_iterations: int = 10,
@@ -983,9 +990,11 @@ def llm(
     Args:
         filter: Tool filter (string, dict, or list of mixed)
         filter_mode: Filter mode ("all", "best_match", "*")
-        provider: LLM provider ("claude", "openai", "custom")
-        model: Model name (can be overridden by MESH_LLM_MODEL)
-        api_key: API key (can be overridden by provider-specific env vars)
+        provider: LLM provider (string like "claude" for direct LiteLLM, or dict for mesh delegation)
+                  Mesh delegation format: {"capability": "llm", "tags": ["claude"], "version": ">=1.0.0"}
+                  When dict: Uses mesh DI to resolve provider agent instead of calling LiteLLM directly
+        model: Model name (can be overridden by MESH_LLM_MODEL) - only used with string provider
+        api_key: API key (can be overridden by provider-specific env vars) - only used with string provider
         max_iterations: Max agentic loop iterations (can be overridden by MESH_LLM_MAX_ITERATIONS)
         system_prompt: Default system prompt
         system_prompt_file: Path to Jinja2 template file
@@ -1035,6 +1044,18 @@ def llm(
                 f"Context parameter will be ignored."
             )
 
+        # Handle provider config: dict (mesh delegation) or string (direct LiteLLM)
+        # If provider is dict, don't allow env var override (explicit mesh delegation)
+        if isinstance(provider, dict):
+            resolved_provider = provider
+        else:
+            resolved_provider = get_config_value(
+                "MESH_LLM_PROVIDER",
+                override=provider,
+                default="claude",
+                rule=ValidationRule.STRING_RULE,
+            )
+
         resolved_config = {
             "filter": filter,
             "filter_mode": get_config_value(
@@ -1043,12 +1064,7 @@ def llm(
                 default="all",
                 rule=ValidationRule.STRING_RULE,
             ),
-            "provider": get_config_value(
-                "MESH_LLM_PROVIDER",
-                override=provider,
-                default="claude",
-                rule=ValidationRule.STRING_RULE,
-            ),
+            "provider": resolved_provider,
             "model": get_config_value(
                 "MESH_LLM_MODEL",
                 override=model,

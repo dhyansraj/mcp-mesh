@@ -163,6 +163,10 @@ cython_debug/
 # VS Code
 .vscode/
 
+# Other IDEs/Tools
+.emigo_repomap/
+.windsurf/
+
 # MCP Mesh specific
 *.mcpconfig
 .mcpconfig/

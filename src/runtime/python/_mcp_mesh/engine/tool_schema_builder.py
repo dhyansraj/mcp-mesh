@@ -91,8 +91,9 @@ class ToolSchemaBuilder:
             },
         }
 
-        # OpenAPI spec uses "inputSchema" (camelCase) - enforce strict contract
-        input_schema = tool.get("inputSchema")
+        # Registry returns "input_schema" (snake_case) in JSON
+        # Note: Pydantic model has alias="inputSchema" but we receive raw dicts
+        input_schema = tool.get("input_schema")
         if input_schema:
             tool_schema["function"]["parameters"] = input_schema
 
