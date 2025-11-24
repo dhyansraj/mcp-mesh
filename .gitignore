@@ -166,6 +166,7 @@ cython_debug/
 # Other IDEs/Tools
 .emigo_repomap/
 .windsurf/
+.windsurfrules
 
 # MCP Mesh specific
 *.mcpconfig

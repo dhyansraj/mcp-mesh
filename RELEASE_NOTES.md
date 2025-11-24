@@ -1,5 +1,29 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.0...v0.6.1)
+
+## v0.6.1 (2025-11-24)
+
+### 🎯 Health Check Support
+
+- **Custom Health Check Decorator**: New `@mesh.health_check()` decorator for defining agent health logic
+- **Kubernetes-Compatible Endpoints**: Added `/health`, `/ready`, `/live`, `/startup`, and `/metrics` endpoints
+- **TTL-Based Caching**: Per-key TTL support (default 15s) for health check results to reduce overhead
+- **Flexible Return Types**: Support for bool, dict, and HealthStatus return types from health check functions
+
+### 📊 Features
+
+- K8s-compatible health endpoints with automatic health status aggregation
+- Automatic DEGRADED status on health check exceptions for resilience
+- DecoratorRegistry integration for efficient health status storage
+- Comprehensive test coverage with 239 new test lines
+
+### 🐛 Bug Fixes
+
+- Fixed TTL cache expiration behavior by implementing manual per-key expiry tracking
+- Updated test assertions for DEBUG level logging (was INFO)
+- Removed IDE-specific files from version control (.emigo_repomap, .windsurf, .windsurfrules)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.5.7...v0.6.0)
 
 ## v0.6.0 (2025-11-20)
