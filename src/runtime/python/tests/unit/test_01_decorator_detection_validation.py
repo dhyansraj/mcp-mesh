@@ -130,12 +130,16 @@ class TestMeshAgentDetection:
         clear_debounce_coordinator()
 
         # Clear environment variables that may be auto-set by runtime initialization
+        # CRITICAL: Don't clear MCP_MESH_AUTO_RUN or MCP_MESH_HTTP_ENABLED - conftest.py
+        # sets these to "false" to prevent server startups during tests. Removing them
+        # causes decorators to fall back to MeshDefaults.AUTO_RUN = True, starting
+        # uvicorn servers and making tests take 2-3s each (19+ minutes for 750 tests).
         env_vars = [
             "MCP_MESH_NAMESPACE",
-            "MCP_MESH_AUTO_RUN",
+            # "MCP_MESH_AUTO_RUN",  # Don't clear - needed to prevent server startup
             "MCP_MESH_AUTO_RUN_INTERVAL",
             "MCP_MESH_HEALTH_INTERVAL",
-            "MCP_MESH_HTTP_ENABLED",
+            # "MCP_MESH_HTTP_ENABLED",  # Don't clear - needed to prevent HTTP server
         ]
         for var in env_vars:
             os.environ.pop(var, None)
