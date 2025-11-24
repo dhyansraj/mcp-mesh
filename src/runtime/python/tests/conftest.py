@@ -10,10 +10,15 @@ Provides shared fixtures and test configuration across all test modules.
 # initialization order. By setting ENV vars here (pytest loads conftest.py FIRST),
 # we ensure they're in place before any mesh code runs.
 import os
+import sys
 
 os.environ["MCP_MESH_AUTO_RUN"] = "false"
 os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
 os.environ["PYTEST_RUNNING"] = "true"
+
+# Debug: Print to confirm ENV vars are set (will appear in CI logs)
+print(f"[CONFTEST] MCP_MESH_AUTO_RUN={os.environ.get('MCP_MESH_AUTO_RUN')}", file=sys.stderr)
+print(f"[CONFTEST] PYTEST_RUNNING={os.environ.get('PYTEST_RUNNING')}", file=sys.stderr)
 
 import asyncio
 import shutil

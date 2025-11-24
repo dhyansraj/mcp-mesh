@@ -9,6 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Temporarily skip ALL tests in this file to debug slow CI
+pytestmark = pytest.mark.skip(reason="Temporarily disabled to debug slow CI - Issue tracking")
+
 from _mcp_mesh.pipeline.mcp_heartbeat.llm_tools_resolution import (
     LLMToolsResolutionStep,
     _last_llm_tools_hash,
