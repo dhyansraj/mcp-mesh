@@ -228,11 +228,10 @@ class APIDependencyResolutionStep(PipelineStep):
 
             # Import here to avoid circular imports
             from ...engine.dependency_injector import get_global_injector
-            from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-            from ...engine.mcp_client_proxy import (
-                EnhancedMCPClientProxy,
-                MCPClientProxy,
-            )
+            from ...engine.full_mcp_proxy import (EnhancedFullMCPProxy,
+                                                  FullMCPProxy)
+            from ...engine.mcp_client_proxy import (EnhancedMCPClientProxy,
+                                                    MCPClientProxy)
 
             injector = get_global_injector()
 
@@ -289,13 +288,16 @@ class APIDependencyResolutionStep(PipelineStep):
                         # Import here to avoid circular imports
                         import os
 
-                        from ...engine.self_dependency_proxy import SelfDependencyProxy
-                        from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+                        from ...engine.self_dependency_proxy import \
+                            SelfDependencyProxy
+                        from ...engine.unified_mcp_proxy import \
+                            EnhancedUnifiedMCPProxy
 
                         # Get current agent ID for self-dependency detection
                         current_agent_id = None
                         try:
-                            from ...engine.decorator_registry import DecoratorRegistry
+                            from ...engine.decorator_registry import \
+                                DecoratorRegistry
 
                             config = DecoratorRegistry.get_resolved_agent_config()
                             current_agent_id = config["agent_id"]
@@ -328,18 +330,48 @@ class APIDependencyResolutionStep(PipelineStep):
                         )
 
                         if is_self_dependency:
-                            # Note: Self-dependencies are unusual for API services but we handle them
-                            self.logger.warning(
-                                f"⚠️ API SELF-DEPENDENCY detected for '{capability}' - "
-                                f"this is unusual for API services. Consider refactoring."
-                            )
-                            # For API services, we don't have access to original functions in the same way
-                            # Fall back to unified proxy (same as cross-service)
-                            new_proxy = EnhancedUnifiedMCPProxy(
-                                endpoint,
-                                dep_function_name,
-                                kwargs_config=kwargs_config,
-                            )
+                            # Create self-dependency proxy with WRAPPER function (not original)
+                            # The wrapper has dependency injection logic, so calling it ensures
+                            # the target function's dependencies are also injected properly.
+                            wrapper_func = None
+                            if dep_function_name in mesh_tools:
+                                wrapper_func = mesh_tools[dep_function_name].function
+                                self.logger.debug(
+                                    f"🔍 Found wrapper for '{dep_function_name}' in DecoratorRegistry"
+                                )
+
+                            if wrapper_func:
+                                new_proxy = SelfDependencyProxy(
+                                    wrapper_func, dep_function_name
+                                )
+                                self.logger.info(
+                                    f"🔄 API SELF-DEPENDENCY: Using wrapper for '{capability}' "
+                                    f"(local call with full DI support)"
+                                )
+                            else:
+                                # Fallback to original function if wrapper not found
+                                original_func = injector.find_original_function(
+                                    dep_function_name
+                                )
+                                if original_func:
+                                    new_proxy = SelfDependencyProxy(
+                                        original_func, dep_function_name
+                                    )
+                                    self.logger.warning(
+                                        f"⚠️ API SELF-DEPENDENCY: Using original function for '{capability}' "
+                                        f"(wrapper not found, DI may not work for nested deps)"
+                                    )
+                                else:
+                                    self.logger.warning(
+                                        f"⚠️ API SELF-DEPENDENCY: Cannot create SelfDependencyProxy for '{capability}', "
+                                        f"falling back to HTTP (may cause issues)"
+                                    )
+                                    # Fall back to unified proxy (same as cross-service)
+                                    new_proxy = EnhancedUnifiedMCPProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
                         else:
                             # Create cross-service proxy using unified proxy (same as MCP pipeline)
                             new_proxy = EnhancedUnifiedMCPProxy(
@@ -450,7 +482,8 @@ class APIDependencyResolutionStep(PipelineStep):
             Proxy instance
         """
         from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-        from ...engine.mcp_client_proxy import EnhancedMCPClientProxy, MCPClientProxy
+        from ...engine.mcp_client_proxy import (EnhancedMCPClientProxy,
+                                                MCPClientProxy)
 
         if proxy_type == "FullMCPProxy":
             # Use enhanced proxy if kwargs available

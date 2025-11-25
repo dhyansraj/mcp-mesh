@@ -8,15 +8,13 @@ response processing without making actual dependency injections.
 
 import hashlib
 import json
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import (
-    DependencyResolutionStep,
-)
+from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import \
+    DependencyResolutionStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -795,7 +793,7 @@ class TestRewiring:
             }
         }
 
-        caplog.set_level(logging.WARNING)
+        caplog.set_level(logging.INFO)
 
         # Mock DecoratorRegistry to return the same agent_id as in heartbeat response
         # Also need to mock get_mesh_tools for composite key mapping
@@ -806,13 +804,23 @@ class TestRewiring:
             mock_decorator_registry.get_resolved_agent_config.return_value = mock_config
 
             # Mock get_mesh_tools to return tool name -> function mapping
+            # Include both function1 (for func_id mapping) and tool1_impl (for wrapper lookup)
             mock_func = MagicMock()
             mock_func.__module__ = "test_module"
             mock_func.__qualname__ = "test_function"
             mock_decorated = MagicMock()
             mock_decorated.function = mock_func
+
+            # Mock wrapper function for tool1_impl (the dep_function_name)
+            mock_wrapper_func = MagicMock()
+            mock_wrapper_func.__module__ = "test_module"
+            mock_wrapper_func.__qualname__ = "wrapper_function"
+            mock_wrapper_decorated = MagicMock()
+            mock_wrapper_decorated.function = mock_wrapper_func
+
             mock_decorator_registry.get_mesh_tools.return_value = {
-                "function1": mock_decorated
+                "function1": mock_decorated,
+                "tool1_impl": mock_wrapper_decorated,  # Wrapper for self-dep lookup
             }
 
             with patch(
@@ -823,9 +831,10 @@ class TestRewiring:
 
                 await step.process_heartbeat_response_for_rewiring(heartbeat_response)
 
-                assert "SELF-DEPENDENCY: Using direct function call" in caplog.text
+                # Updated: Now uses wrapper instead of original function
+                assert "SELF-DEPENDENCY: Using wrapper for" in caplog.text
                 mock_self_proxy.assert_called_once_with(
-                    mock_original_func, "tool1_impl"
+                    mock_wrapper_func, "tool1_impl"  # Now expects wrapper, not original
                 )
                 # Now expects composite key format: "func_id:dep_0"
                 mock_injector.register_dependency.assert_called_once_with(

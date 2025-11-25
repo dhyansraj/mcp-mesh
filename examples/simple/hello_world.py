@@ -83,6 +83,79 @@ async def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
         return f"👋 Hello from smart MCP Mesh! (Error getting info: {e})"
 
 
+# ===== SELF-DEPENDENCY TEST =====
+# Tests that self-dependencies properly inject nested cross-agent dependencies
+
+
+@app.tool()
+@mesh.tool(
+    capability="self_dep_test",
+    dependencies=["advanced_greeting"],  # Self-dependency: same agent!
+    description="Test self-dependency with nested cross-agent dependency",
+)
+async def test_self_dependency(
+    advanced_greeting: mesh.McpMeshAgent | None = None,
+) -> dict[str, Any]:
+    """
+    Test self-dependency injection with nested dependencies.
+
+    This tool depends on 'advanced_greeting' which is in the SAME agent (hello_world).
+    'advanced_greeting' in turn depends on 'info' from system_agent (cross-agent).
+
+    Test chain:
+        test_self_dependency (hello_world)
+            → [SELF-DEP via wrapper] advanced_greeting (hello_world)
+                → [CROSS-DEP via HTTP] info (system_agent)
+
+    If self-dependency uses the WRAPPER (not original function), then:
+    - advanced_greeting's 'info' parameter will be injected
+    - The call to system_agent will work
+
+    If self-dependency uses the ORIGINAL function:
+    - advanced_greeting's 'info' parameter will be None
+    - The response will say "info service not available"
+    """
+    result = {
+        "test_name": "self_dependency_with_nested_cross_agent",
+        "self_dep_target": "advanced_greeting",
+        "nested_dep": "info (from system_agent)",
+        "advanced_greeting_result": "not_available",
+        "test_passed": False,
+    }
+
+    if advanced_greeting is None:
+        result["error"] = "advanced_greeting not injected (self-dep failed)"
+        return result
+
+    try:
+        # Call advanced_greeting - this goes through SelfDependencyProxy
+        # If wrapper is used: info will be injected, we get system info
+        # If original is used: info will be None, we get "not available" message
+        greeting = await advanced_greeting()
+        result["advanced_greeting_result"] = greeting
+
+        # Check if the nested dependency worked
+        if "not available" in greeting.lower():
+            result["test_passed"] = False
+            result["diagnosis"] = (
+                "FAIL: Nested 'info' dependency was not injected. SelfDependencyProxy may be using original function instead of wrapper."
+            )
+        elif "Server:" in greeting and "Uptime:" in greeting:
+            result["test_passed"] = True
+            result["diagnosis"] = (
+                "PASS: Nested 'info' dependency was properly injected via wrapper!"
+            )
+        else:
+            result["test_passed"] = False
+            result["diagnosis"] = f"UNKNOWN: Unexpected response format: {greeting}"
+
+    except Exception as e:
+        result["error"] = str(e)
+        result["diagnosis"] = f"FAIL: Exception during self-dep call: {e}"
+
+    return result
+
+
 # ===== DEPENDENCY TEST FUNCTION =====
 # Shows multiple dependencies with different typing approaches
 
