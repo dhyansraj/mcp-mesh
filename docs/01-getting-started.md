@@ -78,7 +78,8 @@ docker-compose up
 # 3. Test it (in another terminal)
 curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
 ```
 
 **Expected response:**
@@ -115,7 +116,8 @@ python hello_world.py &
 # 5. Test it
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
 ```
 
 ## Alternative: Linux/macOS Install Script (3 Minutes)
@@ -141,7 +143,8 @@ python hello_world.py &
 # 5. Test it
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
 ```
 
 ## Alternative: Local Development (5 Minutes)

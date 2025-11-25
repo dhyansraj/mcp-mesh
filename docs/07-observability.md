@@ -87,17 +87,10 @@ Python agents automatically participate in distributed tracing when the registry
 curl http://localhost:8000/trace/status
 
 # Make a test call to generate traces
-curl -X POST http://localhost:9093/mcp \
+curl -s -X POST http://localhost:9093/mcp \
   -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "generate_report",
-      "arguments": {"title": "Test Report"}
-    }
-  }'
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"generate_report","arguments":{"title":"Test Report"}}}'
 
 # Check completed traces (after ~1 minute)
 curl http://localhost:8000/trace/list | jq .
