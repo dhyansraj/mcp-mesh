@@ -19,6 +19,35 @@ from .unified_mcp_proxy import UnifiedMCPProxy
 logger = logging.getLogger(__name__)
 
 
+def extract_vendor_from_model(model: str) -> str | None:
+    """
+    Extract vendor name from LiteLLM model string.
+
+    LiteLLM uses vendor/model format (e.g., "anthropic/claude-sonnet-4-5").
+    This extracts the vendor for provider handler selection.
+
+    Args:
+        model: LiteLLM model string
+
+    Returns:
+        Vendor name (e.g., "anthropic", "openai") or None if not extractable
+
+    Examples:
+        "anthropic/claude-sonnet-4-5" -> "anthropic"
+        "openai/gpt-4o" -> "openai"
+        "gpt-4" -> None (no vendor prefix)
+    """
+    if not model:
+        return None
+
+    if "/" in model:
+        vendor = model.split("/")[0].lower().strip()
+        logger.debug(f"🔍 Extracted vendor '{vendor}' from model '{model}'")
+        return vendor
+
+    return None
+
+
 class MeshLlmAgentInjector(BaseInjector):
     """
     Manages dynamic injection of MeshLlmAgent proxies.
@@ -86,9 +115,7 @@ class MeshLlmAgentInjector(BaseInjector):
                     exc_info=True,
                 )
 
-    def process_llm_providers(
-        self, llm_providers: dict[str, dict[str, Any]]
-    ) -> None:
+    def process_llm_providers(self, llm_providers: dict[str, dict[str, Any]]) -> None:
         """
         Process llm_providers from registry response (v0.6.1 mesh delegation).
 
@@ -181,9 +208,7 @@ class MeshLlmAgentInjector(BaseInjector):
         """
         function_name = provider_data.get("name")
         if not function_name:
-            raise ValueError(
-                f"Provider missing required 'name' field: {provider_data}"
-            )
+            raise ValueError(f"Provider missing required 'name' field: {provider_data}")
 
         endpoint = provider_data.get("endpoint")
         if not endpoint:
@@ -493,6 +518,19 @@ class MeshLlmAgentInjector(BaseInjector):
         is_template = config_dict.get("is_template", False)
         template_path = config_dict.get("template_path")
 
+        # Determine vendor for provider handler selection
+        # Priority: 1) From registry (mesh delegation), 2) From model name, 3) None
+        vendor = llm_agent_data.get("vendor")
+        if not vendor:
+            # For direct LiteLLM calls, extract vendor from model name
+            # e.g., "anthropic/claude-sonnet-4-5" -> "anthropic"
+            model = config_dict.get("model", "")
+            vendor = extract_vendor_from_model(model)
+            if vendor:
+                logger.info(
+                    f"🔍 Extracted vendor '{vendor}' from model '{model}' for handler selection"
+                )
+
         # Create MeshLlmAgent with both metadata and proxies
         llm_agent = MeshLlmAgent(
             config=llm_config,
@@ -503,14 +541,20 @@ class MeshLlmAgentInjector(BaseInjector):
             tool_proxies=llm_agent_data["tools_proxies"],  # Proxies for execution
             template_path=template_path if is_template else None,
             context_value=context_value if is_template else None,
-            provider_proxy=llm_agent_data.get("provider_proxy"),  # Provider proxy for mesh delegation
-            vendor=llm_agent_data.get("vendor"),  # Phase 2: Vendor for provider handler selection
+            provider_proxy=llm_agent_data.get(
+                "provider_proxy"
+            ),  # Provider proxy for mesh delegation
+            vendor=vendor,  # Vendor for provider handler selection (from registry or model name)
         )
 
         logger.debug(
             f"🤖 Created MeshLlmAgent for {function_id} with {len(llm_agent_data['tools_metadata'])} tools"
             + (f", template={template_path}" if is_template else "")
-            + (f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}" if isinstance(config_dict.get("provider"), dict) else "")
+            + (
+                f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}"
+                if isinstance(config_dict.get("provider"), dict)
+                else ""
+            )
         )
 
         return llm_agent

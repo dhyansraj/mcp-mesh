@@ -118,12 +118,14 @@ meshctl list agents
 # 3. Test basic functionality
 curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "hello_mesh_simple", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
 
 # 4. Test dependency injection
 curl -s -X POST http://localhost:8082/mcp \
   -H "Content-Type: application/json" \
-  -d '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {}}}' | jq .
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}' | jq .
 ```
 
 **Expected Results**:
