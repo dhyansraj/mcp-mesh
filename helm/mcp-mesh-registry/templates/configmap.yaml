@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-mesh-registry.fullname" . }}-config
+  labels:
+    {{- include "mcp-mesh-registry.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  # Database configuration - matches working K8s examples
+  DATABASE_TYPE: {{ .Values.registry.database.type | quote }}
+  {{- if eq .Values.registry.database.type "sqlite" }}
+  DATABASE_PATH: {{ .Values.registry.database.path | quote }}
+  {{- else }}
+  DATABASE_HOST: {{ .Values.registry.database.host | quote }}
+  DATABASE_PORT: {{ .Values.registry.database.port | quote }}
+  DATABASE_NAME: {{ .Values.registry.database.name | quote }}
+  DATABASE_USERNAME: {{ .Values.registry.database.username | quote }}
+  {{- end }}
+
+  # Registry server configuration - matches working K8s examples
+  HOST: {{ .Values.registry.host | quote }}
+  PORT: {{ .Values.registry.port | quote }}
+
+  # Logging configuration - matches working K8s examples
+  MCP_MESH_LOG_LEVEL: {{ .Values.registry.logging.level | default "DEBUG" | quote }}
+  MCP_MESH_DEBUG_MODE: {{ .Values.registry.logging.debug | default "true" | quote }}
+
+  # Connection pool configuration
+  DB_CONNECTION_TIMEOUT: "30"
+  DB_MAX_OPEN_CONNECTIONS: "25"
+  DB_MAX_IDLE_CONNECTIONS: "5"
+  DB_CONN_MAX_LIFETIME: "300"
+
+  # Performance/heartbeat configuration
+  DEFAULT_TIMEOUT_THRESHOLD: {{ .Values.registry.performance.timeoutThreshold | default "20" | quote }}
+  HEALTH_CHECK_INTERVAL: {{ .Values.registry.performance.healthCheckInterval | default "10" | quote }}
+  DEFAULT_EVICTION_THRESHOLD: {{ .Values.registry.performance.evictionThreshold | default "60" | quote }}
+
+  # Registry identification
+  REGISTRY_NAME: {{ .Values.registry.name | default "mcp-mesh-registry" | quote }}
+
+  # Observability configuration - matches Docker setup
+  MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.registry.observability.distributedTracing.enabled | default "true" | quote }}
+  TELEMETRY_ENDPOINT: {{ .Values.registry.observability.telemetryEndpoint | default "tempo:4317" | quote }}
