@@ -41,41 +41,41 @@ class MyAgent:
 
 <div class="grid cards" markdown>
 
--   :electric_plug: **Zero Boilerplate**
+- :electric_plug: **Zero Boilerplate**
 
-    ---
+  ***
 
-    Two decorators replace hundreds of lines of networking code. Just write business logic.
+  Two decorators replace hundreds of lines of networking code. Just write business logic.
 
--   :dart: **Smart Discovery**
+- :dart: **Smart Discovery**
 
-    ---
+  ***
 
-    Tag-based service resolution with version constraints. Agents automatically find dependencies.
+  Tag-based service resolution with version constraints. Agents automatically find dependencies.
 
--   :material-kubernetes: **Kubernetes Native**
+- :material-kubernetes: **Kubernetes Native**
 
-    ---
+  ***
 
-    Production-ready Helm charts with horizontal scaling, health checks, and observability.
+  Production-ready Helm charts with horizontal scaling, health checks, and observability.
 
--   :arrows_counterclockwise: **Dynamic Updates**
+- :arrows_counterclockwise: **Dynamic Updates**
 
-    ---
+  ***
 
-    Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
+  Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
 
--   :bar_chart: **Built-in Observability**
+- :bar_chart: **Built-in Observability**
 
-    ---
+  ***
 
-    Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
+  Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
 
--   :shield: **Enterprise Ready**
+- :shield: **Enterprise Ready**
 
-    ---
+  ***
 
-    Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
+  Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
 
 </div>
 
@@ -134,13 +134,13 @@ class MyAgent:
 
 ## :chart_with_upwards_trend: MCP vs MCP Mesh
 
-| Challenge | Traditional MCP | MCP Mesh |
-|-----------|----------------|----------|
-| **Connect 5 servers** | 200+ lines of networking code | 2 decorators |
-| **Handle failures** | Manual error handling everywhere | Automatic graceful degradation |
-| **Scale to production** | Custom Kubernetes setup | `helm install mcp-mesh` |
-| **Monitor system** | Build custom dashboards | Built-in observability stack |
-| **Add new capabilities** | Restart and reconfigure clients | Auto-discovery, zero downtime |
+| Challenge                | Traditional MCP                  | MCP Mesh                       |
+| ------------------------ | -------------------------------- | ------------------------------ |
+| **Connect 5 servers**    | 200+ lines of networking code    | 2 decorators                   |
+| **Handle failures**      | Manual error handling everywhere | Automatic graceful degradation |
+| **Scale to production**  | Custom Kubernetes setup          | `helm install mcp-mesh`        |
+| **Monitor system**       | Build custom dashboards          | Built-in observability stack   |
+| **Add new capabilities** | Restart and reconfigure clients  | Auto-discovery, zero downtime  |
 
 ---
 
@@ -162,8 +162,8 @@ class MyAgent:
 === "Docker"
 
     ```bash
-    docker pull mcpmesh/registry:0.5.6
-    docker pull mcpmesh/python-runtime:0.5.6
+    docker pull mcpmesh/registry:0.6.2
+    docker pull mcpmesh/python-runtime:0.6.2
     ```
 
 ---
@@ -179,7 +179,7 @@ class MyAgent:
 
 ## :star: Project Status
 
-- **Latest Release**: v0.5.6 (September 2025)
+- **Latest Release**: v0.6.2 (November 2025)
 - **License**: MIT
 - **Language**: Python 3.11+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

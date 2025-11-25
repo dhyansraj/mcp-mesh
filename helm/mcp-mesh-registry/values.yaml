@@ -1,0 +1,318 @@
+# Default values for mcp-mesh-registry
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Use Deployment for stateless registry
+replicaCount: 1
+workloadType: "Deployment" # Registry is stateless
+
+image:
+  repository: mcpmesh/registry # Updated for registry
+  pullPolicy: IfNotPresent # For production use
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "0.5"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+
+service:
+  type: ClusterIP
+  port: 8000 # Registry uses port 8000 (matches working examples)
+  targetPort: 8000
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: mcp-registry.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Registry-specific configuration
+registry:
+  # Registry name for identification
+  name: "mcp-mesh-registry"
+
+  # Host address for the registry
+  host: "0.0.0.0"
+  # Port for the registry service (matches working examples)
+  port: 8000
+
+  # Database configuration
+  database:
+    # Database path (for SQLite)
+    path: "/data/registry.db"
+    # Database type (sqlite, postgres, mysql)
+    type: "postgres" # Default to postgres like working examples
+    # For external databases (postgres/mysql)
+    host: "mcp-mesh-postgres" # Matches working examples
+    port: 5432
+    name: "mcpmesh" # Matches working examples
+    username: "mcpmesh" # Matches working examples
+    password: ""
+    # Use existing secret for database credentials
+    existingSecret: ""
+    # Keys in the secret
+    existingSecretUsernameKey: "username"
+    existingSecretPasswordKey: "password"
+
+  # Logging configuration (matches K8s examples)
+  logging:
+    level: "DEBUG" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    format: "json" # json or text
+    debug: "true" # Enable debug mode
+
+  # Health check configuration
+  healthCheck:
+    enabled: true
+    interval: 30
+    timeout: 10
+
+  # Performance tuning (matches K8s examples)
+  performance:
+    maxConnections: 1000
+    connectionTimeout: 30
+    requestTimeout: 60
+    # Fast heartbeat optimization
+    timeoutThreshold: 20
+    healthCheckInterval: 10
+    evictionThreshold: 60
+
+  # Security configuration
+  security:
+    # Enable TLS
+    tls:
+      enabled: false
+      certFile: ""
+      keyFile: ""
+      # Use existing TLS secret
+      existingSecret: ""
+      certKey: "tls.crt"
+      keyKey: "tls.key"
+
+    # Authentication
+    auth:
+      enabled: false
+      type: "token" # token, basic, oauth2
+      # For token auth
+      tokens: []
+      # Use existing secret for tokens
+      existingSecret: ""
+      secretKey: "tokens"
+
+  # Observability configuration - matches Docker setup
+  observability:
+    distributedTracing:
+      enabled: true
+    telemetryEndpoint: "tempo:4317"
+
+    # CORS configuration
+    cors:
+      enabled: true
+      allowedOrigins:
+        - "*"
+      allowedMethods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowedHeaders:
+        - "*"
+      allowCredentials: true
+
+# Persistence configuration (disabled for stateless registry)
+persistence:
+  enabled: false # Registry is stateless and uses external database
+  # Storage class name
+  storageClass: ""
+  # Access mode
+  accessMode: ReadWriteOnce
+  # Size of the volume
+  size: 10Gi
+  # Existing PVC to use
+  existingClaim: ""
+  # Annotations for the PVC
+  annotations: {}
+  # Mount path
+  mountPath: /data
+  # Subpath within the volume
+  subPath: ""
+
+# Environment variables
+env: []
+  # - name: CUSTOM_ENV_VAR
+  #   value: "custom_value"
+
+# Environment variables from ConfigMaps or Secrets
+envFrom: []
+  # - configMapRef:
+  #     name: special-config
+  # - secretRef:
+  #     name: special-secret
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health # Matches working examples
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Network policies
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: mcp-mesh
+        - podSelector:
+            matchLabels:
+              app: mcp-agent
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 5432
+
+# Service Monitor for Prometheus
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  honorLabels: true
+  metricRelabelings: []
+  relabelings: []
+
+# Pod Monitor for Prometheus
+podMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  honorLabels: true
+  metricRelabelings: []
+  relabelings: []
+
+# Extra volumes and volume mounts
+extraVolumes: []
+  # - name: extra-volume
+  #   secret:
+  #     secretName: extra-secret
+
+extraVolumeMounts: []
+  # - name: extra-volume
+  #   mountPath: /etc/extra
+  #   readOnly: true
+
+# Init containers
+initContainers: []
+  # - name: init-db
+  #   image: busybox:1.35
+  #   command: ['sh', '-c', 'until nc -z database 5432; do echo waiting for db; sleep 2; done;']
+
+# Sidecar containers
+sidecarContainers: []
+  # - name: logging-sidecar
+  #   image: fluent/fluent-bit:1.9
+  #   volumeMounts:
+  #     - name: varlog
+  #       mountPath: /var/log
+
+# Extra labels for all resources
+commonLabels: {}
+  # team: backend
+  # environment: production
+
+# Extra annotations for all resources
+commonAnnotations: {}
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "8080"

@@ -1,0 +1,25 @@
+apiVersion: v2
+name: mcp-mesh-registry
+description: MCP Mesh Registry Service - Central service registry for MCP agents
+type: application
+version: 0.6.2
+appVersion: "0.6.2"
+keywords:
+  - mcp
+  - mesh
+  - registry
+  - microservices
+  - agent-registry
+home: https://github.com/your-org/mcp-mesh
+sources:
+  - https://github.com/your-org/mcp-mesh
+maintainers:
+  - name: MCP Mesh Team
+    email: team@example.com
+icon: https://example.com/mcp-mesh-icon.png
+annotations:
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Initial release of MCP Mesh Registry Helm chart
+  "artifacthub.io/containsSecurityUpdates": "false"
+dependencies: []

@@ -1,5 +1,25 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.1...v0.6.2)
+
+## v0.6.2 (2025-11-25)
+
+### 🎯 LLM Provider Handler Fix
+
+- **Vendor Extraction from Model Name**: Extract vendor from LiteLLM model strings (e.g., `anthropic/claude-sonnet-4-5` → `anthropic`) for proper provider handler selection in direct LiteLLM calls
+- **Self-Dependency with @mesh.llm**: Fixed self-dependency injection to use wrapper function instead of original, ensuring LLM agent is properly injected
+
+### 📊 Features
+
+- Automatic vendor detection from model name for correct response format injection
+- ClaudeHandler now properly used for `anthropic/*` models even with direct `provider="claude"` calls
+- Added self-dependency test for `@mesh.llm` decorated functions
+
+### 🐛 Bug Fixes
+
+- Fixed curl syntax in documentation to include proper MCP headers (`Accept: application/json, text/event-stream`)
+- Fixed self-dependency injection to use wrapper instead of original function (#169)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.0...v0.6.1)
 
 ## v0.6.1 (2025-11-24)
