@@ -255,12 +255,14 @@ class DependencyResolutionStep(PipelineStep):
                         # Get current agent ID for self-dependency detection
                         import os
 
-                        from ...engine.self_dependency_proxy import SelfDependencyProxy
+                        from ...engine.self_dependency_proxy import \
+                            SelfDependencyProxy
 
                         # Get current agent ID from DecoratorRegistry (single source of truth)
                         current_agent_id = None
                         try:
-                            from ...engine.decorator_registry import DecoratorRegistry
+                            from ...engine.decorator_registry import \
+                                DecoratorRegistry
 
                             config = DecoratorRegistry.get_resolved_agent_config()
                             current_agent_id = config["agent_id"]
@@ -293,36 +295,51 @@ class DependencyResolutionStep(PipelineStep):
                         )
 
                         if is_self_dependency:
-                            # Create self-dependency proxy with cached function reference
-                            original_func = injector.find_original_function(
-                                dep_function_name
-                            )
-                            if original_func:
-                                new_proxy = SelfDependencyProxy(
-                                    original_func, dep_function_name
+                            # Create self-dependency proxy with WRAPPER function (not original)
+                            # The wrapper has dependency injection logic, so calling it ensures
+                            # the target function's dependencies are also injected properly.
+                            wrapper_func = None
+                            if dep_function_name in mesh_tools:
+                                wrapper_func = mesh_tools[dep_function_name].function
+                                self.logger.debug(
+                                    f"🔍 Found wrapper for '{dep_function_name}' in DecoratorRegistry"
                                 )
-                                self.logger.warning(
-                                    f"⚠️ SELF-DEPENDENCY: Using direct function call for '{capability}' "
-                                    f"instead of HTTP to avoid deadlock. Consider refactoring to "
-                                    f"eliminate self-dependencies if possible."
+
+                            if wrapper_func:
+                                new_proxy = SelfDependencyProxy(
+                                    wrapper_func, dep_function_name
                                 )
                                 self.logger.info(
-                                    f"🔄 Updated to SelfDependencyProxy: '{capability}'"
+                                    f"🔄 SELF-DEPENDENCY: Using wrapper for '{capability}' "
+                                    f"(local call with full DI support)"
                                 )
                             else:
-                                self.logger.error(
-                                    f"❌ Cannot create SelfDependencyProxy for '{capability}': "
-                                    f"original function '{dep_function_name}' not found, falling back to HTTP"
+                                # Fallback to original function if wrapper not found
+                                original_func = injector.find_original_function(
+                                    dep_function_name
                                 )
-                                # Use unified proxy for fallback
-                                new_proxy = EnhancedUnifiedMCPProxy(
-                                    endpoint,
-                                    dep_function_name,
-                                    kwargs_config=kwargs_config,
-                                )
-                                self.logger.debug(
-                                    f"🔧 Created EnhancedUnifiedMCPProxy (fallback): {kwargs_config}"
-                                )
+                                if original_func:
+                                    new_proxy = SelfDependencyProxy(
+                                        original_func, dep_function_name
+                                    )
+                                    self.logger.warning(
+                                        f"⚠️ SELF-DEPENDENCY: Using original function for '{capability}' "
+                                        f"(wrapper not found, DI may not work for nested deps)"
+                                    )
+                                else:
+                                    self.logger.error(
+                                        f"❌ Cannot create SelfDependencyProxy for '{capability}': "
+                                        f"neither wrapper nor original function '{dep_function_name}' found, falling back to HTTP"
+                                    )
+                                    # Use unified proxy for fallback
+                                    new_proxy = EnhancedUnifiedMCPProxy(
+                                        endpoint,
+                                        dep_function_name,
+                                        kwargs_config=kwargs_config,
+                                    )
+                                    self.logger.debug(
+                                        f"🔧 Created EnhancedUnifiedMCPProxy (fallback): {kwargs_config}"
+                                    )
                         else:
                             # Create cross-service proxy using unified proxy
                             new_proxy = EnhancedUnifiedMCPProxy(
