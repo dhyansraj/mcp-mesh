@@ -1,5 +1,27 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.2...v0.6.3)
+
+## v0.6.3 (2025-11-30)
+
+### 🎯 LLM Provider Handler Enhancements
+
+- **Enhanced Model Name Handling**: Improved model name extraction and validation for direct LiteLLM provider calls
+- **Response Format Injection**: Better response format configuration for Claude and OpenAI handlers
+- **Provider Handler Support**: Enhanced provider handler selection and configuration
+- **LLM Config Improvements**: Refactored LLM configuration handling for cleaner provider integration
+
+### 📊 Features
+
+- Enhanced `ClaudeHandler` and `OpenAIHandler` for more robust response processing
+- Improved `MeshLLMAgentInjector` for better dependency injection
+- Cleaner `ResponseParser` implementation for LLM responses
+
+### 🐛 Bug Fixes
+
+- Fixed response format injection for various LLM provider configurations
+- Improved error handling in provider handlers
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.1...v0.6.2)
 
 ## v0.6.2 (2025-11-25)

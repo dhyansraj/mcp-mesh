@@ -8,14 +8,22 @@ Supports three output modes for performance/reliability tradeoffs:
 - strict: Use response_format for guaranteed schema compliance (slowest, 100% reliable)
 - hint: Use prompt-based JSON instructions (medium speed, ~95% reliable)
 - text: Plain text output for str return types (fastest)
+
+Features:
+- Automatic prompt caching for system messages (up to 90% cost reduction)
+- Anti-XML tool calling instructions
+- Output mode optimization based on return type
 """
 
 import json
-from typing import Any, Dict, List, Optional, get_args, get_origin
+import logging
+from typing import Any, Optional, get_args, get_origin
 
 from pydantic import BaseModel
 
 from .base_provider_handler import BaseProviderHandler
+
+logger = logging.getLogger(__name__)
 
 # Output mode constants
 OUTPUT_MODE_STRICT = "strict"
@@ -32,6 +40,7 @@ class ClaudeHandler(BaseProviderHandler):
     - Native structured output via response_format (requires strict schema)
     - Native tool calling (via Anthropic messages API)
     - Performs best with anti-XML tool calling instructions
+    - Automatic prompt caching for cost optimization
 
     Output Modes:
     - strict: response_format with JSON schema (slowest, guaranteed valid JSON)
@@ -43,6 +52,7 @@ class ClaudeHandler(BaseProviderHandler):
     - Schema must have additionalProperties: false on all objects
     - Add anti-XML instructions to prevent <invoke> style tool calls
     - Use one tool call at a time for better reliability
+    - Use cache_control for system prompts to reduce costs
     """
 
     def __init__(self):
@@ -176,6 +186,74 @@ class ClaudeHandler(BaseProviderHandler):
 
         return result
 
+    def _apply_prompt_caching(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Apply prompt caching to system messages for Claude.
+
+        Claude's prompt caching feature caches the system prompt prefix,
+        reducing costs by up to 90% and improving latency for repeated calls.
+
+        The cache_control with type "ephemeral" tells Claude to cache
+        this content for the duration of the session (typically 5 minutes).
+
+        Args:
+            messages: List of message dicts
+
+        Returns:
+            Messages with cache_control applied to system messages
+
+        Reference:
+            https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+        """
+        cached_messages = []
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+
+                # Convert string content to cached content block format
+                if isinstance(content, str):
+                    cached_msg = {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": content,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    }
+                    cached_messages.append(cached_msg)
+                    logger.debug(
+                        f"🗄️ Applied prompt caching to system message ({len(content)} chars)"
+                    )
+                elif isinstance(content, list):
+                    # Already in content block format - add cache_control to last block
+                    cached_content = []
+                    for i, block in enumerate(content):
+                        if isinstance(block, dict):
+                            block_copy = block.copy()
+                            # Add cache_control to the last text block
+                            if i == len(content) - 1 and block.get("type") == "text":
+                                block_copy["cache_control"] = {"type": "ephemeral"}
+                            cached_content.append(block_copy)
+                        else:
+                            cached_content.append(block)
+                    cached_messages.append(
+                        {"role": "system", "content": cached_content}
+                    )
+                    logger.debug("🗄️ Applied prompt caching to system content blocks")
+                else:
+                    # Unknown format - pass through unchanged
+                    cached_messages.append(msg)
+            else:
+                # Non-system messages pass through unchanged
+                cached_messages.append(msg)
+
+        return cached_messages
+
     def prepare_request(
         self,
         messages: list[dict[str, Any]],
@@ -208,8 +286,11 @@ class ClaudeHandler(BaseProviderHandler):
         # The decorator's response_format="json" is just a hint for parsing, not API param
         kwargs.pop("response_format", None)
 
+        # Apply prompt caching to system messages for cost optimization
+        cached_messages = self._apply_prompt_caching(messages)
+
         request_params = {
-            "messages": messages,
+            "messages": cached_messages,
             **kwargs,  # Pass through temperature, max_tokens, etc.
         }
 
@@ -333,4 +414,5 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
             "streaming": True,  # Supports streaming
             "vision": True,  # Claude 3+ supports vision
             "json_mode": True,  # Native JSON mode via response_format
+            "prompt_caching": True,  # Automatic system prompt caching for cost savings
         }
