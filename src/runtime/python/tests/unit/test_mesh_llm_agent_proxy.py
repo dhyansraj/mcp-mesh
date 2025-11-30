@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from _mcp_mesh.engine.llm_config import LLMConfig
 
+# Helper to get fixture paths - tests run from various directories
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+TEMPLATES_DIR = FIXTURES_DIR / "templates"
+
 try:
     from mesh import MeshContextModel
 except ImportError:
@@ -1076,7 +1080,7 @@ class TestTemplateLoading:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
 
         agent = MeshLlmAgent(
             config=config,
@@ -1118,7 +1122,7 @@ class TestTemplateLoading:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/nonexistent.jinja2"
+        template_path = str(TEMPLATES_DIR / "nonexistent.jinja2")
 
         with pytest.raises(FileNotFoundError) as exc_info:
             MeshLlmAgent(
@@ -1138,7 +1142,7 @@ class TestTemplateLoading:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/syntax_error.jinja2"
+        template_path = str(TEMPLATES_DIR / "syntax_error.jinja2")
 
         with pytest.raises(TemplateSyntaxError):
             MeshLlmAgent(
@@ -1154,7 +1158,7 @@ class TestTemplateLoading:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
 
         agent = MeshLlmAgent(
             config=config,
@@ -1310,7 +1314,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
 
         agent = MeshLlmAgent(
@@ -1335,7 +1339,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = {"user_name": "Bob", "domain": "Go"}
 
         agent = MeshLlmAgent(
@@ -1357,7 +1361,7 @@ class TestTemplateRendering:
 
         config = make_test_config()
         # Create a template that doesn't require any variables
-        template_path = "tests/fixtures/templates/with_control.jinja2"
+        template_path = str(TEMPLATES_DIR / "with_control.jinja2")
 
         agent = MeshLlmAgent(
             config=config,
@@ -1376,7 +1380,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/with_control.jinja2"
+        template_path = str(TEMPLATES_DIR / "with_control.jinja2")
         context = AssistantContext(
             role="expert", domain="AI", skills=["Python", "ML", "NLP"]
         )
@@ -1404,7 +1408,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
         # Empty context - missing required vars
         context = {}
 
@@ -1428,7 +1432,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
 
         agent = MeshLlmAgent(
@@ -1453,7 +1457,7 @@ class TestTemplateRendering:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
-        template_path = "tests/fixtures/templates/simple.jinja2"
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
 
         agent = MeshLlmAgent(
