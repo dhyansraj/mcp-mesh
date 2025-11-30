@@ -307,6 +307,22 @@ class MeshLlmAgentInjector(BaseInjector):
             llm_agent = self._create_llm_agent(function_id)
             wrapper._mesh_update_llm_agent(llm_agent)
             logger.info(f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}'")
+
+            # Set factory for per-call context agent creation (template support)
+            # This allows the decorator's wrapper to create new agents with context per-call
+            config_dict = llm_metadata.config
+            if config_dict.get("is_template", False):
+                # Capture function_id by value using default argument to avoid closure issues
+                def create_context_agent(
+                    context_value: Any, _func_id: str = function_id
+                ) -> MeshLlmAgent:
+                    """Factory to create MeshLlmAgent with context for template rendering."""
+                    return self._create_llm_agent(_func_id, context_value=context_value)
+
+                wrapper._mesh_create_context_agent = create_context_agent
+                logger.info(
+                    f"🎯 Set context agent factory for template-based function '{function_id}'"
+                )
         elif wrapper:
             logger.warning(
                 f"⚠️ Wrapper for '{function_id}' found but has no _mesh_update_llm_agent method"
@@ -512,6 +528,9 @@ class MeshLlmAgentInjector(BaseInjector):
             api_key=config_dict.get("api_key", ""),  # Will use ENV if empty
             max_iterations=config_dict.get("max_iterations", 10),
             system_prompt=config_dict.get("system_prompt"),
+            output_mode=config_dict.get(
+                "output_mode"
+            ),  # Pass through output_mode from decorator
         )
 
         # Phase 4: Template support - extract template metadata

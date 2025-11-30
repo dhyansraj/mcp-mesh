@@ -17,7 +17,7 @@ class LLMConfig:
     Supports both direct LiteLLM providers (string) and mesh delegation (dict).
     """
 
-    provider: Union[str, Dict[str, Any]] = "claude"
+    provider: Union[str, dict[str, Any]] = "claude"
     """LLM provider - string for direct LiteLLM (e.g., 'claude', 'openai') or dict for mesh delegation
        Mesh delegation format: {"capability": "llm", "tags": ["claude"], "version": ">=1.0.0"}"""
 
@@ -33,6 +33,9 @@ class LLMConfig:
     system_prompt: Optional[str] = None
     """Optional system prompt to prepend to all interactions"""
 
+    output_mode: Optional[str] = None
+    """Output mode override: 'strict', 'hint', or 'text'. If None, auto-detected by handler."""
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         if self.max_iterations < 1:
@@ -43,3 +46,9 @@ class LLMConfig:
         # Only validate model for string providers (not needed for mesh delegation)
         if isinstance(self.provider, str) and not self.model:
             raise ValueError("model cannot be empty when using string provider")
+
+        # Validate output_mode if provided
+        if self.output_mode and self.output_mode not in ("strict", "hint", "text"):
+            raise ValueError(
+                f"output_mode must be 'strict', 'hint', or 'text', got '{self.output_mode}'"
+            )
