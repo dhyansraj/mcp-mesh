@@ -989,6 +989,39 @@ def set_shutdown_context(context: dict[str, Any]):
     set_global_shutdown_context(context)
 
 
+def _get_llm_agent_for_injection(
+    wrapper: Any, param_name: str, kwargs: dict, func_name: str
+) -> Any:
+    """
+    Get the appropriate LLM agent for injection based on template mode.
+
+    Handles both template-based (per-call context) and non-template (cached) modes.
+
+    Args:
+        wrapper: The wrapper function with _mesh_llm_* attributes
+        param_name: Name of the LLM parameter to inject
+        kwargs: Current call kwargs (may contain context value)
+        func_name: Function name for logging
+
+    Returns:
+        MeshLlmAgent instance (either per-call with context or cached)
+    """
+    config = getattr(wrapper, "_mesh_llm_config", {})
+    is_template = config.get("is_template", False)
+    context_param_name = config.get("context_param")
+    create_context_agent = getattr(wrapper, "_mesh_create_context_agent", None)
+
+    if is_template and context_param_name and create_context_agent:
+        # Template mode: create per-call agent with context
+        context_value = kwargs.get(context_param_name)
+        if context_value is not None:
+            logger.debug(f"🎯 Created per-call LLM agent with context for {func_name}")
+            return create_context_agent(context_value)
+
+    # Non-template mode or no context provided: use cached agent
+    return wrapper._mesh_llm_agent
+
+
 def llm(
     filter: dict[str, Any] | list[dict[str, Any] | str] | str | None = None,
     *,
@@ -1247,7 +1280,9 @@ def llm(
                 """Wrapper that injects both MeshLlmAgent and DI parameters."""
                 # Inject LLM parameter if not provided or if it's None
                 if param_name not in kwargs or kwargs.get(param_name) is None:
-                    kwargs[param_name] = combined_injection_wrapper._mesh_llm_agent
+                    kwargs[param_name] = _get_llm_agent_for_injection(
+                        combined_injection_wrapper, param_name, kwargs, func.__name__
+                    )
                 # Then call the original wrapper (which handles DI injection)
                 return original_call(*args, **kwargs)
 
@@ -1310,7 +1345,9 @@ def llm(
                 """Wrapper that injects MeshLlmAgent parameter."""
                 # Inject llm parameter if not provided or if it's None
                 if param_name not in kwargs or kwargs.get(param_name) is None:
-                    kwargs[param_name] = llm_injection_wrapper._mesh_llm_agent
+                    kwargs[param_name] = _get_llm_agent_for_injection(
+                        llm_injection_wrapper, param_name, kwargs, func.__name__
+                    )
                 return func(*args, **kwargs)
 
             # Create update method for heartbeat - updates the wrapper, not func
