@@ -58,7 +58,7 @@ class MeshLlmAgent:
         self,
         config: LLMConfig,
         filtered_tools: list[dict[str, Any]],
-        output_type: type[BaseModel],
+        output_type: type[BaseModel] | type[str],
         tool_proxies: Optional[dict[str, Any]] = None,
         template_path: Optional[str] = None,
         context_value: Optional[Any] = None,
@@ -71,7 +71,7 @@ class MeshLlmAgent:
         Args:
             config: LLM configuration (provider, model, api_key, etc.)
             filtered_tools: List of tool metadata from registry (for schema building)
-            output_type: Pydantic BaseModel for response validation
+            output_type: Pydantic BaseModel for response validation, or str for plain text
             tool_proxies: Optional map of function_name -> proxy for tool execution
             template_path: Optional path to Jinja2 template file for system prompt
             context_value: Optional context for template rendering (MeshContextModel, dict, or None)
@@ -87,6 +87,7 @@ class MeshLlmAgent:
         self.max_iterations = config.max_iterations
         self.output_type = output_type
         self.system_prompt = config.system_prompt  # Public attribute for tests
+        self.output_mode = config.output_mode  # Output mode override (strict/hint/text)
         self._iteration_count = 0
 
         # Detect if using mesh delegation (provider is dict)
@@ -126,12 +127,19 @@ IMPORTANT TOOL CALLING RULES:
 - Once you have gathered all necessary information, provide your final response
 """
 
-        schema = self.output_type.model_json_schema()
-        schema_str = json.dumps(schema, indent=2)
-        self._cached_json_instructions = (
-            f"\n\nIMPORTANT: You must return your final response as valid JSON matching this schema:\n"
-            f"{schema_str}\n\nReturn ONLY the JSON object, no additional text."
-        )
+        # Only generate JSON schema for Pydantic models, not for str return type
+        if self.output_type is not str and hasattr(
+            self.output_type, "model_json_schema"
+        ):
+            schema = self.output_type.model_json_schema()
+            schema_str = json.dumps(schema, indent=2)
+            self._cached_json_instructions = (
+                f"\n\nIMPORTANT: You must return your final response as valid JSON matching this schema:\n"
+                f"{schema_str}\n\nReturn ONLY the JSON object, no additional text."
+            )
+        else:
+            # str return type - no JSON schema needed
+            self._cached_json_instructions = ""
 
         logger.debug(
             f"🤖 MeshLlmAgent initialized: provider={config.provider}, model={config.model}, "
@@ -483,22 +491,36 @@ IMPORTANT TOOL CALLING RULES:
             try:
                 # Call LLM (either direct LiteLLM or mesh-delegated)
                 try:
-                    if self._is_mesh_delegated:
-                        # Mesh delegation: use provider handler to prepare vendor-specific request
-                        # Phase 2: Handler prepares params including response_format for OpenAI, etc.
-                        request_params = self._provider_handler.prepare_request(
-                            messages=messages,
-                            tools=self._tool_schemas if self._tool_schemas else None,
-                            output_type=self.output_type,
-                            **kwargs,
-                        )
+                    # Build kwargs with output_mode override if set
+                    call_kwargs = (
+                        {**kwargs, "output_mode": self.output_mode}
+                        if self.output_mode
+                        else kwargs
+                    )
 
-                        # Extract model_params to send to provider
-                        # Don't send messages/tools (already separate params) or model/api_key (provider has them)
+                    # Use provider handler to prepare vendor-specific request
+                    request_params = self._provider_handler.prepare_request(
+                        messages=messages,
+                        tools=self._tool_schemas if self._tool_schemas else None,
+                        output_type=self.output_type,
+                        **call_kwargs,
+                    )
+
+                    if self._is_mesh_delegated:
+                        # Mesh delegation: extract model_params to send to provider
+                        # Exclude messages/tools (separate params), model/api_key (provider has them),
+                        # and output_mode (only used locally by prepare_request)
                         model_params = {
                             k: v
                             for k, v in request_params.items()
-                            if k not in ["messages", "tools", "model", "api_key"]
+                            if k
+                            not in [
+                                "messages",
+                                "tools",
+                                "model",
+                                "api_key",
+                                "output_mode",
+                            ]
                         }
 
                         logger.debug(
@@ -509,19 +531,10 @@ IMPORTANT TOOL CALLING RULES:
                         response = await self._call_mesh_provider(
                             messages=messages,
                             tools=self._tool_schemas if self._tool_schemas else None,
-                            **model_params,  # Now includes response_format!
+                            **model_params,
                         )
                     else:
-                        # Direct LiteLLM call
-                        # Phase 2: Use provider handler to prepare vendor-specific request
-                        request_params = self._provider_handler.prepare_request(
-                            messages=messages,
-                            tools=self._tool_schemas if self._tool_schemas else None,
-                            output_type=self.output_type,
-                            **kwargs,
-                        )
-
-                        # Add model and API key (common to all vendors)
+                        # Direct LiteLLM call: add model and API key
                         request_params["model"] = self.model
                         request_params["api_key"] = self.api_key
 
@@ -612,15 +625,20 @@ IMPORTANT TOOL CALLING RULES:
         """
         Parse LLM response into output type.
 
-        Delegates to ResponseParser for actual parsing logic.
+        For str return type, returns content directly without parsing.
+        For Pydantic models, delegates to ResponseParser.
 
         Args:
             content: Response content from LLM
 
         Returns:
-            Parsed Pydantic model instance
+            Raw string (if output_type is str) or parsed Pydantic model instance
 
         Raises:
             ResponseParseError: If response doesn't match output_type schema or invalid JSON
         """
+        # For str return type, return content directly without parsing
+        if self.output_type is str:
+            return content
+
         return ResponseParser.parse(content, self.output_type)

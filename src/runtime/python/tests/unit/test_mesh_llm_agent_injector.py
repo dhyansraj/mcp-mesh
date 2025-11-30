@@ -10,6 +10,7 @@ The MeshLlmAgentInjector is responsible for:
 5. Handling topology updates (tools join/leave)
 """
 
+from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,10 @@ import pytest
 from pydantic import BaseModel, Field
 
 from mesh import MeshContextModel
+
+# Helper to get fixture paths - tests run from various directories
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+TEMPLATES_DIR = FIXTURES_DIR / "templates"
 
 
 # Test output types
@@ -742,7 +747,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             "context_param": "ctx",
         }
 
@@ -772,7 +777,7 @@ class TestContextExtractionWithTemplates:
         assert agent_data["config"]["is_template"] is True
         assert (
             agent_data["config"]["template_path"]
-            == "tests/fixtures/templates/simple.jinja2"
+            == str(TEMPLATES_DIR / "simple.jinja2")
         )
         assert agent_data["config"]["context_param"] == "ctx"
 
@@ -791,7 +796,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             "context_param": "ctx",
         }
 
@@ -845,7 +850,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             "context_param": "ctx",
         }
 
@@ -935,7 +940,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             # No explicit context_param - should detect by convention (prompt_context)
         }
 
@@ -979,7 +984,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             "context_param": "ctx",
         }
 
@@ -1028,7 +1033,7 @@ class TestContextExtractionWithTemplates:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/with_control.jinja2",
+            "template_path": str(TEMPLATES_DIR / "with_control.jinja2"),
             "context_param": "ctx",
         }
 
@@ -1101,7 +1106,7 @@ class TestTemplateIntegrationInInjector:
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
-            "template_path": "tests/fixtures/templates/simple.jinja2",
+            "template_path": str(TEMPLATES_DIR / "simple.jinja2"),
             "context_param": "ctx",
         }
 

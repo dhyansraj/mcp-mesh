@@ -8,7 +8,7 @@ Separated from MeshLlmAgent for better testability and reusability.
 import json
 import logging
 import re
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Union
 
 from pydantic import BaseModel, ValidationError
 
@@ -40,12 +40,12 @@ class ResponseParser:
     """
 
     @staticmethod
-    def parse(content: str, output_type: type[T]) -> T:
+    def parse(content: Any, output_type: type[T]) -> T:
         """
         Parse LLM response into Pydantic model.
 
         Args:
-            content: Raw response content from LLM
+            content: Raw response content from LLM (string or pre-parsed dict/list)
             output_type: Pydantic BaseModel class to parse into
 
         Returns:
@@ -57,16 +57,26 @@ class ResponseParser:
         logger.debug(f"📝 Parsing response into {output_type.__name__}...")
 
         try:
-            # Extract JSON from mixed content (narrative + XML + JSON)
-            extracted_content = ResponseParser._extract_json_from_mixed_content(content)
+            # If content is already parsed (e.g., OpenAI strict mode), skip string processing
+            if isinstance(content, (dict, list)):
+                logger.debug("📦 Content already parsed, skipping string processing")
+                response_data = content
+            else:
+                # String processing for Claude, Gemini, and non-strict OpenAI
+                # Extract JSON from mixed content (narrative + XML + JSON)
+                extracted_content = ResponseParser._extract_json_from_mixed_content(
+                    content
+                )
 
-            # Strip markdown code fences if present
-            cleaned_content = ResponseParser._strip_markdown_fences(extracted_content)
+                # Strip markdown code fences if present
+                cleaned_content = ResponseParser._strip_markdown_fences(
+                    extracted_content
+                )
 
-            # Try to parse as JSON
-            response_data = ResponseParser._parse_json_with_fallback(
-                cleaned_content, output_type
-            )
+                # Try to parse as JSON
+                response_data = ResponseParser._parse_json_with_fallback(
+                    cleaned_content, output_type
+                )
 
             # Validate against output type
             return ResponseParser._validate_and_create(response_data, output_type)
@@ -175,12 +185,16 @@ class ResponseParser:
                 raise ResponseParseError(f"Invalid JSON response: {e}")
 
     @staticmethod
-    def _validate_and_create(response_data: dict[str, Any], output_type: type[T]) -> T:
+    def _validate_and_create(response_data: Any, output_type: type[T]) -> T:
         """
         Validate data against Pydantic model and create instance.
 
+        Handles both dict and list responses:
+        - Dict: Direct unpacking into model
+        - List: Auto-wrap into first list field of model (for OpenAI strict mode)
+
         Args:
-            response_data: Parsed JSON data
+            response_data: Parsed JSON data (dict or list)
             output_type: Target Pydantic model
 
         Returns:
@@ -190,6 +204,31 @@ class ResponseParser:
             ResponseParseError: If validation fails
         """
         try:
+            # Handle list responses - wrap into first list field of model
+            if isinstance(response_data, list):
+                # Find the first list field in the model
+                model_fields = output_type.model_fields
+                list_field_name = None
+                for field_name, field_info in model_fields.items():
+                    # Check if field annotation is a list type
+                    field_type = field_info.annotation
+                    if (
+                        hasattr(field_type, "__origin__")
+                        and field_type.__origin__ is list
+                    ):
+                        list_field_name = field_name
+                        break
+
+                if list_field_name:
+                    logger.debug(
+                        f"📦 Wrapping list response into '{list_field_name}' field"
+                    )
+                    response_data = {list_field_name: response_data}
+                else:
+                    raise ResponseParseError(
+                        f"Response is a list but {output_type.__name__} has no list field to wrap into"
+                    )
+
             parsed = output_type(**response_data)
             logger.debug(f"✅ Response parsed successfully: {parsed}")
             return parsed
