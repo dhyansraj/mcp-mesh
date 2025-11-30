@@ -3,7 +3,7 @@
 # Variables
 REGISTRY_NAME = mcp-mesh-registry
 DEV_NAME = meshctl
-VERSION = 0.6.2
+VERSION = 0.6.3
 BUILD_DIR = bin
 REGISTRY_CMD_DIR = cmd/mcp-mesh-registry
 DEV_CMD_DIR = cmd/meshctl
