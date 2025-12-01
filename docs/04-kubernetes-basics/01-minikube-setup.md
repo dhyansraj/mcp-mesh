@@ -448,7 +448,7 @@ minikube update-context
 kubectl config current-context
 ```
 
-For more issues, see the [section troubleshooting guide](./troubleshooting.md).
+For more issues, see the [section troubleshooting guide](./05-troubleshooting.md).
 
 ## ⚠️ Known Limitations
 

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""
+{{ .Name }} - MCP Mesh LLM Agent
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM agent generated using meshctl scaffold.{{ end }}
+"""
+
+from typing import Any, Dict, List, Optional
+
+import mesh
+from fastmcp import FastMCP
+from pydantic import BaseModel, Field
+
+# FastMCP server instance
+app = FastMCP("{{ toPascalCase .Name }} Service")
+
+# ===== SYSTEM PROMPT =====
+{{ if .SystemPromptInline }}
+SYSTEM_PROMPT = """{{ .SystemPrompt }}"""
+{{ else if not .SystemPromptIsFile }}
+# Default system prompt - customize this for your use case
+SYSTEM_PROMPT = """You are {{ toPascalCase .Name }}, an AI assistant.
+
+{{ if .Description }}{{ .Description }}{{ else }}Process the input and provide a helpful response.{{ end }}
+
+Analyze the provided context and respond appropriately."""
+{{ end }}
+
+# ===== CONTEXT MODEL =====
+
+class {{ toPascalCase .Name }}Context(BaseModel):
+    """Context for {{ .Name }} LLM processing."""
+
+    # Add your context fields here
+    input_text: str = Field(..., description="Input text to process")
+    # Example additional fields:
+    # user_id: str = Field(..., description="User identifier")
+    # metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+{{ if eq .ResponseFormat "json" }}
+
+# ===== RESPONSE MODEL =====
+
+class {{ toPascalCase .Name }}Response(BaseModel):
+    """Structured response from {{ .Name }}."""
+
+    result: str = Field(..., description="Processing result")
+    # Add additional response fields as needed
+    # confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    # reasoning: str = Field(..., description="Explanation of the result")
+{{ end }}
+
+
+# ===== LLM TOOL =====
+
+@app.tool()
+@mesh.llm(
+    filter={{ if .ToolFilter }}{{ toJSON .ToolFilter }}{{ else }}None{{ end }},
+    filter_mode="{{ .FilterMode }}",
+    provider={"capability": "llm", "tags": {{ toJSON .ProviderTags }}},
+    max_iterations={{ .MaxIterations }},
+    system_prompt={{ if .SystemPromptIsFile }}"{{ .SystemPrompt }}"{{ else }}SYSTEM_PROMPT{{ end }},
+    context_param="{{ .ContextParam }}",
+    response_format="{{ .ResponseFormat }}",
+)
+@mesh.tool(
+    capability="{{ toSnakeCase .Name }}",
+    description="{{ if .Description }}{{ .Description }}{{ else }}Process input using LLM{{ end }}",
+    version="1.0.0",
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}["llm"]{{ end }},
+)
+def {{ toSnakeCase .Name }}(
+    {{ .ContextParam }}: {{ toPascalCase .Name }}Context,
+    llm: mesh.MeshLlmAgent = None,
+){{ if eq .ResponseFormat "json" }} -> {{ toPascalCase .Name }}Response{{ else }} -> str{{ end }}:
+    """
+    {{ if .Description }}{{ .Description }}{{ else }}Process input using LLM.{{ end }}
+
+    Args:
+        {{ .ContextParam }}: Context containing input data for processing
+        llm: Injected LLM agent (provided by mesh)
+
+    Returns:
+        {{ if eq .ResponseFormat "json" }}Structured response with processing results{{ else }}Processing result as text{{ end }}
+    """
+    return llm("Process the input based on the context provided")
+
+
+# ===== AGENT CONFIGURATION =====
+
+@mesh.agent(
+    name="{{ .Name }}",
+    version="1.0.0",
+    description="{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent for {{ .Name }}{{ end }}",
+    http_port={{ .Port }},
+    enable_http=True,
+    auto_run=True,
+)
+class {{ toPascalCase .Name }}Agent:
+    """
+    LLM Agent that uses {{ if eq .LLMProviderSelector "claude" }}Claude{{ else if eq .LLMProviderSelector "openai" }}OpenAI{{ else }}an LLM{{ end }} for processing.
+
+    The mesh processor will:
+    1. Discover the 'app' FastMCP instance
+    2. Inject the LLM provider based on tags
+    3. Start the FastMCP HTTP server on port {{ .Port }}
+    4. Register capabilities with the mesh registry
+    """
+
+    pass
+
+
+# No main method needed!
+# Mesh processor automatically handles:
+# - FastMCP server discovery and startup
+# - LLM provider injection
+# - HTTP server configuration
+# - Service registration with mesh registry

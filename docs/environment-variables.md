@@ -626,9 +626,9 @@ export HOST=0.0.0.0    # ⚠️ All interfaces (use carefully)
 
 Now that you understand environment configuration:
 
-1. **[Advanced Patterns](./09-advanced-patterns.md)** - Complex multi-service architectures
-2. **[Local Development](../02-local-development.md)** - Professional development workflows
-3. **[Production Deployment](../03-docker-deployment.md)** - Container orchestration
+1. **[Local Development](./02-local-development.md)** - Professional development workflows
+2. **[Production Deployment](./03-docker-deployment.md)** - Container orchestration
+3. **[Mesh Decorators](./mesh-decorators.md)** - @mesh.tool, @mesh.llm decorators
 
 ---
 

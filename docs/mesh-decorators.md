@@ -1759,9 +1759,9 @@ Make sure version strings are valid semantic versions:
 
 Now that you understand mesh decorators, you can:
 
-1. **[Build Complex Agents](./07-advanced-patterns.md)** - Multi-service architectures
-2. **[Local Development](../02-local-development.md)** - Professional development setup
-3. **[Production Deployment](../03-docker-deployment.md)** - Containerized deployments
+1. **[Local Development](./02-local-development.md)** - Professional development setup
+2. **[Production Deployment](./03-docker-deployment.md)** - Containerized deployments
+3. **[meshctl CLI](./meshctl-cli.md)** - Command-line tools
 
 ---
 

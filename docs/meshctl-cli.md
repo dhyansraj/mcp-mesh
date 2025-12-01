@@ -9,6 +9,9 @@
 ## Quick Start
 
 ```bash
+# Generate a new agent from template
+meshctl scaffold --name my-agent --agent-type llm-agent
+
 # Start registry + agent in one command
 meshctl start examples/hello_world.py
 
@@ -21,7 +24,27 @@ meshctl status --verbose
 
 ## Essential Commands
 
-### 1. Starting Services
+### 1. Scaffolding New Agents
+
+Generate new agents from templates with interactive or CLI-based configuration.
+
+```bash
+# Interactive mode (recommended for beginners)
+meshctl scaffold
+
+# Generate a basic tool agent
+meshctl scaffold --name my-tool --agent-type tool
+
+# Generate an LLM-powered agent
+meshctl scaffold --name my-llm-agent --agent-type llm-agent --llm-selector claude
+
+# Generate an LLM provider
+meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+```
+
+📖 **See [Scaffold Command Reference](./meshctl-scaffold.md) for complete options and examples.**
+
+### 2. Starting Services
 
 #### Start Registry Only
 
@@ -53,7 +76,7 @@ meshctl start agent1.py agent2.py agent3.py
 meshctl start my_agent.py --env KEY=value --env DEBUG=true
 ```
 
-### 2. Monitoring and Status
+### 3. Monitoring and Status
 
 #### List All Agents
 
@@ -93,7 +116,7 @@ meshctl status --verbose
 meshctl status --json
 ```
 
-### 3. Configuration Management
+### 4. Configuration Management
 
 #### View Configuration
 
@@ -452,9 +475,9 @@ meshctl list --filter agent-
 
 Now that you know meshctl basics:
 
-1. **[Advanced Patterns](./08-advanced-patterns.md)** - Complex multi-service architectures
-2. **[Local Development](../02-local-development.md)** - Professional development workflows
-3. **[Production Deployment](../03-docker-deployment.md)** - Container orchestration
+1. **[Local Development](./02-local-development.md)** - Professional development workflows
+2. **[Production Deployment](./03-docker-deployment.md)** - Container orchestration
+3. **[Mesh Decorators](./mesh-decorators.md)** - @mesh.tool, @mesh.llm decorators
 
 ---
 

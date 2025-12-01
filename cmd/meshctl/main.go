@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"mcp-mesh/src/core/cli"
+	"mcp-mesh/src/core/cli/scaffold"
 )
 
 // version is injected at build time via ldflags
@@ -19,6 +20,11 @@ var rootCmd = &cobra.Command{
 This CLI provides commands to manage MCP agents with distributed mesh networking and service discovery.`,
 }
 
+func init() {
+	// Set embedded templates for scaffold command
+	scaffold.SetEmbeddedTemplates(EmbeddedTemplates)
+}
+
 func main() {
 	// Set version from build-time injection
 	rootCmd.Version = version
@@ -28,6 +34,7 @@ func main() {
 	rootCmd.AddCommand(cli.NewListCommand())
 	rootCmd.AddCommand(cli.NewStatusCommand())
 	rootCmd.AddCommand(cli.NewConfigCommand())
+	rootCmd.AddCommand(cli.NewScaffoldCommand())
 
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {
