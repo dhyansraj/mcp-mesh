@@ -1,5 +1,16 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.3...v0.6.4)
+
+## v0.6.4 (2025-11-30)
+
+### 🐛 Bug Fixes
+
+- **Missing PyPI Dependencies**: Added missing `litellm`, `jinja2`, and `cachetools` dependencies to PyPI package configuration
+  - Fixes `jinja2 is required for template rendering` error
+  - Fixes `litellm is required for MeshLlmAgent` error
+  - Root cause: `packaging/pypi/pyproject.toml` was out of sync with `src/runtime/python/pyproject.toml`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.2...v0.6.3)
 
 ## v0.6.3 (2025-11-30)
