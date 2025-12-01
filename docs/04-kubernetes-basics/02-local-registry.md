@@ -628,7 +628,7 @@ CREATE INDEX idx_agents_last_seen ON agents(last_seen);
 "
 ```
 
-For more issues, see the [section troubleshooting guide](./troubleshooting.md).
+For more issues, see the [section troubleshooting guide](./05-troubleshooting.md).
 
 ## ⚠️ Known Limitations
 

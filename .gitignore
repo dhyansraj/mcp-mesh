@@ -180,7 +180,7 @@ capability_store/
 # Go binaries
 mcp-mesh-dev
 /mcp-mesh-registry
-meshctl
+/meshctl
 bin/meshctl
 *.exe
 *.dll

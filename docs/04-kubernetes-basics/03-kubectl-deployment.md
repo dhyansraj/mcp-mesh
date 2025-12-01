@@ -637,7 +637,7 @@ kubectl rollout resume deployment/my-agent -n mcp-mesh
 kubectl rollout undo deployment/my-agent -n mcp-mesh
 ```
 
-For more issues, see the [section troubleshooting guide](./troubleshooting.md).
+For more issues, see the [section troubleshooting guide](./05-troubleshooting.md).
 
 ## ⚠️ Known Limitations
 

@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""
+{{ .Name }} - MCP Mesh LLM Provider
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM provider generated using meshctl scaffold.{{ end }}
+
+This agent provides LLM access to other agents via the @mesh.llm_provider decorator.
+"""
+
+import os
+
+import mesh
+from fastmcp import FastMCP
+
+# FastMCP server instance
+app = FastMCP("{{ toPascalCase .Name }}")
+
+
+# ===== HEALTH CHECK =====
+{{ if contains .Model "anthropic" }}
+async def health_check() -> dict:
+    """
+    Health check for {{ .Name }}.
+
+    Validates:
+    1. ANTHROPIC_API_KEY environment variable is set
+    2. Anthropic API is reachable
+
+    Returns:
+        dict: Health status with checks and errors
+    """
+    checks = {}
+    errors = []
+    status = "healthy"
+
+    # Check API Key presence
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key:
+        checks["anthropic_api_key_present"] = True
+    else:
+        checks["anthropic_api_key_present"] = False
+        errors.append("ANTHROPIC_API_KEY not set")
+        status = "unhealthy"
+
+    # Check API connectivity
+    if api_key:
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.head(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "anthropic-version": "2023-06-01",
+                        "x-api-key": api_key,
+                    },
+                )
+                if response.status_code in [400, 405]:
+                    checks["anthropic_api_reachable"] = True
+                    checks["anthropic_api_key_valid"] = True
+                elif response.status_code == 401:
+                    checks["anthropic_api_reachable"] = True
+                    checks["anthropic_api_key_valid"] = False
+                    errors.append("Anthropic API key is invalid")
+                    status = "unhealthy"
+                else:
+                    checks["anthropic_api_reachable"] = False
+                    errors.append(f"Anthropic API returned status: {response.status_code}")
+                    status = "degraded"
+        except Exception as e:
+            checks["anthropic_api_reachable"] = False
+            errors.append(f"Anthropic API unreachable: {str(e)}")
+            status = "degraded"
+
+    return {
+        "status": status,
+        "checks": checks,
+        "errors": errors,
+    }
+{{ else if contains .Model "openai" }}
+async def health_check() -> dict:
+    """
+    Health check for {{ .Name }}.
+
+    Validates:
+    1. OPENAI_API_KEY environment variable is set
+    2. OpenAI API is reachable
+
+    Returns:
+        dict: Health status with checks and errors
+    """
+    checks = {}
+    errors = []
+    status = "healthy"
+
+    # Check API Key presence
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        checks["openai_api_key_present"] = True
+    else:
+        checks["openai_api_key_present"] = False
+        errors.append("OPENAI_API_KEY not set")
+        status = "unhealthy"
+
+    # Check API connectivity
+    if api_key:
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if response.status_code == 200:
+                    checks["openai_api_reachable"] = True
+                    checks["openai_api_key_valid"] = True
+                elif response.status_code == 401:
+                    checks["openai_api_reachable"] = True
+                    checks["openai_api_key_valid"] = False
+                    errors.append("OpenAI API key is invalid")
+                    status = "unhealthy"
+                else:
+                    checks["openai_api_reachable"] = False
+                    errors.append(f"OpenAI API returned status: {response.status_code}")
+                    status = "degraded"
+        except Exception as e:
+            checks["openai_api_reachable"] = False
+            errors.append(f"OpenAI API unreachable: {str(e)}")
+            status = "degraded"
+
+    return {
+        "status": status,
+        "checks": checks,
+        "errors": errors,
+    }
+{{ else }}
+async def health_check() -> dict:
+    """
+    Health check for {{ .Name }}.
+
+    Returns:
+        dict: Health status
+    """
+    return {
+        "status": "healthy",
+        "checks": {"provider_configured": True},
+        "errors": [],
+    }
+{{ end }}
+
+
+# ===== LLM PROVIDER =====
+
+@mesh.llm_provider(
+    model="{{ .Model }}",
+    capability="llm",
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    version="1.0.0",
+)
+def {{ toSnakeCase .Name }}():
+    """
+    Zero-code LLM provider for {{ .Name }}.
+
+    This provider will be discovered and called by other agents
+    via mesh delegation using the @mesh.llm decorator.
+
+    The decorator automatically:
+    - Creates process_chat(request: MeshLlmRequest) -> str function
+    - Wraps LiteLLM with error handling
+    - Registers with mesh network for dependency injection
+    """
+    pass  # Implementation is in the decorator
+
+
+# ===== AGENT CONFIGURATION =====
+
+@mesh.agent(
+    name="{{ .Name }}",
+    version="1.0.0",
+    description="{{ if .Description }}{{ .Description }}{{ else }}LLM Provider for {{ .Model }}{{ end }}",
+    http_port={{ .Port }},
+    enable_http=True,
+    auto_run=True,
+    health_check=health_check,
+    health_check_ttl=30,
+)
+class {{ toPascalCase .Name }}Agent:
+    """
+    LLM Provider agent that exposes {{ .Model }} via mesh.
+
+    Other agents can use this provider by specifying matching tags
+    in their @mesh.llm decorator.
+    """
+
+    pass
+
+
+# No main method needed!
+# Mesh processor automatically handles:
+# - LiteLLM provider setup
+# - HTTP server configuration
+# - Service registration with mesh registry

@@ -185,7 +185,8 @@ nav:
       - Kubernetes:
           - Basics: 04-kubernetes-basics.md
           - kubectl Deployment: 04-kubernetes-basics/03-kubectl-deployment.md
-          - Kustomize: 04-kubernetes-basics/04-kustomize.md
+          - Service Discovery: 04-kubernetes-basics/04-service-discovery.md
+          - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
 
       - Helm:
           - Overview: 06-helm-deployment.md
@@ -208,4 +209,5 @@ nav:
       - Mesh Decorators: mesh-decorators.md
       - Environment Variables: environment-variables.md
       - meshctl CLI: meshctl-cli.md
+      - meshctl scaffold: meshctl-scaffold.md
       - Tag Matching Migration: enhanced-tag-matching-migration.md

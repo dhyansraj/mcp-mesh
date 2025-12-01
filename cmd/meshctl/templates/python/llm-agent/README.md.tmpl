@@ -1,0 +1,115 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM agent generated using `meshctl scaffold`.{{ end }}
+
+## Overview
+
+This is an LLM-powered MCP Mesh agent that uses {{ if eq .LLMProviderSelector "claude" }}Claude{{ else if eq .LLMProviderSelector "openai" }}OpenAI{{ else }}an LLM provider{{ end }} for processing.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.9+
+- MCP Mesh SDK
+- FastMCP
+- An LLM provider agent running (e.g., claude-provider or openai-provider)
+
+### Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+### Running the Agent
+
+```bash
+meshctl start main.py
+```
+
+Or with debug logging:
+
+```bash
+meshctl start main.py --debug
+```
+
+The agent will start on port {{ .Port }} by default.
+
+## Configuration
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| LLM Provider | {{ .LLMProviderSelector }} | Provider used for LLM calls |
+| Max Iterations | {{ .MaxIterations }} | Maximum agentic loop iterations |
+| Response Format | {{ .ResponseFormat }} | Output format (text/json) |
+| Context Param | {{ .ContextParam }} | Parameter name for context |
+
+## Available Tools
+
+| Tool | Capability | Description |
+|------|------------|-------------|
+| `{{ toSnakeCase .Name }}` | `{{ toSnakeCase .Name }}` | {{ if .Description }}{{ .Description }}{{ else }}Process input using LLM{{ end }} |
+
+## Project Structure
+
+```
+{{ .Name }}/
+├── __init__.py       # Package init
+├── __main__.py       # Module entry point
+├── main.py           # Agent implementation
+{{ if .SystemPromptIsFile }}├── prompts/          # Jinja2 prompt templates
+│   └── {{ .Name }}.jinja2
+{{ end }}├── README.md         # This file
+└── requirements.txt  # Python dependencies
+```
+
+## Customizing the Agent
+
+### Modifying the Context
+
+Edit the `{{ toPascalCase .Name }}Context` class to add fields needed for your use case:
+
+```python
+class {{ toPascalCase .Name }}Context(BaseModel):
+    input_text: str = Field(..., description="Input text")
+    user_id: str = Field(..., description="User identifier")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+```
+
+{{ if eq .ResponseFormat "json" }}
+### Modifying the Response
+
+Edit the `{{ toPascalCase .Name }}Response` class to define your output structure:
+
+```python
+class {{ toPascalCase .Name }}Response(BaseModel):
+    result: str = Field(..., description="Processing result")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reasoning: str = Field(..., description="Explanation")
+```
+{{ end }}
+
+### Changing the System Prompt
+
+{{ if .SystemPromptIsFile }}
+Edit the Jinja2 template at `{{ .SystemPromptFilePath }}` to customize LLM behavior.
+{{ else }}
+Modify the `SYSTEM_PROMPT` constant in `main.py` to change LLM behavior.
+{{ end }}
+
+### Switching LLM Provider
+
+Change the `provider` tags in the `@mesh.llm` decorator:
+
+```python
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["llm", "+claude"]},  # For Claude
+    # or
+    provider={"capability": "llm", "tags": ["llm", "+gpt"]},     # For OpenAI
+    ...
+)
+```
+
+## License
+
+MIT
