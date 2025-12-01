@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-ingress
 description: Ingress configuration for MCP Mesh services with flexible DNS routing
 type: application
-version: 0.6.3
-appVersion: "0.6.3"
+version: 0.6.4
+appVersion: "0.6.4"
 keywords:
   - mcp
   - mesh
