@@ -1,0 +1,117 @@
+# Capabilities System
+
+> Named services that agents provide for discovery and dependency injection
+
+## Overview
+
+Capabilities are named services that agents register with the mesh. When an agent declares a capability, other agents can discover and use it through dependency injection. Multiple agents can provide the same capability with different implementations.
+
+## Declaring Capabilities
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="weather_data",           # Capability name
+    description="Provides weather info", # Human-readable description
+    version="1.0.0",                     # Semantic version
+    tags=["weather", "current", "api"],  # Tags for filtering
+)
+def get_weather(city: str) -> dict:
+    return {"city": city, "temp": 72, "conditions": "sunny"}
+```
+
+## Capability Resolution
+
+When an agent requests a dependency, the registry resolves it by:
+
+1. **Name matching**: Find agents providing the requested capability
+2. **Tag filtering**: Apply tag constraints (if specified)
+3. **Version constraints**: Check semantic version compatibility
+4. **Load balancing**: Select from multiple matching providers
+
+## Multiple Implementations
+
+Multiple agents can provide the same capability:
+
+```python
+# Agent 1: OpenWeather implementation
+@mesh.tool(
+    capability="weather_data",
+    tags=["weather", "openweather", "free"],
+)
+def openweather_data(city: str): ...
+
+# Agent 2: Premium weather implementation
+@mesh.tool(
+    capability="weather_data",
+    tags=["weather", "premium", "accurate"],
+)
+def premium_weather_data(city: str): ...
+```
+
+Consumers can select implementations using tag filters:
+
+```python
+@mesh.tool(
+    dependencies=[{"capability": "weather_data", "tags": ["+premium"]}],
+)
+def get_forecast(weather: mesh.McpMeshAgent = None): ...
+```
+
+## Dependency Declaration
+
+### Simple (by name)
+
+```python
+@mesh.tool(
+    dependencies=["date_service", "weather_data"],
+)
+def my_tool(date: mesh.McpMeshAgent = None, weather: mesh.McpMeshAgent = None):
+    pass
+```
+
+### Advanced (with filters)
+
+```python
+@mesh.tool(
+    dependencies=[
+        {"capability": "date_service"},
+        {"capability": "weather_data", "tags": ["+accurate", "-deprecated"]},
+    ],
+)
+def my_tool(date: mesh.McpMeshAgent = None, weather: mesh.McpMeshAgent = None):
+    pass
+```
+
+## Capability Naming Conventions
+
+| Pattern         | Example         | Use Case         |
+| --------------- | --------------- | ---------------- |
+| `noun_noun`     | `weather_data`  | Data providers   |
+| `verb_noun`     | `get_time`      | Action services  |
+| `domain_action` | `auth_validate` | Domain-specific  |
+| `service`       | `llm`           | Generic services |
+
+## Versioning
+
+Capabilities support semantic versioning:
+
+```python
+@mesh.tool(
+    capability="api_client",
+    version="2.1.0",
+)
+def api_v2(): ...
+```
+
+Consumers can specify version constraints (coming soon):
+
+```python
+dependencies=[{"capability": "api_client", "version": ">=2.0.0"}]
+```
+
+## See Also
+
+- `meshctl man tags` - Tag matching system
+- `meshctl man dependency-injection` - How DI works
+- `meshctl man decorators` - All decorator options

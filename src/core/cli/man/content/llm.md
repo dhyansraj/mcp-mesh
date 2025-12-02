@@ -1,0 +1,224 @@
+# LLM Integration
+
+> Building LLM-powered agents with @mesh.llm decorator
+
+## Overview
+
+MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.llm` decorator. This enables agentic loops where LLMs can discover and use mesh tools automatically.
+
+## @mesh.llm Decorator
+
+```python
+@app.tool()
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
+    max_iterations=5,
+    system_prompt="file://prompts/assistant.jinja2",
+    context_param="ctx",
+    response_format="json",
+    filter=[{"tags": ["tools"]}],
+    filter_mode="all",
+)
+@mesh.tool(
+    capability="smart_assistant",
+    description="LLM-powered assistant",
+)
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+    return llm("Help the user with their request")
+```
+
+## Parameters
+
+| Parameter         | Type | Description                                       |
+| ----------------- | ---- | ------------------------------------------------- |
+| `provider`        | dict | LLM provider selector (capability + tags)         |
+| `max_iterations`  | int  | Max agentic loop iterations (default: 1)          |
+| `system_prompt`   | str  | Inline prompt or `file://path` to Jinja2 template |
+| `context_param`   | str  | Parameter name receiving context object           |
+| `response_format` | str  | `"text"` or `"json"`                              |
+| `filter`          | list | Tool filter criteria                              |
+| `filter_mode`     | str  | `"all"`, `"best_match"`, or `"*"`                 |
+
+## LLM Provider Selection
+
+Select LLM provider using capability and tags:
+
+```python
+# Prefer Claude
+provider={"capability": "llm", "tags": ["+claude"]}
+
+# Require OpenAI
+provider={"capability": "llm", "tags": ["openai"]}
+
+# Any LLM provider
+provider={"capability": "llm"}
+```
+
+## Creating LLM Providers
+
+Use `@mesh.llm_provider` for zero-code LLM providers:
+
+```python
+@mesh.llm_provider(
+    model="anthropic/claude-sonnet-4-5",
+    capability="llm",
+    tags=["llm", "claude", "provider"],
+    version="1.0.0",
+)
+def claude_provider():
+    pass  # No implementation needed
+
+@mesh.agent(name="claude-provider", http_port=9110)
+class ClaudeProviderAgent:
+    pass
+```
+
+### Supported Models (LiteLLM)
+
+```
+anthropic/claude-sonnet-4-5
+anthropic/claude-sonnet-4-20250514
+openai/gpt-4o
+openai/gpt-4-turbo
+openai/gpt-3.5-turbo
+```
+
+## Tool Filtering
+
+Control which mesh tools the LLM can access:
+
+### By Tags
+
+```python
+filter=[{"tags": ["executor", "tools"]}]
+```
+
+### By Capability
+
+```python
+filter=[{"capability": "calculator"}, {"capability": "search"}]
+```
+
+### Wildcard (All Tools)
+
+```python
+filter_mode="*"
+```
+
+### No Tools (LLM Only)
+
+```python
+# Omit filter parameter
+@mesh.llm(provider=..., max_iterations=1)
+```
+
+## System Prompts
+
+### Inline Prompt
+
+```python
+system_prompt="You are a helpful assistant. Analyze the input and respond."
+```
+
+### Jinja2 Template File
+
+```python
+system_prompt="file://prompts/assistant.jinja2"
+```
+
+Template example:
+
+```jinja2
+You are {{ agent_name }}, an AI assistant.
+
+## Context
+{{ input_text }}
+
+## Instructions
+Analyze the input and provide a helpful response.
+Available tools: {{ tools | join(", ") }}
+```
+
+**Note**: Context fields are accessed directly (`{{ input_text }}`), not via prefix.
+
+## Context Objects
+
+Define typed context with Pydantic:
+
+```python
+from pydantic import BaseModel, Field
+
+class AssistContext(BaseModel):
+    input_text: str = Field(..., description="User's request")
+    user_id: str = Field(default="anonymous")
+    preferences: dict = Field(default_factory=dict)
+
+@mesh.llm(context_param="ctx", ...)
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+    return llm(f"Help with: {ctx.input_text}")
+```
+
+## Response Formats
+
+### Text Response
+
+```python
+response_format="text"
+# Returns: str
+```
+
+### JSON Response
+
+```python
+response_format="json"
+# Returns: Pydantic model or dict
+```
+
+With response model:
+
+```python
+class AssistResponse(BaseModel):
+    answer: str
+    confidence: float
+    sources: list[str]
+
+@mesh.llm(response_format="json", ...)
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return llm("Analyze and respond")
+```
+
+## Agentic Loops
+
+Set `max_iterations` for multi-step reasoning:
+
+```python
+@mesh.llm(
+    max_iterations=10,  # Allow up to 10 tool calls
+    filter=[{"tags": ["tools"]}],
+)
+def complex_task(ctx: TaskContext, llm: mesh.MeshLlmAgent = None):
+    return llm("Complete this multi-step task")
+```
+
+The LLM will:
+
+1. Analyze the request
+2. Call discovered tools as needed
+3. Use tool results for further reasoning
+4. Return final response
+
+## Scaffolding LLM Agents
+
+```bash
+# Generate LLM agent
+meshctl scaffold --name my-agent --agent-type llm-agent --llm-selector claude
+
+# Generate LLM provider
+meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+```
+
+## See Also
+
+- `meshctl man decorators` - All decorator options
+- `meshctl man tags` - Tag matching for providers
+- `meshctl man testing` - Testing LLM agents

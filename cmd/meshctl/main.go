@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"mcp-mesh/src/core/cli"
+	"mcp-mesh/src/core/cli/man"
 	"mcp-mesh/src/core/cli/scaffold"
 )
 
@@ -35,6 +36,7 @@ func main() {
 	rootCmd.AddCommand(cli.NewStatusCommand())
 	rootCmd.AddCommand(cli.NewConfigCommand())
 	rootCmd.AddCommand(cli.NewScaffoldCommand())
+	rootCmd.AddCommand(man.NewManCommand())
 
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {
