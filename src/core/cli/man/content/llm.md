@@ -207,6 +207,67 @@ The LLM will:
 3. Use tool results for further reasoning
 4. Return final response
 
+## Runtime Context Injection
+
+Pass additional context at call time to merge with or override auto-populated context:
+
+```python
+@mesh.llm(
+    system_prompt="file://prompts/assistant.jinja2",
+    context_param="ctx",
+)
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+    # Default: uses ctx from context_param
+    return llm("Help the user")
+
+    # Add extra context (runtime wins on conflicts)
+    return llm("Help", context={"extra_info": "value"})
+
+    # Auto context wins on conflicts
+    return llm("Help", context={"extra": "value"}, context_mode="prepend")
+
+    # Replace context entirely
+    return llm("Help", context={"only": "this"}, context_mode="replace")
+```
+
+### Context Modes
+
+| Mode      | Behavior                                    |
+| --------- | ------------------------------------------- |
+| `append`  | auto_context \| runtime_context (default)   |
+| `prepend` | runtime_context \| auto_context (auto wins) |
+| `replace` | runtime_context only (ignores auto)         |
+
+### Use Cases
+
+**Multi-turn conversations** with state:
+
+```python
+async def chat(ctx: ChatContext, llm: mesh.MeshLlmAgent = None):
+    # First turn
+    response1 = await llm("Hello", context={"turn": 1})
+
+    # Second turn with accumulated context
+    response2 = await llm("Continue", context={"turn": 2, "prev": response1})
+
+    return response2
+```
+
+**Conditional context**:
+
+```python
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+    extra = {"premium": True} if ctx.user.is_premium else {}
+    return await llm("Help", context=extra)
+```
+
+**Clear context** when not needed:
+
+```python
+# Explicitly clear all context
+return await llm("Standalone query", context={}, context_mode="replace")
+```
+
 ## Scaffolding LLM Agents
 
 ```bash

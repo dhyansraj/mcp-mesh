@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -40,6 +40,9 @@ except ImportError:
     completion = None
 
 logger = logging.getLogger(__name__)
+
+# Sentinel value to distinguish "context not provided" from "explicitly None/empty"
+_CONTEXT_NOT_PROVIDED = object()
 
 
 class MeshLlmAgent:
@@ -241,13 +244,66 @@ IMPORTANT TOOL CALLING RULES:
             f"Expected MeshContextModel, dict, or None."
         )
 
-    def _render_system_prompt(self) -> str:
+    def _resolve_context(
+        self,
+        runtime_context: Union[dict, None, object],
+        context_mode: Literal["replace", "append", "prepend"],
+    ) -> dict:
+        """
+        Resolve effective context for template rendering.
+
+        Merges auto-populated context (from decorator's context_param) with
+        runtime context passed to __call__(), based on the context_mode.
+
+        Args:
+            runtime_context: Context passed at call time, or _CONTEXT_NOT_PROVIDED
+            context_mode: How to merge contexts - "replace", "append", or "prepend"
+
+        Returns:
+            Resolved context dictionary for template rendering
+
+        Behavior:
+            - If runtime_context is _CONTEXT_NOT_PROVIDED: use auto-populated context
+            - If context_mode is "replace": use runtime_context entirely
+            - If context_mode is "append": auto_context | runtime_context (runtime wins)
+            - If context_mode is "prepend": runtime_context | auto_context (auto wins)
+
+        Note:
+            Empty dict {} with "replace" mode explicitly clears context.
+            Empty dict {} with "append"/"prepend" is a no-op (keeps auto context).
+        """
+        # Get auto-populated context from decorator
+        auto_context = self._prepare_context(self._context_value)
+
+        # If no runtime context provided, use auto-populated context unchanged
+        if runtime_context is _CONTEXT_NOT_PROVIDED:
+            return auto_context
+
+        # Prepare runtime context (handles MeshContextModel, dict, None)
+        runtime_dict = self._prepare_context(runtime_context)
+
+        # Apply context_mode
+        if context_mode == "replace":
+            # Replace entirely with runtime context (even if empty)
+            return runtime_dict
+        elif context_mode == "prepend":
+            # Runtime first, auto overwrites (auto wins on conflicts)
+            return {**runtime_dict, **auto_context}
+        else:  # "append" (default)
+            # Auto first, runtime overwrites (runtime wins on conflicts)
+            return {**auto_context, **runtime_dict}
+
+    def _render_system_prompt(self, effective_context: Optional[dict] = None) -> str:
         """
         Render system prompt from template or return literal.
 
         If template_path was provided in __init__, renders template with context.
         If system_prompt was set via set_system_prompt(), uses that override.
         Otherwise, uses config.system_prompt as literal.
+
+        Args:
+            effective_context: Optional pre-resolved context dict for template rendering.
+                               If None, uses auto-populated _context_value.
 
         Returns:
             Rendered system prompt string
@@ -261,7 +317,12 @@ IMPORTANT TOOL CALLING RULES:
 
         # If template provided, render it
         if self._template is not None:
-            context = self._prepare_context(self._context_value)
+            # Use provided effective_context or fall back to auto-populated context
+            context = (
+                effective_context
+                if effective_context is not None
+                else self._prepare_context(self._context_value)
+            )
             try:
                 rendered = self._template.render(**context)
                 logger.debug(
@@ -412,7 +473,12 @@ IMPORTANT TOOL CALLING RULES:
             raise RuntimeError(f"Mesh LLM provider invocation failed: {e}") from e
 
     async def __call__(
-        self, message: Union[str, list[dict[str, Any]]], **kwargs
+        self,
+        message: Union[str, list[dict[str, Any]]],
+        *,
+        context: Union[dict, None, object] = _CONTEXT_NOT_PROVIDED,
+        context_mode: Literal["replace", "append", "prepend"] = "append",
+        **kwargs,
     ) -> Any:
         """
         Execute automatic agentic loop and return typed response.
@@ -422,6 +488,13 @@ IMPORTANT TOOL CALLING RULES:
                 - str: Single user message (will be wrapped in messages array)
                 - List[Dict[str, Any]]: Full conversation history with messages
                   in format [{"role": "user|assistant|system", "content": "..."}]
+            context: Optional runtime context for system prompt template rendering.
+                     Can be dict, MeshContextModel, or None. If not provided,
+                     uses the auto-populated context from decorator's context_param.
+            context_mode: How to merge runtime context with auto-populated context:
+                - "append" (default): auto_context | runtime_context (runtime wins on conflicts)
+                - "prepend": runtime_context | auto_context (auto wins on conflicts)
+                - "replace": use runtime_context entirely (ignores auto-populated)
             **kwargs: Additional arguments passed to LLM
 
         Returns:
@@ -431,6 +504,22 @@ IMPORTANT TOOL CALLING RULES:
             MaxIterationsError: If max iterations exceeded
             ToolExecutionError: If tool execution fails
             ValidationError: If response doesn't match output_type schema
+
+        Examples:
+            # Use auto-populated context (default behavior)
+            result = await llm("What is the answer?")
+
+            # Append extra context (runtime wins on key conflicts)
+            result = await llm("What is the answer?", context={"extra": "info"})
+
+            # Prepend context (auto wins on key conflicts)
+            result = await llm("What is the answer?", context={"extra": "info"}, context_mode="prepend")
+
+            # Replace context entirely
+            result = await llm("What is the answer?", context={"only": "this"}, context_mode="replace")
+
+            # Explicitly clear context
+            result = await llm("What is the answer?", context={}, context_mode="replace")
         """
         self._iteration_count = 0
 
@@ -440,8 +529,11 @@ IMPORTANT TOOL CALLING RULES:
                 "litellm is required for MeshLlmAgent. Install with: pip install litellm"
             )
 
-        # Render base system prompt (from template or literal)
-        base_system_prompt = self._render_system_prompt()
+        # Resolve effective context (merge auto-populated with runtime context)
+        effective_context = self._resolve_context(context, context_mode)
+
+        # Render base system prompt (from template or literal) with effective context
+        base_system_prompt = self._render_system_prompt(effective_context)
 
         # Phase 2: Use provider handler to format system prompt
         # This allows vendor-specific optimizations (e.g., OpenAI skips JSON instructions)
