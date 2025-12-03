@@ -1490,3 +1490,361 @@ class TestTemplateRendering:
             assert "Alice" in system_message["content"]
             assert "Python" in system_message["content"]
             assert isinstance(response, ChatResponse)
+
+
+# ============================================================================
+# Runtime Context Injection Tests
+# ============================================================================
+
+
+class TestRuntimeContextInjection:
+    """Test runtime context injection via __call__() context parameter."""
+
+    def test_resolve_context_no_runtime_context_provided(self):
+        """Test: When no runtime context provided, use auto-populated context."""
+        from _mcp_mesh.engine.mesh_llm_agent import _CONTEXT_NOT_PROVIDED, MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = ChatContext(user_name="Alice", domain="Python")
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        resolved = agent._resolve_context(_CONTEXT_NOT_PROVIDED, "append")
+
+        assert resolved == {"user_name": "Alice", "domain": "Python"}
+
+    def test_resolve_context_append_mode(self):
+        """Test: Append mode - runtime context extends auto-populated context."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        runtime_context = {"extra_key": "extra_value", "domain": "overridden"}
+        resolved = agent._resolve_context(runtime_context, "append")
+
+        # Auto context first, runtime overwrites (runtime wins on conflicts)
+        assert resolved["user_name"] == "Alice"
+        assert resolved["domain"] == "overridden"  # Runtime wins
+        assert resolved["extra_key"] == "extra_value"
+
+    def test_resolve_context_prepend_mode(self):
+        """Test: Prepend mode - auto-populated context overwrites runtime."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        runtime_context = {"extra_key": "extra_value", "domain": "runtime_domain"}
+        resolved = agent._resolve_context(runtime_context, "prepend")
+
+        # Runtime first, auto overwrites (auto wins on conflicts)
+        assert resolved["user_name"] == "Alice"
+        assert resolved["domain"] == "Python"  # Auto wins
+        assert resolved["extra_key"] == "extra_value"
+
+    def test_resolve_context_replace_mode(self):
+        """Test: Replace mode - runtime context replaces auto-populated entirely."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        runtime_context = {"only_this": "value"}
+        resolved = agent._resolve_context(runtime_context, "replace")
+
+        # Replace entirely
+        assert resolved == {"only_this": "value"}
+        assert "user_name" not in resolved
+        assert "domain" not in resolved
+
+    def test_resolve_context_replace_with_empty_dict(self):
+        """Test: Replace with empty dict explicitly clears context."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        # Explicitly clear context
+        resolved = agent._resolve_context({}, "replace")
+
+        assert resolved == {}
+
+    def test_resolve_context_append_empty_dict_no_op(self):
+        """Test: Append with empty dict is no-op (keeps auto context)."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        resolved = agent._resolve_context({}, "append")
+
+        # Empty dict appended is no-op
+        assert resolved == {"user_name": "Alice", "domain": "Python"}
+
+    def test_resolve_context_none_runtime_context(self):
+        """Test: None runtime context converted to empty dict."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        resolved = agent._resolve_context(None, "append")
+
+        # None is treated as empty dict for append
+        assert resolved == {"user_name": "Alice", "domain": "Python"}
+
+    def test_resolve_context_with_mesh_context_model_runtime(self):
+        """Test: MeshContextModel works as runtime context."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        auto_context = {"user_name": "Alice"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=None,
+            context_value=auto_context,
+        )
+
+        runtime_context = ChatContext(user_name="Bob", domain="Go")
+        resolved = agent._resolve_context(runtime_context, "append")
+
+        # Runtime MeshContextModel should work
+        assert resolved["user_name"] == "Bob"  # Runtime wins
+        assert resolved["domain"] == "Go"
+
+    @pytest.mark.asyncio
+    async def test_call_with_context_parameter(self):
+        """Test: __call__ with context parameter uses resolved context in template."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=template_path,
+            context_value=auto_context,
+        )
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = MagicMock(
+                choices=[
+                    MagicMock(
+                        message=MagicMock(
+                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            )
+
+            # Call with runtime context that overrides domain
+            response = await agent(
+                "Test message",
+                context={"domain": "Go"},
+            )
+
+            # Verify system prompt contains merged context
+            call_kwargs = mock_completion.call_args[1]
+            messages = call_kwargs["messages"]
+            system_message = next(m for m in messages if m["role"] == "system")
+
+            # Alice from auto, Go from runtime (append mode default)
+            assert "Alice" in system_message["content"]
+            assert "Go" in system_message["content"]
+            assert isinstance(response, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_call_with_context_mode_replace(self):
+        """Test: __call__ with context_mode='replace' replaces entire context."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=template_path,
+            context_value=auto_context,
+        )
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = MagicMock(
+                choices=[
+                    MagicMock(
+                        message=MagicMock(
+                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            )
+
+            # Call with replace mode
+            response = await agent(
+                "Test message",
+                context={"user_name": "Bob", "domain": "Rust"},
+                context_mode="replace",
+            )
+
+            # Verify system prompt contains replaced context
+            call_kwargs = mock_completion.call_args[1]
+            messages = call_kwargs["messages"]
+            system_message = next(m for m in messages if m["role"] == "system")
+
+            # Bob and Rust from runtime (replace mode)
+            assert "Bob" in system_message["content"]
+            assert "Rust" in system_message["content"]
+            assert "Alice" not in system_message["content"]
+            assert isinstance(response, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_call_without_context_uses_auto_populated(self):
+        """Test: __call__ without context parameter uses auto-populated context."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
+        auto_context = ChatContext(user_name="Alice", domain="Python")
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=template_path,
+            context_value=auto_context,
+        )
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = MagicMock(
+                choices=[
+                    MagicMock(
+                        message=MagicMock(
+                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            )
+
+            # Call without context (backward compatible)
+            response = await agent("Test message")
+
+            # Verify system prompt contains auto-populated context
+            call_kwargs = mock_completion.call_args[1]
+            messages = call_kwargs["messages"]
+            system_message = next(m for m in messages if m["role"] == "system")
+
+            assert "Alice" in system_message["content"]
+            assert "Python" in system_message["content"]
+            assert isinstance(response, ChatResponse)
+
+    @pytest.mark.asyncio
+    async def test_call_with_context_mode_prepend(self):
+        """Test: __call__ with context_mode='prepend' - auto wins on conflicts."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        config = make_test_config()
+        template_path = str(TEMPLATES_DIR / "simple.jinja2")
+        auto_context = {"user_name": "Alice", "domain": "Python"}
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            template_path=template_path,
+            context_value=auto_context,
+        )
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = MagicMock(
+                choices=[
+                    MagicMock(
+                        message=MagicMock(
+                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            )
+
+            # Call with prepend mode - auto should win
+            response = await agent(
+                "Test message",
+                context={"user_name": "Bob", "domain": "Rust"},
+                context_mode="prepend",
+            )
+
+            # Verify system prompt uses auto context (prepend means auto wins)
+            call_kwargs = mock_completion.call_args[1]
+            messages = call_kwargs["messages"]
+            system_message = next(m for m in messages if m["role"] == "system")
+
+            # Auto wins on conflicts
+            assert "Alice" in system_message["content"]
+            assert "Python" in system_message["content"]
+            assert isinstance(response, ChatResponse)
