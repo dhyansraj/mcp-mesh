@@ -48,3 +48,11 @@ data:
   # Observability configuration - matches Docker setup
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.registry.observability.distributedTracing.enabled | default "true" | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.registry.observability.telemetryEndpoint | default "tempo:4317" | quote }}
+  # Exporter type: console (default), otlp (for Tempo/Jaeger), json
+  TRACE_EXPORTER_TYPE: {{ .Values.registry.observability.exporterType | default "otlp" | quote }}
+
+  # Redis configuration for session/trace storage
+  {{- if .Values.registry.redis.enabled }}
+  REDIS_URL: {{ printf "redis://%s:%v" .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}
+  MCP_MESH_REDIS_TRACE_PUBLISHING: "true"
+  {{- end }}

@@ -10,7 +10,7 @@ image:
   repository: mcpmesh/registry # Updated for registry
   pullPolicy: IfNotPresent # For production use
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.5"
+  tag: "0.6.4"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -29,16 +29,16 @@ podAnnotations: {}
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 65534
-  fsGroup: 65534
+  runAsUser: 999
+  fsGroup: 999
 
 securityContext:
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: true
+  readOnlyRootFilesystem: false # Registry may need to write temp files
   runAsNonRoot: true
-  runAsUser: 65534
+  runAsUser: 999
 
 service:
   type: ClusterIP
@@ -162,7 +162,15 @@ registry:
   observability:
     distributedTracing:
       enabled: true
-    telemetryEndpoint: "tempo:4317"
+    telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
+    # Exporter type: console (default), otlp (for Tempo/Jaeger), json
+    exporterType: "otlp"
+
+  # Redis configuration for trace streaming (registry reads from mesh:trace stream)
+  redis:
+    enabled: true
+    host: "mcp-core-mcp-mesh-redis"
+    port: 6379
 
     # CORS configuration
     cors:
