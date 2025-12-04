@@ -54,8 +54,8 @@ class APIDependencyResolutionStep(PipelineStep):
                 result.message = (
                     "No heartbeat response or registry wrapper - completed successfully"
                 )
-                self.logger.info(
-                    "ℹ️ No heartbeat response to process - this is normal for API services"
+                self.logger.debug(
+                    "No heartbeat response to process - this is normal for API services"
                 )
                 return result
 
@@ -85,20 +85,7 @@ class APIDependencyResolutionStep(PipelineStep):
             # Log function registry status for debugging
             injector = get_global_injector()
             function_count = len(injector._function_registry)
-            self.logger.debug(
-                f"🔍 Function registry contains {function_count} functions:"
-            )
-            for func_id, wrapper_func in injector._function_registry.items():
-                original_func = getattr(wrapper_func, "_mesh_original_func", None)
-                func_name = original_func.__name__ if original_func else "unknown"
-                dependencies = getattr(wrapper_func, "_mesh_dependencies", [])
-                self.logger.debug(
-                    f"  📋 {func_id} -> {func_name} (deps: {dependencies})"
-                )
-
-            self.logger.debug(
-                "🔗 API dependency resolution step completed using hash-based change detection"
-            )
+            self.logger.debug(f"Function registry contains {function_count} functions")
 
         except Exception as e:
             result.status = PipelineStatus.FAILED
@@ -206,32 +193,33 @@ class APIDependencyResolutionStep(PipelineStep):
 
             if _last_api_dependency_hash is None:
                 if function_count > 0:
-                    self.logger.info(
-                        f"🔄 Initial API dependency state detected: {function_count} functions, {total_deps} dependencies"
+                    self.logger.debug(
+                        f"Initial API dependency state detected: {function_count} functions, {total_deps} dependencies"
                     )
                 else:
-                    self.logger.info(
-                        "🔄 Initial API dependency state detected: no dependencies"
+                    self.logger.debug(
+                        "Initial API dependency state detected: no dependencies"
                     )
             else:
-                self.logger.info(
-                    f"🔄 API dependency state changed (hash: {_last_api_dependency_hash} → {current_hash})"
+                self.logger.debug(
+                    f"API dependency state changed (hash: {_last_api_dependency_hash} → {current_hash})"
                 )
                 if function_count > 0:
-                    self.logger.info(
-                        f"🔄 Updating API dependencies for {function_count} functions ({total_deps} total dependencies)"
+                    self.logger.debug(
+                        f"Updating API dependencies for {function_count} functions ({total_deps} total dependencies)"
                     )
                 else:
-                    self.logger.info(
-                        "🔄 Registry reports no API dependencies - unwiring all existing dependencies"
+                    self.logger.debug(
+                        "Registry reports no API dependencies - unwiring all existing dependencies"
                     )
 
             # Import here to avoid circular imports
             from ...engine.dependency_injector import get_global_injector
-            from ...engine.full_mcp_proxy import (EnhancedFullMCPProxy,
-                                                  FullMCPProxy)
-            from ...engine.mcp_client_proxy import (EnhancedMCPClientProxy,
-                                                    MCPClientProxy)
+            from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
+            from ...engine.mcp_client_proxy import (
+                EnhancedMCPClientProxy,
+                MCPClientProxy,
+            )
 
             injector = get_global_injector()
 
@@ -267,15 +255,31 @@ class APIDependencyResolutionStep(PipelineStep):
             for dep_key in keys_to_remove:
                 await injector.unregister_dependency(dep_key)
                 unwired_count += 1
-                self.logger.info(
-                    f"🗑️ Unwired API dependency '{dep_key}' (no longer reported by registry)"
+                self.logger.debug(
+                    f"Unwired API dependency '{dep_key}' (no longer reported by registry)"
                 )
 
             # Step 3: Apply all dependency updates using positional indexing
             updated_count = 0
             for function_name, dependency_list in current_state.items():
+                # Check if function_name is a route path (METHOD:path format)
+                # Route paths contain "/" and look like "GET:/api/v1/benchmark-services"
+                is_route_path = "/" in function_name
+
                 # Map tool name to func_id (using mapping from Step 1)
+                # For route paths, use the route_id directly as it won't be in tool_name_to_func_id
                 func_id = tool_name_to_func_id.get(function_name, function_name)
+
+                # Get route wrapper if this is a route path
+                route_wrapper_info = None
+                if is_route_path:
+                    route_wrapper_info = DecoratorRegistry.get_route_wrapper(
+                        function_name
+                    )
+                    if not route_wrapper_info:
+                        self.logger.warning(
+                            f"No route wrapper found for '{function_name}' - dependency injection may fail"
+                        )
 
                 for dep_index, dep_info in enumerate(dependency_list):
                     status = dep_info["status"]
@@ -288,45 +292,27 @@ class APIDependencyResolutionStep(PipelineStep):
                         # Import here to avoid circular imports
                         import os
 
-                        from ...engine.self_dependency_proxy import \
-                            SelfDependencyProxy
-                        from ...engine.unified_mcp_proxy import \
-                            EnhancedUnifiedMCPProxy
+                        from ...engine.self_dependency_proxy import SelfDependencyProxy
+                        from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
 
                         # Get current agent ID for self-dependency detection
                         current_agent_id = None
                         try:
-                            from ...engine.decorator_registry import \
-                                DecoratorRegistry
+                            from ...engine.decorator_registry import DecoratorRegistry
 
                             config = DecoratorRegistry.get_resolved_agent_config()
                             current_agent_id = config["agent_id"]
-                            self.logger.debug(
-                                f"🔍 Current API service ID from DecoratorRegistry: '{current_agent_id}'"
-                            )
-                        except Exception as e:
+                        except Exception:
                             # For API services, try environment variable fallback
                             current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
-                            self.logger.debug(
-                                f"🔍 Current API service ID from environment: '{current_agent_id}' (fallback due to: {e})"
-                            )
 
                         target_agent_id = dep_info.get("agent_id")
-                        self.logger.debug(
-                            f"🔍 Target agent ID from registry: '{target_agent_id}'"
-                        )
 
                         # Determine if this is a self-dependency (less common for API services)
                         is_self_dependency = (
                             current_agent_id
                             and target_agent_id
                             and current_agent_id == target_agent_id
-                        )
-
-                        self.logger.debug(
-                            f"🔍 Self-dependency check for '{capability}': "
-                            f"current='{current_agent_id}' vs target='{target_agent_id}' "
-                            f"→ {'SELF' if is_self_dependency else 'CROSS'}-dependency"
                         )
 
                         if is_self_dependency:
@@ -336,16 +322,13 @@ class APIDependencyResolutionStep(PipelineStep):
                             wrapper_func = None
                             if dep_function_name in mesh_tools:
                                 wrapper_func = mesh_tools[dep_function_name].function
-                                self.logger.debug(
-                                    f"🔍 Found wrapper for '{dep_function_name}' in DecoratorRegistry"
-                                )
 
                             if wrapper_func:
                                 new_proxy = SelfDependencyProxy(
                                     wrapper_func, dep_function_name
                                 )
-                                self.logger.info(
-                                    f"🔄 API SELF-DEPENDENCY: Using wrapper for '{capability}' "
+                                self.logger.debug(
+                                    f"API SELF-DEPENDENCY: Using wrapper for '{capability}' "
                                     f"(local call with full DI support)"
                                 )
                             else:
@@ -380,57 +363,57 @@ class APIDependencyResolutionStep(PipelineStep):
                                 kwargs_config=kwargs_config,
                             )
 
-                        # Register with composite key using func_id (not tool name) to match injector lookup
-                        dep_key = f"{func_id}:dep_{dep_index}"
-                        self.logger.debug(
-                            f"🔄 Before update: registering {dep_key} = {type(new_proxy).__name__}"
-                        )
-                        await injector.register_dependency(dep_key, new_proxy)
-                        updated_count += 1
+                        # For route paths, directly update the wrapper's dependencies
+                        # This bypasses the injector key-based lookup which doesn't work for routes
+                        if route_wrapper_info:
+                            wrapper = route_wrapper_info.get("wrapper")
+                            if wrapper and hasattr(wrapper, "_mesh_update_dependency"):
+                                wrapper._mesh_update_dependency(dep_index, new_proxy)
+                                updated_count += 1
+                                self.logger.debug(
+                                    f"Updated route dependency '{capability}' at position {dep_index} "
+                                    f"→ {endpoint}/{dep_function_name} for route '{function_name}'"
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"Route wrapper for '{function_name}' doesn't have _mesh_update_dependency method"
+                                )
+                        else:
+                            # Fallback: Register with composite key using func_id for MCP tools
+                            dep_key = f"{func_id}:dep_{dep_index}"
+                            await injector.register_dependency(dep_key, new_proxy)
+                            updated_count += 1
 
-                        # Log which functions will be affected
-                        affected_functions = injector._dependency_mapping.get(
-                            dep_key, set()
-                        )
-                        self.logger.debug(
-                            f"🎯 Functions affected by '{capability}' at position {dep_index}: {list(affected_functions)}"
-                        )
+                            # Log which functions will be affected
+                            affected_functions = injector._dependency_mapping.get(
+                                dep_key, set()
+                            )
+                            self.logger.debug(
+                                f"Functions affected by '{capability}' at position {dep_index}: {list(affected_functions)}"
+                            )
 
-                        self.logger.info(
-                            f"🔄 Updated API dependency '{capability}' at position {dep_index} → {endpoint}/{dep_function_name} "
-                            f"(proxy: EnhancedUnifiedMCPProxy - consistent with MCP pipeline)"
-                        )
-                        self.logger.debug(
-                            f"🔗 Registered dependency '{capability}' at position {dep_index} with key '{dep_key}' (func_id: {func_id})"
-                        )
+                            self.logger.debug(
+                                f"Updated API dependency '{capability}' at position {dep_index} → {endpoint}/{dep_function_name}"
+                            )
+                            self.logger.debug(
+                                f"Registered dependency '{capability}' at position {dep_index} with key '{dep_key}' (func_id: {func_id})"
+                            )
                     else:
                         if status != "available":
                             self.logger.debug(
-                                f"⚠️ API dependency '{capability}' at position {dep_index} not available: {status}"
+                                f"API dependency '{capability}' at position {dep_index} not available: {status}"
                             )
                         else:
                             self.logger.warning(
-                                f"⚠️ Cannot update API dependency '{capability}' at position {dep_index}: missing endpoint or function_name"
+                                f"Cannot update API dependency '{capability}' at position {dep_index}: missing endpoint or function_name"
                             )
 
             # Store new hash for next comparison (use global variable)
             _last_api_dependency_hash = current_hash
 
-            if unwired_count > 0 and updated_count > 0:
-                self.logger.info(
-                    f"✅ Successfully unwired {unwired_count} and updated {updated_count} API dependencies (state hash: {current_hash})"
-                )
-            elif unwired_count > 0:
-                self.logger.info(
-                    f"✅ Successfully unwired {unwired_count} API dependencies (state hash: {current_hash})"
-                )
-            elif updated_count > 0:
-                self.logger.info(
-                    f"✅ Successfully updated {updated_count} API dependencies (state hash: {current_hash})"
-                )
-            else:
-                self.logger.info(
-                    f"✅ API dependency state synchronized (state hash: {current_hash})"
+            if unwired_count > 0 or updated_count > 0:
+                self.logger.debug(
+                    f"API dependency sync: unwired={unwired_count}, updated={updated_count} (hash: {current_hash})"
                 )
 
         except Exception as e:
@@ -482,8 +465,7 @@ class APIDependencyResolutionStep(PipelineStep):
             Proxy instance
         """
         from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-        from ...engine.mcp_client_proxy import (EnhancedMCPClientProxy,
-                                                MCPClientProxy)
+        from ...engine.mcp_client_proxy import EnhancedMCPClientProxy, MCPClientProxy
 
         if proxy_type == "FullMCPProxy":
             # Use enhanced proxy if kwargs available

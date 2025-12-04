@@ -422,6 +422,10 @@ class FastAPIServerSetupStep(PipelineStep):
         except ImportError as e:
             raise Exception(f"FastAPI not available: {e}")
 
+    # Note: Trace context middleware for distributed tracing is added in
+    # mesh/decorators.py BEFORE the FastAPI app starts. This ensures the middleware
+    # is properly registered since middleware cannot be added after the app starts.
+
     async def _add_k8s_endpoints(
         self,
         app: Any,
@@ -889,6 +893,9 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                     self.logger.debug(
                         "✅ SERVER REUSE: FastMCP lifespan already integrated, mounting same HTTP app"
                     )
+
+                    # Note: Trace context middleware is added in decorators.py BEFORE the app starts
+                    # We cannot add middleware after the application has started
 
                     # FastMCP lifespan is already integrated, mount the same HTTP app that was used for lifespan
                     for server_key, server_instance in fastmcp_servers.items():

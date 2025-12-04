@@ -29,7 +29,7 @@ class UnifiedMCPProxy:
     """
 
     def __init__(
-        self, endpoint: str, function_name: str, kwargs_config: Optional[dict] = None
+        self, endpoint: str, function_name: str, kwargs_config: dict | None = None
     ):
         """Initialize Unified MCP Proxy.
 
@@ -134,12 +134,20 @@ class UnifiedMCPProxy:
                     "X-Trace-ID": current_trace.trace_id,
                     "X-Parent-Span": current_trace.span_id,  # Current span becomes parent for downstream
                 }
+                self.logger.info(
+                    f"🔗 TRACE_PROPAGATION: Injecting headers trace_id={current_trace.trace_id[:8]}... "
+                    f"parent_span={current_trace.span_id[:8]}..."
+                )
                 return headers
             else:
+                self.logger.warning("🔗 TRACE_PROPAGATION: No trace context available")
                 return {}
 
         except Exception as e:
             # Never fail MCP calls due to tracing issues
+            self.logger.warning(
+                f"🔗 TRACE_PROPAGATION: Exception getting trace context: {e}"
+            )
             return {}
 
     def _configure_from_kwargs(self):
@@ -826,7 +834,7 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
     """
 
     def __init__(
-        self, endpoint: str, function_name: str, kwargs_config: Optional[dict] = None
+        self, endpoint: str, function_name: str, kwargs_config: dict | None = None
     ):
         """Initialize Enhanced Unified MCP Proxy."""
         super().__init__(endpoint, function_name, kwargs_config)

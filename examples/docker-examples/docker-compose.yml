@@ -388,6 +388,61 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Simple FastAPI Router App (Maya-style APIRouter pattern) - built locally
+  simple-router-app:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    container_name: mcp-mesh-simple-router-app
+    hostname: simple-router-app
+    ports:
+      - "8086:8080"
+    volumes:
+      # Mount Simple Router app code
+      - ../simple/simple_fastapi_router.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=simple-router-app
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=simple-router-app
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=simple-router-app
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    # Agents are resilient - no dependencies needed, can start in any order
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
   # Tempo - Distributed tracing backend
   tempo:
     image: grafana/tempo:2.8.1

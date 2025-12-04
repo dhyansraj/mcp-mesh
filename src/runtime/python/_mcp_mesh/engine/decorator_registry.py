@@ -38,7 +38,7 @@ class LLMAgentMetadata:
 
     function: Callable
     config: dict[str, Any]  # LLM configuration (provider, model, filter, etc.)
-    output_type: Optional[type]  # Pydantic model type from return annotation
+    output_type: type | None  # Pydantic model type from return annotation
     param_name: str  # Name of MeshLlmAgent parameter
     function_id: str  # Unique function ID for registry
     registered_at: datetime
@@ -70,16 +70,55 @@ class DecoratorRegistry:
     _custom_decorators: dict[str, dict[str, DecoratedFunction]] = {}
 
     # Immediate uvicorn server storage (for preventing shutdown state)
-    _immediate_uvicorn_server: Optional[dict[str, Any]] = None
+    _immediate_uvicorn_server: dict[str, Any] | None = None
 
     # FastMCP lifespan storage (for proper integration with FastAPI)
-    _fastmcp_lifespan: Optional[Any] = None
+    _fastmcp_lifespan: Any | None = None
 
     # FastMCP HTTP app storage (the same app instance whose lifespan was extracted)
-    _fastmcp_http_app: Optional[Any] = None
+    _fastmcp_http_app: Any | None = None
 
     # FastMCP server info storage (for schema extraction during heartbeat)
-    _fastmcp_server_info: Optional[dict[str, Any]] = None
+    _fastmcp_server_info: dict[str, Any] | None = None
+
+    # Route-to-wrapper mapping for @mesh.route dependency injection
+    # Key: "METHOD:path" (e.g., "GET:/api/v1/benchmark-services")
+    # Value: {"wrapper": Callable, "dependencies": list[str]}
+    _route_wrapper_registry: dict[str, dict[str, Any]] = {}
+
+    @classmethod
+    def register_route_wrapper(
+        cls, method: str, path: str, wrapper: Callable, dependencies: list[str]
+    ) -> None:
+        """
+        Register a route's wrapper function for dependency injection.
+
+        Args:
+            method: HTTP method (e.g., "GET", "POST")
+            path: Route path (e.g., "/api/v1/benchmark-services")
+            wrapper: The injection wrapper function
+            dependencies: List of dependency capability names
+        """
+        route_id = f"{method}:{path}"
+        cls._route_wrapper_registry[route_id] = {
+            "wrapper": wrapper,
+            "dependencies": dependencies,
+            "method": method,
+            "path": path,
+        }
+        logger.debug(
+            f"📝 Registered route wrapper: {route_id} with {len(dependencies)} dependencies"
+        )
+
+    @classmethod
+    def get_route_wrapper(cls, route_id: str) -> dict[str, Any] | None:
+        """Get route wrapper info by route ID (METHOD:path)."""
+        return cls._route_wrapper_registry.get(route_id)
+
+    @classmethod
+    def get_all_route_wrappers(cls) -> dict[str, dict[str, Any]]:
+        """Get all registered route wrappers."""
+        return cls._route_wrapper_registry.copy()
 
     @classmethod
     def register_mesh_agent(cls, func: Callable, metadata: dict[str, Any]) -> None:
@@ -154,7 +193,7 @@ class DecoratorRegistry:
         cls,
         func: Callable,
         config: dict[str, Any],
-        output_type: Optional[type],
+        output_type: type | None,
         param_name: str,
         function_id: str,
     ) -> None:
@@ -355,7 +394,7 @@ class DecoratorRegistry:
         return stats
 
     # Cache for resolved agent configuration to avoid repeated work
-    _cached_agent_config: Optional[dict[str, Any]] = None
+    _cached_agent_config: dict[str, Any] | None = None
 
     @classmethod
     def update_agent_config(cls, updates: dict[str, Any]) -> None:
@@ -610,7 +649,7 @@ class DecoratorRegistry:
         )
 
     @classmethod
-    def get_immediate_uvicorn_server(cls) -> Optional[dict[str, Any]]:
+    def get_immediate_uvicorn_server(cls) -> dict[str, Any] | None:
         """
         Get stored immediate uvicorn server reference.
 
@@ -659,7 +698,7 @@ class DecoratorRegistry:
         logger.debug("🔄 REGISTRY: Stored FastMCP lifespan for FastAPI integration")
 
     @classmethod
-    def get_fastmcp_lifespan(cls) -> Optional[Any]:
+    def get_fastmcp_lifespan(cls) -> Any | None:
         """
         Get stored FastMCP lifespan.
 
@@ -686,7 +725,7 @@ class DecoratorRegistry:
         logger.debug("🔄 REGISTRY: Stored FastMCP HTTP app for mounting")
 
     @classmethod
-    def get_fastmcp_http_app(cls) -> Optional[Any]:
+    def get_fastmcp_http_app(cls) -> Any | None:
         """
         Get stored FastMCP HTTP app.
 
@@ -715,7 +754,7 @@ class DecoratorRegistry:
         )
 
     @classmethod
-    def get_fastmcp_server_info(cls) -> Optional[dict[str, Any]]:
+    def get_fastmcp_server_info(cls) -> dict[str, Any] | None:
         """
         Get stored FastMCP server info.
 

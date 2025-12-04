@@ -26,8 +26,8 @@ class ExecutionTracer:
     def __init__(self, function_name: str, logger_instance: logging.Logger):
         self.function_name = function_name
         self.logger = logger_instance
-        self.start_time: Optional[float] = None
-        self.trace_context: Optional[Any] = None
+        self.start_time: float | None = None
+        self.trace_context: Any | None = None
         self.execution_metadata: dict = {}
 
     def start_execution(
@@ -41,6 +41,7 @@ class ExecutionTracer:
         """Start execution tracking and log function start."""
         try:
             from .context import TraceContext
+            from .utils import generate_trace_id
 
             self.start_time = time.time()
             self.trace_context = TraceContext.get_current()
@@ -60,22 +61,49 @@ class ExecutionTracer:
             agent_metadata = get_agent_metadata_with_fallback(self.logger)
             self.execution_metadata.update(agent_metadata)
 
+            # Generate a new child span ID for this function execution
+            function_span_id = generate_span_id()
+
             if self.trace_context:
-                # Generate a new child span ID for this function execution
-                # Keep the same trace_id but create unique span_id per function call
-                function_span_id = generate_span_id()
-
-
+                # Have trace context - use existing trace_id, create child span
+                # Current trace's span_id becomes this function's parent_span
                 self.execution_metadata.update(
                     {
                         "trace_id": self.trace_context.trace_id,
                         "span_id": function_span_id,  # New child span for this function
-                        "parent_span": (
-                            self.trace_context.span_id
-                            if self.trace_context.parent_span is not None
-                            else None
-                        ),  # HTTP middleware span becomes parent only if not root
+                        "parent_span": self.trace_context.span_id,  # Parent's span becomes our parent
                     }
+                )
+
+                # Update TraceContext for nested calls - this span becomes the new current span
+                TraceContext.set_current(
+                    trace_id=self.trace_context.trace_id,
+                    span_id=function_span_id,
+                    parent_span=self.trace_context.span_id,
+                )
+            else:
+                # No trace context (FastMCP context propagation issue) - generate root trace
+                # This ensures traces always have IDs even when contextvar propagation fails
+                root_trace_id = generate_trace_id()
+                self.execution_metadata.update(
+                    {
+                        "trace_id": root_trace_id,
+                        "span_id": function_span_id,
+                        "parent_span": None,  # Root span has no parent
+                    }
+                )
+
+                # CRITICAL: Set the TraceContext so outgoing cross-agent calls can propagate it
+                # Without this, inject_trace_headers_to_request() won't find the trace context
+                # and cross-agent traces won't be linked with parent_span
+                TraceContext.set_current(
+                    trace_id=root_trace_id,
+                    span_id=function_span_id,
+                    parent_span=None,
+                )
+
+                self.logger.debug(
+                    f"Generated root trace for {self.function_name}: trace_id={root_trace_id}"
                 )
 
         except Exception as e:
@@ -84,7 +112,7 @@ class ExecutionTracer:
             )
 
     def end_execution(
-        self, result: Any = None, success: bool = True, error: Optional[str] = None
+        self, result: Any = None, success: bool = True, error: str | None = None
     ) -> None:
         """End execution tracking and log function completion."""
         try:
