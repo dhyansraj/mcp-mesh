@@ -5,10 +5,10 @@
 replicaCount: 1
 
 image:
-  repository: mcp-mesh-base # Agent base image
+  repository: mcpmesh/python-runtime # Agent base image from Docker Hub
   pullPolicy: IfNotPresent # For production use
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.5"
+  tag: "0.6.4"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -26,9 +26,9 @@ serviceAccount:
 podAnnotations: {}
 
 podSecurityContext:
-  runAsNonRoot: false # Some agents need root for hello-world example
-  runAsUser: 0
-  fsGroup: 0
+  runAsNonRoot: true
+  runAsUser: 999 # mcp-mesh user in the container
+  fsGroup: 999
 
 securityContext:
   capabilities:
@@ -36,7 +36,7 @@ securityContext:
       - ALL
   readOnlyRootFilesystem: false # Python apps often need writable filesystem
   runAsNonRoot: true
-  runAsUser: 1000
+  runAsUser: 999 # mcp-mesh user in the container
 
 service:
   type: ClusterIP
@@ -47,8 +47,7 @@ service:
 ingress:
   enabled: false
   className: ""
-  annotations:
-    {}
+  annotations: {}
     # kubernetes.io/ingress.class: nginx
     # kubernetes.io/tls-acme: "true"
   hosts:
@@ -82,11 +81,11 @@ tolerations: []
 
 affinity: {}
 
-# Registry configuration (matches working examples)
+# Registry configuration (assumes mcp-mesh-core installed as "mcp-core")
 registry:
-  host: "mcp-mesh-registry"
+  host: "mcp-core-mcp-mesh-registry"
   port: "8000"
-  url: "http://mcp-mesh-registry:8000"
+  url: "http://mcp-core-mcp-mesh-registry:8000"
 
 # Mesh configuration
 mesh:
@@ -101,6 +100,12 @@ agent:
   # Python script to run (required)
   script: "/app/agent.py" # Matches working examples
   # Example: "/app/agents/hello_world.py"
+
+  # Hostname advertised to registry for service discovery
+  # Default: <release>-mcp-mesh-agent.<namespace> (works within same cluster)
+  # For multi-namespace: set to <service>.<namespace>.svc.cluster.local
+  # For multi-cluster: set to external ingress hostname
+  advertisedHost: ""
 
   # Agent metadata for mesh registration (optional - usually comes from @mesh.agent decorator)
   name: "" # Override agent name (empty = use from script's @mesh.agent decorator)
@@ -144,7 +149,7 @@ agent:
   http:
     enabled: true
     host: "0.0.0.0"
-    port: 0 # 0 = auto-assign
+    port: 8080 # Standard K8s agent port (overrides script's http_port)
     cors:
       enabled: true
       origins: ["*"]
@@ -159,11 +164,12 @@ agent:
     # - numpy==1.24.0
 
   # Observability configuration - matches k8s examples
+  # Service names follow pattern: <mcp-core-release>-mcp-mesh-<component>
   observability:
     distributedTracing:
       enabled: true
-      redisUrl: "redis://mcp-mesh-redis:6379"
-    telemetryEndpoint: "tempo:4317"
+      redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
+    telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
     tracing:
       enabled: true
     metrics:
@@ -172,8 +178,8 @@ agent:
   # Additional environment variables for tracing (matches k8s examples)
   environment:
     MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
-    REDIS_URL: "redis://mcp-mesh-redis:6379"
-    TELEMETRY_ENDPOINT: "tempo:4317"
+    REDIS_URL: "redis://mcp-core-mcp-mesh-redis:6379"
+    TELEMETRY_ENDPOINT: "mcp-core-mcp-mesh-tempo:4317"
     MCP_MESH_TRACING_ENABLED: "true"
     MCP_MESH_METRICS_ENABLED: "true"
     # - pandas>=1.5.0
@@ -244,22 +250,19 @@ persistence:
   subPath: ""
 
 # Environment variables
-env:
-  []
+env: []
   # - name: CUSTOM_ENV_VAR
   #   value: "custom_value"
 
 # Environment variables from ConfigMaps or Secrets
-envFrom:
-  []
+envFrom: []
   # - configMapRef:
   #     name: special-config
   # - secretRef:
   #     name: special-secret
 
 # Secrets for sensitive data
-secrets:
-  {}
+secrets: {}
   # Example:
   # API_KEY: "your-api-key"
   # DATABASE_PASSWORD: "your-password"
@@ -321,28 +324,24 @@ podMonitor:
   relabelings: []
 
 # Extra volumes and volume mounts
-extraVolumes:
-  []
+extraVolumes: []
   # - name: extra-volume
   #   secret:
   #     secretName: extra-secret
 
-extraVolumeMounts:
-  []
+extraVolumeMounts: []
   # - name: extra-volume
   #   mountPath: /etc/extra
   #   readOnly: true
 
 # Init containers
-initContainers:
-  []
+initContainers: []
   # - name: wait-for-registry
   #   image: busybox:1.35
   #   command: ['sh', '-c', 'until nc -z mcp-mesh-registry 8080; do echo waiting for registry; sleep 2; done;']
 
 # Sidecar containers
-sidecarContainers:
-  []
+sidecarContainers: []
   # - name: logging-sidecar
   #   image: fluent/fluent-bit:1.9
   #   volumeMounts:
@@ -350,20 +349,17 @@ sidecarContainers:
   #       mountPath: /var/log
 
 # Extra labels for all resources
-commonLabels:
-  {}
+commonLabels: {}
   # team: backend
   # environment: production
 
 # Extra annotations for all resources
-commonAnnotations:
-  {}
+commonAnnotations: {}
   # prometheus.io/scrape: "true"
   # prometheus.io/port: "8080"
 
 # Pod topology spread constraints
-topologySpreadConstraints:
-  []
+topologySpreadConstraints: []
   # - maxSkew: 1
   #   topologyKey: kubernetes.io/hostname
   #   whenUnsatisfiable: DoNotSchedule
@@ -385,8 +381,7 @@ runtimeClassName: ""
 dnsPolicy: ClusterFirst
 
 # DNS config
-dnsConfig:
-  {}
+dnsConfig: {}
   # nameservers:
   #   - 1.1.1.1
   # searches:
@@ -394,8 +389,7 @@ dnsConfig:
   #   - my.dns.search.suffix
 
 # Host aliases
-hostAliases:
-  []
+hostAliases: []
   # - ip: "127.0.0.1"
   #   hostnames:
   #   - "foo.local"
