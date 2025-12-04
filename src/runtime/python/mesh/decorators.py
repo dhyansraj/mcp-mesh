@@ -76,6 +76,49 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             app = FastAPI(title="MCP Mesh Agent (Starting)")
             logger.debug("📦 IMMEDIATE UVICORN: Created minimal FastAPI app")
 
+        # Add trace context middleware for distributed tracing BEFORE app starts
+        # This must be done before uvicorn.run() since middleware can't be added after start
+        try:
+            import os
+
+            tracing_enabled = os.getenv(
+                "MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false"
+            ).lower() in ("true", "1", "yes")
+            if tracing_enabled:
+                from starlette.middleware.base import BaseHTTPMiddleware
+                from starlette.requests import Request
+
+                class TraceContextMiddleware(BaseHTTPMiddleware):
+                    """Middleware to extract trace headers and set up trace context."""
+
+                    async def dispatch(self, request: Request, call_next):
+                        try:
+                            from _mcp_mesh.tracing.trace_context_helper import (
+                                TraceContextHelper,
+                            )
+
+                            # Extract and set trace context from headers for distributed tracing
+                            trace_context = await TraceContextHelper.extract_trace_context_from_request(
+                                request
+                            )
+                            TraceContextHelper.setup_request_trace_context(
+                                trace_context, logger
+                            )
+                        except Exception as e:
+                            # Never fail request due to tracing issues
+                            logger.warning(f"Failed to set trace context: {e}")
+
+                        return await call_next(request)
+
+                app.add_middleware(TraceContextMiddleware)
+                logger.debug(
+                    "📦 IMMEDIATE UVICORN: Added trace context middleware for distributed tracing"
+                )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ IMMEDIATE UVICORN: Failed to add trace context middleware: {e}"
+            )
+
         # Add health endpoint that can be updated by pipeline
         # Store health check result in a shared location that can be updated
         health_result = {"status": "starting", "message": "Agent is starting"}

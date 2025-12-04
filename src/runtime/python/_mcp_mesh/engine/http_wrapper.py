@@ -132,7 +132,7 @@ class HttpMcpWrapper:
 
         # Phase 3: Metadata caching
         self._metadata_cache: dict[str, Any] = {}
-        self._cache_timestamp: Optional[datetime] = None
+        self._cache_timestamp: datetime | None = None
         self._cache_ttl: timedelta = timedelta(minutes=5)  # Cache for 5 minutes
 
         # Phase 5: Session storage and pod info
@@ -254,7 +254,7 @@ class HttpMcpWrapper:
         self._cache_timestamp = datetime.now()
         logger.debug(f"📋 Metadata cache updated with {len(metadata)} entries")
 
-    def get_cached_metadata(self) -> Optional[dict[str, Any]]:
+    def get_cached_metadata(self) -> dict[str, Any] | None:
         """Get cached metadata if available and valid."""
         if self._is_cache_valid():
             logger.debug("✅ Returning cached metadata")
@@ -390,6 +390,14 @@ class HttpMcpWrapper:
                 # Extract and set trace context from headers for distributed tracing
                 try:
                     from ..tracing.trace_context_helper import TraceContextHelper
+
+                    # DEBUG: Log incoming headers for trace propagation debugging
+                    trace_id_header = request.headers.get("X-Trace-ID")
+                    parent_span_header = request.headers.get("X-Parent-Span")
+                    self.logger.info(
+                        f"🔍 INCOMING_HEADERS: X-Trace-ID={trace_id_header}, "
+                        f"X-Parent-Span={parent_span_header}, path={request.url.path}"
+                    )
 
                     # Use helper class for trace context extraction and setup
                     trace_context = (
