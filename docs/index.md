@@ -162,8 +162,8 @@ class MyAgent:
 === "Docker"
 
     ```bash
-    docker pull mcpmesh/registry:0.6.4
-    docker pull mcpmesh/python-runtime:0.6.4
+    docker pull mcpmesh/registry:0.7.0
+    docker pull mcpmesh/python-runtime:0.7.0
     ```
 
 ---
@@ -179,7 +179,7 @@ class MyAgent:
 
 ## :star: Project Status
 
-- **Latest Release**: v0.6.4 (November 2025)
+- **Latest Release**: v0.7.0 (December 2025)
 - **License**: MIT
 - **Language**: Python 3.11+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

@@ -1,5 +1,44 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.4...v0.7.0)
+
+## v0.7.0 (2025-12-04)
+
+### 🎯 Agent Scaffolding & Developer Experience
+
+- **Agent Scaffolding**: New `meshctl scaffold` command for generating agent boilerplate code from templates
+  - Multiple template types: basic, tool, llm, advanced
+  - Interactive prompts or CLI flags for configuration
+  - Generates ready-to-run agent code with proper structure
+
+- **Embedded Documentation**: New `meshctl man` command for viewing documentation without leaving the terminal
+  - Browse documentation by topic
+  - Search functionality for finding specific content
+  - Offline-friendly - no network required
+
+### 📊 Features
+
+- **Runtime Context Injection for MeshLlmAgent**: LLM agents can now receive runtime context for dynamic behavior (#186)
+  - Pass context at invocation time for agent customization
+  - Supports dynamic prompt construction based on runtime state
+
+- **FastAPI Route Dependency Injection**: Fixed `@mesh.route` decorator to properly inject dependencies in FastAPI routes (#188)
+  - Uses `METHOD:path` format as unique route identifier (e.g., "GET:/api/v1/time")
+  - Works with both direct `@mesh.route` and `APIRouter` patterns
+  - Proper function signature preservation
+
+### 🐛 Bug Fixes
+
+- Fixed dependency injection for FastAPI routes when using `@mesh.route` decorator
+- Fixed route wrapper registration to use full `METHOD:path` identifier
+
+### 📦 Infrastructure
+
+- Updated all Docker images to use `0.7` tag
+- Updated all Helm charts to version `0.7.0`
+- Updated Kubernetes manifests and CRDs with new image tags
+- Updated Homebrew formula and Scoop manifest
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.3...v0.6.4)
 
 ## v0.6.4 (2025-11-30)

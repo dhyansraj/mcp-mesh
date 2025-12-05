@@ -10,7 +10,7 @@ image:
   repository: mcpmesh/registry # Updated for registry
   pullPolicy: IfNotPresent # For production use
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.6.4"
+  tag: "0.7.0"
 
 imagePullSecrets: []
 nameOverride: ""

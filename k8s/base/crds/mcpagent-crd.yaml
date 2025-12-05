@@ -92,7 +92,7 @@ spec:
                 image:
                   type: string
                   description: Container image for the agent
-                  default: "mcpmesh/python-runtime:0.6"
+                  default: "mcpmesh/python-runtime:0.7"
 
                 imagePullPolicy:
                   type: string
