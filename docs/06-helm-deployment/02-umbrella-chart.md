@@ -221,25 +221,25 @@ keywords:
 dependencies:
   # Core registry
   - name: mcp-mesh-registry
-    version: "0.6.4"
+    version: "0.7.0"
     repository: "file://../mcp-mesh-registry"
     condition: registry.enabled
 
   # Agents using aliases for multiple instances
   - name: mcp-mesh-agent
-    version: "0.6.4"
+    version: "0.7.0"
     repository: "file://../mcp-mesh-agent"
     alias: hello-world-agent
     condition: agents.helloWorld.enabled
 
   - name: mcp-mesh-agent
-    version: "0.6.4"
+    version: "0.7.0"
     repository: "file://../mcp-mesh-agent"
     alias: system-agent
     condition: agents.system.enabled
 
   - name: mcp-mesh-agent
-    version: "0.6.4"
+    version: "0.7.0"
     repository: "file://../mcp-mesh-agent"
     alias: weather-agent
     condition: agents.weather.enabled

@@ -64,7 +64,7 @@ mcp-mesh-redis:
 mcp-mesh-registry:
   image:
     repository: mcpmesh/registry
-    tag: "0.6.4"
+    tag: "0.7.0"
   registry:
     # Database configuration (connects to PostgreSQL)
     database:

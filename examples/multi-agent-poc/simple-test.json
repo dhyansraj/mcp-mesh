@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "chat",
+    "arguments": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello! Can you tell me what you can help me with?"
+        }
+      ]
+    }
+  }
+}
