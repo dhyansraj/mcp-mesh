@@ -31,7 +31,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.registry.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.registry.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
                 port:
                   number: {{ .Values.core.registry.port }}
     {{- end }}
@@ -44,7 +44,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.redis.service "serviceNamespace" .Values.global.serviceNamespace) }}
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.redis.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
                 port:
                   number: {{ .Values.core.redis.port }}
     {{- end }}
@@ -59,7 +59,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .service "serviceNamespace" $.Values.global.serviceNamespace) }}
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .service "serviceNamespace" $.Values.global.serviceNamespace "root" $) }}
                 port:
                   number: {{ .port }}
     {{- end }}

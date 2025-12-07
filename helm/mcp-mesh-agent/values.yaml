@@ -97,9 +97,16 @@ mesh:
 
 # Agent-specific configuration
 agent:
-  # Python script to run (required)
-  script: "/app/agent.py" # Matches working examples
+  # Python script to run (for single-file agents)
+  # Leave empty if using a multi-file agent with custom Docker CMD
+  script: "/app/agent.py"
   # Example: "/app/agents/hello_world.py"
+
+  # Container command override (optional)
+  # If empty, uses Docker image's CMD (recommended for multi-file agents)
+  # For single-file agents: ["python", "/app/agent.py"]
+  # For multi-file agents: [] (uses Docker CMD like "python -m myagent")
+  command: []
 
   # Hostname advertised to registry for service discovery
   # Default: <release>-mcp-mesh-agent.<namespace> (works within same cluster)

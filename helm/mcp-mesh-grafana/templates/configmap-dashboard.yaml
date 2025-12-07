@@ -1,0 +1,20 @@
+{{- if and .Values.grafana.enabled .Values.grafana.dashboards.enabled }}
+{{- $dashboardFile := .Files.Get "files/dashboards/mcp-mesh-overview.json" }}
+{{- if $dashboardFile }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboard
+  labels:
+    {{- include "mcp-mesh-grafana.labels" . | nindent 4 }}
+data:
+  mcp-mesh-overview.json: |
+{{ $dashboardFile | indent 4 }}
+{{- else }}
+# Dashboard file not found at files/dashboards/mcp-mesh-overview.json
+# This file is copied from observability/grafana/dashboards/ during the release process
+# For local development, run:
+#   mkdir -p helm/mcp-mesh-grafana/files/dashboards
+#   cp observability/grafana/dashboards/*.json helm/mcp-mesh-grafana/files/dashboards/
+{{- end }}
+{{- end }}

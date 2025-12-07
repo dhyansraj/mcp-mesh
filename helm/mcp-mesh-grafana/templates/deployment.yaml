@@ -48,6 +48,9 @@ spec:
         - name: dashboards-config
           mountPath: /etc/grafana/provisioning/dashboards
           readOnly: true
+        - name: dashboards
+          mountPath: /var/lib/grafana/dashboards
+          readOnly: true
         {{- end }}
         {{- if .Values.grafana.persistence.enabled }}
         - name: storage
@@ -82,6 +85,9 @@ spec:
       - name: dashboards-config
         configMap:
           name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboards-config
+      - name: dashboards
+        configMap:
+          name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboard
       {{- end }}
       {{- if .Values.grafana.persistence.enabled }}
       - name: storage
