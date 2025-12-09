@@ -1,0 +1,48 @@
+# Helm values for deploying {{ .Name }} with mcp-mesh-agent chart
+# Usage: helm install {{ .Name }} mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+
+image:
+  repository: your-registry/{{ .Name }}
+  tag: latest
+  pullPolicy: IfNotPresent
+
+agent:
+  name: {{ .Name }}
+  port: {{ .Port }}
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+# Enable mesh connectivity
+mesh:
+  enabled: true
+  registryUrl: http://mcp-mesh-registry:8000
+
+# LLM provider needs API keys for the backend LLM service
+env:
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: anthropic-api-key
+        optional: true
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: openai-api-key
+        optional: true
+
+# Optional: Configure model settings
+# - name: DEFAULT_MODEL
+#   value: "claude-3-5-sonnet-20241022"
+# - name: MAX_TOKENS
+#   value: "4096"
+
+# Optional: Configure additional secrets
+secrets: []

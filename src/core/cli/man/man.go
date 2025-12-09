@@ -30,7 +30,13 @@ Examples:
   meshctl man testing            # MCP curl syntax for testing
   meshctl man --list             # List all available topics
   meshctl man --raw decorators   # Raw markdown output (LLM-friendly)
-  meshctl man --search "health"  # Search across all topics`,
+  meshctl man --search "health"  # Search across all topics
+
+Code Generation:
+  To generate agent code from templates, use:
+    meshctl scaffold              # Interactive wizard
+    meshctl scaffold --dry-run    # Preview generated code
+    meshctl scaffold --help       # All scaffold options`,
 		RunE:              runManCommand,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeManTopics,

@@ -4,9 +4,36 @@
 
 ## Overview
 
-MCP Mesh supports multiple deployment patterns from local development to production Kubernetes clusters. This guide covers common deployment scenarios.
+MCP Mesh supports multiple deployment patterns from local development to production Kubernetes clusters. Use `meshctl scaffold` to generate deployment-ready files automatically.
+
+## Official Docker Images
+
+| Image | Description |
+|-------|-------------|
+| `mcpmesh/registry:0.7` | Registry service for agent discovery |
+| `mcpmesh/python-runtime:0.7` | Python runtime with mcp-mesh SDK pre-installed |
 
 ## Local Development
+
+### Setup
+
+Create a virtual environment in your project root. `meshctl start` automatically detects and uses `.venv` if present:
+
+```bash
+# Create project and virtual environment
+meshctl scaffold --name my-agent --agent-type tool
+cd my-agent
+
+# Create .venv (meshctl looks for this first)
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install MCP Mesh SDK
+pip install "mcp-mesh>=0.7,<0.8"
+
+# Install agent dependencies
+pip install -r requirements.txt
+```
 
 ### Quick Start
 
@@ -14,7 +41,7 @@ MCP Mesh supports multiple deployment patterns from local development to product
 # Terminal 1: Start registry
 meshctl start --registry-only --debug
 
-# Terminal 2: Start agent
+# Terminal 2: Start agent (uses .venv automatically)
 meshctl start my_agent.py --debug --auto-restart
 
 # Terminal 3: Monitor
@@ -42,187 +69,156 @@ meshctl start my_agent.py --auto-restart --watch-pattern "*.py,*.json"
 
 ## Docker Deployment
 
-### Single Agent Dockerfile
+### Generate Dockerfile (Recommended)
+
+`meshctl scaffold` automatically generates a production-ready Dockerfile:
+
+```bash
+# Create agent with Dockerfile
+meshctl scaffold --name my-agent --agent-type tool
+
+# Files created:
+# my-agent/
+#   ├── Dockerfile         # Ready for docker build
+#   ├── .dockerignore      # Optimized ignores
+#   ├── helm-values.yaml   # K8s deployment values
+#   ├── main.py            # Agent code
+#   └── requirements.txt
+```
+
+The generated Dockerfile uses the official runtime:
 
 ```dockerfile
-FROM python:3.11-slim
-
+FROM mcpmesh/python-runtime:0.7
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
-
+RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-
-ENV HOST=0.0.0.0
-ENV MCP_MESH_HTTP_HOST=my-agent
-ENV MCP_MESH_REGISTRY_URL=http://registry:8000
-
+EXPOSE 9000
 CMD ["python", "main.py"]
 ```
 
-### Docker Compose
+### Generate Docker Compose (Recommended)
 
-```yaml
-version: "3.8"
+Use `--compose` to auto-generate docker-compose.yml for all agents in a directory:
 
-services:
-  registry:
-    image: ghcr.io/dhyansraj/mcp-mesh-registry:latest
-    ports:
-      - "8000:8000"
-    environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - MCP_MESH_LOG_LEVEL=INFO
+```bash
+# Create multiple agents
+meshctl scaffold --name agent1 --port 9000
+meshctl scaffold --name agent2 --port 9001
 
-  system-agent:
-    build: ./agents/system
-    environment:
-      - HOST=0.0.0.0
-      - MCP_MESH_HTTP_HOST=system-agent
-      - MCP_MESH_REGISTRY_URL=http://registry:8000
-    depends_on:
-      - registry
+# Generate docker-compose.yml for all agents
+meshctl scaffold --compose
 
-  hello-agent:
-    build: ./agents/hello
-    environment:
-      - HOST=0.0.0.0
-      - MCP_MESH_HTTP_HOST=hello-agent
-      - MCP_MESH_REGISTRY_URL=http://registry:8000
-    depends_on:
-      - registry
-      - system-agent
+# With observability stack (redis, tempo, grafana)
+meshctl scaffold --compose --observability
 ```
+
+Generated docker-compose.yml includes:
+- PostgreSQL database for registry
+- Registry service (`mcpmesh/registry:0.7`)
+- All detected agents with proper networking
+- Health checks and dependency ordering
+- Optional: Redis, Tempo, Grafana (with `--observability`)
 
 ### Running
 
 ```bash
-docker-compose up -d
-docker-compose logs -f
-docker-compose ps
+docker compose up -d
+docker compose logs -f
+docker compose ps
 ```
 
 ## Kubernetes Deployment
 
-### Registry Deployment
+### Helm Charts (Recommended)
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: mcp-mesh-registry
-  namespace: mcp-mesh
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: mcp-mesh-registry
-  template:
-    metadata:
-      labels:
-        app: mcp-mesh-registry
-    spec:
-      containers:
-        - name: registry
-          image: ghcr.io/dhyansraj/mcp-mesh-registry:latest
-          ports:
-            - containerPort: 8000
-          env:
-            - name: HOST
-              value: "0.0.0.0"
-            - name: PORT
-              value: "8000"
-            - name: MCP_MESH_LOG_LEVEL
-              value: "INFO"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: mcp-mesh-registry
-  namespace: mcp-mesh
-spec:
-  selector:
-    app: mcp-mesh-registry
-  ports:
-    - port: 8000
-      targetPort: 8000
-```
-
-### Agent Deployment
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: my-agent
-  namespace: mcp-mesh
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: my-agent
-  template:
-    metadata:
-      labels:
-        app: my-agent
-    spec:
-      containers:
-        - name: agent
-          image: my-registry/my-agent:latest
-          ports:
-            - containerPort: 8080
-          env:
-            - name: HOST
-              value: "0.0.0.0"
-            - name: MCP_MESH_HTTP_PORT
-              value: "8080"
-            - name: MCP_MESH_HTTP_HOST
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.podIP
-            - name: MCP_MESH_REGISTRY_URL
-              value: "http://mcp-mesh-registry:8000"
-            - name: MCP_MESH_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 15
-            periodSeconds: 20
-```
-
-### Service Discovery
-
-In Kubernetes, agents can discover each other via:
-
-1. **Registry**: Standard MCP Mesh discovery
-2. **K8s DNS**: `service-name.namespace.svc.cluster.local`
-3. **Environment**: Injected service endpoints
-
-## Helm Deployment
+For production Kubernetes deployment, use the official Helm charts from the MCP Mesh repository:
 
 ```bash
-# Add MCP Mesh Helm repo
-helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh/charts
+# Add MCP Mesh Helm repository
+helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh
+helm repo update
 
-# Install registry
-helm install registry mcp-mesh/registry -n mcp-mesh
+# Create namespace
+kubectl create namespace mcp-mesh
 
-# Install agent
-helm install my-agent mcp-mesh/agent \
-  --set image.repository=my-registry/my-agent \
-  --set image.tag=latest \
-  --set registryUrl=http://registry:8000
+# Install core infrastructure (registry + database + observability)
+helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh
+
+# Deploy agent using scaffold-generated helm-values.yaml
+helm install my-agent mcp-mesh/mcp-mesh-agent -n mcp-mesh \
+  -f my-agent/helm-values.yaml
+
+# Optional: Install ingress for external access
+helm install mcp-ingress mcp-mesh/mcp-mesh-ingress -n mcp-mesh
+```
+
+### Available Helm Charts
+
+| Chart | Description |
+|-------|-------------|
+| `mcp-mesh/mcp-mesh-core` | Registry + PostgreSQL + Redis + Tempo + Grafana |
+| `mcp-mesh/mcp-mesh-agent` | Deploy individual MCP agents |
+| `mcp-mesh/mcp-mesh-ingress` | Ingress routing for external access |
+
+### Using scaffold-generated helm-values.yaml
+
+Each scaffolded agent includes a `helm-values.yaml` ready for deployment:
+
+```yaml
+# my-agent/helm-values.yaml (auto-generated)
+image:
+  repository: your-registry/my-agent
+  tag: latest
+
+agent:
+  name: my-agent
+  port: 9000
+
+mesh:
+  enabled: true
+  registryUrl: http://mcp-mesh-registry:8000
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+```
+
+### Deployment Workflow
+
+```bash
+# 1. Scaffold your agent
+meshctl scaffold --name my-agent --agent-type tool
+
+# 2. Build and push Docker image
+cd my-agent
+docker build -t your-registry/my-agent:v1.0.0 .
+docker push your-registry/my-agent:v1.0.0
+
+# 3. Update helm-values.yaml with your image repository
+# 4. Deploy with Helm
+helm install my-agent mcp-mesh/mcp-mesh-agent -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/my-agent \
+  --set image.tag=v1.0.0
+```
+
+### Disable Optional Components
+
+```bash
+# Core without observability
+helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh \
+  --set grafana.enabled=false \
+  --set tempo.enabled=false
+
+# Core without PostgreSQL (in-memory registry)
+helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh \
+  --set postgres.enabled=false
 ```
 
 ## Best Practices
@@ -277,6 +273,7 @@ export MCP_MESH_DEBUG_MODE=false
 
 ## See Also
 
+- `meshctl scaffold --help` - Generate agents with deployment files
 - `meshctl man environment` - Configuration options
 - `meshctl man health` - Health monitoring
 - `meshctl man registry` - Registry setup

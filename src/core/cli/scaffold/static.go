@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +24,7 @@ func SetEmbeddedTemplates(fs embed.FS) {
 }
 
 // supportedTemplates defines the templates available for static generation
-var supportedTemplates = []string{"basic", "llm-agent", "llm-provider", "multi-tool", "gateway"}
+var supportedTemplates = []string{"basic", "llm-agent", "llm-provider"}
 
 // agentTypeToTemplate maps agent types to their corresponding template names
 var agentTypeToTemplate = map[string]string{
@@ -52,9 +54,13 @@ func (p *StaticProvider) Description() string {
 
 // RegisterFlags adds static-specific flags to the command
 func (p *StaticProvider) RegisterFlags(cmd *cobra.Command) {
-	cmd.Flags().StringP("template", "t", "basic", "Template: basic, llm-agent, multi-tool, gateway")
+	cmd.Flags().StringP("template", "t", "basic", "Template: basic, llm-agent, llm-provider")
 	cmd.Flags().String("template-dir", "", "Custom template directory")
 	cmd.Flags().String("config", "", "Config file (YAML) for complex scaffolding")
+	cmd.Flags().String("add-tool", "", "Add a new tool to existing agent (requires agent name)")
+	cmd.Flags().String("tool-name", "", "Tool name (for new agent or --add-tool)")
+	cmd.Flags().String("tool-description", "", "Tool description (for new agent or --add-tool)")
+	cmd.Flags().String("tool-type", "", "Tool type for --add-tool: mesh.tool (basic capability) or mesh.llm (LLM-powered)")
 }
 
 // Validate checks if the provided context is valid for static generation
@@ -79,10 +85,150 @@ func (p *StaticProvider) Validate(ctx *ScaffoldContext) error {
 	return nil
 }
 
+// toolSnippetTemplate is the embedded template for adding a new @mesh.tool
+const toolSnippetTemplate = `@app.tool()
+@mesh.tool(
+    capability="{{ .ToolName }}",
+    description="{{ .ToolDescription }}",
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}["tools"]{{ end }},
+)
+async def {{ .ToolName }}() -> str:
+    """
+    {{ .ToolDescription }}.
+
+    Returns:
+        Result string.
+    """
+    # TODO: Implement tool logic
+    return "Not implemented"
+`
+
+// llmToolSnippetTemplate is the embedded template for adding a new @mesh.llm tool
+const llmToolSnippetTemplate = `# ===== {{ toUpperSnakeCase .ToolName }} CONTEXT MODEL =====
+
+class {{ toPascalCase .ToolName }}Context(BaseModel):
+    """Context for {{ .ToolName }} LLM processing."""
+
+    input_text: str = Field(..., description="Input text to process")
+    # Add additional context fields as needed
+
+{{ if eq .ResponseFormat "json" }}
+# ===== {{ toUpperSnakeCase .ToolName }} RESPONSE MODEL =====
+
+class {{ toPascalCase .ToolName }}Response(BaseModel):
+    """Structured response from {{ .ToolName }}."""
+
+    result: str = Field(..., description="Processing result")
+    # Add additional response fields as needed
+{{ end }}
+# ===== {{ toUpperSnakeCase .ToolName }} LLM TOOL =====
+
+@app.tool()
+@mesh.llm(
+    filter={{ if .ToolFilter }}{{ toJSON .ToolFilter }}{{ else }}None{{ end }},
+    filter_mode="{{ default "all" .FilterMode }}",
+    provider={"capability": "llm", "tags": {{ toJSON .ProviderTags }}},
+    max_iterations={{ default 1 .MaxIterations }},
+    system_prompt={{ if .SystemPromptIsFile }}"{{ .SystemPrompt }}"{{ else }}"""{{ default "You are an AI assistant. Process the input and provide a helpful response." .SystemPrompt }}"""{{ end }},
+    context_param="{{ default "ctx" .ContextParam }}",
+    response_format="{{ default "text" .ResponseFormat }}",
+)
+@mesh.tool(
+    capability="{{ .ToolName }}",
+    description="{{ default "LLM-powered tool" .ToolDescription }}",
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}["llm", "tools"]{{ end }},
+)
+def {{ toSnakeCase .ToolName }}(
+    {{ default "ctx" .ContextParam }}: {{ toPascalCase .ToolName }}Context,
+    llm: mesh.MeshLlmAgent = None,
+){{ if eq .ResponseFormat "json" }} -> {{ toPascalCase .ToolName }}Response{{ else }} -> str{{ end }}:
+    """
+    {{ default "LLM-powered tool" .ToolDescription }}.
+
+    Args:
+        {{ default "ctx" .ContextParam }}: Context containing input data for processing
+        llm: Injected LLM agent (provided by mesh)
+
+    Returns:
+        {{ if eq .ResponseFormat "json" }}Structured response with processing results{{ else }}Processing result as text{{ end }}
+    """
+    return llm("Process the input based on the context provided")
+`
+
+// DetectedAgentType represents the type of agent detected from existing code
+type DetectedAgentType string
+
+const (
+	DetectedTool        DetectedAgentType = "tool"
+	DetectedLLMAgent    DetectedAgentType = "llm-agent"
+	DetectedLLMProvider DetectedAgentType = "llm-provider"
+	DetectedUnknown     DetectedAgentType = "unknown"
+)
+
+// detectAgentType reads an existing main.py and determines the agent type
+// by looking for characteristic decorators
+func detectAgentType(mainPyPath string) (DetectedAgentType, error) {
+	content, err := os.ReadFile(mainPyPath)
+	if err != nil {
+		return DetectedUnknown, err
+	}
+
+	contentStr := string(content)
+
+	// Check for @mesh.llm_provider first (most specific)
+	if strings.Contains(contentStr, "@mesh.llm_provider") {
+		return DetectedLLMProvider, nil
+	}
+
+	// Check for @mesh.llm decorator (indicates llm-agent or tool with llm tools)
+	if strings.Contains(contentStr, "@mesh.llm(") {
+		return DetectedLLMAgent, nil
+	}
+
+	// Check for @mesh.tool decorator (basic tool agent)
+	if strings.Contains(contentStr, "@mesh.tool(") {
+		return DetectedTool, nil
+	}
+
+	// Check for @mesh.agent (generic agent, treat as tool)
+	if strings.Contains(contentStr, "@mesh.agent") {
+		return DetectedTool, nil
+	}
+
+	return DetectedUnknown, nil
+}
+
 // Execute performs the scaffold generation using templates.
 func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 	// Create output directory: outputDir/agentName
 	outputDir := filepath.Join(ctx.OutputDir, ctx.Name)
+
+	// Check if this is add-tool mode
+	if ctx.AddTool {
+		return p.executeAddTool(ctx, outputDir)
+	}
+
+	// Handle dry-run mode - render and print without creating files
+	if ctx.DryRun {
+		return p.executeDryRun(ctx)
+	}
+
+	// Check if directory already exists (for safety - don't overwrite)
+	mainPyPath := filepath.Join(outputDir, "main.py")
+	if FileExists(mainPyPath) {
+		// In interactive mode, ask if user wants to add a tool instead
+		if ctx.IsInteractive {
+			return p.handleExistingAgentInteractive(ctx, outputDir, mainPyPath)
+		}
+
+		// Non-interactive mode: return error
+		if ctx.Cmd != nil {
+			ctx.Cmd.Printf("Agent '%s' already exists at %s\n", ctx.Name, outputDir)
+			ctx.Cmd.Printf("To add a new tool, use: meshctl scaffold --name %s --add-tool <tool-name>\n", ctx.Name)
+		}
+		return fmt.Errorf("agent already exists; use --add-tool to add tools to existing agent")
+	}
+
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
@@ -135,6 +281,284 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 	}
 
 	return nil
+}
+
+// handleExistingAgentInteractive handles the case when agent already exists in interactive mode
+func (p *StaticProvider) handleExistingAgentInteractive(ctx *ScaffoldContext, outputDir, mainPyPath string) error {
+	if ctx.Cmd != nil {
+		ctx.Cmd.Println()
+		ctx.Cmd.Printf("⚠️  Agent '%s' already exists at %s\n", ctx.Name, outputDir)
+		ctx.Cmd.Println()
+	}
+
+	// Detect agent type
+	detectedType, err := detectAgentType(mainPyPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect agent type: %w", err)
+	}
+
+	// If it's an llm-provider, we can't add tools
+	if detectedType == DetectedLLMProvider {
+		if ctx.Cmd != nil {
+			ctx.Cmd.Println("This is an LLM provider agent which cannot have additional tools.")
+		}
+		return fmt.Errorf("cannot add tools to llm-provider agents")
+	}
+
+	// Ask if user wants to add a tool instead
+	addTool := false
+	confirmPrompt := &survey.Confirm{
+		Message: "Would you like to add a new tool to this existing agent?",
+		Default: true,
+	}
+	if err := survey.AskOne(confirmPrompt, &addTool); err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+
+	if !addTool {
+		return fmt.Errorf("agent already exists; operation cancelled")
+	}
+
+	// Get tool name
+	toolName := ""
+	namePrompt := &survey.Input{
+		Message: "Tool name (snake_case, e.g., analyze_text):",
+	}
+	if err := survey.AskOne(namePrompt, &toolName, survey.WithValidator(survey.Required)); err != nil {
+		return fmt.Errorf("failed to get tool name: %w", err)
+	}
+
+	// Run the add-tool interactive wizard
+	addToolConfig, err := RunAddToolInteractive(toolName)
+	if err != nil {
+		return fmt.Errorf("add-tool wizard failed: %w", err)
+	}
+
+	// Update context with add-tool configuration
+	ctx.AddTool = true
+	ctx.ToolName = addToolConfig.ToolName
+	ctx.ToolDescription = addToolConfig.ToolDescription
+	ctx.ToolType = addToolConfig.ToolType
+	ctx.Tags = addToolConfig.Tags
+
+	if addToolConfig.ToolType == "mesh.llm" {
+		ctx.LLMProviderSelector = addToolConfig.LLMProviderSelector
+		ctx.ProviderTags = addToolConfig.ProviderTags
+		ctx.MaxIterations = addToolConfig.MaxIterations
+		ctx.ContextParam = addToolConfig.ContextParam
+		ctx.ResponseFormat = addToolConfig.ResponseFormat
+		ctx.ToolFilter = addToolConfig.ToolFilter
+		ctx.FilterMode = addToolConfig.FilterMode
+
+		if addToolConfig.UsePromptFile {
+			ctx.SystemPrompt = fmt.Sprintf("file://prompts/%s.jinja2", addToolConfig.ToolName)
+			ctx.CreatePromptFile = true
+		} else {
+			ctx.SystemPrompt = addToolConfig.SystemPrompt
+		}
+	}
+
+	// Execute add-tool
+	return p.executeAddTool(ctx, outputDir)
+}
+
+// executeAddTool handles adding a new tool to an existing agent
+func (p *StaticProvider) executeAddTool(ctx *ScaffoldContext, outputDir string) error {
+	mainPyPath := filepath.Join(outputDir, "main.py")
+
+	// Check if main.py exists
+	if !FileExists(mainPyPath) {
+		return fmt.Errorf("agent '%s' not found at %s; create it first with: meshctl scaffold %s", ctx.Name, outputDir, ctx.Name)
+	}
+
+	// Detect agent type from existing code
+	detectedType, err := detectAgentType(mainPyPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect agent type: %w", err)
+	}
+
+	// Reject adding tools to llm-provider agents
+	if detectedType == DetectedLLMProvider {
+		return fmt.Errorf("cannot add tools to llm-provider agents; LLM providers only expose the @mesh.llm_provider capability")
+	}
+
+	// Create template renderer
+	renderer := NewTemplateRenderer()
+
+	// Build template data for the tool using full context
+	data := TemplateDataFromContext(ctx)
+
+	// Set defaults
+	if ctx.ToolDescription == "" {
+		data["ToolDescription"] = fmt.Sprintf("A tool called %s", ctx.ToolName)
+	}
+
+	// Determine which template to use based on tool type
+	var snippetTemplate string
+	var toolTypeDisplay string
+
+	var promptFilePath string
+
+	switch ctx.ToolType {
+	case "mesh.llm":
+		snippetTemplate = llmToolSnippetTemplate
+		toolTypeDisplay = "mesh.llm (LLM-powered)"
+
+		// Ensure ProviderTags has a default if not set
+		if ctx.ProviderTags == nil || len(ctx.ProviderTags) == 0 {
+			switch ctx.LLMProviderSelector {
+			case "openai":
+				data["ProviderTags"] = []string{"llm", "+gpt"}
+			default: // claude
+				data["ProviderTags"] = []string{"llm", "+claude"}
+			}
+		}
+
+		// Create prompt file if requested
+		if ctx.CreatePromptFile {
+			promptsDir := filepath.Join(outputDir, "prompts")
+			if err := os.MkdirAll(promptsDir, 0755); err != nil {
+				return fmt.Errorf("failed to create prompts directory: %w", err)
+			}
+
+			promptFilePath = filepath.Join(promptsDir, ctx.ToolName+".jinja2")
+			promptContent := fmt.Sprintf(`You are an AI assistant for %s.
+
+%s
+
+Analyze the provided context and respond appropriately.
+
+{# Available context variables: #}
+{# {{ ctx.input_text }} - The input text to process #}
+`, ctx.ToolName, ctx.ToolDescription)
+
+			if err := os.WriteFile(promptFilePath, []byte(promptContent), 0644); err != nil {
+				return fmt.Errorf("failed to create prompt file: %w", err)
+			}
+		}
+	default: // "mesh.tool" or empty
+		snippetTemplate = toolSnippetTemplate
+		toolTypeDisplay = "mesh.tool (basic capability)"
+	}
+
+	// Append the tool to main.py
+	appended, err := renderer.AppendToolToFile(mainPyPath, snippetTemplate, data)
+	if err != nil {
+		return fmt.Errorf("failed to add tool: %w", err)
+	}
+
+	if !appended {
+		return fmt.Errorf("could not find insertion point in %s; ensure the file has '# ===== AGENT CONFIGURATION =====' marker", mainPyPath)
+	}
+
+	// Print success message
+	if ctx.Cmd != nil {
+		ctx.Cmd.Printf("Successfully added %s tool '%s' to agent '%s'\n", toolTypeDisplay, ctx.ToolName, ctx.Name)
+		ctx.Cmd.Printf("  File: %s\n", mainPyPath)
+		if ctx.ToolType == "mesh.llm" {
+			ctx.Cmd.Printf("  Tool Type: LLM-powered (@mesh.llm + @mesh.tool)\n")
+			ctx.Cmd.Printf("  LLM Provider: %s\n", ctx.LLMProviderSelector)
+			ctx.Cmd.Printf("  Response Format: %s\n", ctx.ResponseFormat)
+			if promptFilePath != "" {
+				ctx.Cmd.Printf("  Prompt File: %s\n", promptFilePath)
+			}
+			ctx.Cmd.Println()
+			ctx.Cmd.Printf("  NOTE: Ensure these imports are present in your main.py:\n")
+			ctx.Cmd.Printf("    from pydantic import BaseModel, Field\n")
+			ctx.Cmd.Println()
+			if promptFilePath != "" {
+				ctx.Cmd.Printf("  Don't forget to customize the prompt file and context model!\n")
+			} else {
+				ctx.Cmd.Printf("  Don't forget to customize the context model and system prompt!\n")
+			}
+		} else {
+			ctx.Cmd.Printf("  Tool Type: Basic capability (@mesh.tool)\n")
+			ctx.Cmd.Printf("  Don't forget to implement the tool logic!\n")
+		}
+	}
+
+	return nil
+}
+
+// executeDryRun renders templates and prints them to stdout without creating files.
+func (p *StaticProvider) executeDryRun(ctx *ScaffoldContext) error {
+	// Create template renderer
+	renderer := NewTemplateRenderer()
+
+	// Build template data
+	data := TemplateDataFromContext(ctx)
+
+	// Use a temporary directory to render files
+	tempDir, err := os.MkdirTemp("", "meshctl-dryrun-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Render templates to temp directory
+	if ctx.TemplateDir != "" {
+		templateSrcDir, err := p.getCustomTemplateDir(ctx)
+		if err != nil {
+			return err
+		}
+		if err := renderer.RenderDirectory(templateSrcDir, tempDir, data); err != nil {
+			return fmt.Errorf("failed to render templates: %w", err)
+		}
+	} else if embeddedTemplatesSet {
+		embeddedPath := fmt.Sprintf("templates/%s/%s", ctx.Language, ctx.Template)
+		if err := renderer.RenderEmbeddedDirectory(embeddedTemplates, embeddedPath, tempDir, data); err != nil {
+			return fmt.Errorf("failed to render embedded templates: %w", err)
+		}
+	} else {
+		templateSrcDir, err := p.getBuiltinTemplateDir(ctx)
+		if err != nil {
+			return err
+		}
+		if err := renderer.RenderDirectory(templateSrcDir, tempDir, data); err != nil {
+			return fmt.Errorf("failed to render templates: %w", err)
+		}
+	}
+
+	// Print header
+	if ctx.Cmd != nil {
+		ctx.Cmd.Println("# Dry-run: Preview of generated files")
+		ctx.Cmd.Printf("# Agent: %s\n", ctx.Name)
+		ctx.Cmd.Printf("# Type: %s\n", ctx.AgentType)
+		ctx.Cmd.Printf("# Template: %s/%s\n", ctx.Language, ctx.Template)
+		ctx.Cmd.Println("#")
+		ctx.Cmd.Println("# Files would be created in:", filepath.Join(ctx.OutputDir, ctx.Name))
+		ctx.Cmd.Println()
+	}
+
+	// Walk the temp directory and print files
+	return filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(tempDir, path)
+		if err != nil {
+			return err
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		if ctx.Cmd != nil {
+			ctx.Cmd.Printf("# ═══════════════════════════════════════════════════════════════\n")
+			ctx.Cmd.Printf("# File: %s/%s\n", ctx.Name, relPath)
+			ctx.Cmd.Printf("# ═══════════════════════════════════════════════════════════════\n")
+			ctx.Cmd.Println(string(content))
+			ctx.Cmd.Println()
+		}
+
+		return nil
+	})
 }
 
 // getCustomTemplateDir returns the template path from a custom template directory.

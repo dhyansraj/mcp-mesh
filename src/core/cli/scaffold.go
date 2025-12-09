@@ -46,7 +46,36 @@ Examples:
   meshctl scaffold --config scaffold.yaml
 
   # List available modes
-  meshctl scaffold --list-modes`,
+  meshctl scaffold --list-modes
+
+  # Generate docker-compose.yml for all agents in directory
+  meshctl scaffold --compose
+
+  # Generate docker-compose with observability stack (redis, tempo, grafana)
+  meshctl scaffold --compose --observability
+
+  # Generate docker-compose with custom project name
+  meshctl scaffold --compose --project-name my-project
+
+  # Preview generated code without creating files
+  meshctl scaffold --name my-agent --agent-type tool --dry-run
+
+Documentation:
+  For SDK reference and decorator documentation, see:
+    meshctl man decorators    # @mesh.tool, @mesh.llm, @mesh.agent, etc.
+    meshctl man llm           # LLM integration guide
+    meshctl man deployment    # Docker and Kubernetes deployment
+    meshctl man --list        # All available topics
+
+Infrastructure:
+  Docker Images:
+    mcpmesh/registry:0.7        - Registry service
+    mcpmesh/python-runtime:0.7  - Python agent runtime (has mcp-mesh SDK)
+
+  Helm Charts (for Kubernetes):
+    helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh
+    mcp-mesh/mcp-mesh-core      - Registry + PostgreSQL + observability
+    mcp-mesh/mcp-mesh-agent     - Deploy individual agents`,
 		RunE: runScaffoldCommand,
 	}
 
@@ -59,6 +88,7 @@ Examples:
 	cmd.Flags().String("description", "", "Agent description")
 	cmd.Flags().Bool("list-modes", false, "List available scaffold modes")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive mode (for scripting)")
+	cmd.Flags().Bool("dry-run", false, "Preview generated code without creating files")
 
 	// Agent type flag
 	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider")
@@ -78,6 +108,11 @@ Examples:
 	cmd.Flags().String("model", "", "LiteLLM model (e.g., anthropic/claude-sonnet-4-5)")
 	cmd.Flags().StringSlice("tags", nil, "Tags for discovery (comma-separated)")
 
+	// Docker-compose generation flags
+	cmd.Flags().Bool("compose", false, "Generate docker-compose.yml for all agents in directory")
+	cmd.Flags().Bool("observability", false, "Include observability stack (redis, tempo, grafana) in docker-compose")
+	cmd.Flags().String("project-name", "", "Docker compose project name (default: directory name)")
+
 	// Register provider-specific flags
 	for _, name := range scaffold.DefaultRegistry.List() {
 		provider, _ := scaffold.DefaultRegistry.Get(name)
@@ -94,6 +129,12 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 		return listScaffoldModes(cmd)
 	}
 
+	// Check if generating docker-compose
+	compose, _ := cmd.Flags().GetBool("compose")
+	if compose {
+		return runComposeGeneration(cmd)
+	}
+
 	var ctx *scaffold.ScaffoldContext
 	var err error
 
@@ -105,10 +146,33 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		// Check if we should run interactive mode
+		// Check for add-tool mode
+		addTool, _ := cmd.Flags().GetString("add-tool")
 		name, _ := cmd.Flags().GetString("name")
 		noInteractive, _ := cmd.Flags().GetBool("no-interactive")
-		if name == "" && !noInteractive && isInteractiveTerminal() {
+		toolType, _ := cmd.Flags().GetString("tool-type")
+
+		if addTool != "" {
+			// Add-tool mode: require agent name
+			if name == "" {
+				return fmt.Errorf("--name is required when using --add-tool; specify the agent to add the tool to")
+			}
+
+			// Run interactive mode for add-tool if tool-type is not specified
+			if toolType == "" && !noInteractive && isInteractiveTerminal() {
+				ctx, err = runAddToolInteractiveMode(cmd, name, addTool)
+				if err != nil {
+					return err
+				}
+			} else {
+				// Use CLI flags for add-tool
+				ctx, err = loadFromFlags(cmd)
+				if err != nil {
+					return err
+				}
+			}
+		} else if name == "" && !noInteractive && isInteractiveTerminal() {
+			// Run interactive mode for creating new agents
 			ctx, err = runInteractiveMode(cmd)
 			if err != nil {
 				return err
@@ -169,12 +233,48 @@ func runInteractiveMode(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	cmd.Println("====================================")
 	cmd.Println()
 
-	interactiveConfig, err := scaffold.RunInteractiveScaffold()
+	// Get output dir for checking existing agents
+	output, _ := cmd.Flags().GetString("output")
+
+	result, err := scaffold.RunInteractiveScaffold(output)
 	if err != nil {
 		return nil, fmt.Errorf("interactive scaffold failed: %w", err)
 	}
 
-	ctx := scaffold.ContextFromInteractive(interactiveConfig)
+	var ctx *scaffold.ScaffoldContext
+
+	if result.IsAddTool {
+		// User wants to add a tool to existing agent
+		ctx = scaffold.ContextFromAddToolInteractive(result.AddToolConfig, result.AgentName)
+	} else {
+		// Creating a new agent
+		ctx = scaffold.ContextFromInteractive(result.Config)
+	}
+
+	// Override output dir if provided via CLI
+	if output != "." {
+		ctx.OutputDir = output
+	}
+
+	ctx.Cmd = cmd
+	ctx.IsInteractive = true
+	return ctx, nil
+}
+
+// runAddToolInteractiveMode runs the interactive wizard for adding a tool
+func runAddToolInteractiveMode(cmd *cobra.Command, agentName, toolName string) (*scaffold.ScaffoldContext, error) {
+	cmd.Println("Add Tool to MCP Mesh Agent")
+	cmd.Println("==========================")
+	cmd.Printf("Agent: %s\n", agentName)
+	cmd.Printf("Tool: %s\n", toolName)
+	cmd.Println()
+
+	addToolConfig, err := scaffold.RunAddToolInteractive(toolName)
+	if err != nil {
+		return nil, fmt.Errorf("interactive add-tool failed: %w", err)
+	}
+
+	ctx := scaffold.ContextFromAddToolInteractive(addToolConfig, agentName)
 
 	// Override output dir if provided via CLI
 	output, _ := cmd.Flags().GetString("output")
@@ -235,6 +335,19 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	model, _ := cmd.Flags().GetString("model")
 	tags, _ := cmd.Flags().GetStringSlice("tags")
 
+	// Get tool flags (for new agent or add-tool mode)
+	addTool, _ := cmd.Flags().GetString("add-tool")
+	toolName, _ := cmd.Flags().GetString("tool-name")
+	toolDescription, _ := cmd.Flags().GetString("tool-description")
+	toolType, _ := cmd.Flags().GetString("tool-type")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	// If --add-tool is provided, it specifies the tool name
+	// Otherwise use --tool-name for new agent creation
+	if addTool != "" {
+		toolName = addTool
+	}
+
 	// Set default provider tags based on selector
 	var providerTags []string
 	switch llmSelector {
@@ -269,7 +382,12 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 		Prompt:              prompt,
 		LLMProvider:         llmProvider,
 		ValidateCode:        validateCode,
+		AddTool:             addTool != "",
+		ToolName:            toolName,
+		ToolDescription:     toolDescription,
+		ToolType:            toolType,
 		Cmd:                 cmd,
+		DryRun:              dryRun,
 	}
 
 	return ctx, nil
@@ -341,6 +459,63 @@ func listScaffoldModes(cmd *cobra.Command) error {
 		provider, _ := scaffold.DefaultRegistry.Get(name)
 		cmd.Printf("  %-10s %s\n", name, provider.Description())
 	}
+
+	return nil
+}
+
+// runComposeGeneration handles the --compose flag to generate docker-compose.yml
+func runComposeGeneration(cmd *cobra.Command) error {
+	output, _ := cmd.Flags().GetString("output")
+	observability, _ := cmd.Flags().GetBool("observability")
+	projectName, _ := cmd.Flags().GetString("project-name")
+
+	cmd.Println("Scanning for agents...")
+
+	// Scan for agents in the output directory
+	agents, err := scaffold.ScanForAgents(output)
+	if err != nil {
+		return fmt.Errorf("failed to scan for agents: %w", err)
+	}
+
+	if len(agents) == 0 {
+		return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold --name <agent-name>'", output)
+	}
+
+	cmd.Printf("Found %d agent(s):\n", len(agents))
+	for _, agent := range agents {
+		cmd.Printf("  - %s (port %d) in %s/\n", agent.Name, agent.Port, agent.Dir)
+	}
+	cmd.Println()
+
+	// Build compose configuration
+	config := &scaffold.ComposeConfig{
+		Agents:        agents,
+		Observability: observability,
+		ProjectName:   projectName,
+		NetworkName:   "",
+	}
+
+	// Generate docker-compose.yml
+	if err := scaffold.GenerateDockerCompose(config, output); err != nil {
+		return fmt.Errorf("failed to generate docker-compose.yml: %w", err)
+	}
+
+	cmd.Printf("Successfully generated docker-compose.yml in %s\n", output)
+	cmd.Println()
+	cmd.Println("Services included:")
+	cmd.Println("  - postgres (5432)")
+	cmd.Println("  - registry (8000)")
+	if observability {
+		cmd.Println("  - redis (6379)")
+		cmd.Println("  - tempo (3200, 4317)")
+		cmd.Println("  - grafana (3000)")
+	}
+	for _, agent := range agents {
+		cmd.Printf("  - %s (%d)\n", agent.Name, agent.Port)
+	}
+	cmd.Println()
+	cmd.Println("To start all services:")
+	cmd.Println("  docker compose up -d")
 
 	return nil
 }
