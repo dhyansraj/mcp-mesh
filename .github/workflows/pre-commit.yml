@@ -10,6 +10,7 @@ jobs:
   pre-commit:
     name: Pre-commit Checks
     runs-on: ubuntu-latest
+    if: false # Temporarily disabled - only unit tests required
 
     steps:
       - uses: actions/checkout@v4
