@@ -1,0 +1,17 @@
+# Dockerfile for {{ .Name }} MCP Mesh LLM agent
+FROM mcpmesh/python-runtime:0.7
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy agent source code
+COPY . .
+
+# Expose the agent port
+EXPOSE {{ .Port }}
+
+# Run as module
+CMD ["python", "-m", "{{ .Name }}"]

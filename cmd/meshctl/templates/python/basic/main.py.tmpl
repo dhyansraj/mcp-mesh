@@ -18,38 +18,19 @@ app = FastMCP("{{ toPascalCase .Name }} Service")
 
 @app.tool()
 @mesh.tool(
-    capability="hello",
-    description="Say hello to someone",
+    capability="{{ .ToolName | default "hello" }}",
+    description="{{ .ToolDescription | default "A tool" }}",
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}["tools"]{{ end }},
 )
-async def hello(name: str = "World") -> str:
+async def {{ .ToolName | default "hello" }}() -> str:
     """
-    Say hello to someone.
-
-    Args:
-        name: The name to greet.
+    {{ .ToolDescription | default "A tool" }}.
 
     Returns:
-        A greeting message.
+        Result string.
     """
-    return f"Hello, {name}! I'm {{ .Name }}."
-
-
-@app.tool()
-@mesh.tool(
-    capability="echo",
-    description="Echo a message back",
-)
-async def echo(message: str) -> str:
-    """
-    Echo a message back.
-
-    Args:
-        message: The message to echo.
-
-    Returns:
-        The same message.
-    """
-    return message
+    # TODO: Implement tool logic
+    return "Not implemented"
 
 
 # ===== AGENT CONFIGURATION =====

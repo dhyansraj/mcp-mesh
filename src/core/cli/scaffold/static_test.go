@@ -79,24 +79,6 @@ func TestStaticProvider_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid static context with multi-tool template",
-			ctx: &ScaffoldContext{
-				Name:     "my-agent",
-				Language: "python",
-				Template: "multi-tool",
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid static context with gateway template",
-			ctx: &ScaffoldContext{
-				Name:     "my-agent",
-				Language: "python",
-				Template: "gateway",
-			},
-			wantErr: false,
-		},
-		{
 			name: "invalid template name",
 			ctx: &ScaffoldContext{
 				Name:     "my-agent",
@@ -359,17 +341,15 @@ func TestStaticProvider_SupportedTemplates(t *testing.T) {
 	assert.Contains(t, templates, "basic")
 	assert.Contains(t, templates, "llm-agent")
 	assert.Contains(t, templates, "llm-provider")
-	assert.Contains(t, templates, "multi-tool")
-	assert.Contains(t, templates, "gateway")
-	assert.Len(t, templates, 5)
+	assert.Len(t, templates, 3)
 }
 
 func TestStaticProvider_IsValidTemplate(t *testing.T) {
 	assert.True(t, IsValidTemplate("basic"))
 	assert.True(t, IsValidTemplate("llm-agent"))
 	assert.True(t, IsValidTemplate("llm-provider"))
-	assert.True(t, IsValidTemplate("multi-tool"))
-	assert.True(t, IsValidTemplate("gateway"))
+	assert.False(t, IsValidTemplate("multi-tool"))
+	assert.False(t, IsValidTemplate("gateway"))
 	assert.False(t, IsValidTemplate("nonexistent"))
 	assert.False(t, IsValidTemplate(""))
 }

@@ -81,6 +81,13 @@ type ScaffoldContext struct {
 	// LLM-provider specific (for @mesh.llm_provider decorator)
 	Model string // LiteLLM model string (e.g., "anthropic/claude-sonnet-4-5")
 
+	// Add-tool mode (for appending tools to existing agents)
+	AddTool          bool   // If true, append tool to existing agent instead of creating new
+	ToolName         string // Name of the tool to add (for --add-tool mode)
+	ToolDescription  string // Description of the tool to add
+	ToolType         string // Type of tool: "mesh.tool" or "mesh.llm" (default: "mesh.tool")
+	CreatePromptFile bool   // If true, create a prompt file for mesh.llm tools
+
 	// Provider-specific (llm scaffold mode)
 	FromDoc      string // Requirements document path
 	Prompt       string // Natural language prompt
@@ -89,7 +96,9 @@ type ScaffoldContext struct {
 	ValidateCode bool   // Validate generated code
 
 	// Runtime
-	Cmd *cobra.Command // Reference to command for flag access
+	Cmd           *cobra.Command // Reference to command for flag access
+	IsInteractive bool           // True if running in interactive mode
+	DryRun        bool           // If true, print generated code instead of writing files
 }
 
 // NewScaffoldContext creates a new ScaffoldContext with default values
@@ -106,6 +115,7 @@ func NewScaffoldContext() *ScaffoldContext {
 		LLMProviderSelector: "claude",
 		LLMProvider:         "claude",
 		FilterMode:          "all",
+		ToolType:            "mesh.tool",
 	}
 }
 
