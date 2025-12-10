@@ -2,9 +2,9 @@
 
 > How the dual decorator pattern enables smart service discovery and dependency injection
 
-## What is Dependency Injection in 0.2.x?
+## What is Dependency Injection?
 
-MCP Mesh 0.3.x revolutionizes dependency injection with the **dual decorator pattern**:
+MCP Mesh's **dual decorator pattern** provides powerful dependency injection:
 
 - 🔗 **Smart capability matching** using tags and metadata
 - 🎯 **Type-safe injection** with `mesh.McpMeshAgent` or flexible `Any` types
@@ -17,7 +17,7 @@ MCP Mesh 0.3.x revolutionizes dependency injection with the **dual decorator pat
 
 ### 1. Capabilities vs Function Names
 
-In 0.2.x, there's an important distinction:
+There's an important distinction in MCP Mesh:
 
 - **Function names**: What you call via MCP (`hello_mesh_simple`)
 - **Capability names**: What other agents depend on (`greeting`)
@@ -324,23 +324,15 @@ curl -s http://localhost:8000/agents | \
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {"name": "get_current_time", "arguments": {}}
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 
 # Test dependency injection
 curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {"name": "hello_mesh_simple", "arguments": {}}
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 ```
 
 ## Benefits of the New Pattern
@@ -364,16 +356,11 @@ curl -s -X POST http://localhost:9090/mcp \
 ### Dependency Not Injected
 
 ```bash
-# Check if provider is registered
-curl -s http://localhost:8000/agents | \
-  jq '.agents[] | select(.capabilities | has("date_service"))'
+# Quick check - see if all dependencies are resolved (e.g., "4/4")
+meshctl list --healthy-only
 
-# Check function names vs capabilities
-curl -s -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \
-  jq '.result.tools[] | {name: .name, description: .description}'
+# Detailed view - shows capabilities, resolved dependencies, and endpoints
+meshctl status
 ```
 
 ### Wrong Service Selected

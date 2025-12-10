@@ -92,80 +92,68 @@ curl -s -X POST http://localhost:8081/mcp \
 
 That's it! You now have a working distributed MCP service mesh! 🎉
 
-## Alternative: macOS with Homebrew (2 Minutes)
+## Quick Start with meshctl (2 Minutes)
 
-**For macOS users with Homebrew:**
+**The simplest way to run agents locally:**
 
 ```bash
-# 1. Install MCP Mesh CLI tools
+# 1. Install MCP Mesh
+pip install "mcp-mesh>=0.7,<0.8"
+
+# 2. Clone examples
+git clone https://github.com/dhyansraj/mcp-mesh.git
+cd mcp-mesh/examples/simple
+
+# 3. Start agents (registry starts automatically!)
+meshctl start system_agent.py     # Terminal 1
+meshctl start hello_world.py      # Terminal 2
+
+# 4. Test it
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+```
+
+!!! tip "Auto-Registry"
+`meshctl start` automatically starts the registry if one isn't running. No need to manage it separately!
+
+## Alternative: Homebrew (macOS)
+
+```bash
+# Install CLI tools via Homebrew
 brew tap dhyansraj/mcp-mesh
 brew install mcp-mesh
 
-# 2. Install Python package with semantic versioning
-pip install "mcp-mesh>=0.6,<0.7"
-
-# 3. Download example agents
-git clone https://github.com/dhyansraj/mcp-mesh.git
-cd mcp-mesh/examples/simple
-
-# 4. Start registry and agents
-mcp-mesh-registry --host 0.0.0.0 --port 8000 &
-python system_agent.py &
-python hello_world.py &
-
-# 5. Test it
-curl -s -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
+# Then follow the Quick Start above
+pip install "mcp-mesh>=0.7,<0.8"
 ```
 
-## Alternative: Linux/macOS Install Script (3 Minutes)
-
-**For Linux or manual macOS installation:**
+## Alternative: curl Install Script
 
 ```bash
-# 1. Install MCP Mesh with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.6,<0.7"
+# Install meshctl binary
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
 
-# 2. Download and start registry (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.5
-mcp-mesh-registry --host 0.0.0.0 --port 8000 &
-
-# 3. Download example agents
-git clone https://github.com/dhyansraj/mcp-mesh.git
-cd mcp-mesh/examples/simple
-
-# 4. Run agents
-python system_agent.py &
-python hello_world.py &
-
-# 5. Test it
-curl -s -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
+# Then follow the Quick Start above
+pip install "mcp-mesh>=0.7,<0.8"
 ```
 
-## Alternative: Local Development (5 Minutes)
+## Alternative: Build from Source
 
-**For developers who want to build from source:**
+**For contributors:**
 
 ```bash
-# 1. Build the project
+# Build everything
 make install-dev
 
-# 2. Start registry (terminal 1)
-./bin/meshctl start-registry
+# Start agents
+./bin/meshctl start examples/simple/system_agent.py   # Terminal 1
+./bin/meshctl start examples/simple/hello_world.py    # Terminal 2
 
-# 3. Start system agent (terminal 2)
-./bin/meshctl start examples/simple/system_agent.py
-
-# 4. Start hello world agent (terminal 3)
-./bin/meshctl start examples/simple/hello_world.py
-
-# 5. Test it
-./bin/meshctl list agents
+# Check status
+./bin/meshctl status
 ```
 
 ## Learning Paths
@@ -174,20 +162,20 @@ make install-dev
 
 ### 🚀 I want to see it working (5 minutes)
 
-1. **[Docker Quick Start](../../examples/docker-examples/README.md)** - Complete environment
+1. **[Docker Quick Start](03-docker-deployment.md)** - Complete environment
 2. **Test the examples** - See dependency injection in action
 3. **Explore with meshctl** - Understand the architecture
 
 ### 🔧 I want to develop agents (15 minutes)
 
-1. **[Local Development Setup](../../examples/simple/README.md)** - Build from source
+1. **[Local Development Setup](02-local-development.md)** - Set up your environment
 2. **Run examples locally** - Direct binary execution
 3. **Modify an agent** - Make your first change
 4. **Create new tools** - Add your own functionality
 
 ### 🏭 I want production deployment (30 minutes)
 
-1. **[Kubernetes Guide](../../examples/k8s/README.md)** - Production-ready setup
+1. **[Kubernetes Guide](06-helm-deployment.md)** - Production-ready setup
 2. **Deploy to cluster** - Scale and monitor
 3. **Test resilience** - Failure scenarios
 4. **Monitor with meshctl** - Operational insights
@@ -197,7 +185,7 @@ make install-dev
 1. **Start with Docker** to see the big picture
 2. **Try local development** to understand internals
 3. **Deploy to Kubernetes** for production patterns
-4. **Read the architecture docs** for deep understanding
+4. **Read the [architecture docs](architecture-and-design.md)** for deep understanding
 
 ## How MCP Mesh Works
 
@@ -246,10 +234,10 @@ Your Code                    MCP Mesh Runtime               Automatic
 
 **Choose your path:**
 
-- 🚀 **Quick Demo**: Try the [Docker examples](../../examples/docker-examples/README.md)
-- 🔧 **Local Development**: Follow the [simple examples guide](../../examples/simple/README.md)
-- 🏭 **Production Setup**: Deploy with [Kubernetes](../../examples/k8s/README.md)
-- 📚 **Deep Dive**: Read the [complete examples overview](../../examples/README.md)
+- 🚀 **Quick Demo**: Try the [Docker deployment](03-docker-deployment.md)
+- 🔧 **Local Development**: Follow the [local development guide](02-local-development.md)
+- 🏭 **Production Setup**: Deploy with [Helm to Kubernetes](06-helm-deployment.md)
+- 📚 **Deep Dive**: Read the [architecture and design](architecture-and-design.md)
 
 ---
 
@@ -286,38 +274,48 @@ For detailed solutions, see the troubleshooting sections in each example README.
 
 - **Windows Support**: Native Windows support is experimental; WSL2 or Docker recommended
 - **Python 3.8**: Not supported; requires Python 3.9+
-- **PyPI Package**: Not yet published; must build from source or use Docker
-- **ARM Architecture**: Some Go binary builds may need local compilation
 - **Network Policies**: Strict firewall/network policies may block agent communication
 
 ## 🎯 What's Next?
 
 After getting started:
 
-1. **Explore the Examples**:
-   - Modify existing agents to understand the patterns
-   - Add new tools to see dependency injection in action
-   - Test resilience by stopping and starting agents
+### Explore the Examples
 
-2. **Build Your Own Agent**:
-   - Copy `hello_world.py` as a template
-   - Add your own capabilities and dependencies
-   - Test integration with existing agents
+- Modify existing agents to understand the patterns
+- Add new tools to see dependency injection in action
+- Test resilience by stopping and starting agents
 
-3. **Scale to Production**:
-   - Deploy to Kubernetes for production workloads
-   - Set up monitoring and alerting
-   - Configure security and access controls
+### Build Your Own Agent
 
-4. **Advanced Features**:
-   - Tag-based dependency resolution
-   - Multi-replica agent deployments
-   - Cross-namespace service discovery
-   - Custom capability development
+```bash
+# Generate a new agent with meshctl scaffold
+meshctl scaffold --name my-agent --capability my_tool
+
+# Or generate with Docker Compose
+meshctl scaffold --name my-agent --compose
+```
+
+- Customize the generated agent code
+- Add your own capabilities and dependencies
+- Test integration with existing agents
+
+### Scale to Production
+
+- Deploy to Kubernetes for production workloads
+- Set up monitoring and alerting
+- Configure security and access controls
+
+### Advanced Features
+
+- Tag-based dependency resolution
+- Multi-replica agent deployments
+- Cross-namespace service discovery
+- Custom capability development
 
 ## 📚 Additional Resources
 
-- **[Examples Overview](../../examples/README.md)** - Compare all deployment options
-- **[Docker Examples](../../examples/docker-examples/README.md)** - Complete containerized setup
-- **[Kubernetes Examples](../../examples/k8s/README.md)** - Production deployment
-- **[Local Development](../../examples/simple/README.md)** - Build and run from source
+- **[Local Development](02-local-development.md)** - Set up your development environment
+- **[Docker Deployment](03-docker-deployment.md)** - Deploy agents with Docker Compose
+- **[Kubernetes Deployment](06-helm-deployment.md)** - Production deployment with Helm
+- **[meshctl CLI Reference](meshctl-cli.md)** - Command reference for meshctl

@@ -89,7 +89,7 @@ Create `.vscode/launch.json`:
 
 ```json
 {
-  "version": "0.6.2",
+  "version": "0.7.0",
   "configurations": [
     {
       "name": "Debug Current Agent",

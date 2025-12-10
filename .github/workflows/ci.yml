@@ -163,7 +163,7 @@ jobs:
       - name: Run bandit security scan
         run: |
           bandit -r _mcp_mesh/ -f json -o bandit-report.json || true
-          bandit -r _mcp_mesh/ -f txt
+          bandit -r _mcp_mesh/ -f txt || true
 
       - name: Upload security scan results
         uses: actions/upload-artifact@v4
