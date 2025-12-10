@@ -80,10 +80,6 @@ extra:
     provider: google
     property: !ENV GOOGLE_ANALYTICS_KEY
 
-  version:
-    provider: mike
-    default: latest
-
   # Google Search Console verification
   google_site_verification: EtV7XZPdw0d9azFHor7Zq2BeuVZVnwSwD0zzGNMOUoM
 
@@ -153,6 +149,8 @@ plugins:
 nav:
   - Home: index.md
 
+  - Why MCP Mesh?: 00-why-mcp-mesh/index.md
+
   - Getting Started:
       - Overview: 01-getting-started.md
       - Prerequisites: 01-getting-started/01-prerequisites.md
@@ -183,9 +181,7 @@ nav:
           - Troubleshooting: 03-docker-deployment/troubleshooting.md
 
       - Kubernetes:
-          - Basics: 04-kubernetes-basics.md
-          - kubectl Deployment: 04-kubernetes-basics/03-kubectl-deployment.md
-          - Service Discovery: 04-kubernetes-basics/04-service-discovery.md
+          - Overview: 04-kubernetes-basics.md
           - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
 
       - Helm:
@@ -197,12 +193,7 @@ nav:
           - Best Practices: 06-helm-deployment/05-best-practices.md
           - Troubleshooting: 06-helm-deployment/troubleshooting.md
 
-  - Observability:
-      - Prometheus Integration: 07-observability/01-prometheus-integration.md
-      - Grafana Dashboards: 07-observability/02-grafana-dashboards.md
-      - Distributed Tracing: 07-observability/03-distributed-tracing.md
-      - Centralized Logging: 07-observability/04-centralized-logging.md
-      - Alerting & SLOs: 07-observability/05-alerting-slos.md
+  - Observability: 07-observability.md
 
   - Reference:
       - Architecture & Design: architecture-and-design.md

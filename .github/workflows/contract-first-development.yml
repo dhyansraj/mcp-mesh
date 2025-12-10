@@ -95,8 +95,9 @@ jobs:
           # Install Go code generator
           go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 
-          # Install Python code generator
-          npm install -g @openapitools/openapi-generator-cli
+          # Install Python code generator (pinned to match local version)
+          npm install -g @openapitools/openapi-generator-cli@2.13.0
+          openapi-generator-cli version-manager set 7.13.0
 
           # Install additional Python dependencies for validation
           pip install openapi-spec-validator jsonschema pyyaml

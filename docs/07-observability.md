@@ -1,414 +1,261 @@
-# Observability and Monitoring
+# Observability
 
-> Monitor and trace your MCP Mesh deployment with built-in distributed tracing
+> Built-in tracing, dashboards, and monitoring - ready to use
 
 ## Overview
 
-MCP Mesh includes a built-in distributed tracing system that provides real-time visibility into request flows across your distributed agents. Unlike traditional OpenTelemetry setups, MCP Mesh uses Redis Streams for trace collection and correlation, offering a lightweight, high-performance observability solution.
+MCP Mesh includes a complete observability stack:
 
-## What You'll Learn
+- **Redis** - Trace event collection from agents
+- **Tempo** - Distributed trace storage and querying
+- **Grafana** - Pre-configured dashboards
 
-By the end of this section, you will:
-
-- ✅ Enable distributed tracing in MCP Mesh
-- ✅ Monitor trace events in real-time
-- ✅ Query and search completed traces
-- ✅ Analyze multi-agent interactions
-- ✅ Debug performance bottlenecks
-- ✅ Export traces to external systems
-
-## MCP Mesh Distributed Tracing Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    MCP Mesh Observability Stack                  │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                     Visualization Layer                   │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   Console   │  │     JSON     │  │   REST API   │   │   │
-│  │  │   Export    │  │   Export     │  │  (Queries)   │   │   │
-│  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                      Processing Layer                     │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │    Trace    │  │    Span      │  │    Export    │   │   │
-│  │  │ Correlator  │  │  Correlation │  │   Pipeline   │   │   │
-│  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Collection Layer                       │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   Registry  │  │ Redis Streams│  │   Consumer   │   │   │
-│  │  │  (Consumer) │  │ (mcp-mesh:   │  │    Group     │   │   │
-│  │  │             │  │   traces)    │  │              │   │   │
-│  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    MCP Mesh Components                    │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   Python    │  │      Go      │  │    Redis     │   │   │
-│  │  │   Agents    │  │   Registry   │  │   Streams    │   │   │
-│  │  │ (Publishers)│  │ (Consumer)   │  │  (Storage)   │   │   │
-│  │  └─────────────┘  └──────────────┘  └──────────────┘   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
+The data flows: **Agents → Redis → Registry → Tempo → Grafana**
 
 ## Quick Start
 
-Enable distributed tracing in your MCP Mesh deployment:
-
-### 1. Enable Tracing in Registry
+### With Helm (Recommended)
 
 ```bash
-# Environment configuration
-export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
-export TRACE_EXPORTER_TYPE=console    # or json, multi
-export TRACE_PRETTY_OUTPUT=true
-export TRACE_ENABLE_STATS=true
+# Deploy core with observability enabled (default)
+helm install mcp-core mcp-mesh/mcp-mesh-core \
+  --namespace mcp-mesh \
+  --set redis.enabled=true \
+  --set tempo.enabled=true \
+  --set grafana.enabled=true
 
-# Start registry with tracing
-meshctl start --registry-only
+# Access Grafana
+kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh
+open http://localhost:3000  # admin/admin
 ```
 
-### 2. Python Agents Auto-Enable Tracing
-
-Python agents automatically participate in distributed tracing when the registry has it enabled. No additional configuration required!
-
-### 3. Verify Tracing is Working
+### With Docker Compose
 
 ```bash
-# Check tracing status
-curl http://localhost:8000/trace/status
+# Generate compose with observability
+meshctl scaffold --compose --observability -d ./agents
 
-# Make a test call to generate traces
-curl -s -X POST http://localhost:9093/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"generate_report","arguments":{"title":"Test Report"}}}'
+# Start
+docker-compose up -d
 
-# Check completed traces (after ~1 minute)
-curl http://localhost:8000/trace/list | jq .
+# Access Grafana
+open http://localhost:3000
 ```
 
-## Core Concepts
-
-### 1. Trace Events
-
-MCP Mesh generates three types of trace events:
-
-- **span_start**: When an operation begins
-- **span_end**: When an operation completes
-- **error**: When an operation fails
-
-### 2. Trace Correlation
-
-The registry correlates events into complete traces:
-
-- **Same trace_id**: Groups spans into a single trace
-- **Same span_id**: Links span_start and span_end events
-- **Parent spans**: Creates trace hierarchy
-
-### 3. Data Flow
+## Architecture
 
 ```
-Python Agent → Redis Streams → Registry Consumer → Correlator → Exporter
-     ↓              ↓               ↓                ↓            ↓
-@mesh.tool()  mcp-mesh:traces  Background     Trace Builder  Console/JSON
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Data Flow                                       │
+│                                                                          │
+│  ┌─────────┐    publish     ┌─────────┐    consume    ┌──────────┐     │
+│  │ Agent A │───────────────►│  Redis  │◄──────────────│ Registry │     │
+│  │ Agent B │    events      │ Stream  │    events     │          │     │
+│  │ Agent C │                │         │               │          │     │
+│  └─────────┘                └─────────┘               └────┬─────┘     │
+│                                                            │            │
+│                                                   export   │            │
+│                                                   traces   │            │
+│                                                            ▼            │
+│  ┌─────────┐                                        ┌──────────┐       │
+│  │ Grafana │◄───────────────────────────────────────│  Tempo   │       │
+│  │         │              query traces              │          │       │
+│  └─────────┘                                        └──────────┘       │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Configuration Options
+## Configuration
 
-### Registry Environment Variables
+### Environment Variables
 
-| Variable                               | Default                  | Description                         |
-| -------------------------------------- | ------------------------ | ----------------------------------- |
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                  | Enable/disable tracing              |
-| `TRACE_EXPORTER_TYPE`                  | `console`                | Export format: console, json, multi |
-| `TRACE_PRETTY_OUTPUT`                  | `true`                   | Pretty-print console output         |
-| `TRACE_ENABLE_STATS`                   | `true`                   | Collect trace statistics            |
-| `TRACE_JSON_OUTPUT_DIR`                | -                        | Directory for JSON export           |
-| `TRACE_BATCH_SIZE`                     | `100`                    | Redis consumer batch size           |
-| `TRACE_TIMEOUT`                        | `5m`                     | Trace completion timeout            |
-| `REDIS_URL`                            | `redis://localhost:6379` | Redis connection URL                |
+**Registry (trace consumer):**
 
-### Exporter Options
+| Variable                               | Default                        | Description                              |
+| -------------------------------------- | ------------------------------ | ---------------------------------------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                        | Enable tracing                           |
+| `REDIS_URL`                            | `redis://localhost:6379`       | Redis for trace events                   |
+| `TELEMETRY_ENDPOINT`                   | -                              | Tempo OTLP endpoint                      |
+| `TRACE_EXPORTER_TYPE`                  | `otlp`                         | Export format: `otlp`, `console`, `json` |
+| `STREAM_NAME`                          | `mesh:trace`                   | Redis stream name                        |
+| `CONSUMER_GROUP`                       | `mcp-mesh-registry-processors` | Consumer group                           |
 
-#### Console Exporter
+**Agents (trace publishers):**
 
-```bash
-export TRACE_EXPORTER_TYPE=console
-export TRACE_PRETTY_OUTPUT=true
-```
+| Variable                               | Default                  | Description                 |
+| -------------------------------------- | ------------------------ | --------------------------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | `false`                  | Enable trace publishing     |
+| `REDIS_URL`                            | `redis://localhost:6379` | Redis for publishing events |
 
-Real-time trace output:
+### Enable Tracing
 
-```
-🔗 TRACE a1b2c3d4 (15ms) - SUCCESS (3 spans across 2 agents)
-  📍 Agent: dependent-service
-    ✅ tool:generate_report [generate_report] (15ms)
-  📍 Agent: fastmcp-service
-    ✅ tool:get_current_time [get_current_time] (2ms)
-    ✅ tool:validate_data [validate_data] (8ms)
-```
-
-#### JSON Exporter
-
-```bash
-export TRACE_EXPORTER_TYPE=json
-export TRACE_JSON_OUTPUT_DIR=/var/log/traces
-```
-
-#### Multi Exporter
-
-```bash
-export TRACE_EXPORTER_TYPE=multi
-export TRACE_JSON_OUTPUT_DIR=/var/log/traces
-```
-
-## API Reference
-
-### Trace Status
-
-```bash
-GET /trace/status
-```
-
-Returns tracing configuration and runtime status.
-
-### List Traces
-
-```bash
-GET /trace/list?limit=20&offset=0
-```
-
-List completed traces with pagination.
-
-### Get Specific Trace
-
-```bash
-GET /trace/{trace_id}
-```
-
-Retrieve a specific trace by ID.
-
-### Search Traces
-
-```bash
-GET /trace/search?agent_name=weather&success=true&start_time=2024-01-01T00:00:00Z
-```
-
-Search traces with filtering:
-
-| Parameter         | Type    | Description              |
-| ----------------- | ------- | ------------------------ |
-| `parent_span_id`  | string  | Filter by parent span    |
-| `agent_name`      | string  | Filter by agent name     |
-| `operation`       | string  | Filter by operation name |
-| `success`         | boolean | Filter by success status |
-| `start_time`      | RFC3339 | Filter by start time     |
-| `end_time`        | RFC3339 | Filter by end time       |
-| `min_duration_ms` | integer | Minimum duration filter  |
-| `max_duration_ms` | integer | Maximum duration filter  |
-| `limit`           | integer | Result limit (max 100)   |
-
-### Trace Statistics
-
-```bash
-GET /trace/stats
-```
-
-Returns aggregate trace statistics.
-
-## Trace Analysis Examples
-
-### Example 1: Find Slow Operations
-
-```bash
-# Find traces longer than 1 second
-curl "http://localhost:8000/trace/search?min_duration_ms=1000" | jq .
-```
-
-### Example 2: Debug Failed Operations
-
-```bash
-# Find failed traces
-curl "http://localhost:8000/trace/search?success=false" | jq .
-```
-
-### Example 3: Analyze Agent Performance
-
-```bash
-# Get traces for specific agent
-curl "http://localhost:8000/trace/search?agent_name=weather-service" | jq .
-```
-
-### Example 4: Monitor Recent Activity
-
-```bash
-# Get traces from last hour
-HOUR_AGO=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
-curl "http://localhost:8000/trace/search?start_time=$HOUR_AGO" | jq .
-```
-
-## Best Practices
-
-### 1. Monitoring
-
-- Monitor trace export rate and success
-- Set up alerts for high error rates
-- Watch for trace correlation issues
-
-### 2. Storage Management
-
-- Traces are stored in memory (last 1000)
-- Older traces are automatically cleaned up
-- Use JSON export for long-term storage
-
-### 3. Performance
-
-- Tracing is designed to be low-overhead
-- Async publishing doesn't block operations
-- Redis Streams provide high throughput
-
-### 4. Debugging
-
-- Check trace status endpoint for issues
-- Monitor Redis stream length
-- Verify consumer group processing
-
-## Integration Examples
-
-### External Monitoring Integration
-
-```bash
-#!/bin/bash
-# Send trace metrics to external monitoring
-
-# Get trace stats
-STATS=$(curl -s http://localhost:8000/trace/stats)
-TOTAL_TRACES=$(echo $STATS | jq .total_traces)
-SUCCESS_RATE=$(echo $STATS | jq '.success_traces / .total_traces * 100')
-
-# Send to monitoring system
-curl -X POST http://monitoring.internal/metrics \
-  -d "mcp_mesh_traces_total $TOTAL_TRACES"
-curl -X POST http://monitoring.internal/metrics \
-  -d "mcp_mesh_traces_success_rate $SUCCESS_RATE"
-```
-
-### Log Integration
-
-```bash
-#!/bin/bash
-# Export traces to centralized logging
-
-# Get recent traces and send to logs
-curl -s "http://localhost:8000/trace/list?limit=100" | \
-  jq -c '.traces[]' | \
-  while read trace; do
-    echo "$trace" | logger -t mcp-mesh-trace
-  done
+```yaml
+# In mcp-mesh-core values
+mcp-mesh-registry:
+  registry:
+    observability:
+      distributedTracing:
+        enabled: true
+        redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
+        telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 ```
 
 ## Troubleshooting
 
-### Issue 1: No Traces Appearing
-
-**Symptoms**: Empty trace list despite agent activity
-
-**Checks**:
+### Step 1: Check if Agents are Publishing to Redis
 
 ```bash
-# 1. Verify tracing is enabled
-curl http://localhost:8000/trace/status | jq .enabled
+# Check Redis stream exists and has events
+redis-cli XLEN mesh:trace
 
-# 2. Check Redis stream
-redis-cli XLEN mcp-mesh:traces
+# View recent events
+redis-cli XREVRANGE mesh:trace + - COUNT 5
 
-# 3. Check consumer status
-curl http://localhost:8000/trace/status | jq .consumer
+# Expected output: Events with trace_id, span_id, agent_name
 ```
 
-### Issue 2: Incomplete Traces
+**If empty:**
 
-**Symptoms**: Traces missing spans or correlation issues
+- Check `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` in agent env
+- Check agent can reach Redis: `curl http://agent:8080/health`
+- Check agent logs for "Tracing enabled" message
 
-**Checks**:
+### Step 2: Check Registry Connection to Redis
 
 ```bash
-# Check for orphaned spans
-redis-cli XREVRANGE mcp-mesh:traces + - COUNT 10
+# Check registry can connect to Redis
+kubectl exec -it <registry-pod> -n mcp-mesh -- redis-cli -h mcp-core-mcp-mesh-redis ping
 
-# Look for mismatched trace_ids
-curl http://localhost:8000/trace/status | jq .correlator
+# Check consumer group exists
+redis-cli XINFO GROUPS mesh:trace
+
+# Expected output: Consumer group "mcp-mesh-registry-processors" with consumers
 ```
 
-### Issue 3: High Memory Usage
+**If no consumer group:**
 
-**Symptoms**: Registry memory growing
+- Check `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` in registry env
+- Check `REDIS_URL` points to correct Redis service
+- Check registry logs for "Starting trace consumer" message
 
-**Checks**:
+### Step 3: Check Registry is Exporting to Tempo
 
 ```bash
-# Check active traces count
-curl http://localhost:8000/trace/status | jq .correlator.active_traces
+# Check trace status endpoint
+kubectl port-forward svc/mcp-core-mcp-mesh-registry 8000:8000 -n mcp-mesh
+curl http://localhost:8000/trace/status | jq .
 
-# Verify cleanup is working
-# Should see periodic cleanup messages in logs
+# Expected output:
+# {
+#   "enabled": true,
+#   "consumer": { "status": "running" },
+#   "correlator": { "active_traces": N },
+#   "exporter": { "type": "otlp", "exported_traces": N }
+# }
 ```
 
-## Advanced Configuration
+**If exporter not working:**
 
-### Custom Exporters
+- Check `TELEMETRY_ENDPOINT` points to Tempo (e.g., `tempo:4317`)
+- Check Tempo is running: `kubectl get pods -l app.kubernetes.io/name=mcp-mesh-tempo`
+- Check registry logs for export errors
 
-You can implement custom exporters by extending the Go registry:
-
-```go
-// Custom exporter implementation
-type CustomExporter struct {
-    endpoint string
-}
-
-func (e *CustomExporter) ExportTrace(trace *CompletedTrace) error {
-    // Send trace to custom backend
-    return sendToCustomBackend(e.endpoint, trace)
-}
-```
-
-### Redis Configuration
+### Step 4: Check Grafana Can Query Tempo
 
 ```bash
-# High-performance Redis settings for tracing
-redis-cli CONFIG SET stream-node-max-bytes 4096
-redis-cli CONFIG SET stream-node-max-entries 100
+# Port-forward Tempo
+kubectl port-forward svc/mcp-core-mcp-mesh-tempo 3200:3200 -n mcp-mesh
+
+# Query traces directly from Tempo
+curl "http://localhost:3200/api/search?limit=5" | jq .
+
+# Expected output: List of traces
 ```
 
-## Performance Characteristics
+**If no traces in Tempo:**
 
-- **Throughput**: 10,000+ spans/second
-- **Latency**: <1ms trace event publishing
-- **Memory**: ~1MB per 1000 completed traces
-- **Storage**: Configurable retention (default: in-memory)
+- Check Tempo is receiving data on port 4317 (OTLP gRPC)
+- Check Tempo logs: `kubectl logs -l app.kubernetes.io/name=mcp-mesh-tempo -n mcp-mesh`
 
-## Next Steps
+**In Grafana:**
 
-The distributed tracing system provides a solid foundation for observability. Consider adding:
+1. Go to Explore → Select "Tempo" datasource
+2. Search for traces
+3. If "No data", check datasource URL points to `http://mcp-core-mcp-mesh-tempo:3200`
 
-1. **External Export**: Send traces to Jaeger/Zipkin
-2. **Alerting**: Set up alerts on trace metrics
-3. **Dashboards**: Create visualizations for trace data
-4. **Custom Metrics**: Extract business metrics from traces
+## Common Issues
 
----
+### No traces appearing anywhere
 
-💡 **Tip**: Use the search API with time ranges to analyze performance trends over time
+```bash
+# Full diagnostic check
+echo "=== Redis Stream ==="
+redis-cli XLEN mesh:trace
 
-📚 **Reference**: [MCP Mesh Tracing API Documentation](./07-observability/03-distributed-tracing.md)
+echo "=== Consumer Groups ==="
+redis-cli XINFO GROUPS mesh:trace
 
-🎯 **Next Step**: Explore the detailed [Distributed Tracing Guide](./07-observability/03-distributed-tracing.md)
+echo "=== Registry Trace Status ==="
+curl -s http://localhost:8000/trace/status | jq .
+
+echo "=== Tempo Traces ==="
+curl -s "http://localhost:3200/api/search?limit=1" | jq .
+```
+
+### Traces in Redis but not in Tempo
+
+Registry is not consuming or exporting properly:
+
+```bash
+# Check registry logs
+kubectl logs -l app.kubernetes.io/name=mcp-mesh-registry -n mcp-mesh | grep -i trace
+
+# Check consumer lag (pending events)
+redis-cli XINFO GROUPS mesh:trace
+# Look for "lag" field - high lag means consumer is slow/stuck
+```
+
+### Traces in Tempo but not in Grafana
+
+Grafana datasource misconfigured:
+
+1. Go to Grafana → Configuration → Data Sources → Tempo
+2. Verify URL: `http://mcp-core-mcp-mesh-tempo:3200`
+3. Click "Save & Test"
+
+## Accessing Services
+
+```bash
+# Grafana (dashboards)
+kubectl port-forward svc/mcp-core-mcp-mesh-grafana 3000:3000 -n mcp-mesh
+# URL: http://localhost:3000 (admin/admin)
+
+# Tempo (trace API)
+kubectl port-forward svc/mcp-core-mcp-mesh-tempo 3200:3200 -n mcp-mesh
+# URL: http://localhost:3200/api/search
+
+# Registry (trace status)
+kubectl port-forward svc/mcp-core-mcp-mesh-registry 8000:8000 -n mcp-mesh
+# URL: http://localhost:8000/trace/status
+```
+
+## Disable Observability
+
+For minimal deployments:
+
+```yaml
+# mcp-mesh-core values
+redis:
+  enabled: false
+
+tempo:
+  enabled: false
+
+grafana:
+  enabled: false
+
+mcp-mesh-registry:
+  registry:
+    observability:
+      distributedTracing:
+        enabled: false
+```

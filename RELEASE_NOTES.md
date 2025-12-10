@@ -1,5 +1,24 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.0...v0.7.1)
+
+## v0.7.1 (2025-12-10)
+
+### 📚 Documentation
+
+- Simplified observability documentation with troubleshooting pipeline focus
+- Updated Helm documentation to correctly explain mcp-mesh-core umbrella chart
+- Streamlined Kubernetes deployment docs to focus on Helm
+- Removed broken mike versioning configuration
+
+### 🐛 Bug Fixes
+
+- Fixed documentation version display in header
+
+### 📦 Infrastructure
+
+- Updated all Helm charts to version `0.7.1`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.6.4...v0.7.0)
 
 ## v0.7.0 (2025-12-04)

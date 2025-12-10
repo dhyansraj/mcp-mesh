@@ -1,10 +1,10 @@
 # Creating Your First Agent
 
-> Build a complete weather service agent using the new dual decorator pattern
+> Build a complete weather service agent using the dual decorator pattern
 
 ## Overview
 
-In this guide, you'll create a sophisticated weather service agent using MCP Mesh 0.7.x that demonstrates:
+In this guide, you'll create a sophisticated weather service agent that demonstrates:
 
 - 🌤️ **Multiple MCP decorators** - `@app.tool`, `@app.prompt`, `@app.resource`
 - 🔗 **Smart dependency injection** - Type-safe dependencies with tag-based resolution
@@ -33,7 +33,7 @@ Create `weather_agent.py`:
 ```python
 #!/usr/bin/env python3
 """
-Advanced Weather Service Agent - MCP Mesh 0.7.x Pattern
+Advanced Weather Service Agent
 
 Demonstrates:
 - Dual decorator pattern (@app + @mesh)
@@ -344,7 +344,7 @@ class WeatherService:
 Create `requirements.txt`:
 
 ```txt
-mcp-mesh>=0.6,<0.7
+mcp-mesh>=0.7,<0.8
 fastmcp>=2.8.0
 ```
 
@@ -355,7 +355,7 @@ Create `README.md`:
 ````markdown
 # Weather Service Agent
 
-Advanced weather service using MCP Mesh 0.7.x dual decorator pattern.
+Advanced weather service using MCP Mesh's dual decorator pattern.
 
 ## Features
 
@@ -379,16 +379,18 @@ python ../examples/simple/system_agent.py
 
 ```bash
 # Test weather data
-curl -X POST http://localhost:9091/mcp \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_weather", "arguments": {"city": "tokyo"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"tokyo"}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 
 # Test forecast with dependencies
-curl -X POST http://localhost:9091/mcp \
+curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_forecast", "arguments": {"city": "london", "days": 5}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_forecast","arguments":{"city":"london","days":5}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 ```
 
 ````
@@ -412,77 +414,46 @@ python weather_agent.py
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "get_weather",
-      "arguments": {"city": "tokyo"}
-    }
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"tokyo"}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 
 # 2. Test forecast (self + external dependencies)
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "get_forecast",
-      "arguments": {"city": "london", "days": 3}
-    }
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_forecast","arguments":{"city":"london","days":3}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
 
 # 3. Test prompt generation
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "prompts/get",
-    "params": {
-      "name": "weather_analysis_prompt",
-      "arguments": {"city": "paris", "analysis_type": "detailed"}
-    }
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"weather_analysis_prompt","arguments":{"city":"paris","analysis_type":"detailed"}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result'
 
 # 4. Test resource access
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "resources/read",
-    "params": {
-      "uri": "weather://config/sydney"
-    }
-  }' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"weather://config/sydney"}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result'
 ```
 
 ### Verify Service Integration
 
 ```bash
-# Check what services are registered
-curl -s http://localhost:8000/agents | \
-  jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
+# Quick check - shows agent count and dependency resolution
+meshctl list --healthy-only
 
-# List all available tools
-curl -s -X POST http://localhost:9091/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | \
-  jq '.result.tools[] | {name: .name, description: .description}'
+# Detailed view - shows capabilities, dependencies, endpoints
+meshctl status
 ```
 
 ## Understanding What You Built
 
 ### The Dual Decorator Pattern
 
-Your agent demonstrates the power of MCP Mesh 0.7.x:
+Your agent demonstrates the power of MCP Mesh:
 
 ```python
 @app.tool()      # ← FastMCP: Handles MCP protocol
@@ -569,11 +540,11 @@ python -c "import mesh, fastmcp; print('Dependencies OK')"
 ### Dependencies Not Injected
 
 ```bash
-# Verify system agent is running
-curl -s http://localhost:8080/health
+# Quick check - see if all dependencies are resolved (e.g., "4/4")
+meshctl list --healthy-only
 
-# Check service registration
-curl -s http://localhost:8000/agents | jq '.agents[].name'
+# Detailed view - shows capabilities, resolved dependencies, and endpoints
+meshctl status
 ```
 
 ### Function Not Found
@@ -584,7 +555,7 @@ curl -s http://localhost:8000/agents | jq '.agents[].name'
 
 ## Next Steps
 
-Congratulations! You've built a sophisticated agent using MCP Mesh 0.7.x. You've learned:
+Congratulations! You've built a sophisticated agent using MCP Mesh. You've learned:
 
 ✅ **Dual decorator pattern** - FastMCP + Mesh orchestration
 ✅ **All MCP decorators** - Tools, prompts, and resources
@@ -609,4 +580,4 @@ Congratulations! You've built a sophisticated agent using MCP Mesh 0.7.x. You've
 
 🎯 **Pro Tip**: Use self-dependencies for internal coordination and tag-based dependencies for smart external service selection.
 
-🚀 **Achievement Unlocked**: You've mastered the MCP Mesh 0.7.x dual decorator pattern! Ready for production deployment?
+🚀 **Achievement Unlocked**: You've mastered the MCP Mesh dual decorator pattern! Ready for production deployment?

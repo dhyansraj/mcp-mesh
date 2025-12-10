@@ -7,13 +7,16 @@ template: home.html
 
 MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into an enterprise-grade distributed system. Build production-ready AI agent networks with zero boilerplate.
 
+!!! tip "Complete Platform for AI Agents"
+MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
+
 ---
 
 ## :rocket: Quick Start
 
 ```bash
 # Install MCP Mesh
-pip install "mcp-mesh>=0.5,<0.6"
+pip install "mcp-mesh>=0.7,<0.8"
 ```
 
 ```python
@@ -39,44 +42,31 @@ class MyAgent:
 
 ## :sparkles: Key Features
 
-<div class="grid cards" markdown>
-
-- :electric_plug: **Zero Boilerplate**
-
-  ***
-
-  Two decorators replace hundreds of lines of networking code. Just write business logic.
-
-- :dart: **Smart Discovery**
-
-  ***
-
-  Tag-based service resolution with version constraints. Agents automatically find dependencies.
-
-- :material-kubernetes: **Kubernetes Native**
-
-  ***
-
-  Production-ready Helm charts with horizontal scaling, health checks, and observability.
-
-- :arrows_counterclockwise: **Dynamic Updates**
-
-  ***
-
-  Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
-
-- :bar_chart: **Built-in Observability**
-
-  ***
-
-  Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
-
-- :shield: **Enterprise Ready**
-
-  ***
-
-  Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
-
+<div class="grid-features" markdown>
+<div class="feature-card" markdown>
+### :electric_plug: Zero Boilerplate
+Two decorators replace hundreds of lines of networking code. Just write business logic.
+</div>
+<div class="feature-card" markdown>
+### :dart: Smart Discovery
+Tag-based service resolution with version constraints. Agents automatically find dependencies.
+</div>
+<div class="feature-card" markdown>
+### :material-kubernetes: Kubernetes Native
+Production-ready Helm charts with horizontal scaling, health checks, and observability.
+</div>
+<div class="feature-card" markdown>
+### :arrows_counterclockwise: Dynamic Updates
+Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
+</div>
+<div class="feature-card" markdown>
+### :bar_chart: Built-in Observability
+Grafana dashboards, distributed tracing with Tempo, and Redis-backed session management.
+</div>
+<div class="feature-card" markdown>
+### :shield: Enterprise Ready
+Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
+</div>
 </div>
 
 ---
@@ -144,12 +134,39 @@ class MyAgent:
 
 ---
 
+## :vs: MCP Mesh vs Other Frameworks
+
+| Framework     | K8s Native              | Independent Scaling               | Service Discovery           | Best For              |
+| ------------- | ----------------------- | --------------------------------- | --------------------------- | --------------------- |
+| **MCP Mesh**  | :white_check_mark: Helm | :white_check_mark: Per-agent pods | :white_check_mark: Built-in | Production deployment |
+| LangGraph     | :x: Manual              | :x: Same process                  | :x: DIY                     | Complex workflows     |
+| CrewAI        | :x: Manual              | :x: Limited                       | :x: None                    | Rapid prototyping     |
+| AutoGen       | :x: Manual              | :x: Manual                        | :x: DIY                     | Enterprise/Azure      |
+| OpenAI Agents | :x: Manual              | :x: Manual                        | :x: None                    | OpenAI-centric        |
+
+[:material-arrow-right: Full comparison with code examples](00-why-mcp-mesh/index.md){ .md-button }
+
+---
+
 ## :package: Installation Options
 
 === "PyPI"
 
     ```bash
-    pip install "mcp-mesh>=0.5,<0.6"
+    pip install "mcp-mesh>=0.7,<0.8"
+    ```
+
+=== "curl (Linux/macOS)"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    ```
+
+=== "curl (Windows)"
+
+    ```bash
+    # Via WSL or Git Bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
     ```
 
 === "Homebrew"
@@ -162,8 +179,8 @@ class MyAgent:
 === "Docker"
 
     ```bash
-    docker pull mcpmesh/registry:0.7.0
-    docker pull mcpmesh/python-runtime:0.7.0
+    docker pull mcpmesh/registry:0.7
+    docker pull mcpmesh/python-runtime:0.7
     ```
 
 ---
@@ -179,7 +196,7 @@ class MyAgent:
 
 ## :star: Project Status
 
-- **Latest Release**: v0.7.0 (December 2025)
+- **Latest Release**: v0.7.1 (December 2025)
 - **License**: MIT
 - **Language**: Python 3.11+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

@@ -1,411 +1,300 @@
 # Local Development
 
-> Set up a professional development environment for building MCP Mesh agents
+> Develop your own MCP Mesh agents locally
 
 ## Overview
 
-After running your first Hello World example, it's time to set up a proper development environment. This guide covers professional development practices, debugging techniques, and productivity tools for MCP Mesh development.
-
-## What You'll Learn
-
-By the end of this section, you will:
-
-- ✅ Set up a complete local development environment
-- ✅ Run the MCP Mesh registry with different database backends
-- ✅ Debug agents using IDE tools and logging
-- ✅ Implement hot reload for rapid development
-- ✅ Write and run comprehensive tests for your agents
+This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine.
 
 ## Development Workflow
 
-Here's the typical development workflow we'll establish:
-
 ```mermaid
 graph LR
-    A[Write Code] --> B[Hot Reload]
-    B --> C[Test Locally]
-    C --> D[Debug if Needed]
-    D --> A
-    C --> E[Run Tests]
-    E --> F[Commit Changes]
+    A[Install Tools] --> B[Scaffold Agent]
+    B --> C[Write Code]
+    C --> D[Start Agents]
+    D --> E[Test with curl]
+    E --> C
 ```
 
-## Section Contents
+## Quick Start
 
-1. **[Development Environment Setup](./02-local-development/01-environment-setup.md)** - IDEs, tools, and configuration
-2. **[Running Registry Locally](./02-local-development/02-local-registry.md)** - SQLite vs PostgreSQL, data persistence
-3. **[Debugging Agents](./02-local-development/03-debugging.md)** - IDE debugging, logging, troubleshooting
-4. **[Hot Reload and Development Workflow](./02-local-development/04-hot-reload.md)** - Automatic reloading, file watching
-5. **[Testing Your Agents](./02-local-development/05-testing.md)** - Unit tests, integration tests, test coverage
+### 1. Install meshctl
 
-## Key Development Tools
+=== "Homebrew (macOS)"
 
-### 1. Virtual Environments
+    ```bash
+    brew tap dhyansraj/mcp-mesh
+    brew install mcp-mesh
+    ```
 
-Keep your dependencies isolated:
+=== "curl (Linux/macOS)"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    ```
+
+=== "Windows (WSL)"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    ```
+
+### 2. Set Up Your Project
 
 ```bash
-# Create project-specific environment
-python -m venv .venv
-source .venv/bin/activate
+# Create project directory
+mkdir my-agent-project
+cd my-agent-project
 
-# Install development dependencies
-make install-dev
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install MCP Mesh SDK
+pip install "mcp-mesh>=0.7,<0.8"
 ```
 
-### 2. Environment Variables
+### 3. Scaffold Your Agent
 
-Use `.env` files for configuration:
+```bash
+# Generate a new agent
+meshctl scaffold --name my-agent --capability my_service
+
+# Or with Docker Compose for deployment
+meshctl scaffold --name my-agent --compose
+```
+
+This creates:
+
+```
+my-agent/
+├── main.py           # Your agent code
+├── requirements.txt  # Dependencies
+└── README.md         # Documentation
+```
+
+### 4. Develop Your Agent
+
+Edit `main.py` to add your functionality:
+
+```python
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("My Agent")
+
+@app.tool()
+@mesh.tool(capability="my_service")
+def my_function(data: str) -> str:
+    """Your custom functionality."""
+    return f"Processed: {data}"
+
+@mesh.agent(name="my-agent", http_port=8080, auto_run=True)
+class MyAgent:
+    pass
+```
+
+### 5. Start Your Agent
+
+```bash
+# Start your agent (registry auto-starts if not running)
+meshctl start main.py
+```
+
+### 6. Test with curl
+
+```bash
+# List available tools
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.tools[].name'
+
+# Call your tool
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_function","arguments":{"data":"hello"}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+```
+
+!!! note "SSE Response Format"
+MCP Mesh uses Server-Sent Events (SSE) format. The `grep "^data:" | sed 's/^data: //'` extracts the JSON from the SSE stream.
+
+## Multi-Agent Development
+
+Develop multiple agents that work together:
+
+```bash
+# Terminal 1: Start first agent
+meshctl start agents/auth_agent.py
+
+# Terminal 2: Start second agent (depends on first)
+meshctl start agents/api_agent.py
+
+# Test dependency injection
+curl -s -X POST http://localhost:8081/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secure_operation","arguments":{}}}' \
+  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+```
+
+## Project Structure
+
+Each scaffolded agent gets its own directory:
+
+```
+my-project/
+├── my-agent/
+│   ├── main.py           # Agent code
+│   ├── requirements.txt  # Dependencies
+│   ├── Dockerfile        # Container build
+│   ├── helm-values.yaml  # Kubernetes config
+│   ├── __init__.py
+│   ├── __main__.py
+│   └── README.md
+├── another-agent/
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   └── ...
+└── docker-compose.yml    # Generated with --compose
+```
+
+## Environment Variables
+
+Configure your agents with environment variables:
 
 ```bash
 # .env
 MCP_MESH_REGISTRY_URL=http://localhost:8000
 MCP_MESH_LOG_LEVEL=DEBUG
-MCP_MESH_HTTP_PORT=8081
-DATABASE_URL=postgresql://user:pass@localhost/mcp_mesh
+MCP_MESH_HTTP_PORT=8080
 ```
 
-### 3. Development Registry
-
-Run registry with hot reload:
+## Useful Commands
 
 ```bash
-# Start registry with automatic database setup
-./bin/meshctl start-registry
+# List all agents
+meshctl list
 
-# PostgreSQL for production-like testing
-docker run -d -p 5432:5432 \
-  -e POSTGRES_DB=mcp_mesh \
-  -e POSTGRES_PASSWORD=password \
-  postgres:15
+# List only healthy agents
+meshctl list --healthy-only
+
+# Check mesh status
+meshctl status
+
+# Stop all agents
+meshctl stop --all
 ```
 
-### 4. Code Quality Tools
+## Debugging
 
-Maintain high code quality:
+### Enable Debug Logging
 
 ```bash
-# Format code
-black src/ tests/
-
-# Sort imports
-isort src/ tests/
-
-# Lint code
-ruff check src/
-
-# Type checking
-mypy src/
+meshctl start --debug main.py
 ```
 
-## Quick Start Commands
-
-Get started quickly with these commands:
+### Check Registry Connection
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/weather-agent
-cd weather-agent
+# Quick check - shows agent count and dependency resolution
+meshctl list --healthy-only
 
-# Set up development environment
-make dev-setup  # or ./scripts/setup-dev.sh
-
-# Start all services
-make dev-start  # Starts registry, database, and monitoring
-
-# Run your agent
-./bin/meshctl start examples/simple/weather_agent.py
-
-# Run tests
-make test       # All tests
-make test-unit  # Unit tests only
-make test-integration  # Integration tests
+# Detailed view - shows capabilities, dependencies, endpoints
+meshctl status
 ```
-
-## Development Best Practices
-
-### 1. Project Structure
-
-Organize your agent projects consistently:
-
-```
-my-agent/
-├── src/
-│   ├── __init__.py
-│   ├── agent.py           # Main agent code
-│   ├── handlers.py        # Request handlers
-│   └── utils.py          # Utility functions
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── conftest.py       # pytest configuration
-├── configs/
-│   ├── development.yaml
-│   ├── staging.yaml
-│   └── production.yaml
-├── scripts/
-│   ├── setup-dev.sh
-│   └── run-tests.sh
-├── .env.example
-├── requirements.txt
-├── requirements-dev.txt
-├── Makefile
-└── README.md
-```
-
-### 2. Configuration Management
-
-Use environment-specific configurations:
-
-```python
-# config.py
-import os
-from pathlib import Path
-
-ENV = os.getenv("MCP_MESH_ENV", "development")
-
-# Load environment-specific config
-config_path = Path(f"configs/{ENV}.yaml")
-```
-
-### 3. Logging Strategy
-
-Implement comprehensive logging:
-
-```python
-import logging
-import structlog
-
-# Configure structured logging
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.dev.ConsoleRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    cache_logger_on_first_use=True,
-)
-
-logger = structlog.get_logger()
-```
-
-### 4. Error Handling
-
-Implement robust error handling:
-
-```python
-# Import mesh decorators and handle errors gracefully
-from mesh import agent, tool
-
-@tool(
-    capability="robust_service",
-    dependencies=["external_service"]
-)
-def robust_operation(data: str, external_service=None):
-    try:
-        if external_service:
-            result = external_service(data)
-            return result
-        else:
-            logger.warning("External service unavailable, using fallback")
-            return {"result": "fallback_data", "source": "local"}
-    except Exception as e:
-        logger.error(f"Operation failed: {e}")
-        raise
-```
-
-## Common Development Scenarios
-
-### Scenario 1: Multi-Agent Development
-
-Develop multiple interacting agents:
-
-```bash
-# Terminal 1: Registry
-./bin/meshctl start-registry
-
-# Terminal 2: Database Agent
-./bin/meshctl start examples/simple/database_agent.py
-
-# Terminal 3: Cache Agent
-./bin/meshctl start examples/simple/cache_agent.py
-
-# Terminal 4: API Agent
-./bin/meshctl start examples/simple/api_agent.py
-```
-
-### Scenario 2: Testing Integration
-
-Test agent interactions:
-
-```python
-# tests/integration/test_weather_integration.py
-import pytest
-import subprocess
-import requests
-import time
-
-@pytest.fixture
-def test_harness():
-    # Start test registry
-    registry_proc = subprocess.Popen([
-        "./bin/meshctl", "start-registry", "--port", "18000"
-    ])
-    time.sleep(2)
-
-    # Start test agents
-    weather_proc = subprocess.Popen([
-        "./bin/meshctl", "start", "examples/simple/weather_agent.py"
-    ], env={"MCP_MESH_REGISTRY_URL": "http://localhost:18000"})
-
-    time.sleep(3)
-    yield
-
-    # Cleanup
-    weather_proc.terminate()
-    registry_proc.terminate()
-
-def test_weather_integration(test_harness):
-    response = requests.get("http://localhost:18000/agents")
-    agents = response.json()
-    assert any(a["name"] == "weather-agent" for a in agents)
-```
-
-### Scenario 3: Performance Profiling
-
-Profile your agents:
-
-```python
-import cProfile
-import pstats
-
-profiler = cProfile.Profile()
-profiler.enable()
-
-# Your agent code here
-
-profiler.disable()
-stats = pstats.Stats(profiler).sort_stats('cumulative')
-stats.print_stats()
-```
-
-## Development Tools Integration
 
 ### VS Code Configuration
 
-`.vscode/launch.json`:
+Create `.vscode/launch.json`:
 
 ```json
 {
-  "version": "0.6.2",
+  "version": "0.2.0",
   "configurations": [
     {
       "name": "Debug Agent",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/bin/meshctl",
-      "args": ["start", "examples/simple/weather_agent.py"],
+      "module": "mesh",
+      "args": ["start", "main.py"],
       "env": {
-        "MCP_MESH_LOG_LEVEL": "DEBUG",
-        "PYTHONDONTWRITEBYTECODE": "1"
+        "MCP_MESH_LOG_LEVEL": "DEBUG"
       }
     }
   ]
 }
 ```
 
-### PyCharm Configuration
-
-1. Set up Python interpreter with virtual environment
-2. Configure environment variables in Run Configuration
-3. Enable pytest as test runner
-4. Set up code style settings
-
-## Troubleshooting Development Issues
-
-### Registry Connection Issues
-
-```bash
-# Check if registry is running
-curl http://localhost:8000/health
-
-# Check what's using port 8000
-lsof -i :8000
-
-# Restart with verbose logging
-MCP_MESH_LOG_LEVEL=DEBUG ./bin/meshctl start-registry
-```
-
-### Agent Registration Failures
+## Testing Your Agents
 
 ```python
-# Enable debug logging
-import logging
-logging.basicConfig(level=logging.DEBUG)
+# tests/test_agents.py
+import pytest
+import requests
 
-# Check registration details
-logger.debug("registration_attempt",
-    endpoint=agent.endpoint,
-    capabilities=agent.capabilities
-)
+def test_my_function():
+    response = requests.post(
+        "http://localhost:8080/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "my_function",
+                "arguments": {"data": "test"}
+            }
+        }
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Processed: test" in str(result)
 ```
 
-### Dependency Resolution Problems
+Run tests:
 
 ```bash
-# List all registered agents
-curl http://localhost:8000/agents | jq
-
-# Check registry health
-curl http://localhost:8000/health | jq
+pytest tests/
 ```
 
-## Ready to Dive Deeper?
+## Troubleshooting
 
-Now that you understand the development landscape, let's set up your environment:
+### Registry Not Starting
 
-[Development Environment Setup](./02-local-development/01-environment-setup.md) →
+```bash
+# Check if port 8000 is in use
+lsof -i :8000
 
----
+# Kill existing process if needed
+kill -9 $(lsof -t -i:8000)
 
-💡 **Pro Tip**: Use `make` commands or shell scripts to standardize common development tasks across your team.
+# Start registry manually
+meshctl start-registry
+```
 
-📚 **Note**: This section focuses on Python agent development. For Go component development (like the registry), see our [Go Development Guide](../contributing/go-development.md).
+### Agent Not Registering
 
-## 🔧 Troubleshooting
+1. Check registry is running: `curl http://localhost:8000/health`
+2. Check agent logs for errors
+3. Verify `MCP_MESH_REGISTRY_URL` is correct
 
-### Common Development Issues
+### Dependency Not Injected
 
-1. **Hot reload not working** - Check file watcher permissions and patterns
-2. **IDE not recognizing imports** - Configure Python interpreter to use virtual environment
-3. **Database connection errors** - Verify PostgreSQL/SQLite is running and accessible
-4. **Test failures in CI but not locally** - Check for environment-specific dependencies
-5. **Debugging not hitting breakpoints** - Disable hot reload when debugging
+```bash
+# Quick check - see if all dependencies are resolved (e.g., "4/4")
+meshctl list --healthy-only
 
-For comprehensive solutions, see our [Development Troubleshooting Guide](./02-local-development/troubleshooting.md).
+# Detailed view - shows capabilities, resolved dependencies, and endpoints
+meshctl status
+```
 
-## ⚠️ Known Limitations
+## Next Steps
 
-- **Hot reload**: Some changes (decorators, imports) require manual restart
-- **Windows development**: File watching may be slower than Linux/macOS
-- **SQLite concurrency**: Limited write concurrency for development
-- **Mock limitations**: Some MCP features hard to mock locally
-- **IDE support**: Limited autocomplete for injected dependencies
-
-## 📝 TODO
-
-- [ ] Create development container (devcontainer) configuration
-- [ ] Add Makefile generator for new projects
-- [ ] Implement local service mesh visualization
-- [ ] Create development proxy for remote services
-- [ ] Add performance regression detection
-- [ ] Support for local Kubernetes development (kind/k3s)
-- [ ] Create agent scaffolding CLI tool
-- [ ] Add development metrics dashboard
+- [Docker Deployment](03-docker-deployment.md) - Package and deploy your agents
+- [Kubernetes Deployment](06-helm-deployment.md) - Scale to production
+- [Mesh Decorators Reference](mesh-decorators.md) - All decorator options

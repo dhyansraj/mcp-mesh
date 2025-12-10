@@ -1,258 +1,261 @@
 # Docker Deployment
 
-> Package and run MCP Mesh agents in containers for consistent, portable deployments
+> Run MCP Mesh agents in containers with pre-built images and generated compose files
 
 ## Overview
 
-Docker provides a consistent environment for running MCP Mesh agents across different systems. This section covers building Docker images for your agents, running multi-agent systems with Docker Compose, and preparing for container orchestration platforms.
+MCP Mesh provides pre-built Docker images and a scaffold tool to generate Docker Compose files automatically. No need to write Dockerfiles from scratch.
 
-Whether you're containerizing a single agent or building a complex multi-service mesh, Docker ensures your agents run the same way everywhere - from your laptop to production servers.
+## Quick Start (30 seconds)
 
-## What You'll Learn
+```bash
+# Generate a new agent with Dockerfile and compose file
+meshctl scaffold --name my-agent --compose
 
-By the end of this section, you will:
-
-- ✅ Build optimized Docker images for MCP Mesh agents
-- ✅ Configure multi-agent systems with Docker Compose
-- ✅ Implement service discovery in containerized environments
-- ✅ Manage persistent data and configuration
-- ✅ Set up networking for agent communication
-- ✅ Prepare for Kubernetes deployment
-
-## Why Docker for MCP Mesh?
-
-Docker solves several challenges in distributed agent deployment:
-
-1. **Consistency**: Same environment everywhere, no "works on my machine"
-2. **Isolation**: Agents run in separate containers with defined resources
-3. **Portability**: Move from development to production seamlessly
-4. **Scalability**: Easy to run multiple instances of agents
-5. **Dependency Management**: All dependencies packaged with the agent
-
-## Docker Architecture for MCP Mesh
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Host                               │
-│                                                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐ │
-│  │  Registry        │  │  Weather Agent   │  │  System     │ │
-│  │  Container       │  │  Container       │  │  Agent      │ │
-│  │                  │  │                  │  │  Container  │ │
-│  │  ┌─────────────┐ │  │  ┌─────────────┐ │  │  ┌────────┐│ │
-│  │  │ Go Registry │ │  │  │ Python Agent│ │  │  │ Python ││ │
-│  │  │ PostgreSQL  │ │  │  │ MCP Mesh    │ │  │  │ Agent  ││ │
-│  │  └─────────────┘ │  │  └─────────────┘ │  │  └────────┘│ │
-│  └────────┬─────────┘  └────────┬─────────┘  └──────┬─────┘ │
-│           │                      │                    │       │
-│  ┌────────┴──────────────────────┴────────────────────┴────┐ │
-│  │                   Docker Network (mesh-net)              │ │
-│  └──────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+# Start everything (docker-compose.yml is in current directory)
+docker-compose up
 ```
 
-## Section Contents
+That's it! Your agent is running with the registry and observability stack.
 
-1. **[Building Docker Images](./03-docker-deployment/01-building-images.md)** - Create optimized images for agents
-2. **[Docker Compose Setup](./03-docker-deployment/02-compose-setup.md)** - Orchestrate multi-agent systems
-3. **[Multi-Agent Deployment](./03-docker-deployment/03-multi-agent.md)** - Run complex agent networks
-4. **[Networking and Service Discovery](./03-docker-deployment/04-networking.md)** - Container communication
-5. **[Persistent Storage](./03-docker-deployment/05-storage.md)** - Data persistence strategies
+## Pre-built Images
 
-## Quick Start Example
+MCP Mesh publishes official images to Docker Hub:
 
-Here's a complete Docker Compose setup to get you started:
+| Image                        | Purpose                                      |
+| ---------------------------- | -------------------------------------------- |
+| `mcpmesh/registry:0.7`       | Go-based registry service                    |
+| `mcpmesh/python-runtime:0.7` | Python agent runtime (includes mcp-mesh SDK) |
+
+## Using Scaffold to Generate Compose Files
+
+The `meshctl scaffold` command generates everything you need:
+
+```bash
+# Generate compose for existing agents directory
+meshctl scaffold --compose -d ./agents
+
+# Include observability stack (Grafana, Tempo, Redis)
+meshctl scaffold --compose --observability -d ./agents
+
+# Preview without creating files
+meshctl scaffold --compose --dry-run -d ./agents
+```
+
+### Generated docker-compose.yml
 
 ```yaml
-# docker-compose.yml
 version: "3.8"
 
 services:
   registry:
-    build:
-      context: .
-      dockerfile: docker/registry/Dockerfile
+    image: mcpmesh/registry:0.7
     ports:
       - "8000:8000"
     environment:
-      MCP_MESH_DB_TYPE: postgresql
-      MCP_MESH_DB_HOST: postgres
-      MCP_MESH_DB_NAME: mcp_mesh
-      MCP_MESH_DB_USER: postgres
-      MCP_MESH_DB_PASSWORD: postgres
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: mcp_mesh
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - HOST=0.0.0.0
+      - PORT=8000
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  system-agent:
-    build:
-      context: .
-      dockerfile: docker/agent/Dockerfile
-    command: ["./bin/meshctl", "start", "examples/simple/system_agent.py"]
+  my-agent:
+    image: mcpmesh/python-runtime:0.7
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./my-agent:/app/agent:ro
+    command: ["python", "/app/agent/main.py"]
     environment:
-      MCP_MESH_REGISTRY_URL: http://registry:8000
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_HTTP_PORT=8080
     depends_on:
-      - registry
-
-  weather-agent:
-    build:
-      context: .
-      dockerfile: docker/agent/Dockerfile
-    command: ["./bin/meshctl", "start", "examples/simple/weather_agent.py"]
-    environment:
-      MCP_MESH_REGISTRY_URL: http://registry:8000
-    depends_on:
-      - registry
-      - system-agent
-
-volumes:
-  postgres_data:
+      registry:
+        condition: service_healthy
 
 networks:
   default:
-    name: mesh-net
+    name: mcp-mesh
 ```
 
-Run it with:
+## Manual Setup (Without Scaffold)
 
-```bash
-docker-compose up -d
-docker-compose logs -f
+If you prefer manual control, here's a minimal compose file:
+
+```yaml
+version: "3.8"
+
+services:
+  registry:
+    image: mcpmesh/registry:0.7
+    ports:
+      - "8000:8000"
+
+  my-agent:
+    image: mcpmesh/python-runtime:0.7
+    volumes:
+      - ./agent.py:/app/agent.py:ro
+    command: ["python", "/app/agent.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+
+networks:
+  default:
+    name: mcp-mesh
 ```
 
-## Key Concepts for Docker Deployment
+## Building Custom Agent Images
 
-### 1. Image Layers and Caching
+The `meshctl scaffold` command automatically generates a `Dockerfile` for each agent. Use that for production builds.
 
-Build efficient images with proper layering:
+If you didn't use scaffold, here's a sample Dockerfile:
 
 ```dockerfile
-# Good: Layers that change less frequently first
-FROM python:3.11-slim
-WORKDIR /app
+# Dockerfile
+FROM mcpmesh/python-runtime:0.7
 
-# Install MCP Mesh from source
-COPY . .
-RUN make install-dev
+# Copy your agent code
+COPY ./my-agent /app/agent
 
-# Run agent
-CMD ["./bin/meshctl", "start", "examples/simple/agent.py"]
+# Install additional dependencies if needed
+RUN pip install -r /app/agent/requirements.txt
+
+# Run the agent
+CMD ["python", "/app/agent/main.py"]
 ```
 
-### 2. Environment Configuration
-
-Use environment variables for configuration:
+Build and run:
 
 ```bash
-# Development
-docker run -e MCP_MESH_LOG_LEVEL=DEBUG my-agent
-
-# Production
-docker run -e MCP_MESH_LOG_LEVEL=INFO my-agent
+docker build -t my-company/my-agent:1.0 .
+docker run -e MCP_MESH_REGISTRY_URL=http://registry:8000 my-company/my-agent:1.0
 ```
 
-### 3. Health Checks
+## Multi-Agent Setup
 
-Ensure containers are ready before dependent services start:
+Run multiple agents with a single compose file:
 
-```dockerfile
-HEALTHCHECK --interval=30s --timeout=3s \
-  CMD curl -f http://localhost:8081/health || exit 1
+```yaml
+version: "3.8"
+
+services:
+  registry:
+    image: mcpmesh/registry:0.7
+    ports:
+      - "8000:8000"
+
+  auth-agent:
+    image: mcpmesh/python-runtime:0.7
+    volumes:
+      - ./agents/auth:/app/agent:ro
+    command: ["python", "/app/agent/main.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_HTTP_PORT=8080
+
+  data-agent:
+    image: mcpmesh/python-runtime:0.7
+    volumes:
+      - ./agents/data:/app/agent:ro
+    command: ["python", "/app/agent/main.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_HTTP_PORT=8080
+
+  api-agent:
+    image: mcpmesh/python-runtime:0.7
+    volumes:
+      - ./agents/api:/app/agent:ro
+    command: ["python", "/app/agent/main.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_HTTP_PORT=8080
+
+networks:
+  default:
+    name: mcp-mesh
 ```
 
-## Development Workflow with Docker
+## Adding Observability
 
-1. **Build Once, Run Anywhere**
+Use `--observability` flag to include Grafana, Tempo, and Redis:
 
-   ```bash
-   docker build -t my-agent:latest .
-   docker run my-agent:latest
-   ```
+```bash
+meshctl scaffold --compose --observability -d ./agents
+```
 
-2. **Local Development with Bind Mounts**
+Or add manually:
 
-   ```bash
-   docker run -v $(pwd)/agents:/app/agents my-agent:latest
-   ```
+```yaml
+services:
+  # ... your agents ...
 
-3. **Multi-Stage Builds for Optimization**
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
-   ```dockerfile
-   FROM python:3.11 AS builder
-   # Build stage
+  tempo:
+    image: grafana/tempo:latest
+    ports:
+      - "3200:3200"
+      - "4317:4317"
 
-   FROM python:3.11-slim
-   # Runtime stage
-   ```
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+```
+
+## Environment Variables
+
+Key environment variables for containerized agents:
+
+| Variable                | Description        | Default                 |
+| ----------------------- | ------------------ | ----------------------- |
+| `MCP_MESH_REGISTRY_URL` | Registry endpoint  | `http://localhost:8000` |
+| `MCP_MESH_HTTP_PORT`    | Agent HTTP port    | `8080`                  |
+| `MCP_MESH_LOG_LEVEL`    | Logging level      | `INFO`                  |
+| `REDIS_URL`             | Redis for sessions | (optional)              |
+| `TEMPO_ENDPOINT`        | Tracing endpoint   | (optional)              |
 
 ## Best Practices
 
-- 🔒 **Security**: Never embed secrets in images
-- 📦 **Size**: Use slim base images and multi-stage builds
-- 🏷️ **Tagging**: Use semantic versioning for image tags
-- 📝 **Documentation**: Include README in image with usage instructions
-- 🔄 **Updates**: Regularly update base images for security patches
+1. **Use pre-built images** - Don't build from source unless necessary
+2. **Generate with scaffold** - Let `meshctl scaffold` handle the boilerplate
+3. **Volume mount for development** - Fast iteration without rebuilding
+4. **Build custom images for production** - Bake code into image
+5. **Use health checks** - Ensure proper startup order
 
-## Ready to Start?
+## Troubleshooting
 
-Begin with [Building Docker Images](./03-docker-deployment/01-building-images.md) →
+### Agent can't connect to registry
 
-## 🔧 Troubleshooting
+```bash
+# Check registry is healthy
+docker-compose ps
+docker-compose logs registry
 
-### Common Docker Issues
+# Verify network
+docker network ls
+docker network inspect mcp-mesh
+```
 
-1. **Container can't connect to registry**
+### Agent exits immediately
 
-   - Check network configuration
-   - Verify service names in compose file
-   - Ensure registry is healthy before agents start
+```bash
+# Check logs
+docker-compose logs my-agent
 
-2. **Agent exits immediately**
+# Run interactively
+docker-compose run --rm my-agent /bin/bash
+```
 
-   - Check logs: `docker logs <container>`
-   - Verify CMD or ENTRYPOINT is correct
-   - Ensure required environment variables are set
+## Next Steps
 
-3. **Permission denied errors**
-   - Run containers as non-root user
-   - Check file permissions in image
-   - Use proper volume mount permissions
-
-For detailed solutions, see our [Docker Troubleshooting Guide](./03-docker-deployment/troubleshooting.md).
-
-## ⚠️ Known Limitations
-
-- **Windows Containers**: Limited support, use Linux containers
-- **ARM Architecture**: Some base images may not support ARM
-- **File Watching**: Hot reload doesn't work well in containers
-- **Networking**: Container networking adds complexity to debugging
-
-## 📝 TODO
-
-- [ ] Add Kubernetes deployment examples
-- [ ] Create automated image vulnerability scanning
-- [ ] Add examples for cloud container registries
-- [ ] Document multi-architecture builds
-- [ ] Add container security best practices guide
-
----
-
-💡 **Tip**: Use Docker BuildKit for faster builds: `DOCKER_BUILDKIT=1 docker build .`
-
-📚 **Reference**: [Official Docker Documentation](https://docs.docker.com/)
-
-🎯 **Next Step**: Ready to containerize your agents? Start with [Building Docker Images](./03-docker-deployment/01-building-images.md)
+- [Networking Details](./03-docker-deployment/04-networking.md) - Deep dive into container networking
+- [Kubernetes Deployment](./06-helm-deployment.md) - Production deployment with Helm

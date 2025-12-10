@@ -12,7 +12,7 @@ brew tap dhyansraj/mcp-mesh
 brew install mcp-mesh
 
 # Install Python package with semantic versioning
-pip install "mcp-mesh>=0.6,<0.7"
+pip install "mcp-mesh>=0.7,<0.8"
 
 # Verify installation
 meshctl --version
@@ -23,7 +23,7 @@ mcp-mesh-registry --version
 
 ```bash
 # Install MCP Mesh from PyPI with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.6,<0.7"
+pip install "mcp-mesh>=0.7,<0.8"
 
 # Download the CLI tools
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
