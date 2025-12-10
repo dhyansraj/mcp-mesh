@@ -20,25 +20,37 @@
   filter: brightness(0) invert(1);
 }
 
-/* Grid cards styling */
-.grid.cards {
+/* Feature grid styling */
+.grid-features {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.5rem;
   margin: 2rem 0;
 }
 
-.grid.cards > div {
+.feature-card {
   border: 1px solid var(--md-default-fg-color--lightest);
   border-radius: 8px;
   padding: 1.5rem;
   transition: all 0.3s;
 }
 
-.grid.cards > div:hover {
+.feature-card:hover {
   border-color: var(--md-primary-fg-color);
   box-shadow: 0 4px 8px rgba(0,0,0,0.1);
   transform: translateY(-2px);
+}
+
+.feature-card h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+}
+
+.feature-card p {
+  margin-bottom: 0;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.9rem;
 }
 
 /* Center content */
