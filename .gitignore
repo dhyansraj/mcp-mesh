@@ -236,3 +236,10 @@ packaging/pypi/README.md
 packaging/pypi/LICENSE
 packaging/pypi/dist/
 MEDIUM-POST-MULTI-AGENT-POC.md
+
+# Helm chart dependency packages (regenerate with: helm dependency update)
+helm/*/charts/*.tgz
+
+# Helm chart files copied during release (generated from observability/)
+helm/mcp-mesh-grafana/files/
+helm/mcp-mesh-tempo/files/

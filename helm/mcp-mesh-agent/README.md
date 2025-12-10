@@ -11,17 +11,31 @@ This Helm chart deploys MCP Mesh agents with Python runtime on Kubernetes.
 
 ## Installing the Chart
 
-### Method 1: Built-in Script (Container Image)
+### Method 1: Single-File Agent
 
-To install with a script built into the container image:
+For simple agents with a single Python file:
 
 ```bash
-helm install my-agent ./helm/mcp-mesh-agent \
-  --set agent.script=/app/agents/hello_world.py \
-  --set registry.url=http://mcp-mesh-registry:8080
+helm install hello-world ./helm/mcp-mesh-agent -n mcp-mesh \
+  --set agent.name=hello-world \
+  --set agent.command='["python","/app/agent.py"]'
 ```
 
-### Method 2: External ConfigMap
+### Method 2: Multi-File Agent (Custom Docker Image)
+
+For complex agents packaged as Docker images with their own CMD:
+
+```bash
+helm install avatar ./helm/mcp-mesh-agent -n mcp-mesh \
+  --set image.repository=myregistry/avatar-agent \
+  --set image.tag=v1.0.0 \
+  --set agent.name=avatar \
+  --set agent.script=""
+```
+
+The chart uses the Docker image's CMD instead of overriding it.
+
+### Method 3: External ConfigMap
 
 To install with an externally managed ConfigMap:
 
@@ -33,7 +47,7 @@ helm install my-agent ./helm/mcp-mesh-agent \
   --set registry.url=http://mcp-mesh-registry:8080
 ```
 
-### Method 3: Auto-Generated ConfigMap (Recommended)
+### Method 4: Auto-Generated ConfigMap
 
 To install with automatic ConfigMap generation from a script file:
 
@@ -62,12 +76,15 @@ helm uninstall my-agent
 
 The following table lists the configurable parameters of the MCP Mesh Agent chart and their default values.
 
-### Required Parameters
+### Key Parameters
 
-| Parameter      | Description                          | Default                           |
-| -------------- | ------------------------------------ | --------------------------------- |
-| `agent.script` | Python script path to run (REQUIRED) | `""`                              |
-| `registry.url` | MCP Mesh Registry URL                | `"http://mcp-mesh-registry:8080"` |
+| Parameter       | Description                                         | Default                        |
+| --------------- | --------------------------------------------------- | ------------------------------ |
+| `agent.name`    | Agent name for registry                             | `""`                           |
+| `agent.script`  | Python script path (single-file agents)             | `"/app/agent.py"`              |
+| `agent.command` | Container command override (empty = use Docker CMD) | `[]`                           |
+| `registry.host` | MCP Mesh Registry host                              | `"mcp-core-mcp-mesh-registry"` |
+| `registry.port` | MCP Mesh Registry port                              | `"8000"`                       |
 
 ### Agent Configuration
 
@@ -319,6 +336,33 @@ Check init container logs if using custom packages:
 
 ```bash
 kubectl logs <pod-name> -c init-packages
+```
+
+## Building Custom Agent Images
+
+Base your Dockerfile on `mcpmesh/python-runtime`:
+
+```dockerfile
+FROM mcpmesh/python-runtime:0.7.0
+
+# Copy agent code
+COPY . /app/
+
+# For multi-file agents, set the command
+CMD ["python", "-m", "myagent"]
+```
+
+Build and deploy:
+
+```bash
+docker build -t myregistry/my-agent:v1.0.0 .
+docker push myregistry/my-agent:v1.0.0
+
+helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
+  --set image.repository=myregistry/my-agent \
+  --set image.tag=v1.0.0 \
+  --set agent.name=my-agent \
+  --set agent.script=""
 ```
 
 ## Advanced Usage

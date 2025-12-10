@@ -2,9 +2,11 @@
 
 This umbrella chart deploys the core MCP Mesh infrastructure components:
 
-- **PostgreSQL** - Database for registry data
-- **Redis** - Cache for session storage (optional)
 - **MCP Mesh Registry** - Central service registry and discovery
+- **PostgreSQL** - Database for registry data
+- **Redis** - Distributed tracing stream
+- **Tempo** - Trace collection and storage (observability)
+- **Grafana** - Observability dashboard (observability)
 
 ## Quick Start
 
@@ -52,10 +54,16 @@ postgres:
   enabled: true # Set to false to use external PostgreSQL
 
 redis:
-  enabled: true # Set to false to disable Redis
+  enabled: true # Required for distributed tracing
 
 registry:
-  enabled: true # Set to false to not deploy registry
+  enabled: true # Core component, usually always enabled
+
+grafana:
+  enabled: true # Set to false to skip observability UI
+
+tempo:
+  enabled: true # Set to false to skip trace collection
 ```
 
 ### Database Configuration
@@ -157,6 +165,19 @@ Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
 | `postgres.enabled` | bool   | `true`       | Enable PostgreSQL deployment         |
 | `redis.enabled`    | bool   | `true`       | Enable Redis deployment              |
 | `registry.enabled` | bool   | `true`       | Enable Registry deployment           |
+| `grafana.enabled`  | bool   | `true`       | Enable Grafana deployment            |
+| `tempo.enabled`    | bool   | `true`       | Enable Tempo deployment              |
 | `namespaceCreate`  | bool   | `true`       | Create namespace if it doesn't exist |
+
+## Service Discovery
+
+After installation, agents can connect using these endpoints:
+
+| Service  | Internal URL                      |
+| -------- | --------------------------------- |
+| Registry | `mcp-core-mcp-mesh-registry:8000` |
+| Redis    | `mcp-core-mcp-mesh-redis:6379`    |
+| Tempo    | `mcp-core-mcp-mesh-tempo:4317`    |
+| Grafana  | `mcp-core-mcp-mesh-grafana:3000`  |
 
 See individual component charts for detailed configuration options.

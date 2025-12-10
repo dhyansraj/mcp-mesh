@@ -62,11 +62,12 @@ Generate full hostname for a service
 
 {{/*
 Generate service name with namespace support
+Expects: dict "service" <string> "serviceNamespace" <string> "root" <context>
 */}}
 {{- define "mcp-mesh-ingress.serviceName" -}}
 {{- $service := .service -}}
 {{- if contains "{{" .service -}}
-{{- $service = tpl .service . -}}
+{{- $service = tpl .service .root -}}
 {{- end -}}
 {{- if .serviceNamespace }}
 {{- printf "%s.%s.svc.cluster.local" $service .serviceNamespace }}

@@ -1,0 +1,67 @@
+name: Release Helm Charts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g., v0.7.1)"
+        required: true
+        default: "v0.7.1"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Sync observability configs to Helm charts
+        run: |
+          # Grafana dashboards
+          mkdir -p helm/mcp-mesh-grafana/files/dashboards
+          cp observability/grafana/dashboards/*.json \
+             helm/mcp-mesh-grafana/files/dashboards/
+
+          # Verify files were copied
+          echo "=== Grafana dashboard files ==="
+          ls -la helm/mcp-mesh-grafana/files/dashboards/
+
+      - name: Update Helm chart dependencies
+        run: |
+          # Update dependencies for umbrella chart
+          helm dependency update helm/mcp-mesh-core
+
+      - name: Lint Helm charts
+        run: |
+          for chart in helm/mcp-mesh-*; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              echo "Linting $chart..."
+              helm lint "$chart"
+            fi
+          done
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: helm
+          config: .github/cr.yaml
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
