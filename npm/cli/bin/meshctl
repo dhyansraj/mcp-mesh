@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+"use strict";
+
+// This is a fallback script that gets replaced by the actual binary after installation.
+// If you're seeing this error, the installation might have failed.
+
+const fs = require("fs");
+const path = require("path");
+const child_process = require("child_process");
+
+const binaryName = process.platform === "win32" ? "meshctl.exe" : "meshctl";
+const binaryPath = path.join(__dirname, binaryName);
+
+if (fs.existsSync(binaryPath) && binaryPath !== __filename) {
+  // Binary exists, execute it
+  const result = child_process.spawnSync(binaryPath, process.argv.slice(2), {
+    stdio: "inherit",
+  });
+  process.exit(result.status || 0);
+} else {
+  console.error("Error: meshctl binary not found.");
+  console.error("");
+  console.error("The meshctl binary was not properly installed. Try:");
+  console.error("  1. Reinstall: npm install -g @mcp-mesh/cli");
+  console.error("  2. Or install from source: https://github.com/dhyansraj/mcp-mesh");
+  console.error("");
+  console.error("If the problem persists, please report at:");
+  console.error("  https://github.com/dhyansraj/mcp-mesh/issues");
+  process.exit(1);
+}

@@ -1,0 +1,50 @@
+{
+  "name": "@mcpmesh/cli",
+  "version": "0.7.2",
+  "description": "CLI for MCP Mesh - Enterprise-Grade Distributed Service Mesh for AI Agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhyansraj/mcp-mesh.git"
+  },
+  "homepage": "https://dhyansraj.github.io/mcp-mesh/",
+  "bugs": {
+    "url": "https://github.com/dhyansraj/mcp-mesh/issues"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "bin": {
+    "meshctl": "bin/meshctl"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@mcpmesh/cli-linux-x64": "0.7.2",
+    "@mcpmesh/cli-linux-arm64": "0.7.2",
+    "@mcpmesh/cli-darwin-x64": "0.7.2",
+    "@mcpmesh/cli-darwin-arm64": "0.7.2",
+    "@mcpmesh/cli-win32-x64": "0.7.2",
+    "@mcpmesh/cli-win32-arm64": "0.7.2"
+  },
+  "keywords": [
+    "mcp",
+    "mesh",
+    "ai",
+    "agents",
+    "kubernetes",
+    "microservices",
+    "orchestration",
+    "model-context-protocol",
+    "llm",
+    "claude",
+    "anthropic",
+    "service-mesh",
+    "distributed-systems"
+  ],
+  "author": "Dhyan Sraj <dhyansraj@gmail.com>",
+  "publishConfig": {
+    "access": "public"
+  }
+}
