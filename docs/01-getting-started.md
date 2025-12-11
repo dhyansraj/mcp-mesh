@@ -220,17 +220,20 @@ cd mcp-mesh/examples/docker-examples
 docker-compose up
 
 # 3. Test it (in another terminal)
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
+meshctl call hello_mesh_simple --agent-url http://localhost:8081
 ```
 
 **Expected response:**
 
 ```json
 {
-  "result": "Hello from MCP Mesh! Today is 2025-06-19 15:30:42"
+  "content": [
+    {
+      "type": "text",
+      "text": "👋 Hello from MCP Mesh! Today is December 11, 2025 at 03:30 PM"
+    }
+  ],
+  "isError": false
 }
 ```
 
@@ -253,11 +256,7 @@ meshctl start system_agent.py     # Terminal 1
 meshctl start hello_world.py      # Terminal 2
 
 # 4. Test it
-curl -s -X POST http://localhost:8080/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call hello_mesh_simple
 ```
 
 !!! tip "Auto-Registry"

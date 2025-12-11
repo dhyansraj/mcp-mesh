@@ -110,22 +110,16 @@ Once you have any example running, test the core functionality:
 
 ```bash
 # 1. Install meshctl CLI (optional, use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.3
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.7
 
 # 2. Check agent registration
-meshctl list agents
+meshctl list
 
 # 3. Test basic functionality
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' | jq .
+meshctl call hello_mesh_simple
 
 # 4. Test dependency injection
-curl -s -X POST http://localhost:8082/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}' | jq .
+meshctl call get_current_time
 ```
 
 **Expected Results**:

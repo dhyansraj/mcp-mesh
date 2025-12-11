@@ -379,18 +379,10 @@ python ../examples/simple/system_agent.py
 
 ```bash
 # Test weather data
-curl -s -X POST http://localhost:9091/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"tokyo"}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call get_weather '{"city":"tokyo"}'
 
 # Test forecast with dependencies
-curl -s -X POST http://localhost:9091/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_forecast","arguments":{"city":"london","days":5}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call get_forecast '{"city":"london","days":5}'
 ```
 
 ````
@@ -411,33 +403,30 @@ python weather_agent.py
 
 ```bash
 # 1. Test basic weather data (self-dependency)
-curl -s -X POST http://localhost:9091/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"tokyo"}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call get_weather '{"city":"tokyo"}'
 
 # 2. Test forecast (self + external dependencies)
-curl -s -X POST http://localhost:9091/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_forecast","arguments":{"city":"london","days":3}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call get_forecast '{"city":"london","days":3}'
+```
 
+<details>
+<summary>Testing prompts and resources (requires curl)</summary>
+
+```bash
 # 3. Test prompt generation
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"weather_analysis_prompt","arguments":{"city":"paris","analysis_type":"detailed"}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"weather_analysis_prompt","arguments":{"city":"paris","analysis_type":"detailed"}}}'
 
 # 4. Test resource access
 curl -s -X POST http://localhost:9091/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"weather://config/sydney"}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result'
+  -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"weather://config/sydney"}}'
 ```
+
+</details>
 
 ### Verify Service Integration
 

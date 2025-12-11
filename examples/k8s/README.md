@@ -206,6 +206,21 @@ curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
 - `test_dependencies` - Test function showing hybrid dependency resolution
 
 ```bash
+# Using meshctl with Kubernetes ingress
+# Note: Use --ingress-url with minikube IP if DNS is not configured
+meshctl call --ingress-domain mcp-mesh.local --ingress-url http://$(minikube ip) hello_mesh_simple
+
+# Simple greeting
+meshctl call --ingress-domain mcp-mesh.local hello_mesh_simple
+
+# Typed greeting with dependency resolution
+meshctl call --ingress-domain mcp-mesh.local hello_mesh_typed
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
+
+```bash
 # Simple greeting
 curl -s -X POST http://hello-world.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
@@ -235,6 +250,8 @@ curl -s -X POST http://hello-world.mcp-mesh.local/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### FastMCP Agent
 
 **Available Tools:**
@@ -244,6 +261,23 @@ curl -s -X POST http://hello-world.mcp-mesh.local/mcp/ \
 - `process_data` - Process and format data
 - `get_enriched_system_info` - Get enriched system information by calling system agent
 - `increment_session_counter` - Increment a counter for a specific session
+
+```bash
+# Get current time
+meshctl call --ingress-domain mcp-mesh.local get_current_time
+
+# Math calculation with timestamp
+meshctl call --ingress-domain mcp-mesh.local calculate_with_timestamp '{"operation": "add", "a": 10, "b": 5}'
+
+# Process data
+meshctl call --ingress-domain mcp-mesh.local process_data '{"data": "sample data to process"}'
+
+# Get enriched system info (dependency chain: FastMCP → System)
+meshctl call --ingress-domain mcp-mesh.local get_enriched_system_info
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # Get current time
@@ -309,6 +343,8 @@ curl -s -X POST http://fastmcp-agent.mcp-mesh.local/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### System Agent
 
 **Available Tools:**
@@ -318,6 +354,23 @@ curl -s -X POST http://fastmcp-agent.mcp-mesh.local/mcp/ \
 - `check_how_long_running` - Get system uptime information
 - `analyze_storage_and_os` - Get disk and OS information
 - `perform_health_diagnostic` - Get system status including current time
+
+```bash
+# Get current time
+meshctl call --ingress-domain mcp-mesh.local get_current_time
+
+# Get system overview
+meshctl call --ingress-domain mcp-mesh.local fetch_system_overview
+
+# Check system uptime
+meshctl call --ingress-domain mcp-mesh.local check_how_long_running
+
+# Health diagnostic with dependency injection
+meshctl call --ingress-domain mcp-mesh.local perform_health_diagnostic
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # Get current time
@@ -377,6 +430,8 @@ curl -s -X POST http://system-agent.mcp-mesh.local/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 ```
 
+</details>
+
 ### Enhanced FastMCP Agent
 
 **Available Tools:**
@@ -386,6 +441,20 @@ curl -s -X POST http://system-agent.mcp-mesh.local/mcp/ \
 - `stream_data_processing` - Streaming data processing with auto-configured streaming
 - `get_secure_config` - Secure configuration with authentication handling
 - `enhanced_session_increment` - Enhanced session management with auto-session handling
+
+```bash
+# Get enhanced time with metadata
+meshctl call --ingress-domain mcp-mesh.local get_enhanced_time
+
+# Enhanced calculation with auto-retry
+meshctl call --ingress-domain mcp-mesh.local calculate_enhanced '{"operation": "power", "a": 2, "b": 8}'
+
+# Enhanced session management
+meshctl call --ingress-domain mcp-mesh.local enhanced_session_increment
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # Get enhanced time with metadata
@@ -435,6 +504,8 @@ curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### Dependent Agent (Multi-Agent Dependency Injection Demo)
 
 **Available Tools:**
@@ -447,6 +518,20 @@ curl -s -X POST http://enhanced-fastmcp-agent.mcp-mesh.local/mcp/ \
 # 🔥 3-Agent Dependency Chain with Distributed Tracing
 # This demonstrates the complete dependency injection flow:
 # Dependent Agent → FastMCP Agent → System Agent
+meshctl call --ingress-domain mcp-mesh.local generate_comprehensive_report '{"report_title": "Multi-Agent K8s System Report", "include_system_data": true}'
+
+# Generate report (uses FastMCP agent's time service)
+meshctl call --ingress-domain mcp-mesh.local generate_report '{"title": "K8s System Status Report", "content": "All K8s systems operational"}'
+
+# Analyze data (uses dependency injection for timestamps)
+meshctl call --ingress-domain mcp-mesh.local analyze_data '{"data": ["k8s-pod1", "k8s-pod2", "k8s-service", "k8s-ingress", "k8s-configmap"]}'
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
+
+```bash
+# 3-Agent Dependency Chain with Distributed Tracing
 curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -496,6 +581,8 @@ curl -s -X POST http://dependent-agent.mcp-mesh.local/mcp/ \
     }
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 ```
+
+</details>
 
 #### 🔍 **Distributed Tracing Verification**
 

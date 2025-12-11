@@ -42,21 +42,37 @@ MCP Mesh uses [FastMCP](https://github.com/jlowin/fastmcp) under the hood to han
 
 **MCP Compatibility:**
 
-MCP Mesh tools are standard MCP tools. They can be invoked by any MCP client using JSON-RPC:
+MCP Mesh tools are standard MCP tools. They can be invoked using the meshctl CLI or any MCP client:
+
+```bash
+# List registered agents
+meshctl list
+
+# Call a tool (discovers agent via registry)
+meshctl call my_tool '{"param":"value"}'
+
+# Call with explicit agent
+meshctl call my-agent:my_tool '{"param":"value"}'
+```
+
+<details>
+<summary>Using curl directly (JSON-RPC)</summary>
 
 ```bash
 # List available tools
-curl -s -X POST http://agent:8080/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
 # Call a tool
-curl -s -X POST http://agent:8080/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_tool","arguments":{"param":"value"}}}'
 ```
+
+</details>
 
 ---
 

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -45,7 +47,13 @@ Examples:
   meshctl list --wide                             # Show endpoints and tool counts
   meshctl list --registry-url http://remote:8000  # Connect to remote registry
   meshctl list --registry-host prod.example.com   # Connect to remote host
-  meshctl list --registry-port 9000               # Use custom port`,
+  meshctl list --registry-port 9000               # Use custom port
+
+Tools listing:
+  meshctl list --tools                            # List all tools across all agents
+  meshctl list -t                                 # Short form (list all tools)
+  meshctl list --tools=get_current_time           # Show tool call spec and input schema
+  meshctl list --tools=system-agent:get_time      # Show tool details for specific agent`,
 		RunE: runListCommand,
 	}
 
@@ -61,11 +69,16 @@ Examples:
 	cmd.Flags().Bool("healthy-only", false, "Show only healthy agents")
 	cmd.Flags().String("id", "", "Show detailed information for specific agent ID")
 
+	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
+	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
+	cmd.Flags().Lookup("tools").NoOptDefVal = "all" // "all" means list all tools
+
 	// Remote registry connection flags
 	cmd.Flags().String("registry-url", "", "Registry URL (overrides host/port)")
 	cmd.Flags().String("registry-host", "", "Registry host (default: localhost)")
 	cmd.Flags().Int("registry-port", 0, "Registry port (default: 8000)")
 	cmd.Flags().String("registry-scheme", "http", "Registry URL scheme (http/https)")
+	cmd.Flags().Bool("insecure", false, "Skip TLS certificate verification")
 	cmd.Flags().Int("timeout", 10, "Connection timeout in seconds")
 
 	return cmd
@@ -161,20 +174,27 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 	healthyOnly, _ := cmd.Flags().GetBool("healthy-only")
 	agentID, _ := cmd.Flags().GetString("id")
 
+	// Tools listing flag
+	toolsFlag, _ := cmd.Flags().GetString("tools")
+	toolsFlagChanged := cmd.Flags().Changed("tools")
+
 	// Registry connection flags
 	registryURL, _ := cmd.Flags().GetString("registry-url")
 	registryHost, _ := cmd.Flags().GetString("registry-host")
 	registryPort, _ := cmd.Flags().GetInt("registry-port")
 	registryScheme, _ := cmd.Flags().GetString("registry-scheme")
+	insecure, _ := cmd.Flags().GetBool("insecure")
 	timeout, _ := cmd.Flags().GetInt("timeout")
 
 	// Determine final registry URL
 	finalRegistryURL := determineRegistryURL(config, registryURL, registryHost, registryPort, registryScheme)
 
-	// Set connection timeout if provided
-	if timeout > 0 {
-		// Configure HTTP client with timeout (will be used by HTTP functions)
-		configureHTTPClient(timeout)
+	// Configure HTTP client with timeout and TLS settings
+	configureHTTPClientWithTLS(timeout, insecure)
+
+	// Handle tools listing mode
+	if toolsFlagChanged {
+		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, healthyOnly)
 	}
 
 	// Collect all information
@@ -1009,6 +1029,22 @@ func configureHTTPClient(timeoutSeconds int) {
 	}
 }
 
+// configureHTTPClientWithTLS sets up the HTTP client with timeout and optional TLS skip
+func configureHTTPClientWithTLS(timeoutSeconds int, insecure bool) {
+	transport := &http.Transport{}
+
+	if insecure {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	}
+
+	registryHTTPClient = &http.Client{
+		Timeout:   time.Duration(timeoutSeconds) * time.Second,
+		Transport: transport,
+	}
+}
+
 // filterAgentsSince filters agents by last activity time
 func filterAgentsSince(agents []EnhancedAgent, since string) ([]EnhancedAgent, error) {
 	duration, err := time.ParseDuration(since)
@@ -1268,4 +1304,402 @@ func formatCapabilitiesForWide(tools []ToolInfo) string {
 	}
 
 	return truncated
+}
+
+// ToolListItem represents a tool for the tools listing
+type ToolListItem struct {
+	ToolName    string `json:"tool_name"`
+	AgentName   string `json:"agent_name"`
+	AgentID     string `json:"agent_id"`
+	Capability  string `json:"capability"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+	Tags        string `json:"tags"`
+	Endpoint    string `json:"endpoint"`
+}
+
+// runToolsListCommand handles the --tools flag
+func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly bool) error {
+	// Get enhanced agents from registry
+	enhancedAgents, err := getEnhancedAgents(registryURL)
+	if err != nil {
+		return fmt.Errorf("failed to get agents from registry: %w", err)
+	}
+
+	// Filter healthy agents if requested
+	if healthyOnly {
+		enhancedAgents = filterHealthyAgents(enhancedAgents)
+	}
+
+	// Collect all tools
+	var allTools []ToolListItem
+	for _, agent := range enhancedAgents {
+		for _, tool := range agent.Tools {
+			toolItem := ToolListItem{
+				ToolName:   tool.FunctionName,
+				AgentName:  agent.Name,
+				AgentID:    agent.ID,
+				Capability: tool.Capability,
+				Version:    tool.Version,
+				Endpoint:   agent.Endpoint,
+			}
+			if tool.FunctionName == "" {
+				toolItem.ToolName = tool.Name
+			}
+			if len(tool.Tags) > 0 {
+				toolItem.Tags = strings.Join(tool.Tags, ",")
+			}
+			allTools = append(allTools, toolItem)
+		}
+	}
+
+	// If no specific tool requested (or "all" from NoOptDefVal), list all tools
+	if toolSpec == "" || toolSpec == "all" {
+		return outputToolsList(allTools, jsonOutput)
+	}
+
+	// Parse tool specifier (agent:tool or just tool)
+	agentName, toolName := parseToolSpec(toolSpec)
+
+	// Find the specific tool
+	var matchedTool *ToolListItem
+	var matchedAgent *EnhancedAgent
+	for _, agent := range enhancedAgents {
+		if agentName != "" && agent.Name != agentName && agent.ID != agentName {
+			continue
+		}
+		for _, tool := range agent.Tools {
+			funcName := tool.FunctionName
+			if funcName == "" {
+				funcName = tool.Name
+			}
+			if funcName == toolName {
+				toolItem := ToolListItem{
+					ToolName:   funcName,
+					AgentName:  agent.Name,
+					AgentID:    agent.ID,
+					Capability: tool.Capability,
+					Version:    tool.Version,
+					Endpoint:   agent.Endpoint,
+				}
+				if len(tool.Tags) > 0 {
+					toolItem.Tags = strings.Join(tool.Tags, ",")
+				}
+				matchedTool = &toolItem
+				matchedAgent = &agent
+				break
+			}
+		}
+		if matchedTool != nil {
+			break
+		}
+	}
+
+	if matchedTool == nil {
+		if agentName != "" {
+			return fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+		}
+		return fmt.Errorf("tool '%s' not found on any agent", toolName)
+	}
+
+	// Get detailed tool information from agent
+	return outputToolDetails(matchedTool, matchedAgent, jsonOutput)
+}
+
+// parseToolSpec parses "agent:tool" or "tool" format
+func parseToolSpec(spec string) (agentName, toolName string) {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", parts[0]
+}
+
+// outputToolsList outputs the list of all tools
+func outputToolsList(tools []ToolListItem, jsonOutput bool) error {
+	if jsonOutput {
+		data, err := json.MarshalIndent(tools, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(tools) == 0 {
+		fmt.Println("No tools found")
+		return nil
+	}
+
+	// Sort by tool name
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].ToolName < tools[j].ToolName
+	})
+
+	// Calculate column widths
+	toolWidth := 25
+	agentWidth := 20
+	capWidth := 20
+
+	for _, tool := range tools {
+		if len(tool.ToolName) > toolWidth-2 {
+			toolWidth = len(tool.ToolName) + 2
+		}
+		if len(tool.AgentName) > agentWidth-2 {
+			agentWidth = len(tool.AgentName) + 2
+		}
+		if len(tool.Capability) > capWidth-2 {
+			capWidth = len(tool.Capability) + 2
+		}
+	}
+
+	// Limit widths
+	if toolWidth > 40 {
+		toolWidth = 40
+	}
+	if agentWidth > 30 {
+		agentWidth = 30
+	}
+	if capWidth > 25 {
+		capWidth = 25
+	}
+
+	// Print header
+	fmt.Printf("%-*s %-*s %-*s %s\n", toolWidth, "TOOL", agentWidth, "AGENT", capWidth, "CAPABILITY", "TAGS")
+	fmt.Println(strings.Repeat("-", toolWidth+agentWidth+capWidth+20))
+
+	// Print tools
+	for _, tool := range tools {
+		tags := tool.Tags
+		if tags == "" {
+			tags = "-"
+		}
+		fmt.Printf("%-*s %-*s %-*s %s\n",
+			toolWidth, truncateStringForList(tool.ToolName, toolWidth-2),
+			agentWidth, truncateStringForList(tool.AgentName, agentWidth-2),
+			capWidth, truncateStringForList(tool.Capability, capWidth-2),
+			tags)
+	}
+
+	fmt.Printf("\n%d tool(s) found\n", len(tools))
+	return nil
+}
+
+// MCPToolSchema represents the input schema from tools/list
+type MCPToolSchema struct {
+	Type       string                       `json:"type"`
+	Properties map[string]MCPPropertySchema `json:"properties,omitempty"`
+	Required   []string                     `json:"required,omitempty"`
+}
+
+// MCPPropertySchema represents a property in the input schema
+type MCPPropertySchema struct {
+	Type        string   `json:"type"`
+	Description string   `json:"description,omitempty"`
+	Default     any      `json:"default,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+}
+
+// MCPToolInfo represents tool info from tools/list response
+type MCPToolInfo struct {
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	InputSchema MCPToolSchema `json:"inputSchema"`
+}
+
+// outputToolDetails outputs detailed information for a specific tool
+func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, jsonOutput bool) error {
+	// Try to get detailed tool info from agent via MCP tools/list
+	var mcpTool *MCPToolInfo
+	if agent != nil && agent.Endpoint != "" {
+		mcpTool = getToolDetailsFromAgent(agent.Endpoint, tool.ToolName)
+	}
+
+	if jsonOutput {
+		output := map[string]interface{}{
+			"tool_name":  tool.ToolName,
+			"agent_name": tool.AgentName,
+			"agent_id":   tool.AgentID,
+			"capability": tool.Capability,
+			"endpoint":   tool.Endpoint,
+			"version":    tool.Version,
+			"tags":       tool.Tags,
+		}
+		if mcpTool != nil {
+			output["description"] = mcpTool.Description
+			output["input_schema"] = mcpTool.InputSchema
+		}
+		data, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	// Pretty print tool details
+	fmt.Printf("%sTool: %s%s\n", colorBlue, tool.ToolName, colorReset)
+	fmt.Printf("Agent: %s\n", tool.AgentName)
+	fmt.Printf("Capability: %s\n", tool.Capability)
+	if mcpTool != nil && mcpTool.Description != "" {
+		fmt.Printf("Description: %s\n", mcpTool.Description)
+	}
+	if tool.Version != "" {
+		fmt.Printf("Version: %s\n", tool.Version)
+	}
+	if tool.Tags != "" {
+		fmt.Printf("Tags: %s\n", tool.Tags)
+	}
+
+	// Print input schema
+	fmt.Printf("\n%sInput Schema:%s\n", colorBlue, colorReset)
+	if mcpTool != nil && len(mcpTool.InputSchema.Properties) > 0 {
+		for propName, prop := range mcpTool.InputSchema.Properties {
+			required := ""
+			for _, req := range mcpTool.InputSchema.Required {
+				if req == propName {
+					required = ", required"
+					break
+				}
+			}
+			fmt.Printf("  %s (%s%s)", propName, prop.Type, required)
+			if prop.Description != "" {
+				fmt.Printf(": %s", prop.Description)
+			}
+			fmt.Println()
+		}
+	} else {
+		fmt.Println("  (no parameters required)")
+	}
+
+	// Print example
+	fmt.Printf("\n%sExample:%s\n", colorBlue, colorReset)
+	if mcpTool != nil && len(mcpTool.InputSchema.Properties) > 0 {
+		exampleArgs := buildExampleArgs(mcpTool.InputSchema)
+		fmt.Printf("  meshctl call %s '%s'\n", tool.ToolName, exampleArgs)
+	} else {
+		fmt.Printf("  meshctl call %s\n", tool.ToolName)
+	}
+
+	return nil
+}
+
+// getToolDetailsFromAgent fetches tool details from the agent via MCP tools/list
+func getToolDetailsFromAgent(endpoint, toolName string) *MCPToolInfo {
+	// Build MCP request for tools/list
+	mcpReq := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+		"params":  map[string]interface{}{},
+	}
+
+	reqBody, err := json.Marshal(mcpReq)
+	if err != nil {
+		return nil
+	}
+
+	// Make request
+	mcpURL := strings.TrimSuffix(endpoint, "/") + "/mcp"
+	req, err := http.NewRequest("POST", mcpURL, strings.NewReader(string(reqBody)))
+	if err != nil {
+		return nil
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	resp, err := registryHTTPClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	// Parse SSE if needed
+	bodyStr := string(body)
+	jsonData := body
+	if strings.HasPrefix(bodyStr, "event:") || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		for _, line := range strings.Split(bodyStr, "\n") {
+			if strings.HasPrefix(line, "data:") {
+				jsonData = []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+				break
+			}
+		}
+	}
+
+	// Parse response
+	var mcpResp struct {
+		Result struct {
+			Tools []MCPToolInfo `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(jsonData, &mcpResp); err != nil {
+		return nil
+	}
+
+	// Find the specific tool
+	for _, t := range mcpResp.Result.Tools {
+		if t.Name == toolName {
+			return &t
+		}
+	}
+
+	return nil
+}
+
+// buildExampleArgs builds example JSON arguments from schema
+func buildExampleArgs(schema MCPToolSchema) string {
+	if len(schema.Properties) == 0 {
+		return "{}"
+	}
+
+	args := make(map[string]interface{})
+	for propName, prop := range schema.Properties {
+		// Check if required
+		isRequired := false
+		for _, req := range schema.Required {
+			if req == propName {
+				isRequired = true
+				break
+			}
+		}
+
+		// Only include required fields in example
+		if !isRequired {
+			continue
+		}
+
+		// Generate example value based on type
+		switch prop.Type {
+		case "string":
+			if len(prop.Enum) > 0 {
+				args[propName] = prop.Enum[0]
+			} else {
+				args[propName] = "example"
+			}
+		case "number", "integer":
+			args[propName] = 1
+		case "boolean":
+			args[propName] = true
+		case "array":
+			args[propName] = []interface{}{"item1", "item2"}
+		case "object":
+			args[propName] = map[string]interface{}{}
+		default:
+			args[propName] = "value"
+		}
+	}
+
+	jsonBytes, _ := json.Marshal(args)
+	return string(jsonBytes)
 }
