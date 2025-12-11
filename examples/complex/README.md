@@ -19,6 +19,7 @@ While the `examples/simple/` directory shows basic MCP Mesh functionality, this 
 A comprehensive multi-file agent demonstrating advanced data processing capabilities with **real dependency injection** from weather and LLM services.
 
 **Features:**
+
 - **Multi-format data parsing**: CSV, JSON, Excel, Parquet, TSV
 - **Statistical analysis**: Descriptive statistics, correlation analysis, outlier detection
 - **Data transformation**: Filtering, sorting, aggregation, cleaning operations
@@ -30,6 +31,7 @@ A comprehensive multi-file agent demonstrating advanced data processing capabili
 - **Proper Python packaging**: `pyproject.toml` with dependencies and scripts
 
 **Structure:**
+
 ```
 data_processor_agent/
 ├── __init__.py              # Package initialization
@@ -85,18 +87,21 @@ The data processor agent depends on two service agents from `examples/advanced/`
 ### 1. Start Required Services
 
 **Terminal 1 - Weather Service:**
+
 ```bash
 cd examples/advanced
 python weather_agent.py
 ```
 
 **Terminal 2 - LLM Service:**
+
 ```bash
 cd examples/advanced
 python llm_chat_agent.py
 ```
 
 **Terminal 3 - Data Processor (with dependencies):**
+
 ```bash
 cd examples/complex/data_processor_agent
 python main.py
@@ -110,6 +115,7 @@ curl -s http://localhost:8000/agents | jq '.agents[] | {name: .name, endpoint: .
 ```
 
 Expected output:
+
 ```json
 {
   "name": "weather-agent-472dbc15",
@@ -117,7 +123,7 @@ Expected output:
   "dependencies_resolved": 0
 }
 {
-  "name": "llm-chat-agent-ce2b56ad", 
+  "name": "llm-chat-agent-ce2b56ad",
   "endpoint": "http://10.211.55.3:9093",
   "dependencies_resolved": 0
 }
@@ -131,7 +137,12 @@ Expected output:
 ### 3. Test Service Integration
 
 **Test Weather Service:**
+
 ```bash
+# Using meshctl
+meshctl call --agent-url http://localhost:9094 get_local_weather
+
+# Or using curl
 curl -s -X POST http://localhost:9094/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -147,7 +158,12 @@ curl -s -X POST http://localhost:9094/mcp/ \
 ```
 
 **Test LLM Service:**
+
 ```bash
+# Using meshctl
+meshctl call --agent-url http://localhost:9093 process_text_with_llm '{"text": "Weather data shows 70°F temperature with overcast conditions", "task": "analyze"}'
+
+# Or using curl
 curl -s -X POST http://localhost:9093/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -166,7 +182,12 @@ curl -s -X POST http://localhost:9093/mcp/ \
 ```
 
 **Test Data Processor (with dependency injection):**
+
 ```bash
+# Using meshctl
+meshctl call --agent-url http://localhost:9090 get_agent_status
+
+# Or using curl
 curl -s -X POST http://localhost:9090/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -184,6 +205,7 @@ curl -s -X POST http://localhost:9090/mcp/ \
 ### 4. Alternative Execution Methods
 
 **Local Development:**
+
 ```bash
 cd data_processor_agent
 python -m venv venv
@@ -193,12 +215,14 @@ python -m data_processor_agent
 ```
 
 **Docker Deployment:**
+
 ```bash
 docker build -t data-processor-agent .
 docker run -p 9092:9092 data-processor-agent
 ```
 
 **Docker Compose (full stack with registry):**
+
 ```bash
 docker-compose up -d
 ```
@@ -206,11 +230,13 @@ docker-compose up -d
 ## Architecture Patterns Demonstrated
 
 ### 1. **Dual Decorator Pattern**
+
 All tools use FastMCP + MCP Mesh dual decorators:
+
 ```python
 @app.tool()                    # FastMCP decorator FIRST
 @mesh.tool(                    # MCP Mesh decorator SECOND
-    capability="data_processing", 
+    capability="data_processing",
     dependencies=["weather-service", "llm-service"],
     # Enhanced proxy configuration
     timeout=300,
@@ -222,7 +248,7 @@ All tools use FastMCP + MCP Mesh dual decorators:
     }
 )
 def parse_data_file(
-    file_path: str, 
+    file_path: str,
     file_format: Optional[str] = None,
     weather_service: mesh.McpMeshAgent = None,  # Dependency injection
     llm_service: mesh.McpMeshAgent = None       # Dependency injection
@@ -232,13 +258,15 @@ def parse_data_file(
 ```
 
 ### 2. **Enhanced Proxy Configuration (v0.3+)**
+
 Direct kwargs for advanced proxy features:
+
 ```python
 @mesh.tool(
     capability="data_processing",
     # Enhanced proxy configuration as direct kwargs
     timeout=300,              # 5-minute timeout
-    retry_count=3,           # 3 retry attempts  
+    retry_count=3,           # 3 retry attempts
     streaming=True,          # Enable streaming
     custom_headers={         # Custom HTTP headers
         "X-Service-Type": "data-processor",
@@ -248,11 +276,13 @@ Direct kwargs for advanced proxy features:
 ```
 
 ### 3. **Auto-Run Pattern**
+
 All agents use `auto_run=True` for zero-boilerplate startup:
+
 ```python
 @mesh.agent(
     name="data-processor",
-    version="1.0.0", 
+    version="1.0.0",
     http_port=9092,
     auto_run=True    # MCP Mesh handles everything automatically
 )
@@ -261,11 +291,13 @@ class DataProcessorAgent:
 ```
 
 ### 4. **Modular Package Structure**
+
 - Clear separation of concerns with `config/`, `tools/`, `utils/` modules
 - Proper Python package initialization and exports
 - Flexible import strategies for both package and standalone execution
 
 ### 5. **Service Discovery & Dependency Injection**
+
 - Automatic service discovery through MCP Mesh registry
 - Type-safe dependency injection with `mesh.McpMeshAgent` parameters
 - Graceful degradation when dependencies are unavailable
@@ -288,7 +320,7 @@ source .venv/bin/activate       # Shared virtual environment
 cd examples/complex/data_processor_agent
 python main.py
 
-cd examples/advanced  
+cd examples/advanced
 python weather_agent.py
 python llm_chat_agent.py
 ```
@@ -333,10 +365,11 @@ python -m data_processor_agent
 These examples demonstrate advanced MCP Mesh features:
 
 ### 1. **Real Dependency Injection**
+
 ```python
 @app.tool()
 @mesh.tool(
-    capability="data_processing", 
+    capability="data_processing",
     dependencies=["weather-service", "llm-service"]
 )
 def analyze_data_with_context(
@@ -346,18 +379,19 @@ def analyze_data_with_context(
 ) -> Dict[str, Any]:
     # Get weather context
     weather_data = weather_service() if weather_service else None
-    
+
     # Use LLM for analysis
     analysis = llm_service({
-        "text": data, 
+        "text": data,
         "task": "analyze",
         "context": f"Weather: {weather_data}"
     }) if llm_service else None
-    
+
     return {"data": data, "weather": weather_data, "analysis": analysis}
 ```
 
 ### 2. **Enhanced Proxy Configuration (v0.3+)**
+
 ```python
 @app.tool()
 @mesh.tool(
@@ -378,6 +412,7 @@ def process_large_dataset(data: str) -> Dict[str, Any]:
 ```
 
 ### 3. **FastMCP Compatibility**
+
 ```python
 # ✅ CORRECT: No **kwargs in function signatures
 def parse_data_file(file_path: str, file_format: Optional[str] = None) -> Dict[str, Any]:
@@ -393,43 +428,51 @@ def parse_data_file(file_path: str, **options) -> Dict[str, Any]:
 This example demonstrates a complete service ecosystem:
 
 ### Service Providers
+
 - **Weather Service**: Real weather data with auto-location detection
 - **LLM Service**: Text processing and data interpretation
 - **Data Processor**: Complex multi-file agent consuming both services
 
 ### Capability Names
+
 - `weather-service` → Provided by weather agent
-- `llm-service` → Provided by LLM agent  
+- `llm-service` → Provided by LLM agent
 - `data_processing` → Provided by data processor agent (multiple tools)
 - `statistical_analysis` → Provided by data processor agent
 - `data_interpretation` → Provided by LLM agent
 
 ### Service Discovery
+
 All agents automatically register with the MCP Mesh registry and dependencies are resolved via capability names and tags.
 
 ## Best Practices Demonstrated
 
 ### 1. **Code Organization**
+
 - Single responsibility principle for each module
 - Clear interfaces between components
 - Separation of business logic from infrastructure
 
 ### 2. **Configuration Management**
+
 - All configuration via environment variables
 - Type-safe configuration with validation
 - Hierarchical configuration with defaults
 
 ### 3. **Error Handling**
+
 - Structured error responses for MCP tools
 - Graceful degradation for partial failures
 - Comprehensive logging for debugging
 
 ### 4. **Testing Strategy**
+
 - Unit tests for individual components
 - Integration tests for MCP tools
 - Multi-agent testing with real dependencies
 
 ### 5. **Deployment Flexibility**
+
 - Multiple execution methods
 - Docker containerization with multi-stage builds
 - Kubernetes-ready configuration
@@ -438,21 +481,25 @@ All agents automatically register with the MCP Mesh registry and dependencies ar
 ## Deployment Options
 
 ### 1. **Local Development**
+
 - Direct Python execution for rapid iteration
 - Virtual environment with editable installation
 - Environment variable configuration
 
 ### 2. **Docker Containerization**
+
 - Multi-stage builds for optimization
 - Non-root user for security
 - Health checks and monitoring
 
 ### 3. **Kubernetes Deployment**
+
 - Production-ready manifests
 - ConfigMap and Secret integration
 - Service discovery and load balancing
 
 ### 4. **Package Distribution**
+
 - PyPI-compatible packages
 - Command-line scripts installation
 - Dependency management
@@ -467,7 +514,7 @@ All agents automatically register with the MCP Mesh registry and dependencies ar
 
 ## Related Documentation
 
-- [Simple Examples](../simple/README.md) - Basic MCP Mesh functionality  
+- [Simple Examples](../simple/README.md) - Basic MCP Mesh functionality
 - [Advanced Examples](../advanced/README.md) - Weather and LLM service agents
 - [Mesh Decorators Guide](../../docs/mesh-decorators.md) - Complete decorator reference
 - [Development Guide](../../docs/02-local-development.md) - Comprehensive best practices
@@ -475,6 +522,7 @@ All agents automatically register with the MCP Mesh registry and dependencies ar
 ## Support
 
 For questions about complex agent development:
+
 1. Review the development guide and example code
 2. Check the main MCP Mesh documentation
 3. Test the multi-agent setup to understand service dependencies

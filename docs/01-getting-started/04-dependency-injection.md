@@ -312,28 +312,42 @@ def date_service_proxy():
 ### Check Service Registration
 
 ```bash
-# See what services are registered
-curl -s http://localhost:8000/agents | \
-  jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
+# See what agents are registered
+meshctl list
 ```
 
 ### Test Individual Services
 
 ```bash
 # Test date service directly
+meshctl call get_current_time
+
+# Test dependency injection (hello_mesh_simple calls date_service internally)
+meshctl call hello_mesh_simple
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
+
+```bash
+# View registry
+curl -s http://localhost:8000/agents | \
+  jq '.agents[] | {name: .name, capabilities: (.capabilities | keys)}'
+
+# Test date service directly
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}'
 
 # Test dependency injection
 curl -s -X POST http://localhost:9090/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}'
 ```
+
+</details>
 
 ## Benefits of the New Pattern
 

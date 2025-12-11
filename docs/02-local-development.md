@@ -102,26 +102,37 @@ class MyAgent:
 meshctl start main.py
 ```
 
-### 6. Test with curl
+### 6. Test Your Agent
+
+```bash
+# List registered agents
+meshctl list
+
+# Call your tool
+meshctl call my_function '{"data":"hello"}'
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # List available tools
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.tools[].name'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
 # Call your tool
 curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_function","arguments":{"data":"hello"}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_function","arguments":{"data":"hello"}}}'
 ```
 
 !!! note "SSE Response Format"
-MCP Mesh uses Server-Sent Events (SSE) format. The `grep "^data:" | sed 's/^data: //'` extracts the JSON from the SSE stream.
+MCP Mesh uses Server-Sent Events (SSE) format. `meshctl call` handles this automatically.
+
+</details>
 
 ## Multi-Agent Development
 
@@ -135,11 +146,7 @@ meshctl start agents/auth_agent.py
 meshctl start agents/api_agent.py
 
 # Test dependency injection
-curl -s -X POST http://localhost:8081/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"secure_operation","arguments":{}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call secure_operation
 ```
 
 ## Project Structure

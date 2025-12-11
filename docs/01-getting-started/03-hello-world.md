@@ -16,17 +16,21 @@ meshctl start examples/simple/system_agent.py
 meshctl start examples/simple/hello_world.py
 
 # 3. Test it
-curl -s -X POST http://localhost:9090/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"hello_mesh_simple","arguments":{}}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.content[0].text'
+meshctl call hello_mesh_simple
 ```
 
 **Expected response:**
 
-```
-"Hello from MCP Mesh! Today is December 10, 2025 at 03:30 PM"
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "👋 Hello from MCP Mesh! Today is December 10, 2025 at 03:30 PM"
+    }
+  ],
+  "isError": false
+}
 ```
 
 ## Understanding the Code
@@ -108,14 +112,20 @@ MCP Mesh automatically:
 
 ## Testing Your Setup
 
-### List Available Tools
+### List Registered Agents
 
 ```bash
-curl -s -X POST http://localhost:9090/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  | grep "^data:" | sed 's/^data: //' | jq '.result.tools[].name'
+meshctl list
+```
+
+### Call a Tool
+
+```bash
+# Call hello_mesh_simple on any agent that provides it
+meshctl call hello_mesh_simple
+
+# Call get_current_time from system agent
+meshctl call get_current_time
 ```
 
 ### Check Agent Status
@@ -124,11 +134,21 @@ curl -s -X POST http://localhost:9090/mcp \
 meshctl status
 ```
 
-### View Registry
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
+# List tools from an agent
+curl -s -X POST http://localhost:9090/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# View registry
 curl -s http://localhost:8000/agents | jq '.agents[] | {name, capabilities}'
 ```
+
+</details>
 
 ## Troubleshooting
 

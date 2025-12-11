@@ -83,6 +83,10 @@ EOF
 Send the request:
 
 ```bash
+# Using meshctl (reads JSON arguments from file)
+meshctl call --registry http://localhost:8003 --agent-url http://localhost:9200 chat "$(cat test-prime-request.json | jq -c '.params.arguments')"
+
+# Or using curl directly
 curl -s -X POST http://localhost:9200/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -125,6 +129,10 @@ meshctl list --registry-port 8003
 3. **Send the Same Request Again**:
 
 ```bash
+# Using meshctl
+meshctl call --registry http://localhost:8003 --agent-url http://localhost:9200 chat "$(cat test-prime-request.json | jq -c '.params.arguments')"
+
+# Or using curl
 curl -s -X POST http://localhost:9200/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -151,6 +159,10 @@ meshctl list --registry-port 8003 --healthy-only
 5. **Next Request Uses Claude Again** (automatic recovery):
 
 ```bash
+# Using meshctl
+meshctl call --registry http://localhost:8003 --agent-url http://localhost:9200 chat "$(cat test-prime-request.json | jq -c '.params.arguments')"
+
+# Or using curl
 curl -s -X POST http://localhost:9200/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \

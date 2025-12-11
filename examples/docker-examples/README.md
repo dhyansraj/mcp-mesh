@@ -152,6 +152,17 @@ curl -s -X POST http://localhost:8084/mcp \
 
 ```bash
 # Simple greeting
+meshctl call hello_mesh_simple
+
+# Typed greeting with dependency resolution
+meshctl call hello_mesh_typed
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
+
+```bash
+# Simple greeting
 curl -s -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -180,6 +191,8 @@ curl -s -X POST http://localhost:8081/mcp \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### FastMCP Agent
 
 **Available Tools:**
@@ -187,6 +200,20 @@ curl -s -X POST http://localhost:8081/mcp \
 - `get_current_time` - Get the current system time
 - `calculate_with_timestamp` - Perform math operation with timestamp from time service
 - `process_data` - Process and format data
+
+```bash
+# Get current time
+meshctl call get_current_time
+
+# Math calculation with timestamp
+meshctl call calculate_with_timestamp '{"operation": "add", "a": 10, "b": 5}'
+
+# Process data
+meshctl call process_data '{"input": "sample data to process"}'
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # Get current time
@@ -238,6 +265,8 @@ curl -s -X POST http://localhost:8083/mcp \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### System Agent
 
 **Available Tools:**
@@ -247,6 +276,20 @@ curl -s -X POST http://localhost:8083/mcp \
 - `check_how_long_running` - Get system uptime information
 - `analyze_storage_and_os` - Get disk and OS information
 - `perform_health_diagnostic` - Get system status including current time
+
+```bash
+# Get current time
+meshctl call get_current_time
+
+# Get system overview
+meshctl call fetch_system_overview
+
+# Check system uptime
+meshctl call check_how_long_running
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
 
 ```bash
 # Get current time
@@ -292,6 +335,8 @@ curl -s -X POST http://localhost:8082/mcp \
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text'
 ```
 
+</details>
+
 ### Dependent Agent (3-Agent Dependency Injection Demo)
 
 **Available Tools:**
@@ -301,9 +346,23 @@ curl -s -X POST http://localhost:8082/mcp \
 - `analyze_data` - Analyze data with timestamp from time service
 
 ```bash
-# 🔥 NEW: 3-Agent Dependency Chain with Distributed Tracing
+# 🔥 3-Agent Dependency Chain with Distributed Tracing
 # This demonstrates the complete dependency injection flow:
 # Dependent Agent → FastMCP Agent → System Agent
+meshctl call generate_comprehensive_report '{"report_title": "Multi-Agent System Report", "include_system_data": true}'
+
+# Generate report (uses FastMCP agent's time service)
+meshctl call generate_report '{"title": "System Status Report", "content": "All systems operational"}'
+
+# Analyze data (uses dependency injection for timestamps)
+meshctl call analyze_data '{"data": ["value1", "value2", "value3", "value4", "value5"]}'
+```
+
+<details>
+<summary>Alternative: Using curl directly</summary>
+
+```bash
+# 3-Agent Dependency Chain with Distributed Tracing
 curl -s -X POST http://localhost:8084/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -353,6 +412,8 @@ curl -s -X POST http://localhost:8084/mcp \
     }
   }' | grep "^data:" | sed 's/^data: //' | jq -r '.result.content[0].text' | jq .
 ```
+
+</details>
 
 #### 🔍 **Distributed Tracing Verification**
 
