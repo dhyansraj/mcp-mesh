@@ -16,15 +16,12 @@ MCP Mesh provides two types of Helm charts:
 The `mcp-mesh-core` chart deploys the complete infrastructure stack:
 
 ```bash
-# Add MCP Mesh Helm repo
-helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh/helm
-helm repo update
-
 # Create namespace
 kubectl create namespace mcp-mesh
 
-# Deploy core infrastructure
-helm install mcp-core mcp-mesh/mcp-mesh-core \
+# Deploy core infrastructure (OCI registry - no helm repo add needed)
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --namespace mcp-mesh
 ```
 
@@ -42,19 +39,22 @@ Deploy each agent using the `mcp-mesh-agent` chart:
 
 ```bash
 # Deploy hello-world agent
-helm install hello-world mcp-mesh/mcp-mesh-agent \
+helm install hello-world oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.name=hello-world \
   --set agent.script=hello_world.py
 
 # Deploy system agent
-helm install system-agent mcp-mesh/mcp-mesh-agent \
+helm install system-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.name=system-agent \
   --set agent.script=system_agent.py
 
 # Deploy weather agent
-helm install weather-agent mcp-mesh/mcp-mesh-agent \
+helm install weather-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.name=weather-agent \
   --set agent.script=weather_agent.py
@@ -116,7 +116,8 @@ mcp-mesh-registry:
 ```
 
 ```bash
-helm install mcp-core mcp-mesh/mcp-mesh-core \
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   -f core-minimal.yaml
 ```
@@ -150,7 +151,8 @@ resources:
 ```
 
 ```bash
-helm install my-agent mcp-mesh/mcp-mesh-agent \
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   -f my-agent-values.yaml
 ```
@@ -177,12 +179,14 @@ autoscaling:
 helm list -n mcp-mesh
 
 # Upgrade core infrastructure
-helm upgrade mcp-core mcp-mesh/mcp-mesh-core \
+helm upgrade mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   -f core-values.yaml
 
 # Scale an agent
-helm upgrade weather-agent mcp-mesh/mcp-mesh-agent \
+helm upgrade weather-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.replicas=3
 

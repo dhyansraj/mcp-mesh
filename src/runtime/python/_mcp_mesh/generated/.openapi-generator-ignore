@@ -1,3 +1,4 @@
+# Skip packaging files - we use this as part of our main package
 pyproject.toml
 setup.py
 setup.cfg

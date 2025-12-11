@@ -145,6 +145,7 @@ plugins:
   - git-revision-date-localized:
       enable_creation_date: true
       type: timeago
+      enable_git_follow: false
 
 nav:
   - Home: index.md
@@ -171,6 +172,7 @@ nav:
       - Troubleshooting: 02-local-development/troubleshooting.md
 
   - Deployment:
+      - deployment.md
       - Docker:
           - Overview: 03-docker-deployment.md
           - Building Images: 03-docker-deployment/01-building-images.md
@@ -182,16 +184,13 @@ nav:
 
       - Kubernetes:
           - Overview: 04-kubernetes-basics.md
-          - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
-
-      - Helm:
-          - Overview: 06-helm-deployment.md
-          - Understanding Charts: 06-helm-deployment/01-understanding-charts.md
           - Multi-Agent Deployment: 06-helm-deployment/02-umbrella-chart.md
           - Customizing Values: 06-helm-deployment/03-customizing-values.md
           - Multi-Environment: 06-helm-deployment/04-multi-environment.md
-          - Best Practices: 06-helm-deployment/05-best-practices.md
-          - Troubleshooting: 06-helm-deployment/troubleshooting.md
+          - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
+          - Advanced:
+              - Helm Charts Deep Dive: 06-helm-deployment/01-understanding-charts.md
+              - Best Practices: 06-helm-deployment/05-best-practices.md
 
   - Observability: 07-observability.md
 
@@ -202,3 +201,5 @@ nav:
       - meshctl CLI: meshctl-cli.md
       - meshctl scaffold: meshctl-scaffold.md
       - Tag Matching Migration: enhanced-tag-matching-migration.md
+
+  - Contributing: contributing.md

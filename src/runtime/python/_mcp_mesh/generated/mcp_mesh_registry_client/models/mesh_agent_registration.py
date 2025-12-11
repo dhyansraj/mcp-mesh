@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -28,7 +28,7 @@ from typing_extensions import Self
 
 class MeshAgentRegistration(BaseModel):
     """
-    Service registration request with flattened structure. Used by both /agents/register and /heartbeat endpoints. Supports both agents (agent_type=mcp_agent) and API services (agent_type=api). 
+    Service registration request with flattened structure. Used by both /agents/register and /heartbeat endpoints. Supports both agents (agent_type=mcp_agent) and API services (agent_type=api).
     """ # noqa: E501
     agent_id: Annotated[str, Field(min_length=1, strict=True, max_length=64)] = Field(description="Unique identifier for the agent")
     agent_type: Optional[StrictStr] = Field(default='mcp_agent', description="Type of service - mcp_agent provides capabilities, api consumes them")
@@ -127,5 +127,3 @@ class MeshAgentRegistration(BaseModel):
             "tools": [MeshToolRegistration.from_dict(_item) for _item in obj["tools"]] if obj.get("tools") is not None else None
         })
         return _obj
-
-

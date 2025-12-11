@@ -1,5 +1,5 @@
 # Helm values for deploying {{ .Name }} with mcp-mesh-agent chart
-# Usage: helm install {{ .Name }} mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent --version 0.7.1 -f helm-values.yaml
 
 image:
   repository: your-registry/{{ .Name }}

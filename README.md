@@ -10,6 +10,14 @@
 
 > **The future of AI is not one large model, but many specialized agents working together.**
 
+<p align="center">
+  <a href="https://dhyansraj.github.io/mcp-mesh/"><strong>📚 Documentation</strong></a> ·
+  <a href="https://dhyansraj.github.io/mcp-mesh/01-getting-started/"><strong>🚀 Quick Start</strong></a> ·
+  <a href="https://discord.gg/KDFDREphWn"><strong>💬 Discord</strong></a>
+</p>
+
+---
+
 ## 🎯 Why MCP Mesh?
 
 While MCP solved AI tool standardization, scaling MCP applications to production presents unique challenges. MCP Mesh transforms MCP from a development protocol into an enterprise-grade distributed system.
@@ -208,10 +216,9 @@ This project is open source. License details will be provided in the LICENSE fil
 
 ## 🚀 Get Started
 
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://dhyansraj.github.io/mcp-mesh/)
-
-1. **[⚡ Quick Tutorial](docs/01-getting-started.md)** - Build your first distributed MCP agent
-2. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
-3. **[🔧 Contribute](https://github.com/dhyansraj/mcp-mesh/issues)** - Help build the future of AI orchestration
+1. **[📚 Full Documentation](https://dhyansraj.github.io/mcp-mesh/)** - Complete guides and reference
+2. **[⚡ Quick Tutorial](https://dhyansraj.github.io/mcp-mesh/01-getting-started/)** - Build your first distributed MCP agent
+3. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
+4. **[🔧 Contribute](https://dhyansraj.github.io/mcp-mesh/contributing/)** - Help build the future of AI orchestration
 
 **Star the repo** if MCP Mesh helps you build better AI systems! ⭐

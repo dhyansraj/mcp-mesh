@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -57,7 +57,7 @@ class TracingApi:
     ) -> str:
         """Stream trace events for a specific trace ID
 
-        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects 
+        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects
 
         :param trace_id: Trace identifier to stream events for (required)
         :type trace_id: str
@@ -126,7 +126,7 @@ class TracingApi:
     ) -> ApiResponse[str]:
         """Stream trace events for a specific trace ID
 
-        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects 
+        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects
 
         :param trace_id: Trace identifier to stream events for (required)
         :type trace_id: str
@@ -195,7 +195,7 @@ class TracingApi:
     ) -> RESTResponseType:
         """Stream trace events for a specific trace ID
 
-        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects 
+        Establishes a persistent connection to stream real-time trace events for the specified trace ID. Uses Server-Sent Events (SSE) for streaming trace data from Redis.  🤖 AI CRITICAL CONTRACT: - Returns real-time trace events as they occur - Enables clients to monitor task progress across agents - Supports multiple registry instances reading from shared Redis - Connection stays open until trace completes or client disconnects
 
         :param trace_id: Trace identifier to stream events for (required)
         :type trace_id: str
@@ -277,7 +277,7 @@ class TracingApi:
         if 'Accept' not in _header_params:
             _header_params['Accept'] = self.api_client.select_header_accept(
                 [
-                    'text/event-stream', 
+                    'text/event-stream',
                     'application/json'
                 ]
             )
@@ -301,5 +301,3 @@ class TracingApi:
             _host=_host,
             _request_auth=_request_auth
         )
-
-

@@ -39,8 +39,8 @@ app = FastMCP("My Agent")
 # Define a tool with automatic dependency injection
 @app.tool()
 @mesh.tool(capability="greeting", dependencies=["time_service"])
-def greet(name: str, time_service=None):
-    current_time = time_service() if time_service else "unknown"
+async def greet(name: str, time_service: mesh.McpMeshAgent = None):
+    current_time = await time_service() if time_service else "unknown"
     return f"Hello {name}! The time is {current_time}"
 
 # Expose a REST endpoint
@@ -98,11 +98,11 @@ That's a complete agent with:
     capability="analyze_data",
     dependencies=["db_service", "ml_service"]
 )
-def analyze(data, db_service=None, ml_service=None):
+async def analyze(data, db_service: mesh.McpMeshAgent = None, ml_service: mesh.McpMeshAgent = None):
     # db_service and ml_service are automatically injected
     # MCP Mesh finds them, connects them, handles failures
-    records = db_service.query(data)
-    return ml_service.predict(records)
+    records = await db_service(query=data) if db_service else {}
+    return await ml_service(data=records) if ml_service else {}
 ```
 
 ### 3. One Command to Production
@@ -111,9 +111,9 @@ def analyze(data, db_service=None, ml_service=None):
 # Generate Docker Compose with observability
 meshctl scaffold --compose --observability
 
-# Or deploy to Kubernetes
-helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh
-helm install my-mesh mcp-mesh/mcp-mesh-core
+# Or deploy to Kubernetes (OCI registry)
+helm install my-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 -n mcp-mesh --create-namespace
 ```
 
 ### 4. Built-in Observability

@@ -15,18 +15,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pages: write
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
       - name: Install Helm
         uses: azure/setup-helm@v3
@@ -58,10 +53,66 @@ jobs:
             fi
           done
 
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.6.0
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          charts_dir: helm
-          config: .github/cr.yaml
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Helm charts to GHCR
+        run: |
+          # Get version from tag or input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          # Remove 'v' prefix for chart version
+          CHART_VERSION="${VERSION#v}"
+
+          echo "Releasing charts with version: $CHART_VERSION"
+
+          # Package and push each chart
+          for chart in helm/mcp-mesh-*; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              CHART_NAME=$(basename "$chart")
+              echo "=== Processing $CHART_NAME ==="
+
+              # Package the chart
+              helm package "$chart" --version "$CHART_VERSION" --destination /tmp/charts/
+
+              # Push to GHCR
+              REGISTRY="oci://ghcr.io/${{ github.repository_owner }}/mcp-mesh"
+              helm push "/tmp/charts/${CHART_NAME}-${CHART_VERSION}.tgz" "$REGISTRY"
+
+              echo "✓ Pushed $CHART_NAME:$CHART_VERSION to ghcr.io"
+            fi
+          done
+
+      - name: Summary
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          CHART_VERSION="${VERSION#v}"
+
+          echo "## Helm Charts Released 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Charts pushed to \`ghcr.io/${{ github.repository_owner }}/mcp-mesh\`:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for chart in helm/mcp-mesh-*; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              CHART_NAME=$(basename "$chart")
+              CHART_URL="oci://ghcr.io/${{ github.repository_owner }}/mcp-mesh/${CHART_NAME}"
+              echo "- \`${CHART_URL}:${CHART_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          CORE_URL="oci://ghcr.io/${{ github.repository_owner }}/mcp-mesh/mcp-mesh-core"
+          echo "helm install mcp-core ${CORE_URL} --version ${CHART_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

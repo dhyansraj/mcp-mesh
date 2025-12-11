@@ -253,11 +253,11 @@ paths:
                 type: string
                 description: Server-Sent Events stream of trace data
               example: |
-                data: {"event_type": "task_started", "agent_id": "worker-1", "timestamp": "2024-01-20T10:30:45Z", "details": {"task": "process_data"}}
+                data: {"event_type": "task_started", "agent_id": "worker-1"}
 
-                data: {"event_type": "task_progress", "agent_id": "worker-1", "timestamp": "2024-01-20T10:30:47Z", "details": {"progress": 25}}
+                data: {"event_type": "task_progress", "progress": 25}
 
-                data: {"event_type": "task_completed", "agent_id": "worker-1", "timestamp": "2024-01-20T10:31:15Z", "details": {"result": "success"}}
+                data: {"event_type": "task_completed", "result": "success"}
         "404":
           description: Trace not found
           content:
@@ -412,7 +412,8 @@ components:
           example:
             timeout: 45
             retry_count: 3
-            custom_headers: { "X-API-Version": "v2" }
+            custom_headers:
+              X-API-Version: v2
             streaming: true
             auth_required: true
 
@@ -1599,6 +1600,7 @@ components:
           example:
             timeout: 45
             retry_count: 3
-            custom_headers: { "X-API-Version": "v2" }
+            custom_headers:
+              X-API-Version: v2
             streaming: true
             auth_required: true

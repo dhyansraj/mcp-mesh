@@ -8,9 +8,9 @@ MCP Mesh supports multiple deployment patterns from local development to product
 
 ## Official Docker Images
 
-| Image | Description |
-|-------|-------------|
-| `mcpmesh/registry:0.7` | Registry service for agent discovery |
+| Image                        | Description                                    |
+| ---------------------------- | ---------------------------------------------- |
+| `mcpmesh/registry:0.7`       | Registry service for agent discovery           |
 | `mcpmesh/python-runtime:0.7` | Python runtime with mcp-mesh SDK pre-installed |
 
 ## Local Development
@@ -115,6 +115,7 @@ meshctl scaffold --compose --observability
 ```
 
 Generated docker-compose.yml includes:
+
 - PostgreSQL database for registry
 - Registry service (`mcpmesh/registry:0.7`)
 - All detected agents with proper networking
@@ -133,34 +134,32 @@ docker compose ps
 
 ### Helm Charts (Recommended)
 
-For production Kubernetes deployment, use the official Helm charts from the MCP Mesh repository:
+For production Kubernetes deployment, use the official Helm charts from the MCP Mesh OCI registry:
 
 ```bash
-# Add MCP Mesh Helm repository
-helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh
-helm repo update
-
 # Create namespace
 kubectl create namespace mcp-mesh
 
 # Install core infrastructure (registry + database + observability)
-helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh
+# No "helm repo add" needed - uses OCI registry directly
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
+  -n mcp-mesh
 
 # Deploy agent using scaffold-generated helm-values.yaml
-helm install my-agent mcp-mesh/mcp-mesh-agent -n mcp-mesh \
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
+  -n mcp-mesh \
   -f my-agent/helm-values.yaml
-
-# Optional: Install ingress for external access
-helm install mcp-ingress mcp-mesh/mcp-mesh-ingress -n mcp-mesh
 ```
 
 ### Available Helm Charts
 
-| Chart | Description |
-|-------|-------------|
-| `mcp-mesh/mcp-mesh-core` | Registry + PostgreSQL + Redis + Tempo + Grafana |
-| `mcp-mesh/mcp-mesh-agent` | Deploy individual MCP agents |
-| `mcp-mesh/mcp-mesh-ingress` | Ingress routing for external access |
+| Chart                                                | Description                                     |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| `oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core`     | Registry + PostgreSQL + Redis + Tempo + Grafana |
+| `oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent`    | Deploy individual MCP agents                    |
+| `oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry` | Registry service only                           |
 
 ### Using scaffold-generated helm-values.yaml
 
@@ -202,7 +201,9 @@ docker push your-registry/my-agent:v1.0.0
 
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
-helm install my-agent mcp-mesh/mcp-mesh-agent -n mcp-mesh \
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
+  -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
   --set image.tag=v1.0.0
@@ -212,12 +213,16 @@ helm install my-agent mcp-mesh/mcp-mesh-agent -n mcp-mesh \
 
 ```bash
 # Core without observability
-helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh \
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
+  -n mcp-mesh \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
-helm install mcp-core mcp-mesh/mcp-mesh-core -n mcp-mesh \
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
+  -n mcp-mesh \
   --set postgres.enabled=false
 ```
 

@@ -6,6 +6,60 @@
 
 MCP Mesh is a distributed service orchestration framework built on top of the Model Context Protocol (MCP) that enables seamless dependency injection, service discovery, and inter-service communication. The architecture combines familiar FastMCP development patterns with powerful mesh orchestration capabilities.
 
+## Glossary
+
+Key terms used throughout MCP Mesh documentation:
+
+| Term                             | Definition                                                                                                                                                                                                                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Agent**                        | A Python application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                               |
+| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                                                                                   |
+| **Capability**                   | A unique identifier (string) that describes what a tool provides. Other tools declare dependencies on capabilities, not specific agents. Example: `"redis_store_memory"`, `"analyze_emotion"`.                                                                                             |
+| **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
+| **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
+| **Heartbeat**                    | Periodic signal sent by agents to the registry to indicate they're alive. Default interval is 15 seconds.                                                                                                                                                                                  |
+| **Proxy**                        | An injected object (`McpMeshAgent`) that transparently handles communication with remote tools. You call it like a function; MCP Mesh handles the rest.                                                                                                                                    |
+| **Tag**                          | Metadata attached to tools for filtering during dependency resolution. Supports `+` (prefer) and `-` (avoid) operators.                                                                                                                                                                    |
+| **MCP (Model Context Protocol)** | The underlying protocol used for tool communication. MCP Mesh tools are standard MCP tools and can be invoked via HTTP using MCP's `tools/list` and `tools/call` endpoints.                                                                                                                |
+
+### About FastMCP
+
+MCP Mesh uses [FastMCP](https://github.com/jlowin/fastmcp) under the hood to handle MCP protocol details. You don't need to learn FastMCP separately—just use the `@app.tool()` decorator to define tools and MCP Mesh handles everything else.
+
+**What FastMCP provides (handled automatically):**
+
+- MCP protocol serialization/deserialization
+- HTTP server for tool endpoints
+- Tool schema generation from Python type hints
+
+**What MCP Mesh adds:**
+
+- Service discovery and registration
+- Automatic dependency injection
+- Health monitoring and heartbeats
+- LLM integration (`@mesh.llm`)
+- Multi-agent orchestration
+
+**MCP Compatibility:**
+
+MCP Mesh tools are standard MCP tools. They can be invoked by any MCP client using JSON-RPC:
+
+```bash
+# List available tools
+curl -s -X POST http://agent:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# Call a tool
+curl -s -X POST http://agent:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"my_tool","arguments":{"param":"value"}}}'
+```
+
+---
+
 ## Core Architecture
 
 ### High-Level Components
@@ -100,6 +154,406 @@ MCP Mesh is a distributed service orchestration framework built on top of the Mo
 - **Runtime Phase**: Direct FastMCP-to-FastMCP communication (no proxy)
 - **Monitoring Phase**: Continuous health checks and capability updates in background
 
+## MCP Mesh Agents and Tools
+
+MCP Mesh agents are simple Python scripts or modules that define one or more MCP tools. While tools communicate via the MCP protocol, all networking and communication complexity is abstracted away by MCP Mesh.
+
+### What is an MCP Mesh Agent?
+
+An agent is a Python file that:
+
+1. Creates a FastMCP app
+2. Defines tools using the dual decorator pattern
+3. Registers with the mesh using `@mesh.agent`
+
+```python
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("My Agent")
+
+@app.tool()           # FastMCP decorator - defines MCP tool
+@mesh.tool(           # Mesh decorator - adds orchestration
+    capability="greeting",
+    dependencies=["time_service"]
+)
+async def greet(name: str, time_service: mesh.McpMeshAgent = None):
+    """Greet someone with the current time."""
+    current_time = await time_service() if time_service else "unknown"
+    return f"Hello {name}! The time is {current_time}"
+
+@mesh.agent(
+    name="greeting-agent",
+    http_port=8080,
+    enable_http=True,
+    auto_run=True,
+)
+class GreetingAgent:
+    pass
+```
+
+That's all the code you need. MCP Mesh handles:
+
+- **Service discovery** - Finding other agents in the network
+- **Dependency injection** - Automatically wiring dependencies
+- **Health monitoring** - Heartbeats and failure detection
+- **HTTP exposure** - Tools callable via REST API
+
+### Types of Tools
+
+MCP Mesh supports four types of tools, each with its own decorator:
+
+| Decorator            | Purpose                                     | Use Case                                   |
+| -------------------- | ------------------------------------------- | ------------------------------------------ |
+| `@mesh.tool`         | Standard MCP tool with dependency injection | Data processing, storage, utilities        |
+| `@mesh.llm`          | LLM-powered tool with agentic capabilities  | AI analysis, content generation, reasoning |
+| `@mesh.llm_provider` | Zero-code LLM vendor integration            | Claude, GPT-4, Gemini providers            |
+| `@mesh.route`        | FastAPI route with tool injection           | REST APIs, webhooks, external interfaces   |
+
+---
+
+### 1. Standard Tools (`@mesh.tool`)
+
+Standard tools are the building blocks of MCP Mesh. They expose capabilities that other agents can discover and call.
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="redis_store_memory",
+    description="Store a memory in Redis",
+    version="1.0.0",
+    tags=["redis", "storage", "write"],
+)
+async def store_memory(
+    user_email: str,
+    content: str,
+    importance: int,
+) -> dict:
+    """Store a new memory in Redis."""
+    key = f"memory:{user_email}:{timestamp}"
+    await redis_client.set(key, json.dumps({
+        "content": content,
+        "importance": importance,
+    }))
+    return {"status": "success", "key": key}
+```
+
+**Key concepts:**
+
+- **Capability**: A unique identifier that other tools use to declare dependencies
+- **Tags**: Metadata for filtering during dependency resolution
+- **Version**: Semantic versioning for compatibility matching
+- **Dependencies**: List of capabilities this tool requires
+
+#### Dependency Injection
+
+When a tool declares dependencies, MCP Mesh automatically resolves and injects them:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="update_emotion",
+    dependencies=["analyze_emotion"],  # Depends on another capability
+)
+async def update_emotion(
+    user_email: str,
+    avatar_id: str,
+    analyze: mesh.McpMeshAgent = None,  # Injected automatically
+) -> dict:
+    """Update emotion state using LLM analysis."""
+
+    # Call the injected dependency like a function
+    result = await analyze(
+        user_email=user_email,
+        avatar_id=avatar_id,
+    )
+
+    # Use the result
+    return {"emotion": result.emotion, "intensity": result.intensity}
+```
+
+**How it works:**
+
+1. Agent starts and registers its capabilities with the registry
+2. MCP Mesh discovers agents that provide required dependencies
+3. Proxy objects (`mesh.McpMeshAgent`) are injected at runtime
+4. Calling the proxy transparently invokes the remote tool via MCP
+5. You don't manage URLs, connections, retries, or failures
+
+#### Advanced Tag Matching
+
+Tags support prefix operators for fine-grained control:
+
+```python
+@mesh.tool(
+    capability="analyze",
+    dependencies=[
+        "storage",              # Must have "storage" tag
+        {"capability": "llm", "tags": ["+claude", "-gpt"]},  # Prefer Claude, avoid GPT
+    ]
+)
+```
+
+| Operator | Meaning             | Example        |
+| -------- | ------------------- | -------------- |
+| (none)   | Must have tag       | `"storage"`    |
+| `+`      | Prefer if available | `"+claude"`    |
+| `-`      | Avoid if possible   | `"-expensive"` |
+
+---
+
+### 2. LLM Tools (`@mesh.llm`)
+
+LLM tools add intelligence to any MCP tool. They can:
+
+- Execute agentic loops with tool calling
+- Use dynamic system prompts (Jinja2 templates)
+- Filter available tools for the LLM
+- Return structured JSON or plain text
+
+```python
+from pydantic import BaseModel, Field
+
+class EmotionAnalysis(BaseModel):
+    """Structured response from emotion analysis."""
+    emotion: str = Field(..., description="Primary emotion")
+    intensity: float = Field(..., ge=0.0, le=1.0)
+    reasoning: str = Field(..., description="Brief explanation")
+
+@app.tool()
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["llm", "+gpt"]},  # Prefer GPT for speed
+    max_iterations=1,                                          # Single LLM call
+    system_prompt="file://prompts/emotion_analysis.jinja2",   # Dynamic prompt
+    context_param="emotion_ctx",                               # Context injection
+    response_format="json",                                    # Structured output
+)
+@mesh.tool(
+    capability="analyze_emotion",
+    tags=["emotion", "analysis", "llm"],
+)
+async def analyze_emotion(
+    emotion_ctx: EmotionContext,
+    llm: mesh.MeshLlmAgent = None,
+) -> EmotionAnalysis:
+    """Analyze avatar's emotional state from conversation."""
+    return await llm("Analyze the avatar's emotional state")
+```
+
+#### LLM Decorator Options
+
+| Option            | Description                          | Example                                      |
+| ----------------- | ------------------------------------ | -------------------------------------------- |
+| `provider`        | Which LLM to use (capability + tags) | `{"capability": "llm", "tags": ["+claude"]}` |
+| `max_iterations`  | Max tool-calling loops               | `10` for agentic, `1` for single call        |
+| `system_prompt`   | Static string or Jinja2 file         | `"file://prompts/system.jinja2"`             |
+| `context_param`   | Parameter name for template context  | `"emotion_ctx"`                              |
+| `response_format` | Output format                        | `"json"`, `"text"`                           |
+| `filter`          | Filter available tools for LLM       | `{"tags": ["memory-agent"]}`                 |
+| `filter_mode`     | How to apply filter                  | `"all"`, `"any"`                             |
+
+#### Agentic Tool Calling
+
+LLM tools can call other tools in a loop:
+
+```python
+@app.tool()
+@mesh.llm(
+    filter={"tags": ["memory-agent", "recall"]},  # Only memory tools available
+    filter_mode="all",
+    provider={"capability": "llm", "tags": ["+claude"]},
+    max_iterations=10,  # Allow up to 10 tool calls
+    system_prompt="file://prompts/avatar.jinja2",
+    context_param="avatar_ctx",
+    response_format="text",
+)
+@mesh.tool(
+    capability="generic_avatar_respond",
+    tags=["avatar", "companion"],
+)
+async def generic_respond(
+    avatar_ctx: AvatarContext,
+    llm: mesh.MeshLlmAgent = None,
+) -> str:
+    """Generate avatar response with memory recall capability."""
+    # LLM can call memory_recall tool during its reasoning
+    return await llm(avatar_ctx.conversation_history)
+```
+
+The LLM sees filtered tools and can call them autonomously. MCP Mesh handles the tool execution loop.
+
+---
+
+### 3. LLM Providers (`@mesh.llm_provider`)
+
+LLM providers make any AI vendor available to the mesh with zero code:
+
+```python
+@mesh.llm_provider(
+    model="anthropic/claude-sonnet-4-5",
+    capability="llm",
+    tags=["llm", "claude", "anthropic", "sonnet", "provider"],
+    version="1.0.0",
+)
+def claude_provider():
+    """Claude provider - automatically creates process_chat endpoint."""
+    pass  # Implementation is in the decorator
+
+@mesh.agent(
+    name="claude-provider",
+    http_port=9110,
+    enable_http=True,
+    auto_run=True,
+    health_check=claude_health_check,
+)
+class ClaudeProviderAgent:
+    pass
+```
+
+**What it provides:**
+
+- Automatic `process_chat(request: MeshLlmRequest)` tool
+- LiteLLM integration for unified API
+- Error handling and retries
+- Mesh registration with capability and tags
+
+#### Multiple Providers
+
+Deploy multiple providers and let tools choose at runtime:
+
+```python
+# claude_provider.py
+@mesh.llm_provider(
+    model="anthropic/claude-sonnet-4-5",
+    tags=["llm", "claude", "anthropic", "expensive", "smart"],
+)
+def claude_provider():
+    pass
+
+# openai_provider.py
+@mesh.llm_provider(
+    model="openai/gpt-4o",
+    tags=["llm", "openai", "gpt", "fast", "cheap"],
+)
+def openai_provider():
+    pass
+```
+
+Tools select providers using tag matching:
+
+```python
+@mesh.llm(
+    # Use Claude for complex reasoning
+    provider={"capability": "llm", "tags": ["+claude", "+smart"]},
+)
+async def complex_analysis(...): ...
+
+@mesh.llm(
+    # Use GPT for fast, simple tasks
+    provider={"capability": "llm", "tags": ["+gpt", "+fast"]},
+)
+async def quick_extraction(...): ...
+```
+
+---
+
+### 4. FastAPI Routes (`@mesh.route`)
+
+The `@mesh.route` decorator lets FastAPI endpoints call MCP tools as regular Python functions:
+
+```python
+from fastapi import APIRouter, Request
+from mesh.types import McpMeshAgent
+
+router = APIRouter(prefix="/chat", tags=["chat"])
+
+@router.post("/completions")
+@mesh.route(dependencies=["avatar_chat"])
+async def chat_completions(
+    request: Request,
+    chat_request: ChatCompletionRequest,
+    avatar_id: str = "maya-creative",
+    avatar_agent: McpMeshAgent = None,  # Injected by @mesh.route
+):
+    """OpenAI-compatible chat endpoint."""
+
+    # Extract user from JWT
+    user_info = require_user_from_request(request)
+
+    # Call MCP tool like a regular function
+    result = await avatar_agent(
+        user_email=user_info["email"],
+        message=chat_request.messages[-1].content,
+        avatar_id=avatar_id,
+    )
+
+    return ChatCompletionResponse(
+        choices=[{"message": {"content": result["message"]}}]
+    )
+```
+
+**Benefits:**
+
+- **No network code**: MCP Mesh handles connections
+- **Type safety**: Pydantic models work transparently
+- **Dependency injection**: Tools injected like FastAPI dependencies
+- **Decoupled architecture**: Routes don't know where tools run
+
+---
+
+### Putting It All Together
+
+Here's how these components work together in a real system (Maya):
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     FastAPI Backend                               │
+│  @mesh.route(dependencies=["avatar_chat"])                       │
+│  POST /chat/completions → avatar_agent()                         │
+└──────────────────────────────────┬───────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    Orchestrator Agent                             │
+│  @mesh.tool(capability="avatar_chat",                            │
+│             dependencies=["generic_avatar_respond",              │
+│                          "memory_recall", "update_emotion"])     │
+└──────────┬───────────────────────┬───────────────────────────────┘
+           │                       │
+           ▼                       ▼
+┌─────────────────────┐  ┌─────────────────────────────────────────┐
+│   Avatar Agent      │  │          Memory LLM Agent               │
+│  @mesh.llm(         │  │  @mesh.llm(provider={"+gpt"})           │
+│    provider={"+claude"}│  │  @mesh.tool(capability="memory_recall")│
+│  )                  │  │                                         │
+└─────────┬───────────┘  └─────────────────┬───────────────────────┘
+          │                                │
+          ▼                                ▼
+┌─────────────────────┐           ┌─────────────────────┐
+│   Claude Provider   │           │   OpenAI Provider   │
+│  @mesh.llm_provider │           │  @mesh.llm_provider │
+│  model="claude..."  │           │  model="gpt-4o"     │
+└─────────────────────┘           └─────────────────────┘
+```
+
+**Data flow:**
+
+1. HTTP request hits FastAPI route
+2. `@mesh.route` injects `avatar_agent` (Orchestrator)
+3. Orchestrator calls Avatar Agent with injected dependencies
+4. Avatar Agent uses Claude via `@mesh.llm`
+5. Memory LLM uses GPT for fast extraction
+6. Response flows back through the chain
+
+All of this happens with:
+
+- **Zero network code** in your tools
+- **Automatic service discovery**
+- **Runtime dependency injection**
+- **Transparent LLM provider selection**
+
+---
+
 ## Design Principles
 
 ### 1. **True Resilient Architecture**
@@ -149,7 +603,7 @@ def get_weather(time_service: Any = None) -> dict:
 
 ### 3. **Enhanced Proxy System**
 
-MCP Mesh v0.3+ introduces automatic proxy configuration from decorator kwargs:
+MCP Mesh provides automatic proxy configuration from decorator kwargs:
 
 ```python
 @mesh.tool(
@@ -486,8 +940,6 @@ spec:
 - **POST Heartbeat**: ~2KB per agent when topology changes
 - **Tool Calls**: Standard MCP JSON-RPC (varies by payload)
 
-_See `docs/performance/` for detailed benchmarks_
-
 ## Security Model
 
 ### Current Architecture
@@ -502,17 +954,6 @@ _See `docs/performance/` for detailed benchmarks_
 2. **Service Mesh**: Deploy with Istio/Linkerd for mTLS
 3. **API Gateway**: Use gateway for external access control
 4. **Enhanced Proxies**: Use `auth_required=True` with bearer tokens
-
-_See `docs/security/` for detailed security guidance_
-
-## Recent Enhancements (v0.3.x)
-
-1. **✅ Redis Session Storage**: Distributed session affinity with Redis backend
-2. **✅ Enhanced Proxy System**: Kwargs-based auto-configuration for proxies
-3. **✅ Automatic Session Management**: Built-in session lifecycle management
-4. **✅ HTTP Wrapper Improvements**: Session routing middleware and port resolution
-5. **✅ Streaming Auto-Selection**: Automatic routing based on tool capabilities
-6. **✅ Authentication Integration**: Bearer token support for enhanced proxies
 
 ## Extension Points
 
@@ -561,4 +1002,4 @@ This architecture enables MCP Mesh to provide a seamless, scalable, and develope
 
 **For Implementation Details**: See source code in `src/runtime/python/_mcp_mesh/` and `cmd/registry/`
 **For Examples**: See `examples/` directory for complete working examples
-**For Performance**: See `docs/performance/` for benchmarks and optimization guides
+**For Configuration**: See [Environment Variables](./environment-variables.md) for all configuration options
