@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const child_process = require("child_process");
 
-const binaryPath = path.join(__dirname, "meshctl");
+const binaryPath = path.join(__dirname, "mcp-mesh-registry");
 
 if (fs.existsSync(binaryPath) && binaryPath !== __filename) {
   // Binary exists, execute it
@@ -17,9 +17,9 @@ if (fs.existsSync(binaryPath) && binaryPath !== __filename) {
   });
   process.exit(result.status || 0);
 } else {
-  console.error("Error: meshctl binary not found.");
+  console.error("Error: mcp-mesh-registry binary not found.");
   console.error("");
-  console.error("The meshctl binary was not properly installed. Try:");
+  console.error("The mcp-mesh-registry binary was not properly installed. Try:");
   console.error("  1. Reinstall: npm install -g @mcpmesh/cli");
   console.error("  2. Or install from source: https://github.com/dhyansraj/mcp-mesh");
   console.error("");

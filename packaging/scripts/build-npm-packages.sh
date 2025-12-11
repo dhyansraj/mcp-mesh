@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Build npm packages for meshctl
+# Build npm packages for meshctl and mcp-mesh-registry
 # Usage: ./build-npm-packages.sh [VERSION]
 
 VERSION="${VERSION:-${1:-dev}}"
@@ -12,19 +12,40 @@ GO_VERSION="${GO_VERSION:-1.23}"
 
 echo "Building npm packages for version: $VERSION"
 
-# Platforms to build
+# Platforms to build (Linux and macOS only - Windows not supported due to CGO requirements)
 PLATFORMS=(
   "linux:amd64:linux-x64"
   "linux:arm64:linux-arm64"
   "darwin:amd64:darwin-x64"
   "darwin:arm64:darwin-arm64"
-  "windows:amd64:win32-x64"
-  "windows:arm64:win32-arm64"
 )
 
 # Clean and create output directory
 rm -rf "$NPM_DIR"
 mkdir -p "$NPM_DIR"
+
+# Function to get CC for cross-compilation
+get_cc_for_platform() {
+  local goos="$1"
+  local goarch="$2"
+  local host_arch=$(uname -m)
+
+  case "$goos-$goarch" in
+    "linux-arm64")
+      echo "aarch64-linux-gnu-gcc"
+      ;;
+    "linux-amd64")
+      if [[ "$host_arch" == "aarch64" || "$host_arch" == "arm64" ]]; then
+        echo "x86_64-linux-gnu-gcc"
+      else
+        echo ""  # Native build
+      fi
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
 
 # Build platform-specific packages
 for platform in "${PLATFORMS[@]}"; do
@@ -38,34 +59,38 @@ for platform in "${PLATFORMS[@]}"; do
   # Create package directory
   mkdir -p "$PKG_DIR/bin"
 
-  # Determine binary name
-  BINARY_NAME="meshctl"
-  if [ "$GOOS" = "windows" ]; then
-    BINARY_NAME="meshctl.exe"
-  fi
-
-  # Build the binary
+  # Build meshctl (no CGO required)
   if CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
-    -o "$PKG_DIR/bin/$BINARY_NAME" \
+    -o "$PKG_DIR/bin/meshctl" \
     ./cmd/meshctl 2>/dev/null; then
-    echo "  ✓ Built ${PKG_NAME}"
+    echo "  ✓ Built meshctl for ${NPM_PLATFORM}"
   else
-    echo "  ⚠ Failed to build ${PKG_NAME} (cross-compile may require different host)"
+    echo "  ⚠ Failed to build meshctl for ${NPM_PLATFORM}"
     rm -rf "$PKG_DIR"
     continue
   fi
 
-  # Determine npm os/cpu values
+  # Build mcp-mesh-registry (requires CGO for SQLite)
+  CC=$(get_cc_for_platform "$GOOS" "$GOARCH")
+
+  BUILD_ENV="CGO_ENABLED=1 GOOS=$GOOS GOARCH=$GOARCH"
+  if [ -n "$CC" ]; then
+    BUILD_ENV="$BUILD_ENV CC=$CC"
+  fi
+
+  if eval "$BUILD_ENV go build \
+    -ldflags='-s -w -X main.Version=${VERSION}' \
+    -o '$PKG_DIR/bin/mcp-mesh-registry' \
+    ./cmd/mcp-mesh-registry" 2>/dev/null; then
+    echo "  ✓ Built mcp-mesh-registry for ${NPM_PLATFORM}"
+  else
+    echo "  ⚠ Failed to build mcp-mesh-registry for ${NPM_PLATFORM} (CGO cross-compile may not be available)"
+  fi
+
+  # Determine npm os/cpu values (map Go values to npm values)
   NPM_OS="$GOOS"
   NPM_CPU="$GOARCH"
-
-  # Map Go values to npm values
-  if [ "$GOOS" = "darwin" ]; then
-    NPM_OS="darwin"
-  elif [ "$GOOS" = "windows" ]; then
-    NPM_OS="win32"
-  fi
 
   if [ "$GOARCH" = "amd64" ]; then
     NPM_CPU="x64"
@@ -76,7 +101,7 @@ for platform in "${PLATFORMS[@]}"; do
 {
   "name": "${PKG_NAME}",
   "version": "${VERSION}",
-  "description": "meshctl binary for ${NPM_PLATFORM}",
+  "description": "MCP Mesh CLI binaries for ${NPM_PLATFORM}",
   "license": "MIT",
   "preferUnplugged": true,
   "engines": {
@@ -133,8 +158,13 @@ for platform in "${PLATFORMS[@]}"; do
   IFS=':' read -r _ _ NPM_PLATFORM <<< "$platform"
   PKG_DIR="$NPM_DIR/cli-${NPM_PLATFORM}"
   if [ -d "$PKG_DIR" ]; then
-    SIZE=$(du -sh "$PKG_DIR/bin/"* 2>/dev/null | cut -f1)
-    echo "  @mcpmesh/cli-${NPM_PLATFORM}: ${SIZE}"
+    echo "  @mcpmesh/cli-${NPM_PLATFORM}:"
+    for bin in "$PKG_DIR/bin/"*; do
+      if [ -f "$bin" ]; then
+        SIZE=$(du -sh "$bin" 2>/dev/null | cut -f1)
+        echo "    - $(basename "$bin"): ${SIZE}"
+      fi
+    done
   fi
 done
 
