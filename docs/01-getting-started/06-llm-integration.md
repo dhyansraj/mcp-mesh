@@ -27,9 +27,9 @@ app = FastMCP("Analysis Service")
 @app.tool()
 @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
 @mesh.tool(capability="simple_chat")
-def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
+async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
     """LLM agent auto-injected, no configuration needed."""
-    return llm(message)
+    return await llm(message)
 
 # 2. LLM with tool discovery filter
 @app.tool()
@@ -40,9 +40,9 @@ def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
     model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="system_analysis")
-def analyze(query: str, llm: mesh.MeshLlmAgent = None) -> dict:
+async def analyze(query: str, llm: mesh.MeshLlmAgent = None) -> dict:
     """LLM automatically has access to all system-tagged tools."""
-    return llm(query)
+    return await llm(query)
 ```
 
 ## Core Concepts

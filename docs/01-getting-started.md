@@ -38,9 +38,9 @@ def greet(name: str = "World") -> str:
     capability="advanced_greeting",
     dependencies=["date_service"]  # ← Mesh handles service discovery
 )
-def greet_with_date(name: str = "World", date_service: mesh.McpMeshAgent = None) -> str:
+async def greet_with_date(name: str = "World", date_service: mesh.McpMeshAgent = None) -> str:
     if date_service:
-        current_date = date_service()  # Calls remote system agent
+        current_date = await date_service()  # Calls remote system agent
         return f"Hello, {name}! Today is {current_date}"
     return f"Hello, {name}! (Date service not available)"
 
@@ -62,6 +62,150 @@ That's it! The **dual decorator pattern** gives you:
 - **Mesh decorators** (`@mesh.tool`) for dependency injection and orchestration
 - **Automatic discovery** - Mesh finds your FastMCP `app` and handles server startup
 - **Zero boilerplate** - No main methods or manual server management needed
+
+## Prerequisites
+
+Before you begin, ensure you have the required tools installed.
+
+### Required
+
+#### Python 3.9+
+
+```bash
+# Check version
+python --version  # Should show 3.9 or higher
+
+# Install if needed
+# macOS
+brew install python@3.11
+
+# Ubuntu/Debian
+sudo apt install python3.11
+
+# Windows - download from https://python.org
+```
+
+#### Virtual Environment
+
+MCP Mesh expects a `.venv` directory in your project root:
+
+```bash
+# Create virtual environment
+python -m venv .venv
+
+# Activate it
+source .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate      # Windows
+
+# Install MCP Mesh SDK
+pip install "mcp-mesh>=0.7,<0.8"
+```
+
+!!! tip "Why .venv?"
+`meshctl start` automatically detects and uses `.venv` if present. This keeps your project dependencies isolated and consistent.
+
+#### Docker & Docker Compose
+
+Required for the Docker quick start and production deployments:
+
+```bash
+# Check installation
+docker --version
+docker compose version
+
+# Install if needed
+# macOS
+brew install --cask docker  # Installs Docker Desktop
+
+# Ubuntu
+sudo apt install docker.io docker-compose-v2
+
+# Windows - download Docker Desktop from https://docker.com
+```
+
+#### meshctl CLI
+
+The `meshctl` command-line tool manages agents, registry, and scaffolding:
+
+=== "Homebrew (macOS)"
+
+    ```bash
+    brew tap dhyansraj/mcp-mesh
+    brew install mcp-mesh
+    ```
+
+=== "curl (Linux/macOS)"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    ```
+
+=== "Build from Source"
+
+    ```bash
+    git clone https://github.com/dhyansraj/mcp-mesh.git
+    cd mcp-mesh
+    make install-dev
+    # Binary available at ./bin/meshctl
+    ```
+
+Verify installation:
+
+```bash
+meshctl version
+```
+
+### Optional (for Kubernetes)
+
+#### Helm
+
+Required for deploying to Kubernetes:
+
+```bash
+# macOS
+brew install helm
+
+# Linux
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Verify
+helm version
+```
+
+#### Minikube (Local Kubernetes)
+
+For local Kubernetes development:
+
+```bash
+# macOS
+brew install minikube
+
+# Linux
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+
+# Windows
+choco install minikube
+
+# Start cluster
+minikube start --cpus=4 --memory=8192
+```
+
+### Quick Check
+
+Run this to verify your setup:
+
+```bash
+echo "=== MCP Mesh Prerequisites Check ==="
+echo -n "Python: "; python --version 2>/dev/null || echo "❌ Not found"
+echo -n "pip: "; pip --version 2>/dev/null | head -c 20 || echo "❌ Not found"
+echo -n "Docker: "; docker --version 2>/dev/null | head -c 25 || echo "❌ Not found"
+echo -n "meshctl: "; meshctl version 2>/dev/null || echo "❌ Not found (optional for Docker quick start)"
+echo -n "Helm: "; helm version --short 2>/dev/null || echo "⚠️ Not found (optional)"
+echo -n "Minikube: "; minikube version --short 2>/dev/null || echo "⚠️ Not found (optional)"
+```
+
+---
 
 ## Quick Start (Docker - 2 Minutes)
 

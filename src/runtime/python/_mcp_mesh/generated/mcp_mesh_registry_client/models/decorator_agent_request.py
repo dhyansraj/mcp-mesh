@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -28,7 +28,7 @@ from typing_extensions import Self
 
 class DecoratorAgentRequest(BaseModel):
     """
-    Unified request schema for both /agents/register and /heartbeat endpoints. Supports decorator-based agent registration with per-function dependencies. 
+    Unified request schema for both /agents/register and /heartbeat endpoints. Supports decorator-based agent registration with per-function dependencies.
     """ # noqa: E501
     agent_id: Annotated[str, Field(min_length=1, strict=True, max_length=64)] = Field(description="Unique identifier for the agent")
     timestamp: datetime = Field(description="Request timestamp")
@@ -101,5 +101,3 @@ class DecoratorAgentRequest(BaseModel):
             "metadata": DecoratorAgentMetadata.from_dict(obj["metadata"]) if obj.get("metadata") is not None else None
         })
         return _obj
-
-

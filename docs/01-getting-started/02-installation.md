@@ -266,7 +266,7 @@ Now that MCP Mesh is installed, let's run your first example:
 
 💡 **Tip**: Keep the registry running in a separate terminal while working with agents.
 
-📚 **Note**: For production deployments, consider using Docker or Kubernetes for easier management. See our [deployment guides](../MCP_MESH_DEPLOYMENT_GUIDE.md) for more options.
+📚 **Note**: For production deployments, consider using Docker or Kubernetes for easier management. See our [deployment guides](../deployment.md) for more options.
 
 ## 🔧 Troubleshooting
 
@@ -285,12 +285,3 @@ For comprehensive solutions, see our [Troubleshooting Guide](./troubleshooting.m
 - **Windows**: Some features require WSL2 for full compatibility
 - **Go registry**: Requires Go 1.23+ and CGO for SQLite support
 - **Air-gapped environments**: Requires manual dependency download
-
-## 📝 TODO
-
-- [x] Create one-line installer script
-- [x] Add Homebrew formula for macOS
-- [ ] Create snap package for Linux
-- [ ] Add Windows installer (.exe)
-- [ ] Support poetry and pipenv
-- [ ] Create Docker image for development

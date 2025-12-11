@@ -357,7 +357,7 @@ export UVICORN_LIFESPAN=on
 
 ### Fast Heartbeat Optimization
 
-> **New in v0.3+**: Ultra-fast topology change detection
+Ultra-fast topology change detection:
 
 ```bash
 # Ultra-aggressive (sub-5 second detection)

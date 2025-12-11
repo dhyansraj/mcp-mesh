@@ -72,10 +72,9 @@ Infrastructure:
     mcpmesh/registry:0.7        - Registry service
     mcpmesh/python-runtime:0.7  - Python agent runtime (has mcp-mesh SDK)
 
-  Helm Charts (for Kubernetes):
-    helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh
-    mcp-mesh/mcp-mesh-core      - Registry + PostgreSQL + observability
-    mcp-mesh/mcp-mesh-agent     - Deploy individual agents`,
+  Helm Charts (for Kubernetes - OCI registry, no helm repo add needed):
+    oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core   - Registry + PostgreSQL + observability
+    oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent  - Deploy individual agents`,
 		RunE: runScaffoldCommand,
 	}
 

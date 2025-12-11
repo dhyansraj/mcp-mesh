@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -56,7 +56,7 @@ class HealthApi:
     ) -> HealthResponse:
         """Registry health check
 
-        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI. 
+        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -119,7 +119,7 @@ class HealthApi:
     ) -> ApiResponse[HealthResponse]:
         """Registry health check
 
-        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI. 
+        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -182,7 +182,7 @@ class HealthApi:
     ) -> RESTResponseType:
         """Registry health check
 
-        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI. 
+        Returns registry health status and basic information.  🤖 AI NOTE: This endpoint should NEVER return errors unless the registry is truly broken. Used by startup detection logic in CLI.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -301,7 +301,7 @@ class HealthApi:
     ) -> RootResponse:
         """Registry root information
 
-        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery. 
+        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -364,7 +364,7 @@ class HealthApi:
     ) -> ApiResponse[RootResponse]:
         """Registry root information
 
-        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery. 
+        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -427,7 +427,7 @@ class HealthApi:
     ) -> RESTResponseType:
         """Registry root information
 
-        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery. 
+        Returns basic registry information and available endpoints.  🤖 AI NOTE: Used for connectivity testing and endpoint discovery.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -546,7 +546,7 @@ class HealthApi:
     ) -> None:
         """Registry health check (headers only)
 
-        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health 
+        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -609,7 +609,7 @@ class HealthApi:
     ) -> ApiResponse[None]:
         """Registry health check (headers only)
 
-        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health 
+        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -672,7 +672,7 @@ class HealthApi:
     ) -> RESTResponseType:
         """Registry health check (headers only)
 
-        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health 
+        Returns registry health status headers without response body. Used by Docker/K8s health checks with wget --spider.  🤖 AI NOTE: Same logic as GET /health but returns only headers. Enables simple health checks: wget --spider http://localhost:8000/health
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -762,5 +762,3 @@ class HealthApi:
             _host=_host,
             _request_auth=_request_auth
         )
-
-

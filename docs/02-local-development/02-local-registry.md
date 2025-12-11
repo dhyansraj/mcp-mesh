@@ -352,13 +352,6 @@ For more issues, see the [section troubleshooting guide](./troubleshooting.md).
 - **Auto-Start**: Only works with mcp-mesh-dev CLI, not direct Python execution
 - **Data Migration**: No automatic migration between SQLite and PostgreSQL
 
-## 📝 TODO
-
-- [ ] Add support for MySQL/MariaDB backend
-- [ ] Implement data export/import tools
-- [ ] Add registry UI for visual inspection
-- [ ] Support for registry clustering
-
 ## Summary
 
 You can now run the MCP Mesh registry locally with your choice of database backend.
@@ -380,6 +373,6 @@ Continue to [Debugging Agents](./03-debugging.md) →
 
 💡 **Tip**: Use `watch -n 1 'curl -s localhost:8080/api/v1/agents | jq'` to monitor agent registrations in real-time
 
-📚 **Reference**: [Registry API Documentation](../../reference/registry-api.md)
+📚 **Reference**: [meshctl CLI Reference](../meshctl-cli.md)
 
 🧪 **Try It**: Start the registry with PostgreSQL and register multiple agents - watch them appear in the database

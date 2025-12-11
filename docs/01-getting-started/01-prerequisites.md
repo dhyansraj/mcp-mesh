@@ -1,10 +1,10 @@
 # Prerequisites
 
-> Quick checklist before installing MCP Mesh 0.3.x with dual decorator pattern
+> Quick checklist before installing MCP Mesh
 
-## Essential Requirements for MCP Mesh 0.3.x
+## Essential Requirements
 
-You need Python 3.9+ and understanding of the new dual decorator pattern:
+You need Python 3.9+ and understanding of the dual decorator pattern:
 
 ### 1. Python 3.9+
 
@@ -33,7 +33,7 @@ python -m ensurepip --upgrade
 
 ### 3. Understanding the Dual Decorator Pattern
 
-MCP Mesh 0.3.x introduces the **dual decorator pattern** combining:
+MCP Mesh uses the **dual decorator pattern** combining:
 
 - **FastMCP decorators** (`@app.tool`, `@app.prompt`, `@app.resource`) - Familiar MCP development
 - **Mesh decorators** (`@mesh.tool`, `@mesh.agent`) - Orchestration and dependency injection
@@ -49,11 +49,11 @@ app = FastMCP("My Service")
     capability="greeting",
     dependencies=["time_service"]
 )
-def hello(time_service: mesh.McpMeshAgent = None):
-    return f"Hello! Time: {time_service()}"
+async def hello(time_service: mesh.McpMeshAgent = None):
+    return f"Hello! Time: {await time_service()}"
 ```
 
-That's it! You're ready to install MCP Mesh 0.3.x.
+That's it! You're ready to install MCP Mesh.
 
 ## Recommended Setup
 
@@ -115,7 +115,7 @@ Once all prerequisites are met, proceed to [Installation](./02-installation.md) 
 
 ---
 
-💡 **Tip**: If you encounter issues, our [Troubleshooting Guide](../10-operations/03-troubleshooting.md) covers common problems and solutions.
+💡 **Tip**: If you encounter issues, our [Troubleshooting Guide](./troubleshooting.md) covers common problems and solutions.
 
 📚 **Note**: For containerized deployments (Docker/Kubernetes), different prerequisites apply. See [Docker Deployment](../03-docker-deployment.md) or [Kubernetes Basics](../04-kubernetes-basics.md).
 
@@ -136,11 +136,3 @@ For detailed solutions, see our [Troubleshooting Guide](./troubleshooting.md).
 - **32-bit systems**: Limited support, 64-bit recommended
 - **Network proxies**: May require additional configuration
 - **Corporate firewalls**: May block agent communication on custom ports
-
-## 📝 TODO
-
-- [ ] Add automated prerequisite installer script
-- [ ] Support for Python 3.13 when released
-- [ ] Add Podman as Docker alternative
-- [ ] Create offline installation package
-- [ ] Add ARM64 native support verification

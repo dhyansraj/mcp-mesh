@@ -22,11 +22,24 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 class DualContractEndpointDetector:
     """Detects HTTP endpoints and validates against appropriate contracts."""
+
+    # Operational endpoints that are intentionally not part of the OpenAPI contract
+    # These are internal/operational endpoints for debugging, monitoring, etc.
+    EXCLUDED_PATHS = {
+        "/trace/status",
+        "/trace/stats",
+        "/trace/info",
+        "/trace/list",
+        "/trace/search",
+    }
+    EXCLUDED_PATH_PREFIXES = [
+        "/trace/",  # Individual trace lookups like /trace/{trace_id}
+    ]
 
     def __init__(
         self, registry_spec_path: str, agent_spec_path: str, source_paths: list[str]
@@ -41,11 +54,28 @@ class DualContractEndpointDetector:
             self.agent_spec_path, "Agent"
         )
 
+    def is_excluded_path(self, path: str) -> bool:
+        """Check if path is an excluded operational endpoint."""
+        if path in self.EXCLUDED_PATHS:
+            return True
+        for prefix in self.EXCLUDED_PATH_PREFIXES:
+            if path.startswith(prefix) and path != prefix.rstrip("/"):
+                return True
+        return False
+
+    @staticmethod
+    def normalize_path(path: str) -> str:
+        """Normalize path parameters from framework-specific to OpenAPI format.
+
+        Converts Gin-style :param to OpenAPI-style {param}.
+        """
+        return re.sub(r":([a-zA-Z_][a-zA-Z0-9_]*)", r"{\1}", path)
+
     def _load_openapi_endpoints(
         self, spec_path: Path, spec_name: str
     ) -> set[tuple[str, str]]:
         """Load endpoints from OpenAPI specification."""
-        endpoints = set()
+        endpoints: set[tuple[str, str]] = set()
 
         if not spec_path.exists():
             print(f"Warning: {spec_name} OpenAPI spec not found: {spec_path}")
@@ -93,7 +123,7 @@ class DualContractEndpointDetector:
                 for pattern in patterns:
                     for match in re.finditer(pattern, content):
                         method = match.group("method")
-                        path = match.group("path")
+                        path = self.normalize_path(match.group("path"))
                         endpoints.add((method, path))
                         print(f"Found Go endpoint: {method} {path} in {go_file}")
 
@@ -169,7 +199,9 @@ class DualContractEndpointDetector:
                     for pattern in patterns:
                         for match in re.finditer(pattern, content):
                             method = match.group("method")
-                            path = match.group("path")
+                            path = self.normalize_path(match.group("path"))
+                            if self.is_excluded_path(path):
+                                continue  # Skip operational endpoints
                             registry_endpoints.add((method, path))
                             print(
                                 f"Found Registry endpoint: {method} {path} in {go_file}"

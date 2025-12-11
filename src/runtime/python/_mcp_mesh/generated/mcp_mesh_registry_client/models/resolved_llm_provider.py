@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -26,7 +26,7 @@ from typing_extensions import Self
 
 class ResolvedLLMProvider(BaseModel):
     """
-    Resolved LLM provider information for mesh delegation. Contains all necessary data to create a proxy and delegate LLM calls to this provider. 🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature). 
+    Resolved LLM provider information for mesh delegation. Contains all necessary data to create a proxy and delegate LLM calls to this provider. 🤖 AI NOTE: This enables LLM mesh delegation (v0.6.1 feature).
     """ # noqa: E501
     name: Annotated[str, Field(min_length=1, strict=True)] = Field(description="Function name of the LLM provider tool")
     endpoint: StrictStr = Field(description="Provider agent endpoint for MCP protocol calls")
@@ -108,5 +108,3 @@ class ResolvedLLMProvider(BaseModel):
             "kwargs": obj.get("kwargs")
         })
         return _obj
-
-

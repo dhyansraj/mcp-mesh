@@ -155,6 +155,7 @@ jobs:
           # Check registry code (should be clean)
           python3 tools/detection/detect_endpoints.py \
             api/mcp-mesh-registry.openapi.yaml \
+            api/mcp-mesh-agent.openapi.yaml \
             src/core/registry
 
           echo "✅ Registry endpoints validation passed"
@@ -164,6 +165,7 @@ jobs:
           echo "📊 Generating endpoint detection report..."
           python3 tools/detection/detect_endpoints.py \
             api/mcp-mesh-registry.openapi.yaml \
+            api/mcp-mesh-agent.openapi.yaml \
             src > endpoint_report.txt || true
 
           echo "## Endpoint Detection Report" >> $GITHUB_STEP_SUMMARY
@@ -195,8 +197,12 @@ jobs:
           # Go dependencies
           go mod download
 
+          # Code generation tools
+          go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+          npm install -g @openapitools/openapi-generator-cli
+
           # Python dependencies
-          pip install -r src/runtime/python/requirements.txt
+          pip install -e src/runtime/python
           pip install openapi-spec-validator jsonschema pyyaml
 
       - name: Regenerate code (ensure consistency)
@@ -212,7 +218,7 @@ jobs:
       - name: Build Go CLI
         run: |
           echo "🔨 Building Go CLI..."
-          go build -o bin/mcp-mesh-dev ./cmd/mcp-mesh-dev
+          go build -o bin/meshctl ./cmd/meshctl
           echo "✅ Go CLI built successfully"
 
       - name: Test Python generated client
@@ -221,7 +227,7 @@ jobs:
           cd src/runtime/python
           python3 -c "
           try:
-              from src.mcp_mesh.registry_client_generated.mcp_mesh_registry_client import AgentsApi, HealthApi
+              from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
               print('✅ Generated Python client imports successfully')
           except ImportError as e:
               print(f'❌ Generated Python client import failed: {e}')

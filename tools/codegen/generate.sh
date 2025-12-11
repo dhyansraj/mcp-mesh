@@ -265,7 +265,30 @@ EOF
     done
 
     log_info "Applying ${#patterns[@]} import path fixes in single pass..."
-    find "$output_dir" -name "*.py" -type f -exec sed -i "$sed_script" {} \;
+    # Use -i '' for macOS compatibility (BSD sed requires extension argument)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        find "$output_dir" -name "*.py" -type f -exec sed -i '' "$sed_script" {} \;
+    else
+        find "$output_dir" -name "*.py" -type f -exec sed -i "$sed_script" {} \;
+    fi
+
+    # Strip trailing whitespace and ensure files end with single newline (pre-commit compatibility)
+    # Note: Generated files are excluded from black/isort in pre-commit config
+    log_info "Normalizing whitespace in generated files..."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # Strip trailing whitespace from lines
+        find "$output_dir" -name "*.py" -type f -exec sed -i '' 's/[[:space:]]*$//' {} \;
+        # Ensure file ends with exactly one newline
+        for f in $(find "$output_dir" -name "*.py" -type f); do
+            # Remove trailing newlines and add exactly one
+            printf '%s\n' "$(cat "$f")" > "$f"
+        done
+    else
+        find "$output_dir" -name "*.py" -type f -exec sed -i 's/[[:space:]]*$//' {} \;
+        for f in $(find "$output_dir" -name "*.py" -type f); do
+            printf '%s\n' "$(cat "$f")" > "$f"
+        done
+    fi
 
     log_success "Python registry client code generated: $output_dir"
 }

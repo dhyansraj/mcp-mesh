@@ -42,9 +42,9 @@ kubectl get pods -A | grep mcp-mesh
 echo -e "\n6. Recent Events:"
 kubectl get events -A --sort-by='.lastTimestamp' | grep -E "(mcp-mesh|Error|Failed)" | tail -20
 
-# Check helm repository
-echo -e "\n7. Helm Repositories:"
-helm repo list | grep mcp-mesh
+# Check OCI registry access (MCP Mesh uses ghcr.io OCI registry)
+echo -e "\n7. OCI Registry Access:"
+helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry --version 0.7.1 2>&1 | head -5
 
 # Check for common issues
 echo -e "\n8. Common Issues Check:"
@@ -63,22 +63,20 @@ kubectl get configmap -A -o json | jq '.items[] | select(.metadata.name | contai
 **Symptoms:**
 
 ```
-Error: failed to download "mcp-mesh/mcp-mesh-registry"
+Error: failed to download "oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry"
 ```
 
-**Cause:** Repository not added or outdated
+**Cause:** Chart version doesn't exist or network issues
 
 **Solution:**
 
 ```bash
-# Add repository
-helm repo add mcp-mesh https://charts.mcp-mesh.io
+# Verify chart exists (OCI charts don't require helm repo add)
+helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry --version 0.7.1
 
-# Update repositories
-helm repo update
-
-# Verify repository
-helm search repo mcp-mesh/
+# List available versions
+helm search repo --regexp 'ghcr.io/dhyansraj/mcp-mesh' 2>/dev/null || \
+  echo "Use: skopeo list-tags docker://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry"
 
 # If using local charts
 helm install my-release ./path/to/chart
@@ -98,7 +96,8 @@ Error: namespaces "mcp-mesh" already exists
 
 ```bash
 # Option 1: Remove --create-namespace flag
-helm install my-release mcp-mesh/mcp-mesh-platform \
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --namespace mcp-mesh
 
 # Option 2: Use existing namespace
@@ -106,7 +105,8 @@ kubectl label namespace mcp-mesh managed-by=helm
 
 # Option 3: Delete and recreate
 kubectl delete namespace mcp-mesh
-helm install my-release mcp-mesh/mcp-mesh-platform \
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --create-namespace
 ```
@@ -128,14 +128,14 @@ Error: INSTALLATION FAILED: cannot re-use a name that is still in use
 helm list -A | grep my-release
 
 # Option 1: Upgrade existing release
-helm upgrade my-release mcp-mesh/mcp-mesh-platform
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
 
 # Option 2: Uninstall and reinstall
 helm uninstall my-release -n mcp-mesh
-helm install my-release mcp-mesh/mcp-mesh-platform
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
 
 # Option 3: Use different name
-helm install my-release-2 mcp-mesh/mcp-mesh-platform
+helm install my-release-2 oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
 ```
 
 ### 📦 Dependency Issues
@@ -210,12 +210,14 @@ dependencies:
 
 ```bash
 # Debug values processing
-helm template my-release mcp-mesh/mcp-mesh-platform \
+helm template my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   -f values.yaml \
   --debug
 
 # Check values precedence
-helm install my-release mcp-mesh/mcp-mesh-platform \
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --dry-run \
   -f values-base.yaml \
   -f values-prod.yaml \
@@ -296,7 +298,8 @@ kubectl create secret docker-registry regcred \
   -n mcp-mesh
 
 # Update values
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --set imagePullSecrets[0].name=regcred
 ```
 
@@ -310,7 +313,8 @@ kubectl logs <pod-name> -n mcp-mesh -c <container-name>
 kubectl get pod <pod-name> -n mcp-mesh -o yaml | grep -A10 livenessProbe
 
 # Increase initial delay
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --set livenessProbe.initialDelaySeconds=60
 ```
 
@@ -389,17 +393,20 @@ kubectl rollout status deployment/mcp-mesh-registry -n mcp-mesh --watch
 
 ```bash
 # Increase timeout
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --timeout 15m \
   --wait
 
 # Use atomic deployments
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --atomic \
   --cleanup-on-fail
 
 # Optimize resource requests
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --set resources.requests.cpu=100m \
   --set resources.requests.memory=128Mi
 ```
@@ -510,7 +517,8 @@ kubectl delete secret sh.helm.release.v1.my-release.v2 -n mcp-mesh
 helm rollback my-release 1 -n mcp-mesh
 
 # Force upgrade
-helm upgrade my-release mcp-mesh/mcp-mesh-platform \
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   --force \
   --reset-values
 ```
@@ -526,7 +534,7 @@ helm upgrade my-release mcp-mesh/mcp-mesh-platform \
 
 ```bash
 # Check for breaking changes
-helm diff upgrade my-release mcp-mesh/mcp-mesh-platform
+helm diff upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
 
 # Backup current state
 helm get values my-release -n mcp-mesh > backup-values.yaml
@@ -535,7 +543,8 @@ kubectl get all -n mcp-mesh -o yaml > backup-resources.yaml
 # Uninstall and reinstall if needed
 helm uninstall my-release -n mcp-mesh
 kubectl delete pvc -n mcp-mesh --all  # If keeping data
-helm install my-release mcp-mesh/mcp-mesh-platform \
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.1 \
   -f backup-values.yaml
 ```
 
@@ -688,7 +697,6 @@ kubectl exec -it mcp-mesh-registry-0 -n mcp-mesh -- \
 If you're still experiencing issues:
 
 1. **Check Documentation**
-
    - [Helm Deployment Guide](../06-helm-deployment.md)
    - [Helm Best Practices](./05-best-practices.md)
 

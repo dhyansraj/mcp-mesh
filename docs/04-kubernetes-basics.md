@@ -23,16 +23,15 @@ kubectl get nodes
 
 ### 2. Deploy with Helm
 
-```bash
-# Add MCP Mesh Helm repo
-helm repo add mcp-mesh https://dhyansraj.github.io/mcp-mesh/helm
-helm repo update
+MCP Mesh charts are hosted on GitHub Container Registry (ghcr.io) as OCI artifacts.
 
+```bash
 # Create namespace
 kubectl create namespace mcp-mesh
 
-# Install registry
-helm install mcp-registry mcp-mesh/mcp-mesh-registry \
+# Install registry (no "helm repo add" needed with OCI)
+helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
+  --version 0.7.1 \
   --namespace mcp-mesh
 
 # Wait for registry
@@ -40,12 +39,14 @@ kubectl wait --for=condition=available deployment/mcp-registry-mcp-mesh-registry
   -n mcp-mesh --timeout=120s
 
 # Install agents
-helm install hello-world mcp-mesh/mcp-mesh-agent \
+helm install hello-world oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.name=hello-world \
   --set agent.script=hello_world.py
 
-helm install system-agent mcp-mesh/mcp-mesh-agent \
+helm install system-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.name=system-agent \
   --set agent.script=system_agent.py
@@ -106,7 +107,8 @@ resources:
 ```
 
 ```bash
-helm install my-agent mcp-mesh/mcp-mesh-agent \
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   -f my-agent-values.yaml
 ```
@@ -118,7 +120,8 @@ helm install my-agent mcp-mesh/mcp-mesh-agent \
 helm list -n mcp-mesh
 
 # Upgrade a release
-helm upgrade hello-world mcp-mesh/mcp-mesh-agent \
+helm upgrade hello-world oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.1 \
   --namespace mcp-mesh \
   --set agent.replicas=3
 

@@ -3,7 +3,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
@@ -60,7 +60,7 @@ class AgentsApi:
     ) -> None:
         """Fast agent health check
 
-        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry 
+        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry
 
         :param agent_id: Agent identifier from registration (required)
         :type agent_id: str
@@ -130,7 +130,7 @@ class AgentsApi:
     ) -> ApiResponse[None]:
         """Fast agent health check
 
-        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry 
+        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry
 
         :param agent_id: Agent identifier from registration (required)
         :type agent_id: str
@@ -200,7 +200,7 @@ class AgentsApi:
     ) -> RESTResponseType:
         """Fast agent health check
 
-        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry 
+        Lightweight health check for agent status without full registration payload. Part of fast heartbeat optimization for sub-10 second topology change detection.  🤖 AI CRITICAL CONTRACT: - Returns HTTP status code only (no response body) - 200 OK: No topology changes, keep sending HEAD requests - 202 Accepted: Topology changed, please send full POST heartbeat - 410 Gone: Unknown agent, please register with POST heartbeat - 503 Service Unavailable: Registry error, back off and retry
 
         :param agent_id: Agent identifier from registration (required)
         :type agent_id: str
@@ -321,7 +321,7 @@ class AgentsApi:
     ) -> AgentsListResponse:
         """List all registered agents
 
-        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution. 
+        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -384,7 +384,7 @@ class AgentsApi:
     ) -> ApiResponse[AgentsListResponse]:
         """List all registered agents
 
-        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution. 
+        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -447,7 +447,7 @@ class AgentsApi:
     ) -> RESTResponseType:
         """List all registered agents
 
-        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution. 
+        Get list of all currently registered agents.  🤖 AI NOTE: Used by CLI list command and dependency resolution.
 
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
@@ -567,7 +567,7 @@ class AgentsApi:
     ) -> MeshRegistrationResponse:
         """Agent registration and heartbeat
 
-        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
+        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available
 
         :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
         :type mesh_agent_registration: MeshAgentRegistration
@@ -635,7 +635,7 @@ class AgentsApi:
     ) -> ApiResponse[MeshRegistrationResponse]:
         """Agent registration and heartbeat
 
-        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
+        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available
 
         :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
         :type mesh_agent_registration: MeshAgentRegistration
@@ -703,7 +703,7 @@ class AgentsApi:
     ) -> RESTResponseType:
         """Agent registration and heartbeat
 
-        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available 
+        Register agent and send periodic heartbeat to maintain registration and get dependency updates.  🤖 AI CRITICAL CONTRACT: - Serves as both initial registration and periodic heartbeat - Enables late registration when registry comes online after agent startup - Response includes dependencies_resolved for dependency injection updates - Agents work standalone when registry is down, register via heartbeat when available
 
         :param mesh_agent_registration: Agent heartbeat data (same format as registration) (required)
         :type mesh_agent_registration: MeshAgentRegistration
@@ -843,7 +843,7 @@ class AgentsApi:
     ) -> None:
         """Graceful agent unregistration
 
-        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request 
+        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request
 
         :param agent_id: Agent identifier to unregister (required)
         :type agent_id: str
@@ -912,7 +912,7 @@ class AgentsApi:
     ) -> ApiResponse[None]:
         """Graceful agent unregistration
 
-        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request 
+        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request
 
         :param agent_id: Agent identifier to unregister (required)
         :type agent_id: str
@@ -981,7 +981,7 @@ class AgentsApi:
     ) -> RESTResponseType:
         """Graceful agent unregistration
 
-        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request 
+        Gracefully unregister an agent from the registry. Creates an \"unregister\" event for topology change detection.  🤖 AI CRITICAL CONTRACT: - Used during agent graceful shutdown (SIGTERM/SIGINT) - Creates registry event for other agents to detect topology change - Immediate removal from registry (no timeout needed) - Other agents will get 202 response on next HEAD request
 
         :param agent_id: Agent identifier to unregister (required)
         :type agent_id: str
@@ -1086,5 +1086,3 @@ class AgentsApi:
             _host=_host,
             _request_auth=_request_auth
         )
-
-

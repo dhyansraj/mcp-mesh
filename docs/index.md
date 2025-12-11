@@ -28,8 +28,8 @@ app = FastMCP("My Service")
 
 @app.tool()
 @mesh.tool(capability="greeting", dependencies=["date_service"])
-def greet(date_service=None):
-    return f"Hello! {date_service()}"
+async def greet(date_service: mesh.McpMeshAgent = None):
+    return f"Hello! {await date_service()}"
 
 @mesh.agent(name="my-service", auto_run=True)
 class MyAgent:

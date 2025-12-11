@@ -156,7 +156,7 @@ def process_data():
 
 ### Enhanced Tag Matching with +/- Operators
 
-> **New in v0.4+**: Smart tag matching with preference and exclusion operators
+Smart tag matching with preference and exclusion operators:
 
 MCP Mesh supports enhanced tag matching with `+` (preferred) and `-` (excluded) operators for intelligent service selection:
 
@@ -199,7 +199,7 @@ def claude_experimental(): return "Experimental Claude features"
         ]
     }]
 )
-def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
+async def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
     """
     Smart chat that:
     - Requires Claude models
@@ -210,7 +210,7 @@ def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
     if not llm_service:
         return "No suitable LLM service available"
 
-    return f"Response from: {llm_service()}"
+    return f"Response from: {await llm_service()}"
 ```
 
 #### Enhanced Matching Behavior
@@ -246,9 +246,9 @@ def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
         ]
     }]
 )
-def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
+async def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
     """Cost-conscious analysis that avoids premium pricing."""
-    return llm_service() if llm_service else "Budget service unavailable"
+    return await llm_service() if llm_service else "Budget service unavailable"
 
 @app.tool()
 @mesh.tool(
@@ -264,9 +264,9 @@ def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
         ]
     }]
 )
-def production_workflow(database_service: mesh.McpMeshAgent = None):
+async def production_workflow(database_service: mesh.McpMeshAgent = None):
     """Production workflow with strict service requirements."""
-    return database_service({"query": "SELECT * FROM users"}) if database_service else None
+    return await database_service(query="SELECT * FROM users") if database_service else None
 ```
 
 #### Priority Scoring System
@@ -342,9 +342,9 @@ def create_report(
     }
 ```
 
-## Advanced @mesh.tool Configuration (v0.3+)
+## Advanced @mesh.tool Configuration
 
-> **New in v0.3+**: Enhanced proxy auto-configuration through decorator kwargs
+Enhanced proxy auto-configuration through decorator kwargs:
 
 The `@mesh.tool` decorator now supports advanced configuration kwargs that automatically configure enhanced MCP proxies with timeouts, retries, authentication, streaming, and session management.
 
@@ -672,8 +672,8 @@ app = FastMCP("Weather Service")
     version="1.2.0",
     dependencies=["location_service"]
 )
-def get_current_weather(location_service: mesh.McpMeshAgent = None):
-    location = location_service() if location_service else "Unknown"
+async def get_current_weather(location_service: mesh.McpMeshAgent = None):
+    location = await location_service() if location_service else "Unknown"
     return f"Current weather in {location}: 22°C, Sunny"
 
 @app.prompt()
@@ -682,8 +682,8 @@ def get_current_weather(location_service: mesh.McpMeshAgent = None):
     tags=["weather", "ai"],
     dependencies=["current_weather"]
 )
-def weather_analysis_prompt(current_weather: mesh.McpMeshAgent = None):
-    weather = current_weather() if current_weather else "No data"
+async def weather_analysis_prompt(current_weather: mesh.McpMeshAgent = None):
+    weather = await current_weather() if current_weather else "No data"
     return f"Analyze this weather: {weather}"
 
 @app.resource("weather://config/{city}")
@@ -811,8 +811,8 @@ def connect_database():
     dependencies=["database"],
     tags=["data", "layer"]
 )
-def access_data(database: mesh.McpMeshAgent = None):
-    db = database() if database else None
+async def access_data(database: mesh.McpMeshAgent = None):
+    db = await database() if database else None
     return f"data_from_{db}"
 
 # Top layer
@@ -828,22 +828,22 @@ def access_data(database: mesh.McpMeshAgent = None):
     ],
     tags=["business", "api"]
 )
-def process_business_logic(
+async def process_business_logic(
     data_access: mesh.McpMeshAgent = None,
     cache: mesh.McpMeshAgent = None
 ):
-    data = data_access() if data_access else "no_data"
-    cached = cache() if cache else "no_cache"
+    data = await data_access() if data_access else "no_data"
+    cached = await cache() if cache else "no_cache"
     return f"processed_{data}_with_{cached}"
 ```
 
 ## Dependency Injection Types
 
-MCP Mesh provides two different proxy types for dependency injection, each designed for specific use cases:
+MCP Mesh provides `mesh.McpMeshAgent` as the proxy type for all dependency injection. This type handles both simple tool calls and advanced MCP protocol operations.
 
-### McpMeshAgent - Simple Tool Calls
+### McpMeshAgent - The Universal Proxy
 
-Use `mesh.McpMeshAgent` when you need **simple tool execution** - calling remote functions with arguments:
+Use `mesh.McpMeshAgent` for all injected dependencies:
 
 ```python
 @app.tool()
@@ -851,18 +851,20 @@ Use `mesh.McpMeshAgent` when you need **simple tool execution** - calling remote
     capability="processor",
     dependencies=["service1", "service2"]
 )
-def process_data(
-    service1: mesh.McpMeshAgent = None,  # For simple tool calls
-    service2: mesh.McpMeshAgent = None   # Type-safe, IDE support
-):
+async def process_data(
+    service1: mesh.McpMeshAgent = None,
+    service2: mesh.McpMeshAgent = None,
+) -> dict:
+    """Process data using injected dependencies."""
+
     # Direct function call - proxy knows which remote function to invoke
-    result1 = service1() if service1 else {}
+    result1 = await service1() if service1 else {}
 
     # With arguments
-    result2 = service1({"format": "JSON"}) if service1 else {}
+    result2 = await service1(format="JSON") if service1 else {}
 
-    # Explicit invoke (same as call)
-    result3 = service2.invoke({"param": "value"}) if service2 else {}
+    # Keyword arguments
+    result3 = await service2(param="value", other="data") if service2 else {}
 
     return {"result1": result1, "result2": result2, "result3": result3}
 ```
@@ -870,215 +872,48 @@ def process_data(
 **Key Features of McpMeshAgent:**
 
 - ✅ Function-to-function binding (no need to specify function names)
-- ✅ Simple `()` and `.invoke()` methods
-- ✅ Optimized for basic tool execution
-- ✅ Lightweight proxy with minimal overhead
+- ✅ Simple async call syntax: `await service(args)`
+- ✅ Transparent MCP protocol communication
+- ✅ Automatic retry and error handling
+- ✅ Type-safe with IDE support
 
-### McpAgent - Full MCP Protocol Access
-
-Use `mesh.McpAgent` when you need **advanced MCP capabilities** like listing tools, managing resources, prompts, streaming, or session management:
-
-```python
-@app.tool()
-@mesh.tool(
-    capability="advanced_processor",
-    dependencies=["file_service", "api_service"]
-)
-async def advanced_processing(
-    file_service: mesh.McpAgent = None,     # Full MCP protocol access
-    api_service: mesh.McpAgent = None       # Advanced capabilities
-) -> dict:
-    """Advanced processing with full MCP protocol support."""
-
-    if not file_service or not api_service:
-        return {"error": "Services unavailable"}
-
-    # === VANILLA MCP PROTOCOL METHODS (100% compatible) ===
-
-    # Discovery - List available capabilities
-    tools = await file_service.list_tools()
-    resources = await file_service.list_resources()
-    prompts = await file_service.list_prompts()
-
-    # Resource Management
-    config = await file_service.read_resource("file://config.json")
-
-    # Prompt Templates
-    analysis_prompt = await file_service.get_prompt(
-        "data_analysis",
-        {"dataset": "sales", "period": "Q4"}
-    )
-
-    # === BACKWARD COMPATIBILITY ===
-
-    # Simple calls (McpMeshAgent compatibility)
-    basic_result = file_service({"action": "scan"})
-    api_result = api_service.invoke({"method": "GET", "endpoint": "/status"})
-
-    # === STREAMING CAPABILITIES (BREAKTHROUGH FEATURE) ===
-
-    # Stream large file processing
-    processed_chunks = []
-    async for chunk in file_service.call_tool_streaming(
-        "process_large_file",
-        {"file": "massive_dataset.csv", "batch_size": 1000}
-    ):
-        processed_chunks.append(chunk)
-        # Real-time processing progress
-        if chunk.get("type") == "progress":
-            print(f"Progress: {chunk['percent']}%")
-
-    # === EXPLICIT SESSION MANAGEMENT (Phase 6) ===
-
-    # Create persistent session for stateful operations
-    session_id = await api_service.create_session()
-
-    # All calls with same session_id route to same agent instance
-    login_result = await api_service.call_with_session(
-        session_id,
-        tool="authenticate",
-        credentials={"user": "admin"}
-    )
-
-    user_data = await api_service.call_with_session(
-        session_id,
-        tool="get_user_profile"
-        # Session maintains authentication state
-    )
-
-    # Cleanup session when done
-    await api_service.close_session(session_id)
-
-    return {
-        "discovered": {
-            "tools": len(tools),
-            "resources": len(resources),
-            "prompts": len(prompts)
-        },
-        "config": config,
-        "basic_results": [basic_result, api_result],
-        "streaming_chunks": len(processed_chunks),
-        "session_results": [login_result, user_data],
-        "analysis_template": analysis_prompt
-    }
-```
-
-**Key Features of McpAgent:**
-
-- ✅ **Complete MCP Protocol**: `list_tools()`, `list_resources()`, `read_resource()`, `list_prompts()`, `get_prompt()`
-- ✅ **Streaming Support**: `call_tool_streaming()` for real-time data processing
-- ✅ **Session Management**: `create_session()`, `call_with_session()`, `close_session()`
-- ✅ **Backward Compatibility**: Supports `()` and `.invoke()` from McpMeshAgent
-- ✅ **Discovery**: Dynamic capability exploration at runtime
-
-### When to Use Which Type?
-
-| Use Case                | Recommended Type | Reason                                                |
-| ----------------------- | ---------------- | ----------------------------------------------------- |
-| Simple tool calls       | `McpMeshAgent`   | Lightweight, optimized for function-to-function calls |
-| Resource management     | `McpAgent`       | Need `read_resource()`, `list_resources()`            |
-| Dynamic discovery       | `McpAgent`       | Need `list_tools()`, `list_prompts()`                 |
-| Streaming operations    | `McpAgent`       | Need `call_tool_streaming()`                          |
-| Session-based workflows | `McpAgent`       | Need session management methods                       |
-| Multi-step protocols    | `McpAgent`       | Need full MCP protocol access                         |
-| Performance-critical    | `McpMeshAgent`   | Minimal overhead for simple calls                     |
-
-### Proxy Selection Example
-
-```python
-@app.tool()
-@mesh.tool(
-    capability="hybrid_processor",
-    dependencies=[
-        "simple_math",      # For basic calculations
-        "file_manager",     # For advanced file operations
-        "stream_processor"  # For streaming data
-    ]
-)
-async def hybrid_processing(
-    # Simple tool calls - use McpMeshAgent
-    simple_math: mesh.McpMeshAgent = None,
-
-    # Advanced capabilities - use McpAgent
-    file_manager: mesh.McpAgent = None,
-    stream_processor: mesh.McpAgent = None
-) -> dict:
-    # Simple calculation
-    result = simple_math({"a": 10, "b": 20, "op": "add"}) if simple_math else 0
-
-    # Advanced file operations
-    if file_manager:
-        files = await file_manager.list_resources()
-        config = await file_manager.read_resource("file://settings.json")
-
-    # Streaming processing
-    chunks = []
-    if stream_processor:
-        async for chunk in stream_processor.call_tool_streaming("process", {"data": result}):
-            chunks.append(chunk)
-
-    return {
-        "calculation": result,
-        "files_found": len(files) if file_manager else 0,
-        "stream_chunks": len(chunks)
-    }
-```
-
-### Mixed Type Dependencies
-
-You can mix both types in the same function based on your specific needs:
+### Example: Multi-Dependency Pipeline
 
 ```python
 @app.tool()
 @mesh.tool(
     capability="data_pipeline",
-    dependencies=[
-        "validator",        # Simple validation calls
-        "transformer",      # Simple data transformation
-        "storage_service",  # Advanced resource management
-        "notification_api"  # Advanced streaming notifications
-    ]
+    dependencies=["validator", "transformer", "storage"],
 )
-async def process_data_pipeline(
+async def process_pipeline(
     data: dict,
-    # Simple operations
     validator: mesh.McpMeshAgent = None,
     transformer: mesh.McpMeshAgent = None,
-
-    # Advanced operations
-    storage_service: mesh.McpAgent = None,
-    notification_api: mesh.McpAgent = None
+    storage: mesh.McpMeshAgent = None,
 ) -> dict:
-    # Step 1: Simple validation
-    is_valid = validator({"data": data}) if validator else True
-    if not is_valid:
+    """Multi-step data processing pipeline."""
+
+    # Step 1: Validate
+    validation = await validator(data=data) if validator else {"valid": True}
+    if not validation.get("valid"):
         return {"error": "Validation failed"}
 
-    # Step 2: Simple transformation
-    transformed = transformer({"data": data, "format": "normalized"}) if transformer else data
+    # Step 2: Transform
+    transformed = await transformer(
+        data=data,
+        format="normalized",
+    ) if transformer else data
 
-    # Step 3: Advanced storage with resource discovery
-    if storage_service:
-        # Discover available storage options
-        resources = await storage_service.list_resources()
+    # Step 3: Store
+    result = await storage(
+        data=transformed,
+        collection="processed",
+    ) if storage else {"stored": False}
 
-        # Use appropriate storage method
-        if "database://primary" in [r["uri"] for r in resources]:
-            storage_result = await storage_service.call_with_session(
-                session_id="pipeline-session",
-                tool="store_data",
-                data=transformed
-            )
-
-    # Step 4: Stream real-time notifications
-    if notification_api:
-        async for notification in notification_api.call_tool_streaming(
-            "send_progress",
-            {"pipeline_id": "data-pipeline", "status": "completed"}
-        ):
-            print(f"Notification: {notification}")
-
-    return {"status": "completed", "records_processed": len(transformed)}
+    return {
+        "status": "completed",
+        "stored": result.get("stored", False),
+    }
 ```
 
 ## @mesh.llm - LLM Agent Injection
@@ -1112,14 +947,14 @@ The `@mesh.llm` decorator enables LLM integration as first-class mesh capabiliti
 @mesh.tool(           # ← Mesh tool decorator THIRD
     capability="chat"
 )
-def chat_function(message: str, llm: mesh.MeshLlmAgent = None):
-    return llm(message)
+async def chat_function(message: str, llm: mesh.MeshLlmAgent = None):
+    return await llm(message)
 
 # ❌ WRONG ORDER
 @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")  # Wrong
 @app.tool()                                                        # Wrong
 @mesh.tool(capability="chat")                                      # Wrong
-def broken_function(message: str, llm=None):
+async def broken_function(message: str, llm=None):
     pass
 ```
 
@@ -1672,12 +1507,12 @@ curl -s http://localhost:8000/agents | \
     capability="safe_processor",
     dependencies=["external_service"]
 )
-def process_safely(external_service: mesh.McpMeshAgent = None):
+async def process_safely(external_service: mesh.McpMeshAgent = None):
     if external_service is None:
         return {"status": "degraded", "reason": "external_service_unavailable"}
 
     try:
-        result = external_service()
+        result = await external_service()
         return {"status": "success", "data": result}
     except Exception as e:
         return {"status": "error", "error": str(e)}

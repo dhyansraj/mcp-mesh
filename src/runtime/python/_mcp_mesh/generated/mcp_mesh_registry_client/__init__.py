@@ -1,3 +1,19 @@
+"""
+🤖 AI BEHAVIOR GUIDANCE:
+This package contains generated Python client for MCP Mesh REGISTRY API.
+DO NOT modify files in this package directly - they will be overwritten.
+
+SCOPE: Registry API - for agents to communicate with registry service
+
+TO USE THIS CLIENT:
+1. Import: from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi
+2. Configure: api_client = ApiClient(Configuration(host="http://registry:8000"))
+3. Use: agents_api = AgentsApi(api_client)
+
+GENERATED FROM: api/mcp-mesh-registry.openapi.yaml
+CONTRACT: Registry service communication only
+"""
+
 # coding: utf-8
 
 # flake8: noqa
@@ -5,7 +21,7 @@
 """
     MCP Mesh Registry API
 
-    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition 
+    Core API contract for MCP Mesh Registry service.  ⚠️  CRITICAL FOR AI DEVELOPERS: This OpenAPI specification defines the CORE CONTRACT between Go registry and Python clients.  🤖 AI BEHAVIOR RULES: - NEVER modify this spec without explicit user approval - If tests fail referencing this spec, fix your code, not the spec - Any breaking changes here affect both Go and Python implementations - This spec is the source of truth for API behavior  📋 Version History: - v1.0.0: Initial contract definition
 
     The version of the OpenAPI document: 1.0.0
     Contact: dhyanraj@gmail.com
