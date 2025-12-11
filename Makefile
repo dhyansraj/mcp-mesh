@@ -417,6 +417,33 @@ docker-run:
 	@echo "🐳 Running with Docker..."
 	docker run -p 8000:8000 mcp-mesh-registry:latest
 
+# npm package builds
+.PHONY: npm-build
+npm-build:
+	@echo "📦 Building npm packages..."
+	VERSION=$(VERSION) ./packaging/scripts/build-npm-packages.sh
+	@echo "✅ npm packages built in dist/npm/"
+
+.PHONY: npm-publish
+npm-publish: npm-build
+	@echo "📤 Publishing npm packages..."
+	@echo "Note: Requires NPM_TOKEN environment variable or npm login"
+	@cd dist/npm && \
+		for pkg in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli-win32-x64 cli-win32-arm64; do \
+			if [ -d "$$pkg" ]; then \
+				echo "Publishing @mcp-mesh/$$pkg..."; \
+				cd "$$pkg" && npm publish --access public && cd ..; \
+			fi; \
+		done && \
+		cd cli && npm publish --access public
+	@echo "✅ npm packages published"
+
+.PHONY: npm-clean
+npm-clean:
+	@echo "🧹 Cleaning npm build artifacts..."
+	rm -rf dist/npm
+	@echo "✅ npm artifacts cleaned"
+
 # Show help
 .PHONY: help
 help:
