@@ -7,34 +7,37 @@ const child_process = require("child_process");
 
 const VERSION = require("./package.json").version;
 
-// Platform mappings matching Go's GOOS/GOARCH
+// Platform mappings matching Go's GOOS/GOARCH (Linux and macOS only)
 const knownPlatforms = {
   "darwin arm64": "@mcpmesh/cli-darwin-arm64",
   "darwin x64": "@mcpmesh/cli-darwin-x64",
   "linux arm64": "@mcpmesh/cli-linux-arm64",
   "linux x64": "@mcpmesh/cli-linux-x64",
-  "win32 arm64": "@mcpmesh/cli-win32-arm64",
-  "win32 x64": "@mcpmesh/cli-win32-x64",
 };
+
+// Binaries to install
+const BINARIES = [
+  { name: "meshctl", required: true },
+  { name: "mcp-mesh-registry", required: true },
+];
 
 function getPlatformPackage() {
   const platformKey = `${process.platform} ${os.arch()}`;
   const pkg = knownPlatforms[platformKey];
 
   if (!pkg) {
-    console.error(`[meshctl] Unsupported platform: ${platformKey}`);
-    console.error(`[meshctl] Supported platforms: ${Object.keys(knownPlatforms).join(", ")}`);
-    console.error(`[meshctl] You can build from source: https://github.com/dhyansraj/mcp-mesh`);
+    console.error(`[mcp-mesh] Unsupported platform: ${platformKey}`);
+    console.error(`[mcp-mesh] Supported platforms: ${Object.keys(knownPlatforms).join(", ")}`);
+    console.error(`[mcp-mesh] You can build from source: https://github.com/dhyansraj/mcp-mesh`);
     process.exit(1);
   }
 
-  return {
-    pkg,
-    subpath: process.platform === "win32" ? "bin/meshctl.exe" : "bin/meshctl",
-  };
+  return pkg;
 }
 
-function getBinaryPath(pkg, subpath) {
+function getBinaryPath(pkg, binaryName) {
+  const subpath = `bin/${binaryName}`;
+
   // Try to find in node_modules (from optionalDependencies)
   const possiblePaths = [
     // Standard node_modules location
@@ -59,11 +62,11 @@ function getBinaryPath(pkg, subpath) {
   }
 }
 
-function downloadFromNpm(pkg, subpath) {
+function downloadFromNpm(pkg) {
   const installDir = path.join(__dirname, ".npm-install-temp");
 
-  console.error(`[meshctl] Platform package ${pkg} not found in node_modules`);
-  console.error(`[meshctl] Installing ${pkg}@${VERSION}...`);
+  console.error(`[mcp-mesh] Platform package ${pkg} not found in node_modules`);
+  console.error(`[mcp-mesh] Installing ${pkg}@${VERSION}...`);
 
   try {
     // Clean up any previous failed install
@@ -84,16 +87,10 @@ function downloadFromNpm(pkg, subpath) {
       }
     );
 
-    const installedPath = path.join(installDir, "node_modules", pkg, subpath);
-
-    if (!fs.existsSync(installedPath)) {
-      throw new Error(`Binary not found at expected path: ${installedPath}`);
-    }
-
-    return installedPath;
+    return path.join(installDir, "node_modules", pkg);
   } catch (e) {
-    console.error(`[meshctl] Failed to install ${pkg}:`, e.message);
-    console.error(`[meshctl] You can install manually from: https://github.com/dhyansraj/mcp-mesh/releases`);
+    console.error(`[mcp-mesh] Failed to install ${pkg}:`, e.message);
+    console.error(`[mcp-mesh] You can install manually from: https://github.com/dhyansraj/mcp-mesh/releases`);
 
     // Cleanup on error
     if (fs.existsSync(installDir)) {
@@ -132,7 +129,7 @@ function copyBinaryToTarget(sourcePath, targetPath) {
   fs.chmodSync(targetPath, 0o755);
 }
 
-function validateBinary(binPath) {
+function validateBinary(binPath, binaryName) {
   try {
     const result = child_process
       .execFileSync(binPath, ["--version"], {
@@ -142,7 +139,7 @@ function validateBinary(binPath) {
       .toString()
       .trim();
 
-    console.log(`[meshctl] ✓ Installed meshctl ${result}`);
+    console.log(`[mcp-mesh] Installed ${binaryName} ${result}`);
     return true;
   } catch (e) {
     // Version command might not exist, try --help
@@ -151,41 +148,65 @@ function validateBinary(binPath) {
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 10000,
       });
-      console.log(`[meshctl] ✓ Installed meshctl successfully`);
+      console.log(`[mcp-mesh] Installed ${binaryName} successfully`);
       return true;
     } catch (e2) {
-      console.error(`[meshctl] ⚠ Binary validation failed:`, e.message);
+      console.error(`[mcp-mesh] Binary validation failed for ${binaryName}:`, e.message);
       return false;
     }
   }
 }
 
 async function install() {
-  const { pkg, subpath } = getPlatformPackage();
-
-  console.log(`[meshctl] Installing for ${process.platform} ${os.arch()}...`);
-
-  // Check if binary already exists from optionalDependencies
-  let binPath = getBinaryPath(pkg, subpath);
+  const pkg = getPlatformPackage();
   let needsCleanup = false;
+  let pkgDir = null;
 
-  if (!binPath) {
-    binPath = downloadFromNpm(pkg, subpath);
+  console.log(`[mcp-mesh] Installing for ${process.platform} ${os.arch()}...`);
+
+  // Check if any binary exists from optionalDependencies
+  const testBinPath = getBinaryPath(pkg, "meshctl");
+  if (!testBinPath) {
+    // Need to download the package
+    pkgDir = downloadFromNpm(pkg);
     needsCleanup = true;
   }
 
-  // Target path in our package's bin directory
-  const targetBin = path.join(
-    __dirname,
-    "bin",
-    process.platform === "win32" ? "meshctl.exe" : "meshctl"
-  );
+  let installedCount = 0;
 
-  // Copy binary to target location
-  copyBinaryToTarget(binPath, targetBin);
+  for (const binary of BINARIES) {
+    const binaryName = binary.name;
 
-  // Validate the binary works
-  validateBinary(targetBin);
+    // Get source path
+    let sourcePath;
+    if (pkgDir) {
+      sourcePath = path.join(pkgDir, "bin", binaryName);
+    } else {
+      sourcePath = getBinaryPath(pkg, binaryName);
+    }
+
+    // Check if binary exists in package
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      if (binary.required) {
+        console.error(`[mcp-mesh] Required binary ${binaryName} not found`);
+        process.exit(1);
+      } else {
+        console.log(`[mcp-mesh] Optional binary ${binaryName} not available for this platform`);
+        continue;
+      }
+    }
+
+    // Target path in our package's bin directory
+    const targetPath = path.join(__dirname, "bin", binaryName);
+
+    // Copy binary to target location
+    copyBinaryToTarget(sourcePath, targetPath);
+
+    // Validate the binary works
+    if (validateBinary(targetPath, binaryName)) {
+      installedCount++;
+    }
+  }
 
   // Clean up temporary install directory if we created one
   if (needsCleanup) {
@@ -199,12 +220,13 @@ async function install() {
     }
   }
 
-  console.log(`[meshctl] Run 'meshctl --help' to get started`);
-  console.log(`[meshctl] Run 'meshctl man' for comprehensive documentation`);
+  console.log(`[mcp-mesh] Installed ${installedCount} binaries`);
+  console.log(`[mcp-mesh] Run 'meshctl --help' to get started`);
+  console.log(`[mcp-mesh] Run 'mcp-mesh-registry --help' for registry options`);
 }
 
 // Run installation
 install().catch((e) => {
-  console.error("[meshctl] Installation failed:", e.message);
+  console.error("[mcp-mesh] Installation failed:", e.message);
   process.exit(1);
 });

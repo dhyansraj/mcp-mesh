@@ -15,7 +15,8 @@
     "postinstall": "node install.js"
   },
   "bin": {
-    "meshctl": "bin/meshctl"
+    "meshctl": "bin/meshctl",
+    "mcp-mesh-registry": "bin/mcp-mesh-registry"
   },
   "engines": {
     "node": ">=18"
@@ -24,9 +25,7 @@
     "@mcpmesh/cli-linux-x64": "0.7.2",
     "@mcpmesh/cli-linux-arm64": "0.7.2",
     "@mcpmesh/cli-darwin-x64": "0.7.2",
-    "@mcpmesh/cli-darwin-arm64": "0.7.2",
-    "@mcpmesh/cli-win32-x64": "0.7.2",
-    "@mcpmesh/cli-win32-arm64": "0.7.2"
+    "@mcpmesh/cli-darwin-arm64": "0.7.2"
   },
   "keywords": [
     "mcp",

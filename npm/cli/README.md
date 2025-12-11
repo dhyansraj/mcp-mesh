@@ -1,4 +1,4 @@
-# @mcp-mesh/cli
+# @mcpmesh/cli
 
 CLI for **MCP Mesh** - Enterprise-Grade Distributed Service Mesh for AI Agents.
 
@@ -7,6 +7,13 @@ CLI for **MCP Mesh** - Enterprise-Grade Distributed Service Mesh for AI Agents.
 ```bash
 npm install -g @mcpmesh/cli
 ```
+
+This installs two binaries:
+
+- **meshctl** - CLI tool for managing MCP Mesh agents and tools
+- **mcp-mesh-registry** - Registry service for service discovery
+
+> **Note:** This package supports Linux and macOS only. For Windows, use WSL2 or Docker.
 
 ## Quick Start
 
@@ -28,6 +35,9 @@ meshctl list --tools
 
 # Call an MCP tool
 meshctl call get_current_time
+
+# Start the registry service (Linux/macOS)
+mcp-mesh-registry --help
 ```
 
 ## What is MCP Mesh?
