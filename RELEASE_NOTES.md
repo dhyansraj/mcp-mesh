@@ -1,5 +1,40 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.1...v0.7.2)
+
+## v0.7.2 (2025-12-11)
+
+### 🎯 CLI Tool Invocation & Discovery
+
+- **meshctl call**: New command to invoke MCP tools directly from the CLI
+  - `meshctl call <tool_name> '{"arg": "value"}'` - invoke any tool
+  - Automatic agent discovery - finds which agent provides the tool
+  - Support for `agent:tool` syntax to target specific agents
+  - Pretty-printed JSON output
+
+- **meshctl list --tools**: Enhanced tool discovery across all agents
+  - `meshctl list --tools` - list all tools from all connected agents
+  - `meshctl list --tools=<tool>` - show tool details with input schema
+  - Great for LLM discoverability
+
+### 📦 npm Package Distribution
+
+- **@mcpmesh/cli**: Install meshctl via npm for easy LLM integration
+  - `npm install -g @mcpmesh/cli`
+  - Platform-specific binary packages (linux, darwin, win32 × x64, arm64)
+  - Automatic platform detection and binary setup
+  - Enables LLMs like Claude to install and use meshctl directly
+
+### 📚 Documentation
+
+- Updated all documentation examples to use `meshctl call` instead of curl
+- Improved getting started guides with CLI-first approach
+
+### 📦 Infrastructure
+
+- GitHub Actions workflow for automated npm publishing on release
+- Makefile targets: `npm-build`, `npm-publish`, `npm-clean`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.0...v0.7.1)
 
 ## v0.7.1 (2025-12-10)
