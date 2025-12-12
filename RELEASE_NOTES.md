@@ -1,5 +1,22 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.2...v0.7.3)
+
+## v0.7.3 (2025-12-11)
+
+### 📦 npm Package Enhancement
+
+- **mcp-mesh-registry in npm**: Both `meshctl` and `mcp-mesh-registry` binaries are now bundled in the `@mcpmesh/cli` npm package
+  - `npm install -g @mcpmesh/cli` installs both tools
+  - `meshctl` - CLI for managing MCP Mesh agents and tools
+  - `mcp-mesh-registry` - Registry service for service discovery
+  - Supported platforms: Linux (x64, arm64), macOS (x64, arm64)
+
+### 📦 Infrastructure
+
+- Added CGO cross-compilation support for registry binary in npm build
+- Simplified platform support to Linux and macOS (Windows users should use WSL2 or Docker)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.1...v0.7.2)
 
 ## v0.7.2 (2025-12-11)
