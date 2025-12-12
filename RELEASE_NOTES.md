@@ -1,5 +1,20 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.3...v0.7.4)
+
+## v0.7.4 (2025-12-12)
+
+### 🐛 Bug Fixes
+
+- **npm packages**: Fixed `mcp-mesh-registry` missing from macOS npm packages
+  - Now downloads pre-built binaries from GitHub releases instead of cross-compiling
+  - All platforms (Linux x64/arm64, macOS x64/arm64) include both `meshctl` and `mcp-mesh-registry`
+
+### 📦 Infrastructure
+
+- Simplified npm build process by reusing release assets
+- Removed CGO cross-compilation dependency from npm publish workflow
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.2...v0.7.3)
 
 ## v0.7.3 (2025-12-11)
