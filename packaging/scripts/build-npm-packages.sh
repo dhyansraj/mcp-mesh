@@ -2,17 +2,22 @@
 set -e
 
 # Build npm packages for meshctl and mcp-mesh-registry
+# Downloads pre-built binaries from GitHub releases instead of building from source
 # Usage: ./build-npm-packages.sh [VERSION]
 
 VERSION="${VERSION:-${1:-dev}}"
-VERSION="${VERSION#v}" # Remove 'v' prefix if present
+VERSION_WITH_V="v${VERSION#v}"  # Ensure v prefix for download URLs
+VERSION="${VERSION#v}"          # Remove 'v' prefix for npm version
 
 NPM_DIR="${NPM_DIR:-dist/npm}"
-GO_VERSION="${GO_VERSION:-1.23}"
+GITHUB_REPO="${GITHUB_REPO:-dhyansraj/mcp-mesh}"
+DOWNLOAD_DIR="${DOWNLOAD_DIR:-dist/downloads}"
 
 echo "Building npm packages for version: $VERSION"
+echo "Downloading from: https://github.com/$GITHUB_REPO/releases/tag/$VERSION_WITH_V"
 
-# Platforms to build (Linux and macOS only - Windows not supported due to CGO requirements)
+# Platforms to package (Linux and macOS only)
+# Format: "goos:goarch:npm-platform"
 PLATFORMS=(
   "linux:amd64:linux-x64"
   "linux:arm64:linux-arm64"
@@ -20,73 +25,80 @@ PLATFORMS=(
   "darwin:arm64:darwin-arm64"
 )
 
-# Clean and create output directory
-rm -rf "$NPM_DIR"
-mkdir -p "$NPM_DIR"
+# Clean and create output directories
+rm -rf "$NPM_DIR" "$DOWNLOAD_DIR"
+mkdir -p "$NPM_DIR" "$DOWNLOAD_DIR"
 
-# Function to get CC for cross-compilation
-get_cc_for_platform() {
-  local goos="$1"
-  local goarch="$2"
-  local host_arch=$(uname -m)
+# Download and extract release assets
+echo ""
+echo "Downloading release assets..."
+for platform in "${PLATFORMS[@]}"; do
+  IFS=':' read -r GOOS GOARCH NPM_PLATFORM <<< "$platform"
 
-  case "$goos-$goarch" in
-    "linux-arm64")
-      echo "aarch64-linux-gnu-gcc"
-      ;;
-    "linux-amd64")
-      if [[ "$host_arch" == "aarch64" || "$host_arch" == "arm64" ]]; then
-        echo "x86_64-linux-gnu-gcc"
-      else
-        echo ""  # Native build
-      fi
-      ;;
-    *)
-      echo ""
-      ;;
-  esac
-}
+  TARBALL_NAME="mcp-mesh_${VERSION_WITH_V}_${GOOS}_${GOARCH}.tar.gz"
+  DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/$VERSION_WITH_V/$TARBALL_NAME"
 
-# Build platform-specific packages
+  echo "  Downloading $TARBALL_NAME..."
+
+  if curl -sL -f "$DOWNLOAD_URL" -o "$DOWNLOAD_DIR/$TARBALL_NAME"; then
+    echo "    ✓ Downloaded $TARBALL_NAME"
+  else
+    echo "    ✗ Failed to download $TARBALL_NAME"
+    echo "    URL: $DOWNLOAD_URL"
+    exit 1
+  fi
+done
+
+# Create platform-specific npm packages
+echo ""
+echo "Creating npm packages..."
 for platform in "${PLATFORMS[@]}"; do
   IFS=':' read -r GOOS GOARCH NPM_PLATFORM <<< "$platform"
 
   PKG_NAME="@mcpmesh/cli-${NPM_PLATFORM}"
   PKG_DIR="$NPM_DIR/cli-${NPM_PLATFORM}"
+  TARBALL_NAME="mcp-mesh_${VERSION_WITH_V}_${GOOS}_${GOARCH}.tar.gz"
 
-  echo "Building ${PKG_NAME}..."
+  echo "  Creating ${PKG_NAME}..."
 
   # Create package directory
   mkdir -p "$PKG_DIR/bin"
 
-  # Build meshctl (no CGO required)
-  if CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
-    -ldflags="-s -w -X main.version=${VERSION}" \
-    -o "$PKG_DIR/bin/meshctl" \
-    ./cmd/meshctl 2>/dev/null; then
-    echo "  ✓ Built meshctl for ${NPM_PLATFORM}"
+  # Extract binaries from tarball
+  # The tarball structure is: ${goos}_${goarch}/meshctl and ${goos}_${goarch}/mcp-mesh-registry
+  EXTRACT_DIR=$(mktemp -d)
+  tar -xzf "$DOWNLOAD_DIR/$TARBALL_NAME" -C "$EXTRACT_DIR"
+
+  # Find and copy binaries
+  PLATFORM_DIR="$EXTRACT_DIR/${GOOS}_${GOARCH}"
+  if [ -d "$PLATFORM_DIR" ]; then
+    if [ -f "$PLATFORM_DIR/meshctl" ]; then
+      cp "$PLATFORM_DIR/meshctl" "$PKG_DIR/bin/"
+      chmod +x "$PKG_DIR/bin/meshctl"
+      echo "    ✓ Extracted meshctl"
+    else
+      echo "    ✗ meshctl not found in tarball"
+      rm -rf "$EXTRACT_DIR"
+      exit 1
+    fi
+
+    if [ -f "$PLATFORM_DIR/mcp-mesh-registry" ]; then
+      cp "$PLATFORM_DIR/mcp-mesh-registry" "$PKG_DIR/bin/"
+      chmod +x "$PKG_DIR/bin/mcp-mesh-registry"
+      echo "    ✓ Extracted mcp-mesh-registry"
+    else
+      echo "    ✗ mcp-mesh-registry not found in tarball"
+      rm -rf "$EXTRACT_DIR"
+      exit 1
+    fi
   else
-    echo "  ⚠ Failed to build meshctl for ${NPM_PLATFORM}"
-    rm -rf "$PKG_DIR"
-    continue
+    echo "    ✗ Platform directory not found: $PLATFORM_DIR"
+    ls -la "$EXTRACT_DIR"
+    rm -rf "$EXTRACT_DIR"
+    exit 1
   fi
 
-  # Build mcp-mesh-registry (requires CGO for SQLite)
-  CC=$(get_cc_for_platform "$GOOS" "$GOARCH")
-
-  BUILD_ENV="CGO_ENABLED=1 GOOS=$GOOS GOARCH=$GOARCH"
-  if [ -n "$CC" ]; then
-    BUILD_ENV="$BUILD_ENV CC=$CC"
-  fi
-
-  if eval "$BUILD_ENV go build \
-    -ldflags='-s -w -X main.Version=${VERSION}' \
-    -o '$PKG_DIR/bin/mcp-mesh-registry' \
-    ./cmd/mcp-mesh-registry" 2>/dev/null; then
-    echo "  ✓ Built mcp-mesh-registry for ${NPM_PLATFORM}"
-  else
-    echo "  ⚠ Failed to build mcp-mesh-registry for ${NPM_PLATFORM} (CGO cross-compile may not be available)"
-  fi
+  rm -rf "$EXTRACT_DIR"
 
   # Determine npm os/cpu values (map Go values to npm values)
   NPM_OS="$GOOS"
@@ -111,16 +123,19 @@ for platform in "${PLATFORMS[@]}"; do
   "cpu": ["${NPM_CPU}"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mcpmesh/mcp-mesh.git"
+    "url": "git+https://github.com/dhyansraj/mcp-mesh.git"
   },
   "publishConfig": {
     "access": "public"
   }
 }
 EOF
+
+  echo "    ✓ Created ${PKG_NAME}"
 done
 
 # Copy and update main CLI package
+echo ""
 echo "Preparing main @mcpmesh/cli package..."
 CLI_PKG_DIR="$NPM_DIR/cli"
 mkdir -p "$CLI_PKG_DIR/bin"
@@ -130,6 +145,7 @@ cp npm/cli/package.json "$CLI_PKG_DIR/"
 cp npm/cli/install.js "$CLI_PKG_DIR/"
 cp npm/cli/README.md "$CLI_PKG_DIR/"
 cp npm/cli/bin/meshctl "$CLI_PKG_DIR/bin/"
+cp npm/cli/bin/mcp-mesh-registry "$CLI_PKG_DIR/bin/"
 
 # Update version in main package.json
 sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$CLI_PKG_DIR/package.json"
@@ -144,6 +160,9 @@ done
 rm -f "$CLI_PKG_DIR/"*.bak
 
 echo "  ✓ Prepared @mcpmesh/cli"
+
+# Clean up downloads
+rm -rf "$DOWNLOAD_DIR"
 
 # Create a summary
 echo ""
