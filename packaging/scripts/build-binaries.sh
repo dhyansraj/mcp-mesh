@@ -112,7 +112,7 @@ build_binary() {
     local ldflags=(
         "-w"                                    # Omit debug info
         "-s"                                    # Omit symbol table
-        "-X main.Version=$VERSION"              # Set version
+        "-X main.version=$VERSION"              # Set version (lowercase 'v' to match Go source)
         "-X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"  # Set build time
         "-X main.GitCommit=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"  # Set git commit
     )
