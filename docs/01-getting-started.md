@@ -127,27 +127,41 @@ sudo apt install docker.io docker-compose-v2
 
 The `meshctl` command-line tool manages agents, registry, and scaffolding:
 
-=== "Homebrew (macOS)"
+```bash
+# Install via npm (recommended)
+npm install -g @mcpmesh/cli
+```
 
-    ```bash
-    brew tap dhyansraj/mcp-mesh
-    brew install mcp-mesh
-    ```
+<details>
+<summary>Alternative: Homebrew (macOS)</summary>
 
-=== "curl (Linux/macOS)"
+```bash
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+```
 
-    ```bash
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
-    ```
+</details>
 
-=== "Build from Source"
+<details>
+<summary>Alternative: Install Script (Linux/macOS)</summary>
 
-    ```bash
-    git clone https://github.com/dhyansraj/mcp-mesh.git
-    cd mcp-mesh
-    make install-dev
-    # Binary available at ./bin/meshctl
-    ```
+```bash
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+```
+
+</details>
+
+<details>
+<summary>Alternative: Build from Source</summary>
+
+```bash
+git clone https://github.com/dhyansraj/mcp-mesh.git
+cd mcp-mesh
+make install-dev
+# Binary available at ./bin/meshctl
+```
+
+</details>
 
 Verify installation:
 
@@ -262,7 +276,10 @@ meshctl call hello_mesh_simple
 !!! tip "Auto-Registry"
 `meshctl start` automatically starts the registry if one isn't running. No need to manage it separately!
 
-## Alternative: Homebrew (macOS)
+## Alternative Installation Methods
+
+<details>
+<summary><strong>Homebrew (macOS)</strong></summary>
 
 ```bash
 # Install CLI tools via Homebrew
@@ -273,7 +290,10 @@ brew install mcp-mesh
 pip install "mcp-mesh>=0.7,<0.8"
 ```
 
-## Alternative: curl Install Script
+</details>
+
+<details>
+<summary><strong>Install Script (Linux/macOS)</strong></summary>
 
 ```bash
 # Install meshctl binary
@@ -283,7 +303,10 @@ curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh |
 pip install "mcp-mesh>=0.7,<0.8"
 ```
 
-## Alternative: Build from Source
+</details>
+
+<details>
+<summary><strong>Build from Source</strong></summary>
 
 **For contributors:**
 
@@ -298,6 +321,8 @@ make install-dev
 # Check status
 ./bin/meshctl status
 ```
+
+</details>
 
 ## Learning Paths
 

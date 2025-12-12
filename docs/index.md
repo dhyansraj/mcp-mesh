@@ -148,40 +148,48 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 ---
 
-## :package: Installation Options
+## :package: Installation
 
-=== "PyPI"
+=== "meshctl (CLI)"
+
+    ```bash
+    npm install -g @mcpmesh/cli
+    ```
+
+    Command-line tool for managing agents, registry, and mesh operations.
+
+=== "Registry"
+
+    ```bash
+    npm install -g @mcpmesh/cli
+    ```
+
+    Service discovery and coordination server. Included with the npm package above.
+
+=== "Python Runtime"
 
     ```bash
     pip install "mcp-mesh>=0.7,<0.8"
     ```
 
-=== "curl (Linux/macOS)"
+    Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
 
-    ```bash
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
-    ```
-
-=== "curl (Windows)"
-
-    ```bash
-    # Via WSL or Git Bash
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
-    ```
-
-=== "Homebrew"
-
-    ```bash
-    brew tap dhyansraj/mcp-mesh
-    brew install mcp-mesh
-    ```
-
-=== "Docker"
+=== "Docker Images"
 
     ```bash
     docker pull mcpmesh/registry:0.7
     docker pull mcpmesh/python-runtime:0.7
     ```
+
+    Official container images for production deployments.
+
+=== "Helm Charts"
+
+    ```bash
+    helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/charts/mcp-mesh
+    ```
+
+    Kubernetes deployment with the umbrella chart. See [Helm Deployment Guide](06-helm-deployment/index.md).
 
 ---
 

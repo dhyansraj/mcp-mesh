@@ -9,18 +9,18 @@ This directory contains simple Python agents that demonstrate MCP Mesh capabilit
 ### 1. Install MCP Mesh
 
 ```bash
-# Install from PyPI with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
-```
+# Install CLI tools (meshctl and registry)
+npm install -g @mcpmesh/cli
 
-This installs the latest stable version of MCP Mesh and all dependencies.
+# Install Python runtime
+pip install "mcp-mesh>=0.7,<0.8"
+```
 
 ### 2. Start the Registry
 
 ```bash
-# Download and start the registry service (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only --version v0.3
-registry --host 0.0.0.0 --port 8000
+# Start registry (or use meshctl start which auto-starts it)
+mcp-mesh-registry --host 0.0.0.0 --port 8000
 ```
 
 The registry will start on `http://localhost:8000` and handle agent discovery and coordination.
@@ -52,10 +52,7 @@ Both agents will:
 ### 1. Check Agent Registration
 
 ```bash
-# Install meshctl CLI tool first (use minor version for latest patches)
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --meshctl-only --version v0.3
-
-# List all registered agents
+# List all registered agents (meshctl installed in step 1)
 meshctl list agents
 
 # Get detailed agent information

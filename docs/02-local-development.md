@@ -19,26 +19,31 @@ graph LR
 
 ## Quick Start
 
-### 1. Install meshctl
+### 1. Install Required Components
 
-=== "Homebrew (macOS)"
-
-    ```bash
-    brew tap dhyansraj/mcp-mesh
-    brew install mcp-mesh
-    ```
-
-=== "curl (Linux/macOS)"
+=== "meshctl (CLI)"
 
     ```bash
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    npm install -g @mcpmesh/cli
     ```
 
-=== "Windows (WSL)"
+    Command-line tool for managing agents, registry, and mesh operations.
+
+=== "Registry"
 
     ```bash
-    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    npm install -g @mcpmesh/cli
     ```
+
+    Service discovery and coordination server. Included with the npm package above.
+
+=== "Python Runtime"
+
+    ```bash
+    pip install "mcp-mesh>=0.7,<0.8"
+    ```
+
+    Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
 
 ### 2. Set Up Your Project
 
@@ -51,7 +56,7 @@ cd my-agent-project
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install MCP Mesh SDK
+# Install MCP Mesh SDK (if not done above)
 pip install "mcp-mesh>=0.7,<0.8"
 ```
 

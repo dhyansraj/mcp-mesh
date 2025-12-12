@@ -1,14 +1,19 @@
-# MCP Mesh Architecture
+# MCP Mesh
 
-> Enterprise-grade distributed service mesh for MCP agents with zero-boilerplate dependency injection
+> Production-grade distributed mesh for intelligent agents
 
-## Overview
+## Why MCP Mesh?
 
-MCP Mesh is a distributed service mesh that enables MCP (Model Context Protocol) agents to discover each other, share capabilities, and collaborate through automatic dependency injection. The system follows a "background coordination" philosophy where agents operate autonomously while the registry facilitates discovery.
+Traditional frameworks treat AI agents like dumb microservices—central orchestrators create them, control them, wire them together.
 
-## Core Philosophy
+MCP Mesh takes a different view: agents are intelligent. Let them behave that way.
+
+Agents self-organize—discovering collaborators, adapting to failures, forming dynamic partnerships. The mesh provides the environment; the intelligence does the rest.
+
+## Core Principles
 
 - **Agents are autonomous**: Each agent runs independently and communicates directly with other agents
+- **LLMs are first-class capabilities**: LLM agents are discoverable and callable like any tool—tools can invoke LLMs, LLMs can invoke other LLMs, no artificial hierarchy
 - **Registry is a facilitator**: The registry helps agents find each other but doesn't proxy communication
 - **Graceful degradation**: If a dependency is unavailable, agents continue operating with reduced functionality
 - **Zero boilerplate**: Decorators handle all the complex wiring automatically

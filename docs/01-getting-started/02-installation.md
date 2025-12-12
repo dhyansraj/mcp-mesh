@@ -4,29 +4,12 @@
 
 ## Quick Install (Recommended)
 
-### macOS with Homebrew
-
 ```bash
-# Install CLI tools (includes meshctl and mcp-mesh-registry)
-brew tap dhyansraj/mcp-mesh
-brew install mcp-mesh
+# Install CLI tools (meshctl and mcp-mesh-registry)
+npm install -g @mcpmesh/cli
 
-# Install Python package with semantic versioning
+# Install Python runtime
 pip install "mcp-mesh>=0.7,<0.8"
-
-# Verify installation
-meshctl --version
-mcp-mesh-registry --version
-```
-
-### Linux/macOS with Install Script
-
-```bash
-# Install MCP Mesh from PyPI with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.7,<0.8"
-
-# Download the CLI tools
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
 
 # Verify installation
 meshctl --version
@@ -35,11 +18,47 @@ mcp-mesh-registry --version
 
 **What this installs:**
 
-- 📦 **Python package**: MCP Mesh runtime for building agents
-- 🔧 **meshctl**: CLI tool for managing the mesh
-- 🏗️ **mcp-mesh-registry**: Service discovery and coordination server
+- **meshctl**: CLI tool for managing the mesh
+- **mcp-mesh-registry**: Service discovery and coordination server
+- **mcp-mesh** (Python): Runtime for building agents
 
-## Alternative: Build from Source
+## Alternative Installation Methods
+
+<details>
+<summary><strong>Homebrew (macOS)</strong></summary>
+
+```bash
+# Install CLI tools
+brew tap dhyansraj/mcp-mesh
+brew install mcp-mesh
+
+# Install Python package
+pip install "mcp-mesh>=0.7,<0.8"
+
+# Verify installation
+meshctl --version
+```
+
+</details>
+
+<details>
+<summary><strong>Install Script (Linux/macOS)</strong></summary>
+
+```bash
+# Install Python package
+pip install "mcp-mesh>=0.7,<0.8"
+
+# Download CLI tools
+curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+
+# Verify installation
+meshctl --version
+```
+
+</details>
+
+<details>
+<summary><strong>Build from Source</strong></summary>
 
 For contributors or advanced users who want to build from source:
 
@@ -96,6 +115,8 @@ sudo make install
 # Or add to PATH instead
 export PATH=$PATH:$(pwd)/bin
 ```
+
+</details>
 
 ## What Gets Installed?
 
@@ -202,17 +223,17 @@ That's it! You've just created and deployed your first MCP Mesh agent.
 
 ### 1. Command 'meshctl' not found
 
-**Solution**: Either add `/usr/local/bin` to your PATH or use the local binary:
+**Solution**: Ensure npm global binaries are in your PATH:
 
 ```bash
-# Option 1: Use full path
-/usr/local/bin/meshctl --version
+# Check where npm installs global packages
+npm config get prefix
 
-# Option 2: Add to PATH
-export PATH=$PATH:/usr/local/bin
+# Add to PATH (add to your shell profile for persistence)
+export PATH="$(npm config get prefix)/bin:$PATH"
 
-# Option 3: Use local binary
-./bin/meshctl --version
+# Verify installation
+meshctl --version
 ```
 
 ### 2. ImportError: No module named 'mcp_mesh'
@@ -224,19 +245,7 @@ source .venv/bin/activate  # or your custom venv
 python -c "import mcp_mesh"
 ```
 
-### 3. Permission denied when installing to /usr/local/bin
-
-**Solution**: The installer will prompt for sudo. Alternatively, use local binaries:
-
-```bash
-# Just build without installing
-make build
-
-# Add to PATH
-export PATH=$PATH:$(pwd)/bin
-```
-
-### 4. Port 8080 already in use
+### 3. Port 8080 already in use
 
 **Solution**: Another service is using port 8080:
 
@@ -281,7 +290,6 @@ For comprehensive solutions, see our [Troubleshooting Guide](./troubleshooting.m
 
 ## ⚠️ Known Limitations
 
-- **PyPI package**: May lag behind latest GitHub commits
-- **Windows**: Some features require WSL2 for full compatibility
-- **Go registry**: Requires Go 1.23+ and CGO for SQLite support
+- **Windows**: Native Windows support is limited; WSL2 or Docker recommended
+- **Building from source**: Requires Go 1.23+ with CGO enabled for SQLite support
 - **Air-gapped environments**: Requires manual dependency download

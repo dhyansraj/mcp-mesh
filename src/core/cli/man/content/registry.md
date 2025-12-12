@@ -31,13 +31,13 @@ meshctl start --registry-only --registry-port 9000
 meshctl start --registry-only --debug
 ```
 
-### With Go Binary
+### With npm (Standalone Registry)
 
 ```bash
-# Download registry binary
-curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash -s -- --registry-only
+# Install registry via npm
+npm install -g @mcpmesh/cli
 
-# Start registry
+# Start registry directly
 mcp-mesh-registry --host 0.0.0.0 --port 8000
 ```
 
