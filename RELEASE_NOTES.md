@@ -1,5 +1,22 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.4...v0.7.5)
+
+## v0.7.5 (2025-12-12)
+
+### 📚 Documentation
+
+- **Installation simplification**: npm is now the primary installation method across all docs
+- **Component-based organization**: Installation docs reorganized by component (meshctl, Registry, Python Runtime, Docker, Helm)
+- **New tagline**: "Production-grade distributed mesh for intelligent agents"
+- **Philosophy update**: Added "Why MCP Mesh?" section explaining agent autonomy philosophy
+- **Core principles**: Added "LLMs are first-class capabilities" to documentation
+
+### 🧹 Cleanup
+
+- Removed accidentally committed `prompts/` folder
+- Updated troubleshooting sections for npm-based installation
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.3...v0.7.4)
 
 ## v0.7.4 (2025-12-12)
