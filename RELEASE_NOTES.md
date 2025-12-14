@@ -1,5 +1,27 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.5...v0.7.6)
+
+## v0.7.6 (2025-12-14)
+
+### 🐛 Bug Fixes
+
+- **@mesh.llm_provider**: Preserves original function name to avoid conflicts when multiple providers are used (#227)
+- **meshctl scaffold --compose**: Generates correct command without redundant python prefix (#222)
+- **Dockerfile templates**: Fixed non-root user permissions in scaffolded Dockerfiles (#226)
+- **Registry version**: Fixed double 'v' in version output and updated description (#235)
+- **Helm docs**: Removed redundant python from command examples (#225)
+
+### ✨ Features
+
+- **Configurable core release name**: Added `global.coreReleaseName` for flexible Helm service hostnames (#224)
+
+### 📚 Documentation
+
+- **meshctl man scaffold**: New topic for agent scaffolding command (#223)
+- **meshctl man cli**: New topic covering call, list, status commands (#234)
+- **Deployment docs**: Added Apple Silicon buildx hint and use `--create-namespace` (#236)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.4...v0.7.5)
 
 ## v0.7.5 (2025-12-12)
