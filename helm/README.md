@@ -46,7 +46,7 @@ helm install mcp-core helm/mcp-mesh-core -n mcp-mesh
 # 2. Install agents (repeat for each agent)
 helm install hello-world helm/mcp-mesh-agent -n mcp-mesh \
   --set agent.name=hello-world \
-  --set agent.command='["python","/app/agent.py"]'
+  --set agent.command='["/app/agent.py"]'
 
 # 3. (Optional) Install ingress for external access
 helm install mcp-ingress helm/mcp-mesh-ingress -n mcp-mesh

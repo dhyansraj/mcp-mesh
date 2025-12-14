@@ -104,8 +104,9 @@ agent:
 
   # Container command override (optional)
   # If empty, uses Docker image's CMD (recommended for multi-file agents)
-  # For single-file agents: ["python", "/app/agent.py"]
-  # For multi-file agents: [] (uses Docker CMD like "python -m myagent")
+  # For single-file agents: ["/app/agent.py"]
+  # For multi-file agents: [] (uses Docker CMD)
+  # Note: Don't include "python" - the mcpmesh/python-runtime image ENTRYPOINT provides it
   command: []
 
   # Hostname advertised to registry for service discovery
