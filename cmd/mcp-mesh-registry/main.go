@@ -62,9 +62,8 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Printf("MCP Mesh Registry Service v%s\n", version)
-		fmt.Println("Built with Go and Kubernetes API Server patterns")
-		fmt.Println("Compatible with Python MCP Mesh Registry API")
+		fmt.Printf("MCP Mesh Registry %s\n", version)
+		fmt.Println("Central service discovery and agent coordination for MCP Mesh")
 		return
 	}
 
