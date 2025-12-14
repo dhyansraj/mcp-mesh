@@ -5,6 +5,10 @@
 global:
   # Namespace for all components
   namespace: mcp-mesh
+  # Release name for mcp-mesh-core (used to construct service hostnames)
+  # Override this if you install mcp-mesh-core with a different release name
+  # Example: helm install my-core ... → set coreReleaseName: "my-core"
+  coreReleaseName: "mcp-core"
 
 # Component enablement
 postgres:
@@ -67,9 +71,10 @@ mcp-mesh-registry:
     tag: "0.7.0"
   registry:
     # Database configuration (connects to PostgreSQL)
+    # Note: Hostnames use global.coreReleaseName prefix (default: "mcp-core")
     database:
       type: "postgres"
-      host: "mcp-core-mcp-mesh-postgres.mcp-mesh.svc.cluster.local" # Full DNS name for reliable resolution
+      host: "mcp-core-mcp-mesh-postgres.mcp-mesh.svc.cluster.local"
       port: 5432
       name: "mcpmesh"
       username: "mcpmesh"
