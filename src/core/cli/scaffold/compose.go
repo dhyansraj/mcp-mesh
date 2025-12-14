@@ -314,7 +314,7 @@ services:
     volumes:
       - ./{{ .Dir }}:/app:ro
     working_dir: /app
-    command: ["python", "main.py"]
+    command: ["main.py"]
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
       AGENT_NAME: {{ .Name }}
