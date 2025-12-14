@@ -2,6 +2,13 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+# Global configuration
+global:
+  # Release name used when installing mcp-mesh-core
+  # Override this if you installed mcp-mesh-core with a different release name
+  # Example: helm install my-core mcp-mesh-core ... → set coreReleaseName: "my-core"
+  coreReleaseName: "mcp-core"
+
 replicaCount: 1
 
 image:
@@ -81,7 +88,9 @@ tolerations: []
 
 affinity: {}
 
-# Registry configuration (assumes mcp-mesh-core installed as "mcp-core")
+# Registry configuration
+# Hostnames use global.coreReleaseName prefix (default: "mcp-core")
+# Override these if you installed mcp-mesh-core with a different release name
 registry:
   host: "mcp-core-mcp-mesh-registry"
   port: "8000"
@@ -171,8 +180,8 @@ agent:
     # Example:
     # - numpy==1.24.0
 
-  # Observability configuration - matches k8s examples
-  # Service names follow pattern: <mcp-core-release>-mcp-mesh-<component>
+  # Observability configuration
+  # Hostnames use global.coreReleaseName prefix (default: "mcp-core")
   observability:
     distributedTracing:
       enabled: true
