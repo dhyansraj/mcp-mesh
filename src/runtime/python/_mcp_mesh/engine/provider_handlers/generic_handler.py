@@ -5,7 +5,7 @@ Provides sensible defaults using prompt-based approach similar to Claude.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -46,11 +46,11 @@ class GenericHandler(BaseProviderHandler):
 
     def prepare_request(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]],
+        messages: list[dict[str, Any]],
+        tools: Optional[list[dict[str, Any]]],
         output_type: type[BaseModel],
-        **kwargs: Any
-    ) -> Dict[str, Any]:
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """
         Prepare request with standard parameters.
 
@@ -86,8 +86,8 @@ class GenericHandler(BaseProviderHandler):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[List[Dict[str, Any]]],
-        output_type: type[BaseModel]
+        tool_schemas: Optional[list[dict[str, Any]]],
+        output_type: type,
     ) -> str:
         """
         Format system prompt with explicit JSON instructions.
@@ -97,11 +97,12 @@ class GenericHandler(BaseProviderHandler):
         - Explicit JSON schema (since we can't assume response_format)
         - Clear tool calling guidelines
         - Maximum explicitness for compatibility
+        - Skip JSON schema for str return type (text mode)
 
         Args:
             base_prompt: Base system prompt
             tool_schemas: Optional tool schemas
-            output_type: Expected response type
+            output_type: Expected response type (str or Pydantic model)
 
         Returns:
             Formatted system prompt with explicit instructions
@@ -120,24 +121,29 @@ TOOL CALLING RULES:
 - Provide your final response after gathering needed information
 """
 
-        # Add explicit JSON schema instructions
+        # Skip JSON schema for str return type (text mode)
+        if output_type is str:
+            return system_content
+
+        # Add explicit JSON schema instructions for Pydantic models
         # (since we can't rely on vendor-specific structured output)
-        schema = output_type.model_json_schema()
-        schema_str = json.dumps(schema, indent=2)
-        system_content += (
-            f"\n\nIMPORTANT: Return your final response as valid JSON matching this exact schema:\n"
-            f"{schema_str}\n\n"
-            f"Rules:\n"
-            f"- Return ONLY the JSON object, no markdown, no additional text\n"
-            f"- Ensure all required fields are present\n"
-            f"- Match the schema exactly\n"
-            f"- Use double quotes for strings\n"
-            f"- Do not include comments"
-        )
+        if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+            schema = output_type.model_json_schema()
+            schema_str = json.dumps(schema, indent=2)
+            system_content += (
+                f"\n\nIMPORTANT: Return your final response as valid JSON matching this exact schema:\n"
+                f"{schema_str}\n\n"
+                f"Rules:\n"
+                f"- Return ONLY the JSON object, no markdown, no additional text\n"
+                f"- Ensure all required fields are present\n"
+                f"- Match the schema exactly\n"
+                f"- Use double quotes for strings\n"
+                f"- Do not include comments"
+            )
 
         return system_content
 
-    def get_vendor_capabilities(self) -> Dict[str, bool]:
+    def get_vendor_capabilities(self) -> dict[str, bool]:
         """
         Return conservative capability flags.
 
