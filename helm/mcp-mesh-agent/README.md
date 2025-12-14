@@ -18,7 +18,7 @@ For simple agents with a single Python file:
 ```bash
 helm install hello-world ./helm/mcp-mesh-agent -n mcp-mesh \
   --set agent.name=hello-world \
-  --set agent.command='["python","/app/agent.py"]'
+  --set agent.command='["/app/agent.py"]'
 ```
 
 ### Method 2: Multi-File Agent (Custom Docker Image)
