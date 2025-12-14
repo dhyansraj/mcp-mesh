@@ -103,6 +103,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "Agent Scaffolding",
 		Description: "Generate agents with meshctl scaffold command",
 	},
+	"cli": {
+		Name:        "cli",
+		Aliases:     []string{"commands", "call", "list", "status"},
+		Title:       "CLI Commands",
+		Description: "meshctl call, list, status for development and testing",
+	},
 }
 
 // aliasMap maps aliases to canonical guide names.
@@ -146,7 +152,7 @@ func ListGuides() []*Guide {
 		"overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
 		"proxies", "fastapi", "environment", "deployment", "testing",
-		"scaffold",
+		"scaffold", "cli",
 	}
 	for _, name := range order {
 		if guide, ok := guideRegistry[name]; ok {

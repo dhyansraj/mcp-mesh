@@ -1,10 +1,20 @@
 # Testing MCP Agents
 
-> How to test MCP Mesh agents using curl and the MCP JSON-RPC protocol
+> How to test MCP Mesh agents using meshctl and curl
 
-## Overview
+## Quick Way: meshctl call
 
-MCP agents expose a JSON-RPC 2.0 API over HTTP with Server-Sent Events (SSE) responses. This guide shows the correct curl syntax for testing agents - a common source of errors when working with MCP.
+```bash
+meshctl call hello_mesh_simple                    # Call tool by name
+meshctl call calculator:add '{"a": 1, "b": 2}'    # With arguments
+meshctl list --tools                              # List all available tools
+```
+
+See `meshctl man cli` for more CLI commands.
+
+## Protocol Details: curl
+
+MCP agents expose a JSON-RPC 2.0 API over HTTP with Server-Sent Events (SSE) responses. This section shows the correct curl syntax - useful for understanding the underlying protocol.
 
 ## Key Points
 
@@ -121,5 +131,6 @@ meshctl status --verbose
 
 ## See Also
 
+- `meshctl man cli` - CLI commands for development
 - `meshctl man decorators` - How to create tools
 - `meshctl man capabilities` - Understanding capabilities
