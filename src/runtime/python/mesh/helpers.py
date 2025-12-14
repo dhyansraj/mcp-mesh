@@ -235,6 +235,13 @@ def llm_provider(
         if func.__doc__:
             process_chat.__doc__ = func.__doc__ + "\n\n" + (process_chat.__doc__ or "")
 
+        # FIX for issue #227: Preserve original function name to avoid conflicts
+        # when multiple @mesh.llm_provider decorators are used in the same agent.
+        # FastMCP uses __name__ as the tool name, so without this fix all providers
+        # would be registered as "process_chat" and overwrite each other.
+        process_chat.__name__ = func.__name__
+        process_chat.__qualname__ = func.__qualname__
+
         # CRITICAL: Apply @mesh.tool() FIRST (before FastMCP caches the function)
         # This ensures mesh DI wrapper is in place when FastMCP caches the function
         # Decorators are applied bottom-up, so mesh wrapper must be innermost
@@ -249,7 +256,7 @@ def llm_provider(
         process_chat = app.tool()(process_chat)
 
         logger.info(
-            f"✅ Created LLM provider '{func.__name__}' -> process_chat "
+            f"✅ Created LLM provider '{func.__name__}' "
             f"(model={model}, capability={capability}, tags={tags}, vendor={vendor})"
         )
 
