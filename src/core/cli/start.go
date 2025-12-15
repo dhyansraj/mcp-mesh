@@ -765,24 +765,34 @@ func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
 
 func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
 	// Try to find registry binary in multiple locations
-	possiblePaths := []string{
-		"./bin/mcp-mesh-registry",           // Relative to current working directory
-		"./mcp-mesh-registry",               // For compatibility with process_lifecycle.go
-		"./build/mcp-mesh-registry",         // Build directory
-		"mcp-mesh-registry",                 // In PATH
+	localPaths := []string{
+		"./bin/mcp-mesh-registry",   // Relative to current working directory
+		"./mcp-mesh-registry",       // For compatibility with process_lifecycle.go
+		"./build/mcp-mesh-registry", // Build directory
 	}
 
 	var registryBinary string
 	var binaryFound bool
 
-	// Check each possible location
-	for _, path := range possiblePaths {
+	// Check local paths first
+	for _, path := range localPaths {
 		if _, err := os.Stat(path); err == nil {
 			registryBinary = path
 			binaryFound = true
 			break
 		}
 	}
+
+	// If not found locally, check system PATH
+	if !binaryFound {
+		if path, err := exec.LookPath("mcp-mesh-registry"); err == nil {
+			registryBinary = path
+			binaryFound = true
+		}
+	}
+
+	// Build possiblePaths for error message
+	possiblePaths := append(localPaths, "mcp-mesh-registry (in PATH)")
 
 	// If binary not found, try to build it
 	if !binaryFound {
