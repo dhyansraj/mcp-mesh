@@ -80,6 +80,16 @@ func (Agent) Edges() []ent.Edge {
 				OnDelete: entsql.Cascade,
 			}).
 			Comment("Dependency resolutions for this agent's tools"),
+		edge.To("llm_tool_resolutions", LLMToolResolution.Type).
+			Annotations(entsql.Annotation{
+				OnDelete: entsql.Cascade,
+			}).
+			Comment("LLM tool resolutions for @mesh.llm filter"),
+		edge.To("llm_provider_resolutions", LLMProviderResolution.Type).
+			Annotations(entsql.Annotation{
+				OnDelete: entsql.Cascade,
+			}).
+			Comment("LLM provider resolutions for @mesh.llm provider"),
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 
 	"entgo.io/ent"
@@ -33,6 +35,10 @@ type Client struct {
 	Capability *CapabilityClient
 	// DependencyResolution is the client for interacting with the DependencyResolution builders.
 	DependencyResolution *DependencyResolutionClient
+	// LLMProviderResolution is the client for interacting with the LLMProviderResolution builders.
+	LLMProviderResolution *LLMProviderResolutionClient
+	// LLMToolResolution is the client for interacting with the LLMToolResolution builders.
+	LLMToolResolution *LLMToolResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
 }
@@ -49,6 +55,8 @@ func (c *Client) init() {
 	c.Agent = NewAgentClient(c.config)
 	c.Capability = NewCapabilityClient(c.config)
 	c.DependencyResolution = NewDependencyResolutionClient(c.config)
+	c.LLMProviderResolution = NewLLMProviderResolutionClient(c.config)
+	c.LLMToolResolution = NewLLMToolResolutionClient(c.config)
 	c.RegistryEvent = NewRegistryEventClient(c.config)
 }
 
@@ -140,12 +148,14 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:                  ctx,
-		config:               cfg,
-		Agent:                NewAgentClient(cfg),
-		Capability:           NewCapabilityClient(cfg),
-		DependencyResolution: NewDependencyResolutionClient(cfg),
-		RegistryEvent:        NewRegistryEventClient(cfg),
+		ctx:                   ctx,
+		config:                cfg,
+		Agent:                 NewAgentClient(cfg),
+		Capability:            NewCapabilityClient(cfg),
+		DependencyResolution:  NewDependencyResolutionClient(cfg),
+		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
+		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
+		RegistryEvent:         NewRegistryEventClient(cfg),
 	}, nil
 }
 
@@ -163,12 +173,14 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:                  ctx,
-		config:               cfg,
-		Agent:                NewAgentClient(cfg),
-		Capability:           NewCapabilityClient(cfg),
-		DependencyResolution: NewDependencyResolutionClient(cfg),
-		RegistryEvent:        NewRegistryEventClient(cfg),
+		ctx:                   ctx,
+		config:                cfg,
+		Agent:                 NewAgentClient(cfg),
+		Capability:            NewCapabilityClient(cfg),
+		DependencyResolution:  NewDependencyResolutionClient(cfg),
+		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
+		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
+		RegistryEvent:         NewRegistryEventClient(cfg),
 	}, nil
 }
 
@@ -197,19 +209,23 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.Agent.Use(hooks...)
-	c.Capability.Use(hooks...)
-	c.DependencyResolution.Use(hooks...)
-	c.RegistryEvent.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.Agent, c.Capability, c.DependencyResolution, c.LLMProviderResolution,
+		c.LLMToolResolution, c.RegistryEvent,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.Agent.Intercept(interceptors...)
-	c.Capability.Intercept(interceptors...)
-	c.DependencyResolution.Intercept(interceptors...)
-	c.RegistryEvent.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.Agent, c.Capability, c.DependencyResolution, c.LLMProviderResolution,
+		c.LLMToolResolution, c.RegistryEvent,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -221,6 +237,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Capability.mutate(ctx, m)
 	case *DependencyResolutionMutation:
 		return c.DependencyResolution.mutate(ctx, m)
+	case *LLMProviderResolutionMutation:
+		return c.LLMProviderResolution.mutate(ctx, m)
+	case *LLMToolResolutionMutation:
+		return c.LLMToolResolution.mutate(ctx, m)
 	case *RegistryEventMutation:
 		return c.RegistryEvent.mutate(ctx, m)
 	default:
@@ -377,6 +397,38 @@ func (c *AgentClient) QueryDependencyResolutions(a *Agent) *DependencyResolution
 			sqlgraph.From(agent.Table, agent.FieldID, id),
 			sqlgraph.To(dependencyresolution.Table, dependencyresolution.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, agent.DependencyResolutionsTable, agent.DependencyResolutionsColumn),
+		)
+		fromV = sqlgraph.Neighbors(a.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryLlmToolResolutions queries the llm_tool_resolutions edge of a Agent.
+func (c *AgentClient) QueryLlmToolResolutions(a *Agent) *LLMToolResolutionQuery {
+	query := (&LLMToolResolutionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := a.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, id),
+			sqlgraph.To(llmtoolresolution.Table, llmtoolresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.LlmToolResolutionsTable, agent.LlmToolResolutionsColumn),
+		)
+		fromV = sqlgraph.Neighbors(a.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryLlmProviderResolutions queries the llm_provider_resolutions edge of a Agent.
+func (c *AgentClient) QueryLlmProviderResolutions(a *Agent) *LLMProviderResolutionQuery {
+	query := (&LLMProviderResolutionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := a.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, id),
+			sqlgraph.To(llmproviderresolution.Table, llmproviderresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.LlmProviderResolutionsTable, agent.LlmProviderResolutionsColumn),
 		)
 		fromV = sqlgraph.Neighbors(a.driver.Dialect(), step)
 		return fromV, nil
@@ -723,6 +775,336 @@ func (c *DependencyResolutionClient) mutate(ctx context.Context, m *DependencyRe
 	}
 }
 
+// LLMProviderResolutionClient is a client for the LLMProviderResolution schema.
+type LLMProviderResolutionClient struct {
+	config
+}
+
+// NewLLMProviderResolutionClient returns a client for the LLMProviderResolution from the given config.
+func NewLLMProviderResolutionClient(c config) *LLMProviderResolutionClient {
+	return &LLMProviderResolutionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `llmproviderresolution.Hooks(f(g(h())))`.
+func (c *LLMProviderResolutionClient) Use(hooks ...Hook) {
+	c.hooks.LLMProviderResolution = append(c.hooks.LLMProviderResolution, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `llmproviderresolution.Intercept(f(g(h())))`.
+func (c *LLMProviderResolutionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.LLMProviderResolution = append(c.inters.LLMProviderResolution, interceptors...)
+}
+
+// Create returns a builder for creating a LLMProviderResolution entity.
+func (c *LLMProviderResolutionClient) Create() *LLMProviderResolutionCreate {
+	mutation := newLLMProviderResolutionMutation(c.config, OpCreate)
+	return &LLMProviderResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of LLMProviderResolution entities.
+func (c *LLMProviderResolutionClient) CreateBulk(builders ...*LLMProviderResolutionCreate) *LLMProviderResolutionCreateBulk {
+	return &LLMProviderResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *LLMProviderResolutionClient) MapCreateBulk(slice any, setFunc func(*LLMProviderResolutionCreate, int)) *LLMProviderResolutionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &LLMProviderResolutionCreateBulk{err: fmt.Errorf("calling to LLMProviderResolutionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*LLMProviderResolutionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &LLMProviderResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for LLMProviderResolution.
+func (c *LLMProviderResolutionClient) Update() *LLMProviderResolutionUpdate {
+	mutation := newLLMProviderResolutionMutation(c.config, OpUpdate)
+	return &LLMProviderResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *LLMProviderResolutionClient) UpdateOne(lpr *LLMProviderResolution) *LLMProviderResolutionUpdateOne {
+	mutation := newLLMProviderResolutionMutation(c.config, OpUpdateOne, withLLMProviderResolution(lpr))
+	return &LLMProviderResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *LLMProviderResolutionClient) UpdateOneID(id int) *LLMProviderResolutionUpdateOne {
+	mutation := newLLMProviderResolutionMutation(c.config, OpUpdateOne, withLLMProviderResolutionID(id))
+	return &LLMProviderResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for LLMProviderResolution.
+func (c *LLMProviderResolutionClient) Delete() *LLMProviderResolutionDelete {
+	mutation := newLLMProviderResolutionMutation(c.config, OpDelete)
+	return &LLMProviderResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *LLMProviderResolutionClient) DeleteOne(lpr *LLMProviderResolution) *LLMProviderResolutionDeleteOne {
+	return c.DeleteOneID(lpr.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *LLMProviderResolutionClient) DeleteOneID(id int) *LLMProviderResolutionDeleteOne {
+	builder := c.Delete().Where(llmproviderresolution.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &LLMProviderResolutionDeleteOne{builder}
+}
+
+// Query returns a query builder for LLMProviderResolution.
+func (c *LLMProviderResolutionClient) Query() *LLMProviderResolutionQuery {
+	return &LLMProviderResolutionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeLLMProviderResolution},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a LLMProviderResolution entity by its id.
+func (c *LLMProviderResolutionClient) Get(ctx context.Context, id int) (*LLMProviderResolution, error) {
+	return c.Query().Where(llmproviderresolution.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *LLMProviderResolutionClient) GetX(ctx context.Context, id int) *LLMProviderResolution {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryConsumerAgent queries the consumer_agent edge of a LLMProviderResolution.
+func (c *LLMProviderResolutionClient) QueryConsumerAgent(lpr *LLMProviderResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := lpr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(llmproviderresolution.Table, llmproviderresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, llmproviderresolution.ConsumerAgentTable, llmproviderresolution.ConsumerAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(lpr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryProviderAgent queries the provider_agent edge of a LLMProviderResolution.
+func (c *LLMProviderResolutionClient) QueryProviderAgent(lpr *LLMProviderResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := lpr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(llmproviderresolution.Table, llmproviderresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, llmproviderresolution.ProviderAgentTable, llmproviderresolution.ProviderAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(lpr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *LLMProviderResolutionClient) Hooks() []Hook {
+	return c.hooks.LLMProviderResolution
+}
+
+// Interceptors returns the client interceptors.
+func (c *LLMProviderResolutionClient) Interceptors() []Interceptor {
+	return c.inters.LLMProviderResolution
+}
+
+func (c *LLMProviderResolutionClient) mutate(ctx context.Context, m *LLMProviderResolutionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&LLMProviderResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&LLMProviderResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&LLMProviderResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&LLMProviderResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown LLMProviderResolution mutation op: %q", m.Op())
+	}
+}
+
+// LLMToolResolutionClient is a client for the LLMToolResolution schema.
+type LLMToolResolutionClient struct {
+	config
+}
+
+// NewLLMToolResolutionClient returns a client for the LLMToolResolution from the given config.
+func NewLLMToolResolutionClient(c config) *LLMToolResolutionClient {
+	return &LLMToolResolutionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `llmtoolresolution.Hooks(f(g(h())))`.
+func (c *LLMToolResolutionClient) Use(hooks ...Hook) {
+	c.hooks.LLMToolResolution = append(c.hooks.LLMToolResolution, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `llmtoolresolution.Intercept(f(g(h())))`.
+func (c *LLMToolResolutionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.LLMToolResolution = append(c.inters.LLMToolResolution, interceptors...)
+}
+
+// Create returns a builder for creating a LLMToolResolution entity.
+func (c *LLMToolResolutionClient) Create() *LLMToolResolutionCreate {
+	mutation := newLLMToolResolutionMutation(c.config, OpCreate)
+	return &LLMToolResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of LLMToolResolution entities.
+func (c *LLMToolResolutionClient) CreateBulk(builders ...*LLMToolResolutionCreate) *LLMToolResolutionCreateBulk {
+	return &LLMToolResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *LLMToolResolutionClient) MapCreateBulk(slice any, setFunc func(*LLMToolResolutionCreate, int)) *LLMToolResolutionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &LLMToolResolutionCreateBulk{err: fmt.Errorf("calling to LLMToolResolutionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*LLMToolResolutionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &LLMToolResolutionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for LLMToolResolution.
+func (c *LLMToolResolutionClient) Update() *LLMToolResolutionUpdate {
+	mutation := newLLMToolResolutionMutation(c.config, OpUpdate)
+	return &LLMToolResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *LLMToolResolutionClient) UpdateOne(ltr *LLMToolResolution) *LLMToolResolutionUpdateOne {
+	mutation := newLLMToolResolutionMutation(c.config, OpUpdateOne, withLLMToolResolution(ltr))
+	return &LLMToolResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *LLMToolResolutionClient) UpdateOneID(id int) *LLMToolResolutionUpdateOne {
+	mutation := newLLMToolResolutionMutation(c.config, OpUpdateOne, withLLMToolResolutionID(id))
+	return &LLMToolResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for LLMToolResolution.
+func (c *LLMToolResolutionClient) Delete() *LLMToolResolutionDelete {
+	mutation := newLLMToolResolutionMutation(c.config, OpDelete)
+	return &LLMToolResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *LLMToolResolutionClient) DeleteOne(ltr *LLMToolResolution) *LLMToolResolutionDeleteOne {
+	return c.DeleteOneID(ltr.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *LLMToolResolutionClient) DeleteOneID(id int) *LLMToolResolutionDeleteOne {
+	builder := c.Delete().Where(llmtoolresolution.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &LLMToolResolutionDeleteOne{builder}
+}
+
+// Query returns a query builder for LLMToolResolution.
+func (c *LLMToolResolutionClient) Query() *LLMToolResolutionQuery {
+	return &LLMToolResolutionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeLLMToolResolution},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a LLMToolResolution entity by its id.
+func (c *LLMToolResolutionClient) Get(ctx context.Context, id int) (*LLMToolResolution, error) {
+	return c.Query().Where(llmtoolresolution.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *LLMToolResolutionClient) GetX(ctx context.Context, id int) *LLMToolResolution {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryConsumerAgent queries the consumer_agent edge of a LLMToolResolution.
+func (c *LLMToolResolutionClient) QueryConsumerAgent(ltr *LLMToolResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := ltr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(llmtoolresolution.Table, llmtoolresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, llmtoolresolution.ConsumerAgentTable, llmtoolresolution.ConsumerAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(ltr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryProviderAgent queries the provider_agent edge of a LLMToolResolution.
+func (c *LLMToolResolutionClient) QueryProviderAgent(ltr *LLMToolResolution) *AgentQuery {
+	query := (&AgentClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := ltr.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(llmtoolresolution.Table, llmtoolresolution.FieldID, id),
+			sqlgraph.To(agent.Table, agent.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, llmtoolresolution.ProviderAgentTable, llmtoolresolution.ProviderAgentColumn),
+		)
+		fromV = sqlgraph.Neighbors(ltr.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *LLMToolResolutionClient) Hooks() []Hook {
+	return c.hooks.LLMToolResolution
+}
+
+// Interceptors returns the client interceptors.
+func (c *LLMToolResolutionClient) Interceptors() []Interceptor {
+	return c.inters.LLMToolResolution
+}
+
+func (c *LLMToolResolutionClient) mutate(ctx context.Context, m *LLMToolResolutionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&LLMToolResolutionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&LLMToolResolutionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&LLMToolResolutionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&LLMToolResolutionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown LLMToolResolution mutation op: %q", m.Op())
+	}
+}
+
 // RegistryEventClient is a client for the RegistryEvent schema.
 type RegistryEventClient struct {
 	config
@@ -875,9 +1257,11 @@ func (c *RegistryEventClient) mutate(ctx context.Context, m *RegistryEventMutati
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Agent, Capability, DependencyResolution, RegistryEvent []ent.Hook
+		Agent, Capability, DependencyResolution, LLMProviderResolution,
+		LLMToolResolution, RegistryEvent []ent.Hook
 	}
 	inters struct {
-		Agent, Capability, DependencyResolution, RegistryEvent []ent.Interceptor
+		Agent, Capability, DependencyResolution, LLMProviderResolution,
+		LLMToolResolution, RegistryEvent []ent.Interceptor
 	}
 )

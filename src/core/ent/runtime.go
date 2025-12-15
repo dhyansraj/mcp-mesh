@@ -6,6 +6,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/ent/schema"
 	"time"
@@ -77,6 +79,38 @@ func init() {
 	dependencyresolution.DefaultUpdatedAt = dependencyresolutionDescUpdatedAt.Default.(func() time.Time)
 	// dependencyresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	dependencyresolution.UpdateDefaultUpdatedAt = dependencyresolutionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	llmproviderresolutionFields := schema.LLMProviderResolution{}.Fields()
+	_ = llmproviderresolutionFields
+	// llmproviderresolutionDescRequiredNamespace is the schema descriptor for required_namespace field.
+	llmproviderresolutionDescRequiredNamespace := llmproviderresolutionFields[5].Descriptor()
+	// llmproviderresolution.DefaultRequiredNamespace holds the default value on creation for the required_namespace field.
+	llmproviderresolution.DefaultRequiredNamespace = llmproviderresolutionDescRequiredNamespace.Default.(string)
+	// llmproviderresolutionDescCreatedAt is the schema descriptor for created_at field.
+	llmproviderresolutionDescCreatedAt := llmproviderresolutionFields[11].Descriptor()
+	// llmproviderresolution.DefaultCreatedAt holds the default value on creation for the created_at field.
+	llmproviderresolution.DefaultCreatedAt = llmproviderresolutionDescCreatedAt.Default.(func() time.Time)
+	// llmproviderresolutionDescUpdatedAt is the schema descriptor for updated_at field.
+	llmproviderresolutionDescUpdatedAt := llmproviderresolutionFields[12].Descriptor()
+	// llmproviderresolution.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	llmproviderresolution.DefaultUpdatedAt = llmproviderresolutionDescUpdatedAt.Default.(func() time.Time)
+	// llmproviderresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	llmproviderresolution.UpdateDefaultUpdatedAt = llmproviderresolutionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	llmtoolresolutionFields := schema.LLMToolResolution{}.Fields()
+	_ = llmtoolresolutionFields
+	// llmtoolresolutionDescFilterMode is the schema descriptor for filter_mode field.
+	llmtoolresolutionDescFilterMode := llmtoolresolutionFields[4].Descriptor()
+	// llmtoolresolution.DefaultFilterMode holds the default value on creation for the filter_mode field.
+	llmtoolresolution.DefaultFilterMode = llmtoolresolutionDescFilterMode.Default.(string)
+	// llmtoolresolutionDescCreatedAt is the schema descriptor for created_at field.
+	llmtoolresolutionDescCreatedAt := llmtoolresolutionFields[11].Descriptor()
+	// llmtoolresolution.DefaultCreatedAt holds the default value on creation for the created_at field.
+	llmtoolresolution.DefaultCreatedAt = llmtoolresolutionDescCreatedAt.Default.(func() time.Time)
+	// llmtoolresolutionDescUpdatedAt is the schema descriptor for updated_at field.
+	llmtoolresolutionDescUpdatedAt := llmtoolresolutionFields[12].Descriptor()
+	// llmtoolresolution.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	llmtoolresolution.DefaultUpdatedAt = llmtoolresolutionDescUpdatedAt.Default.(func() time.Time)
+	// llmtoolresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	llmtoolresolution.UpdateDefaultUpdatedAt = llmtoolresolutionDescUpdatedAt.UpdateDefault.(func() time.Time)
 	registryeventFields := schema.RegistryEvent{}.Fields()
 	_ = registryeventFields
 	// registryeventDescTimestamp is the schema descriptor for timestamp field.

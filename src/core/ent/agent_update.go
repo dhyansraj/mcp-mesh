@@ -9,6 +9,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 	"time"
@@ -269,6 +271,36 @@ func (au *AgentUpdate) AddDependencyResolutions(d ...*DependencyResolution) *Age
 	return au.AddDependencyResolutionIDs(ids...)
 }
 
+// AddLlmToolResolutionIDs adds the "llm_tool_resolutions" edge to the LLMToolResolution entity by IDs.
+func (au *AgentUpdate) AddLlmToolResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.AddLlmToolResolutionIDs(ids...)
+	return au
+}
+
+// AddLlmToolResolutions adds the "llm_tool_resolutions" edges to the LLMToolResolution entity.
+func (au *AgentUpdate) AddLlmToolResolutions(l ...*LLMToolResolution) *AgentUpdate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return au.AddLlmToolResolutionIDs(ids...)
+}
+
+// AddLlmProviderResolutionIDs adds the "llm_provider_resolutions" edge to the LLMProviderResolution entity by IDs.
+func (au *AgentUpdate) AddLlmProviderResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.AddLlmProviderResolutionIDs(ids...)
+	return au
+}
+
+// AddLlmProviderResolutions adds the "llm_provider_resolutions" edges to the LLMProviderResolution entity.
+func (au *AgentUpdate) AddLlmProviderResolutions(l ...*LLMProviderResolution) *AgentUpdate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return au.AddLlmProviderResolutionIDs(ids...)
+}
+
 // Mutation returns the AgentMutation object of the builder.
 func (au *AgentUpdate) Mutation() *AgentMutation {
 	return au.mutation
@@ -335,6 +367,48 @@ func (au *AgentUpdate) RemoveDependencyResolutions(d ...*DependencyResolution) *
 		ids[i] = d[i].ID
 	}
 	return au.RemoveDependencyResolutionIDs(ids...)
+}
+
+// ClearLlmToolResolutions clears all "llm_tool_resolutions" edges to the LLMToolResolution entity.
+func (au *AgentUpdate) ClearLlmToolResolutions() *AgentUpdate {
+	au.mutation.ClearLlmToolResolutions()
+	return au
+}
+
+// RemoveLlmToolResolutionIDs removes the "llm_tool_resolutions" edge to LLMToolResolution entities by IDs.
+func (au *AgentUpdate) RemoveLlmToolResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.RemoveLlmToolResolutionIDs(ids...)
+	return au
+}
+
+// RemoveLlmToolResolutions removes "llm_tool_resolutions" edges to LLMToolResolution entities.
+func (au *AgentUpdate) RemoveLlmToolResolutions(l ...*LLMToolResolution) *AgentUpdate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return au.RemoveLlmToolResolutionIDs(ids...)
+}
+
+// ClearLlmProviderResolutions clears all "llm_provider_resolutions" edges to the LLMProviderResolution entity.
+func (au *AgentUpdate) ClearLlmProviderResolutions() *AgentUpdate {
+	au.mutation.ClearLlmProviderResolutions()
+	return au
+}
+
+// RemoveLlmProviderResolutionIDs removes the "llm_provider_resolutions" edge to LLMProviderResolution entities by IDs.
+func (au *AgentUpdate) RemoveLlmProviderResolutionIDs(ids ...int) *AgentUpdate {
+	au.mutation.RemoveLlmProviderResolutionIDs(ids...)
+	return au
+}
+
+// RemoveLlmProviderResolutions removes "llm_provider_resolutions" edges to LLMProviderResolution entities.
+func (au *AgentUpdate) RemoveLlmProviderResolutions(l ...*LLMProviderResolution) *AgentUpdate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return au.RemoveLlmProviderResolutionIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -570,6 +644,96 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if au.mutation.LlmToolResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.RemovedLlmToolResolutionsIDs(); len(nodes) > 0 && !au.mutation.LlmToolResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.LlmToolResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if au.mutation.LlmProviderResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.RemovedLlmProviderResolutionsIDs(); len(nodes) > 0 && !au.mutation.LlmProviderResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := au.mutation.LlmProviderResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -835,6 +999,36 @@ func (auo *AgentUpdateOne) AddDependencyResolutions(d ...*DependencyResolution) 
 	return auo.AddDependencyResolutionIDs(ids...)
 }
 
+// AddLlmToolResolutionIDs adds the "llm_tool_resolutions" edge to the LLMToolResolution entity by IDs.
+func (auo *AgentUpdateOne) AddLlmToolResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.AddLlmToolResolutionIDs(ids...)
+	return auo
+}
+
+// AddLlmToolResolutions adds the "llm_tool_resolutions" edges to the LLMToolResolution entity.
+func (auo *AgentUpdateOne) AddLlmToolResolutions(l ...*LLMToolResolution) *AgentUpdateOne {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return auo.AddLlmToolResolutionIDs(ids...)
+}
+
+// AddLlmProviderResolutionIDs adds the "llm_provider_resolutions" edge to the LLMProviderResolution entity by IDs.
+func (auo *AgentUpdateOne) AddLlmProviderResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.AddLlmProviderResolutionIDs(ids...)
+	return auo
+}
+
+// AddLlmProviderResolutions adds the "llm_provider_resolutions" edges to the LLMProviderResolution entity.
+func (auo *AgentUpdateOne) AddLlmProviderResolutions(l ...*LLMProviderResolution) *AgentUpdateOne {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return auo.AddLlmProviderResolutionIDs(ids...)
+}
+
 // Mutation returns the AgentMutation object of the builder.
 func (auo *AgentUpdateOne) Mutation() *AgentMutation {
 	return auo.mutation
@@ -901,6 +1095,48 @@ func (auo *AgentUpdateOne) RemoveDependencyResolutions(d ...*DependencyResolutio
 		ids[i] = d[i].ID
 	}
 	return auo.RemoveDependencyResolutionIDs(ids...)
+}
+
+// ClearLlmToolResolutions clears all "llm_tool_resolutions" edges to the LLMToolResolution entity.
+func (auo *AgentUpdateOne) ClearLlmToolResolutions() *AgentUpdateOne {
+	auo.mutation.ClearLlmToolResolutions()
+	return auo
+}
+
+// RemoveLlmToolResolutionIDs removes the "llm_tool_resolutions" edge to LLMToolResolution entities by IDs.
+func (auo *AgentUpdateOne) RemoveLlmToolResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.RemoveLlmToolResolutionIDs(ids...)
+	return auo
+}
+
+// RemoveLlmToolResolutions removes "llm_tool_resolutions" edges to LLMToolResolution entities.
+func (auo *AgentUpdateOne) RemoveLlmToolResolutions(l ...*LLMToolResolution) *AgentUpdateOne {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return auo.RemoveLlmToolResolutionIDs(ids...)
+}
+
+// ClearLlmProviderResolutions clears all "llm_provider_resolutions" edges to the LLMProviderResolution entity.
+func (auo *AgentUpdateOne) ClearLlmProviderResolutions() *AgentUpdateOne {
+	auo.mutation.ClearLlmProviderResolutions()
+	return auo
+}
+
+// RemoveLlmProviderResolutionIDs removes the "llm_provider_resolutions" edge to LLMProviderResolution entities by IDs.
+func (auo *AgentUpdateOne) RemoveLlmProviderResolutionIDs(ids ...int) *AgentUpdateOne {
+	auo.mutation.RemoveLlmProviderResolutionIDs(ids...)
+	return auo
+}
+
+// RemoveLlmProviderResolutions removes "llm_provider_resolutions" edges to LLMProviderResolution entities.
+func (auo *AgentUpdateOne) RemoveLlmProviderResolutions(l ...*LLMProviderResolution) *AgentUpdateOne {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return auo.RemoveLlmProviderResolutionIDs(ids...)
 }
 
 // Where appends a list predicates to the AgentUpdate builder.
@@ -1166,6 +1402,96 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if auo.mutation.LlmToolResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.RemovedLlmToolResolutionsIDs(); len(nodes) > 0 && !auo.mutation.LlmToolResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.LlmToolResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if auo.mutation.LlmProviderResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.RemovedLlmProviderResolutionsIDs(); len(nodes) > 0 && !auo.mutation.LlmProviderResolutionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := auo.mutation.LlmProviderResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

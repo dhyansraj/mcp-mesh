@@ -45,12 +45,20 @@ const (
 	EdgeEvents = "events"
 	// EdgeDependencyResolutions holds the string denoting the dependency_resolutions edge name in mutations.
 	EdgeDependencyResolutions = "dependency_resolutions"
+	// EdgeLlmToolResolutions holds the string denoting the llm_tool_resolutions edge name in mutations.
+	EdgeLlmToolResolutions = "llm_tool_resolutions"
+	// EdgeLlmProviderResolutions holds the string denoting the llm_provider_resolutions edge name in mutations.
+	EdgeLlmProviderResolutions = "llm_provider_resolutions"
 	// CapabilityFieldID holds the string denoting the ID field of the Capability.
 	CapabilityFieldID = "id"
 	// RegistryEventFieldID holds the string denoting the ID field of the RegistryEvent.
 	RegistryEventFieldID = "id"
 	// DependencyResolutionFieldID holds the string denoting the ID field of the DependencyResolution.
 	DependencyResolutionFieldID = "id"
+	// LLMToolResolutionFieldID holds the string denoting the ID field of the LLMToolResolution.
+	LLMToolResolutionFieldID = "id"
+	// LLMProviderResolutionFieldID holds the string denoting the ID field of the LLMProviderResolution.
+	LLMProviderResolutionFieldID = "id"
 	// Table holds the table name of the agent in the database.
 	Table = "agents"
 	// CapabilitiesTable is the table that holds the capabilities relation/edge.
@@ -74,6 +82,20 @@ const (
 	DependencyResolutionsInverseTable = "dependency_resolutions"
 	// DependencyResolutionsColumn is the table column denoting the dependency_resolutions relation/edge.
 	DependencyResolutionsColumn = "consumer_agent_id"
+	// LlmToolResolutionsTable is the table that holds the llm_tool_resolutions relation/edge.
+	LlmToolResolutionsTable = "llm_tool_resolutions"
+	// LlmToolResolutionsInverseTable is the table name for the LLMToolResolution entity.
+	// It exists in this package in order to avoid circular dependency with the "llmtoolresolution" package.
+	LlmToolResolutionsInverseTable = "llm_tool_resolutions"
+	// LlmToolResolutionsColumn is the table column denoting the llm_tool_resolutions relation/edge.
+	LlmToolResolutionsColumn = "consumer_agent_id"
+	// LlmProviderResolutionsTable is the table that holds the llm_provider_resolutions relation/edge.
+	LlmProviderResolutionsTable = "llm_provider_resolutions"
+	// LlmProviderResolutionsInverseTable is the table name for the LLMProviderResolution entity.
+	// It exists in this package in order to avoid circular dependency with the "llmproviderresolution" package.
+	LlmProviderResolutionsInverseTable = "llm_provider_resolutions"
+	// LlmProviderResolutionsColumn is the table column denoting the llm_provider_resolutions relation/edge.
+	LlmProviderResolutionsColumn = "consumer_agent_id"
 )
 
 // Columns holds all SQL columns for agent fields.
@@ -282,6 +304,34 @@ func ByDependencyResolutions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOp
 		sqlgraph.OrderByNeighborTerms(s, newDependencyResolutionsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByLlmToolResolutionsCount orders the results by llm_tool_resolutions count.
+func ByLlmToolResolutionsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newLlmToolResolutionsStep(), opts...)
+	}
+}
+
+// ByLlmToolResolutions orders the results by llm_tool_resolutions terms.
+func ByLlmToolResolutions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newLlmToolResolutionsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByLlmProviderResolutionsCount orders the results by llm_provider_resolutions count.
+func ByLlmProviderResolutionsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newLlmProviderResolutionsStep(), opts...)
+	}
+}
+
+// ByLlmProviderResolutions orders the results by llm_provider_resolutions terms.
+func ByLlmProviderResolutions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newLlmProviderResolutionsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newCapabilitiesStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -301,5 +351,19 @@ func newDependencyResolutionsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(DependencyResolutionsInverseTable, DependencyResolutionFieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, DependencyResolutionsTable, DependencyResolutionsColumn),
+	)
+}
+func newLlmToolResolutionsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(LlmToolResolutionsInverseTable, LLMToolResolutionFieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, LlmToolResolutionsTable, LlmToolResolutionsColumn),
+	)
+}
+func newLlmProviderResolutionsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(LlmProviderResolutionsInverseTable, LLMProviderResolutionFieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, LlmProviderResolutionsTable, LlmProviderResolutionsColumn),
 	)
 }

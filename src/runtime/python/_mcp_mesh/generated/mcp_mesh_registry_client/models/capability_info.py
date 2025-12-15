@@ -21,6 +21,8 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.llm_provider import LLMProvider
+from _mcp_mesh.generated.mcp_mesh_registry_client.models.llm_tool_filter import LLMToolFilter
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -33,7 +35,9 @@ class CapabilityInfo(BaseModel):
     function_name: Annotated[str, Field(min_length=1, strict=True)] = Field(description="Name of the function that provides this capability")
     tags: Optional[List[StrictStr]] = Field(default=None, description="Tags associated with this capability")
     description: Optional[StrictStr] = Field(default=None, description="Human-readable description of the capability")
-    __properties: ClassVar[List[str]] = ["name", "version", "function_name", "tags", "description"]
+    llm_filter: Optional[LLMToolFilter] = None
+    llm_provider: Optional[LLMProvider] = None
+    __properties: ClassVar[List[str]] = ["name", "version", "function_name", "tags", "description", "llm_filter", "llm_provider"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -74,6 +78,12 @@ class CapabilityInfo(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of llm_filter
+        if self.llm_filter:
+            _dict['llm_filter'] = self.llm_filter.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of llm_provider
+        if self.llm_provider:
+            _dict['llm_provider'] = self.llm_provider.to_dict()
         return _dict
 
     @classmethod
@@ -90,6 +100,8 @@ class CapabilityInfo(BaseModel):
             "version": obj.get("version") if obj.get("version") is not None else '1.0.0',
             "function_name": obj.get("function_name"),
             "tags": obj.get("tags"),
-            "description": obj.get("description")
+            "description": obj.get("description"),
+            "llm_filter": LLMToolFilter.from_dict(obj["llm_filter"]) if obj.get("llm_filter") is not None else None,
+            "llm_provider": LLMProvider.from_dict(obj["llm_provider"]) if obj.get("llm_provider") is not None else None
         })
         return _obj

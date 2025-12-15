@@ -208,7 +208,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 			for i, tool := range tools {
 				// Convert registry.LLMToolInfo to generated.LLMToolInfo
 				generatedTools[i] = generated.LLMToolInfo{
-					Name:        tool.FunctionName,
+					Name:        tool.Name,
 					Capability:  tool.Capability,
 					Description: tool.Description,
 					Endpoint:    tool.Endpoint,

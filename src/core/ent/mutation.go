@@ -9,6 +9,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 	"sync"
@@ -27,46 +29,54 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAgent                = "Agent"
-	TypeCapability           = "Capability"
-	TypeDependencyResolution = "DependencyResolution"
-	TypeRegistryEvent        = "RegistryEvent"
+	TypeAgent                 = "Agent"
+	TypeCapability            = "Capability"
+	TypeDependencyResolution  = "DependencyResolution"
+	TypeLLMProviderResolution = "LLMProviderResolution"
+	TypeLLMToolResolution     = "LLMToolResolution"
+	TypeRegistryEvent         = "RegistryEvent"
 )
 
 // AgentMutation represents an operation that mutates the Agent nodes in the graph.
 type AgentMutation struct {
 	config
-	op                            Op
-	typ                           string
-	id                            *string
-	agent_type                    *agent.AgentType
-	name                          *string
-	version                       *string
-	http_host                     *string
-	http_port                     *int
-	addhttp_port                  *int
-	namespace                     *string
-	status                        *agent.Status
-	total_dependencies            *int
-	addtotal_dependencies         *int
-	dependencies_resolved         *int
-	adddependencies_resolved      *int
-	created_at                    *time.Time
-	updated_at                    *time.Time
-	last_full_refresh             *time.Time
-	clearedFields                 map[string]struct{}
-	capabilities                  map[int]struct{}
-	removedcapabilities           map[int]struct{}
-	clearedcapabilities           bool
-	events                        map[int]struct{}
-	removedevents                 map[int]struct{}
-	clearedevents                 bool
-	dependency_resolutions        map[int]struct{}
-	removeddependency_resolutions map[int]struct{}
-	cleareddependency_resolutions bool
-	done                          bool
-	oldValue                      func(context.Context) (*Agent, error)
-	predicates                    []predicate.Agent
+	op                              Op
+	typ                             string
+	id                              *string
+	agent_type                      *agent.AgentType
+	name                            *string
+	version                         *string
+	http_host                       *string
+	http_port                       *int
+	addhttp_port                    *int
+	namespace                       *string
+	status                          *agent.Status
+	total_dependencies              *int
+	addtotal_dependencies           *int
+	dependencies_resolved           *int
+	adddependencies_resolved        *int
+	created_at                      *time.Time
+	updated_at                      *time.Time
+	last_full_refresh               *time.Time
+	clearedFields                   map[string]struct{}
+	capabilities                    map[int]struct{}
+	removedcapabilities             map[int]struct{}
+	clearedcapabilities             bool
+	events                          map[int]struct{}
+	removedevents                   map[int]struct{}
+	clearedevents                   bool
+	dependency_resolutions          map[int]struct{}
+	removeddependency_resolutions   map[int]struct{}
+	cleareddependency_resolutions   bool
+	llm_tool_resolutions            map[int]struct{}
+	removedllm_tool_resolutions     map[int]struct{}
+	clearedllm_tool_resolutions     bool
+	llm_provider_resolutions        map[int]struct{}
+	removedllm_provider_resolutions map[int]struct{}
+	clearedllm_provider_resolutions bool
+	done                            bool
+	oldValue                        func(context.Context) (*Agent, error)
+	predicates                      []predicate.Agent
 }
 
 var _ ent.Mutation = (*AgentMutation)(nil)
@@ -867,6 +877,114 @@ func (m *AgentMutation) ResetDependencyResolutions() {
 	m.removeddependency_resolutions = nil
 }
 
+// AddLlmToolResolutionIDs adds the "llm_tool_resolutions" edge to the LLMToolResolution entity by ids.
+func (m *AgentMutation) AddLlmToolResolutionIDs(ids ...int) {
+	if m.llm_tool_resolutions == nil {
+		m.llm_tool_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.llm_tool_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// ClearLlmToolResolutions clears the "llm_tool_resolutions" edge to the LLMToolResolution entity.
+func (m *AgentMutation) ClearLlmToolResolutions() {
+	m.clearedllm_tool_resolutions = true
+}
+
+// LlmToolResolutionsCleared reports if the "llm_tool_resolutions" edge to the LLMToolResolution entity was cleared.
+func (m *AgentMutation) LlmToolResolutionsCleared() bool {
+	return m.clearedllm_tool_resolutions
+}
+
+// RemoveLlmToolResolutionIDs removes the "llm_tool_resolutions" edge to the LLMToolResolution entity by IDs.
+func (m *AgentMutation) RemoveLlmToolResolutionIDs(ids ...int) {
+	if m.removedllm_tool_resolutions == nil {
+		m.removedllm_tool_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.llm_tool_resolutions, ids[i])
+		m.removedllm_tool_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedLlmToolResolutions returns the removed IDs of the "llm_tool_resolutions" edge to the LLMToolResolution entity.
+func (m *AgentMutation) RemovedLlmToolResolutionsIDs() (ids []int) {
+	for id := range m.removedllm_tool_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// LlmToolResolutionsIDs returns the "llm_tool_resolutions" edge IDs in the mutation.
+func (m *AgentMutation) LlmToolResolutionsIDs() (ids []int) {
+	for id := range m.llm_tool_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetLlmToolResolutions resets all changes to the "llm_tool_resolutions" edge.
+func (m *AgentMutation) ResetLlmToolResolutions() {
+	m.llm_tool_resolutions = nil
+	m.clearedllm_tool_resolutions = false
+	m.removedllm_tool_resolutions = nil
+}
+
+// AddLlmProviderResolutionIDs adds the "llm_provider_resolutions" edge to the LLMProviderResolution entity by ids.
+func (m *AgentMutation) AddLlmProviderResolutionIDs(ids ...int) {
+	if m.llm_provider_resolutions == nil {
+		m.llm_provider_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		m.llm_provider_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// ClearLlmProviderResolutions clears the "llm_provider_resolutions" edge to the LLMProviderResolution entity.
+func (m *AgentMutation) ClearLlmProviderResolutions() {
+	m.clearedllm_provider_resolutions = true
+}
+
+// LlmProviderResolutionsCleared reports if the "llm_provider_resolutions" edge to the LLMProviderResolution entity was cleared.
+func (m *AgentMutation) LlmProviderResolutionsCleared() bool {
+	return m.clearedllm_provider_resolutions
+}
+
+// RemoveLlmProviderResolutionIDs removes the "llm_provider_resolutions" edge to the LLMProviderResolution entity by IDs.
+func (m *AgentMutation) RemoveLlmProviderResolutionIDs(ids ...int) {
+	if m.removedllm_provider_resolutions == nil {
+		m.removedllm_provider_resolutions = make(map[int]struct{})
+	}
+	for i := range ids {
+		delete(m.llm_provider_resolutions, ids[i])
+		m.removedllm_provider_resolutions[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedLlmProviderResolutions returns the removed IDs of the "llm_provider_resolutions" edge to the LLMProviderResolution entity.
+func (m *AgentMutation) RemovedLlmProviderResolutionsIDs() (ids []int) {
+	for id := range m.removedllm_provider_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// LlmProviderResolutionsIDs returns the "llm_provider_resolutions" edge IDs in the mutation.
+func (m *AgentMutation) LlmProviderResolutionsIDs() (ids []int) {
+	for id := range m.llm_provider_resolutions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetLlmProviderResolutions resets all changes to the "llm_provider_resolutions" edge.
+func (m *AgentMutation) ResetLlmProviderResolutions() {
+	m.llm_provider_resolutions = nil
+	m.clearedllm_provider_resolutions = false
+	m.removedllm_provider_resolutions = nil
+}
+
 // Where appends a list predicates to the AgentMutation builder.
 func (m *AgentMutation) Where(ps ...predicate.Agent) {
 	m.predicates = append(m.predicates, ps...)
@@ -1247,7 +1365,7 @@ func (m *AgentMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AgentMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
 	if m.capabilities != nil {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
@@ -1256,6 +1374,12 @@ func (m *AgentMutation) AddedEdges() []string {
 	}
 	if m.dependency_resolutions != nil {
 		edges = append(edges, agent.EdgeDependencyResolutions)
+	}
+	if m.llm_tool_resolutions != nil {
+		edges = append(edges, agent.EdgeLlmToolResolutions)
+	}
+	if m.llm_provider_resolutions != nil {
+		edges = append(edges, agent.EdgeLlmProviderResolutions)
 	}
 	return edges
 }
@@ -1282,13 +1406,25 @@ func (m *AgentMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case agent.EdgeLlmToolResolutions:
+		ids := make([]ent.Value, 0, len(m.llm_tool_resolutions))
+		for id := range m.llm_tool_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
+	case agent.EdgeLlmProviderResolutions:
+		ids := make([]ent.Value, 0, len(m.llm_provider_resolutions))
+		for id := range m.llm_provider_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AgentMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
 	if m.removedcapabilities != nil {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
@@ -1297,6 +1433,12 @@ func (m *AgentMutation) RemovedEdges() []string {
 	}
 	if m.removeddependency_resolutions != nil {
 		edges = append(edges, agent.EdgeDependencyResolutions)
+	}
+	if m.removedllm_tool_resolutions != nil {
+		edges = append(edges, agent.EdgeLlmToolResolutions)
+	}
+	if m.removedllm_provider_resolutions != nil {
+		edges = append(edges, agent.EdgeLlmProviderResolutions)
 	}
 	return edges
 }
@@ -1323,13 +1465,25 @@ func (m *AgentMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case agent.EdgeLlmToolResolutions:
+		ids := make([]ent.Value, 0, len(m.removedllm_tool_resolutions))
+		for id := range m.removedllm_tool_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
+	case agent.EdgeLlmProviderResolutions:
+		ids := make([]ent.Value, 0, len(m.removedllm_provider_resolutions))
+		for id := range m.removedllm_provider_resolutions {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AgentMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 5)
 	if m.clearedcapabilities {
 		edges = append(edges, agent.EdgeCapabilities)
 	}
@@ -1338,6 +1492,12 @@ func (m *AgentMutation) ClearedEdges() []string {
 	}
 	if m.cleareddependency_resolutions {
 		edges = append(edges, agent.EdgeDependencyResolutions)
+	}
+	if m.clearedllm_tool_resolutions {
+		edges = append(edges, agent.EdgeLlmToolResolutions)
+	}
+	if m.clearedllm_provider_resolutions {
+		edges = append(edges, agent.EdgeLlmProviderResolutions)
 	}
 	return edges
 }
@@ -1352,6 +1512,10 @@ func (m *AgentMutation) EdgeCleared(name string) bool {
 		return m.clearedevents
 	case agent.EdgeDependencyResolutions:
 		return m.cleareddependency_resolutions
+	case agent.EdgeLlmToolResolutions:
+		return m.clearedllm_tool_resolutions
+	case agent.EdgeLlmProviderResolutions:
+		return m.clearedllm_provider_resolutions
 	}
 	return false
 }
@@ -1376,6 +1540,12 @@ func (m *AgentMutation) ResetEdge(name string) error {
 		return nil
 	case agent.EdgeDependencyResolutions:
 		m.ResetDependencyResolutions()
+		return nil
+	case agent.EdgeLlmToolResolutions:
+		m.ResetLlmToolResolutions()
+		return nil
+	case agent.EdgeLlmProviderResolutions:
+		m.ResetLlmProviderResolutions()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent edge %s", name)
@@ -3724,6 +3894,2441 @@ func (m *DependencyResolutionMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown DependencyResolution edge %s", name)
+}
+
+// LLMProviderResolutionMutation represents an operation that mutates the LLMProviderResolution nodes in the graph.
+type LLMProviderResolutionMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *int
+	consumer_function_name *string
+	required_capability    *string
+	required_tags          *[]string
+	appendrequired_tags    []string
+	required_version       *string
+	required_namespace     *string
+	provider_function_name *string
+	endpoint               *string
+	status                 *llmproviderresolution.Status
+	resolved_at            *time.Time
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	consumer_agent         *string
+	clearedconsumer_agent  bool
+	provider_agent         *string
+	clearedprovider_agent  bool
+	done                   bool
+	oldValue               func(context.Context) (*LLMProviderResolution, error)
+	predicates             []predicate.LLMProviderResolution
+}
+
+var _ ent.Mutation = (*LLMProviderResolutionMutation)(nil)
+
+// llmproviderresolutionOption allows management of the mutation configuration using functional options.
+type llmproviderresolutionOption func(*LLMProviderResolutionMutation)
+
+// newLLMProviderResolutionMutation creates new mutation for the LLMProviderResolution entity.
+func newLLMProviderResolutionMutation(c config, op Op, opts ...llmproviderresolutionOption) *LLMProviderResolutionMutation {
+	m := &LLMProviderResolutionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeLLMProviderResolution,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withLLMProviderResolutionID sets the ID field of the mutation.
+func withLLMProviderResolutionID(id int) llmproviderresolutionOption {
+	return func(m *LLMProviderResolutionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *LLMProviderResolution
+		)
+		m.oldValue = func(ctx context.Context) (*LLMProviderResolution, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().LLMProviderResolution.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withLLMProviderResolution sets the old LLMProviderResolution of the mutation.
+func withLLMProviderResolution(node *LLMProviderResolution) llmproviderresolutionOption {
+	return func(m *LLMProviderResolutionMutation) {
+		m.oldValue = func(context.Context) (*LLMProviderResolution, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m LLMProviderResolutionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m LLMProviderResolutionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *LLMProviderResolutionMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *LLMProviderResolutionMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().LLMProviderResolution.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetConsumerAgentID sets the "consumer_agent_id" field.
+func (m *LLMProviderResolutionMutation) SetConsumerAgentID(s string) {
+	m.consumer_agent = &s
+}
+
+// ConsumerAgentID returns the value of the "consumer_agent_id" field in the mutation.
+func (m *LLMProviderResolutionMutation) ConsumerAgentID() (r string, exists bool) {
+	v := m.consumer_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerAgentID returns the old "consumer_agent_id" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldConsumerAgentID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerAgentID: %w", err)
+	}
+	return oldValue.ConsumerAgentID, nil
+}
+
+// ResetConsumerAgentID resets all changes to the "consumer_agent_id" field.
+func (m *LLMProviderResolutionMutation) ResetConsumerAgentID() {
+	m.consumer_agent = nil
+}
+
+// SetConsumerFunctionName sets the "consumer_function_name" field.
+func (m *LLMProviderResolutionMutation) SetConsumerFunctionName(s string) {
+	m.consumer_function_name = &s
+}
+
+// ConsumerFunctionName returns the value of the "consumer_function_name" field in the mutation.
+func (m *LLMProviderResolutionMutation) ConsumerFunctionName() (r string, exists bool) {
+	v := m.consumer_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerFunctionName returns the old "consumer_function_name" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldConsumerFunctionName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerFunctionName: %w", err)
+	}
+	return oldValue.ConsumerFunctionName, nil
+}
+
+// ResetConsumerFunctionName resets all changes to the "consumer_function_name" field.
+func (m *LLMProviderResolutionMutation) ResetConsumerFunctionName() {
+	m.consumer_function_name = nil
+}
+
+// SetRequiredCapability sets the "required_capability" field.
+func (m *LLMProviderResolutionMutation) SetRequiredCapability(s string) {
+	m.required_capability = &s
+}
+
+// RequiredCapability returns the value of the "required_capability" field in the mutation.
+func (m *LLMProviderResolutionMutation) RequiredCapability() (r string, exists bool) {
+	v := m.required_capability
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredCapability returns the old "required_capability" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldRequiredCapability(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredCapability is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredCapability requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredCapability: %w", err)
+	}
+	return oldValue.RequiredCapability, nil
+}
+
+// ResetRequiredCapability resets all changes to the "required_capability" field.
+func (m *LLMProviderResolutionMutation) ResetRequiredCapability() {
+	m.required_capability = nil
+}
+
+// SetRequiredTags sets the "required_tags" field.
+func (m *LLMProviderResolutionMutation) SetRequiredTags(s []string) {
+	m.required_tags = &s
+	m.appendrequired_tags = nil
+}
+
+// RequiredTags returns the value of the "required_tags" field in the mutation.
+func (m *LLMProviderResolutionMutation) RequiredTags() (r []string, exists bool) {
+	v := m.required_tags
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredTags returns the old "required_tags" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldRequiredTags(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredTags is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredTags requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredTags: %w", err)
+	}
+	return oldValue.RequiredTags, nil
+}
+
+// AppendRequiredTags adds s to the "required_tags" field.
+func (m *LLMProviderResolutionMutation) AppendRequiredTags(s []string) {
+	m.appendrequired_tags = append(m.appendrequired_tags, s...)
+}
+
+// AppendedRequiredTags returns the list of values that were appended to the "required_tags" field in this mutation.
+func (m *LLMProviderResolutionMutation) AppendedRequiredTags() ([]string, bool) {
+	if len(m.appendrequired_tags) == 0 {
+		return nil, false
+	}
+	return m.appendrequired_tags, true
+}
+
+// ClearRequiredTags clears the value of the "required_tags" field.
+func (m *LLMProviderResolutionMutation) ClearRequiredTags() {
+	m.required_tags = nil
+	m.appendrequired_tags = nil
+	m.clearedFields[llmproviderresolution.FieldRequiredTags] = struct{}{}
+}
+
+// RequiredTagsCleared returns if the "required_tags" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) RequiredTagsCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldRequiredTags]
+	return ok
+}
+
+// ResetRequiredTags resets all changes to the "required_tags" field.
+func (m *LLMProviderResolutionMutation) ResetRequiredTags() {
+	m.required_tags = nil
+	m.appendrequired_tags = nil
+	delete(m.clearedFields, llmproviderresolution.FieldRequiredTags)
+}
+
+// SetRequiredVersion sets the "required_version" field.
+func (m *LLMProviderResolutionMutation) SetRequiredVersion(s string) {
+	m.required_version = &s
+}
+
+// RequiredVersion returns the value of the "required_version" field in the mutation.
+func (m *LLMProviderResolutionMutation) RequiredVersion() (r string, exists bool) {
+	v := m.required_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredVersion returns the old "required_version" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldRequiredVersion(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredVersion: %w", err)
+	}
+	return oldValue.RequiredVersion, nil
+}
+
+// ClearRequiredVersion clears the value of the "required_version" field.
+func (m *LLMProviderResolutionMutation) ClearRequiredVersion() {
+	m.required_version = nil
+	m.clearedFields[llmproviderresolution.FieldRequiredVersion] = struct{}{}
+}
+
+// RequiredVersionCleared returns if the "required_version" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) RequiredVersionCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldRequiredVersion]
+	return ok
+}
+
+// ResetRequiredVersion resets all changes to the "required_version" field.
+func (m *LLMProviderResolutionMutation) ResetRequiredVersion() {
+	m.required_version = nil
+	delete(m.clearedFields, llmproviderresolution.FieldRequiredVersion)
+}
+
+// SetRequiredNamespace sets the "required_namespace" field.
+func (m *LLMProviderResolutionMutation) SetRequiredNamespace(s string) {
+	m.required_namespace = &s
+}
+
+// RequiredNamespace returns the value of the "required_namespace" field in the mutation.
+func (m *LLMProviderResolutionMutation) RequiredNamespace() (r string, exists bool) {
+	v := m.required_namespace
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredNamespace returns the old "required_namespace" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldRequiredNamespace(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredNamespace is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredNamespace requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredNamespace: %w", err)
+	}
+	return oldValue.RequiredNamespace, nil
+}
+
+// ResetRequiredNamespace resets all changes to the "required_namespace" field.
+func (m *LLMProviderResolutionMutation) ResetRequiredNamespace() {
+	m.required_namespace = nil
+}
+
+// SetProviderAgentID sets the "provider_agent_id" field.
+func (m *LLMProviderResolutionMutation) SetProviderAgentID(s string) {
+	m.provider_agent = &s
+}
+
+// ProviderAgentID returns the value of the "provider_agent_id" field in the mutation.
+func (m *LLMProviderResolutionMutation) ProviderAgentID() (r string, exists bool) {
+	v := m.provider_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderAgentID returns the old "provider_agent_id" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldProviderAgentID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderAgentID: %w", err)
+	}
+	return oldValue.ProviderAgentID, nil
+}
+
+// ClearProviderAgentID clears the value of the "provider_agent_id" field.
+func (m *LLMProviderResolutionMutation) ClearProviderAgentID() {
+	m.provider_agent = nil
+	m.clearedFields[llmproviderresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentIDCleared returns if the "provider_agent_id" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) ProviderAgentIDCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldProviderAgentID]
+	return ok
+}
+
+// ResetProviderAgentID resets all changes to the "provider_agent_id" field.
+func (m *LLMProviderResolutionMutation) ResetProviderAgentID() {
+	m.provider_agent = nil
+	delete(m.clearedFields, llmproviderresolution.FieldProviderAgentID)
+}
+
+// SetProviderFunctionName sets the "provider_function_name" field.
+func (m *LLMProviderResolutionMutation) SetProviderFunctionName(s string) {
+	m.provider_function_name = &s
+}
+
+// ProviderFunctionName returns the value of the "provider_function_name" field in the mutation.
+func (m *LLMProviderResolutionMutation) ProviderFunctionName() (r string, exists bool) {
+	v := m.provider_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderFunctionName returns the old "provider_function_name" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldProviderFunctionName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderFunctionName: %w", err)
+	}
+	return oldValue.ProviderFunctionName, nil
+}
+
+// ClearProviderFunctionName clears the value of the "provider_function_name" field.
+func (m *LLMProviderResolutionMutation) ClearProviderFunctionName() {
+	m.provider_function_name = nil
+	m.clearedFields[llmproviderresolution.FieldProviderFunctionName] = struct{}{}
+}
+
+// ProviderFunctionNameCleared returns if the "provider_function_name" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) ProviderFunctionNameCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldProviderFunctionName]
+	return ok
+}
+
+// ResetProviderFunctionName resets all changes to the "provider_function_name" field.
+func (m *LLMProviderResolutionMutation) ResetProviderFunctionName() {
+	m.provider_function_name = nil
+	delete(m.clearedFields, llmproviderresolution.FieldProviderFunctionName)
+}
+
+// SetEndpoint sets the "endpoint" field.
+func (m *LLMProviderResolutionMutation) SetEndpoint(s string) {
+	m.endpoint = &s
+}
+
+// Endpoint returns the value of the "endpoint" field in the mutation.
+func (m *LLMProviderResolutionMutation) Endpoint() (r string, exists bool) {
+	v := m.endpoint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpoint returns the old "endpoint" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldEndpoint(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpoint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpoint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpoint: %w", err)
+	}
+	return oldValue.Endpoint, nil
+}
+
+// ClearEndpoint clears the value of the "endpoint" field.
+func (m *LLMProviderResolutionMutation) ClearEndpoint() {
+	m.endpoint = nil
+	m.clearedFields[llmproviderresolution.FieldEndpoint] = struct{}{}
+}
+
+// EndpointCleared returns if the "endpoint" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) EndpointCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldEndpoint]
+	return ok
+}
+
+// ResetEndpoint resets all changes to the "endpoint" field.
+func (m *LLMProviderResolutionMutation) ResetEndpoint() {
+	m.endpoint = nil
+	delete(m.clearedFields, llmproviderresolution.FieldEndpoint)
+}
+
+// SetStatus sets the "status" field.
+func (m *LLMProviderResolutionMutation) SetStatus(l llmproviderresolution.Status) {
+	m.status = &l
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *LLMProviderResolutionMutation) Status() (r llmproviderresolution.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldStatus(ctx context.Context) (v llmproviderresolution.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *LLMProviderResolutionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetResolvedAt sets the "resolved_at" field.
+func (m *LLMProviderResolutionMutation) SetResolvedAt(t time.Time) {
+	m.resolved_at = &t
+}
+
+// ResolvedAt returns the value of the "resolved_at" field in the mutation.
+func (m *LLMProviderResolutionMutation) ResolvedAt() (r time.Time, exists bool) {
+	v := m.resolved_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResolvedAt returns the old "resolved_at" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldResolvedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResolvedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResolvedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResolvedAt: %w", err)
+	}
+	return oldValue.ResolvedAt, nil
+}
+
+// ClearResolvedAt clears the value of the "resolved_at" field.
+func (m *LLMProviderResolutionMutation) ClearResolvedAt() {
+	m.resolved_at = nil
+	m.clearedFields[llmproviderresolution.FieldResolvedAt] = struct{}{}
+}
+
+// ResolvedAtCleared returns if the "resolved_at" field was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) ResolvedAtCleared() bool {
+	_, ok := m.clearedFields[llmproviderresolution.FieldResolvedAt]
+	return ok
+}
+
+// ResetResolvedAt resets all changes to the "resolved_at" field.
+func (m *LLMProviderResolutionMutation) ResetResolvedAt() {
+	m.resolved_at = nil
+	delete(m.clearedFields, llmproviderresolution.FieldResolvedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *LLMProviderResolutionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *LLMProviderResolutionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *LLMProviderResolutionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *LLMProviderResolutionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *LLMProviderResolutionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the LLMProviderResolution entity.
+// If the LLMProviderResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMProviderResolutionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *LLMProviderResolutionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearConsumerAgent clears the "consumer_agent" edge to the Agent entity.
+func (m *LLMProviderResolutionMutation) ClearConsumerAgent() {
+	m.clearedconsumer_agent = true
+	m.clearedFields[llmproviderresolution.FieldConsumerAgentID] = struct{}{}
+}
+
+// ConsumerAgentCleared reports if the "consumer_agent" edge to the Agent entity was cleared.
+func (m *LLMProviderResolutionMutation) ConsumerAgentCleared() bool {
+	return m.clearedconsumer_agent
+}
+
+// ConsumerAgentIDs returns the "consumer_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ConsumerAgentID instead. It exists only for internal usage by the builders.
+func (m *LLMProviderResolutionMutation) ConsumerAgentIDs() (ids []string) {
+	if id := m.consumer_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetConsumerAgent resets all changes to the "consumer_agent" edge.
+func (m *LLMProviderResolutionMutation) ResetConsumerAgent() {
+	m.consumer_agent = nil
+	m.clearedconsumer_agent = false
+}
+
+// ClearProviderAgent clears the "provider_agent" edge to the Agent entity.
+func (m *LLMProviderResolutionMutation) ClearProviderAgent() {
+	m.clearedprovider_agent = true
+	m.clearedFields[llmproviderresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentCleared reports if the "provider_agent" edge to the Agent entity was cleared.
+func (m *LLMProviderResolutionMutation) ProviderAgentCleared() bool {
+	return m.ProviderAgentIDCleared() || m.clearedprovider_agent
+}
+
+// ProviderAgentIDs returns the "provider_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ProviderAgentID instead. It exists only for internal usage by the builders.
+func (m *LLMProviderResolutionMutation) ProviderAgentIDs() (ids []string) {
+	if id := m.provider_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetProviderAgent resets all changes to the "provider_agent" edge.
+func (m *LLMProviderResolutionMutation) ResetProviderAgent() {
+	m.provider_agent = nil
+	m.clearedprovider_agent = false
+}
+
+// Where appends a list predicates to the LLMProviderResolutionMutation builder.
+func (m *LLMProviderResolutionMutation) Where(ps ...predicate.LLMProviderResolution) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the LLMProviderResolutionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *LLMProviderResolutionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.LLMProviderResolution, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *LLMProviderResolutionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *LLMProviderResolutionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (LLMProviderResolution).
+func (m *LLMProviderResolutionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *LLMProviderResolutionMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.consumer_agent != nil {
+		fields = append(fields, llmproviderresolution.FieldConsumerAgentID)
+	}
+	if m.consumer_function_name != nil {
+		fields = append(fields, llmproviderresolution.FieldConsumerFunctionName)
+	}
+	if m.required_capability != nil {
+		fields = append(fields, llmproviderresolution.FieldRequiredCapability)
+	}
+	if m.required_tags != nil {
+		fields = append(fields, llmproviderresolution.FieldRequiredTags)
+	}
+	if m.required_version != nil {
+		fields = append(fields, llmproviderresolution.FieldRequiredVersion)
+	}
+	if m.required_namespace != nil {
+		fields = append(fields, llmproviderresolution.FieldRequiredNamespace)
+	}
+	if m.provider_agent != nil {
+		fields = append(fields, llmproviderresolution.FieldProviderAgentID)
+	}
+	if m.provider_function_name != nil {
+		fields = append(fields, llmproviderresolution.FieldProviderFunctionName)
+	}
+	if m.endpoint != nil {
+		fields = append(fields, llmproviderresolution.FieldEndpoint)
+	}
+	if m.status != nil {
+		fields = append(fields, llmproviderresolution.FieldStatus)
+	}
+	if m.resolved_at != nil {
+		fields = append(fields, llmproviderresolution.FieldResolvedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, llmproviderresolution.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, llmproviderresolution.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *LLMProviderResolutionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case llmproviderresolution.FieldConsumerAgentID:
+		return m.ConsumerAgentID()
+	case llmproviderresolution.FieldConsumerFunctionName:
+		return m.ConsumerFunctionName()
+	case llmproviderresolution.FieldRequiredCapability:
+		return m.RequiredCapability()
+	case llmproviderresolution.FieldRequiredTags:
+		return m.RequiredTags()
+	case llmproviderresolution.FieldRequiredVersion:
+		return m.RequiredVersion()
+	case llmproviderresolution.FieldRequiredNamespace:
+		return m.RequiredNamespace()
+	case llmproviderresolution.FieldProviderAgentID:
+		return m.ProviderAgentID()
+	case llmproviderresolution.FieldProviderFunctionName:
+		return m.ProviderFunctionName()
+	case llmproviderresolution.FieldEndpoint:
+		return m.Endpoint()
+	case llmproviderresolution.FieldStatus:
+		return m.Status()
+	case llmproviderresolution.FieldResolvedAt:
+		return m.ResolvedAt()
+	case llmproviderresolution.FieldCreatedAt:
+		return m.CreatedAt()
+	case llmproviderresolution.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *LLMProviderResolutionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case llmproviderresolution.FieldConsumerAgentID:
+		return m.OldConsumerAgentID(ctx)
+	case llmproviderresolution.FieldConsumerFunctionName:
+		return m.OldConsumerFunctionName(ctx)
+	case llmproviderresolution.FieldRequiredCapability:
+		return m.OldRequiredCapability(ctx)
+	case llmproviderresolution.FieldRequiredTags:
+		return m.OldRequiredTags(ctx)
+	case llmproviderresolution.FieldRequiredVersion:
+		return m.OldRequiredVersion(ctx)
+	case llmproviderresolution.FieldRequiredNamespace:
+		return m.OldRequiredNamespace(ctx)
+	case llmproviderresolution.FieldProviderAgentID:
+		return m.OldProviderAgentID(ctx)
+	case llmproviderresolution.FieldProviderFunctionName:
+		return m.OldProviderFunctionName(ctx)
+	case llmproviderresolution.FieldEndpoint:
+		return m.OldEndpoint(ctx)
+	case llmproviderresolution.FieldStatus:
+		return m.OldStatus(ctx)
+	case llmproviderresolution.FieldResolvedAt:
+		return m.OldResolvedAt(ctx)
+	case llmproviderresolution.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case llmproviderresolution.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown LLMProviderResolution field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LLMProviderResolutionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case llmproviderresolution.FieldConsumerAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerAgentID(v)
+		return nil
+	case llmproviderresolution.FieldConsumerFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerFunctionName(v)
+		return nil
+	case llmproviderresolution.FieldRequiredCapability:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredCapability(v)
+		return nil
+	case llmproviderresolution.FieldRequiredTags:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredTags(v)
+		return nil
+	case llmproviderresolution.FieldRequiredVersion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredVersion(v)
+		return nil
+	case llmproviderresolution.FieldRequiredNamespace:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredNamespace(v)
+		return nil
+	case llmproviderresolution.FieldProviderAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderAgentID(v)
+		return nil
+	case llmproviderresolution.FieldProviderFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderFunctionName(v)
+		return nil
+	case llmproviderresolution.FieldEndpoint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpoint(v)
+		return nil
+	case llmproviderresolution.FieldStatus:
+		v, ok := value.(llmproviderresolution.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case llmproviderresolution.FieldResolvedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResolvedAt(v)
+		return nil
+	case llmproviderresolution.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case llmproviderresolution.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown LLMProviderResolution field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *LLMProviderResolutionMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *LLMProviderResolutionMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LLMProviderResolutionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown LLMProviderResolution numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *LLMProviderResolutionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(llmproviderresolution.FieldRequiredTags) {
+		fields = append(fields, llmproviderresolution.FieldRequiredTags)
+	}
+	if m.FieldCleared(llmproviderresolution.FieldRequiredVersion) {
+		fields = append(fields, llmproviderresolution.FieldRequiredVersion)
+	}
+	if m.FieldCleared(llmproviderresolution.FieldProviderAgentID) {
+		fields = append(fields, llmproviderresolution.FieldProviderAgentID)
+	}
+	if m.FieldCleared(llmproviderresolution.FieldProviderFunctionName) {
+		fields = append(fields, llmproviderresolution.FieldProviderFunctionName)
+	}
+	if m.FieldCleared(llmproviderresolution.FieldEndpoint) {
+		fields = append(fields, llmproviderresolution.FieldEndpoint)
+	}
+	if m.FieldCleared(llmproviderresolution.FieldResolvedAt) {
+		fields = append(fields, llmproviderresolution.FieldResolvedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *LLMProviderResolutionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *LLMProviderResolutionMutation) ClearField(name string) error {
+	switch name {
+	case llmproviderresolution.FieldRequiredTags:
+		m.ClearRequiredTags()
+		return nil
+	case llmproviderresolution.FieldRequiredVersion:
+		m.ClearRequiredVersion()
+		return nil
+	case llmproviderresolution.FieldProviderAgentID:
+		m.ClearProviderAgentID()
+		return nil
+	case llmproviderresolution.FieldProviderFunctionName:
+		m.ClearProviderFunctionName()
+		return nil
+	case llmproviderresolution.FieldEndpoint:
+		m.ClearEndpoint()
+		return nil
+	case llmproviderresolution.FieldResolvedAt:
+		m.ClearResolvedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMProviderResolution nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *LLMProviderResolutionMutation) ResetField(name string) error {
+	switch name {
+	case llmproviderresolution.FieldConsumerAgentID:
+		m.ResetConsumerAgentID()
+		return nil
+	case llmproviderresolution.FieldConsumerFunctionName:
+		m.ResetConsumerFunctionName()
+		return nil
+	case llmproviderresolution.FieldRequiredCapability:
+		m.ResetRequiredCapability()
+		return nil
+	case llmproviderresolution.FieldRequiredTags:
+		m.ResetRequiredTags()
+		return nil
+	case llmproviderresolution.FieldRequiredVersion:
+		m.ResetRequiredVersion()
+		return nil
+	case llmproviderresolution.FieldRequiredNamespace:
+		m.ResetRequiredNamespace()
+		return nil
+	case llmproviderresolution.FieldProviderAgentID:
+		m.ResetProviderAgentID()
+		return nil
+	case llmproviderresolution.FieldProviderFunctionName:
+		m.ResetProviderFunctionName()
+		return nil
+	case llmproviderresolution.FieldEndpoint:
+		m.ResetEndpoint()
+		return nil
+	case llmproviderresolution.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case llmproviderresolution.FieldResolvedAt:
+		m.ResetResolvedAt()
+		return nil
+	case llmproviderresolution.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case llmproviderresolution.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMProviderResolution field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *LLMProviderResolutionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.consumer_agent != nil {
+		edges = append(edges, llmproviderresolution.EdgeConsumerAgent)
+	}
+	if m.provider_agent != nil {
+		edges = append(edges, llmproviderresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *LLMProviderResolutionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case llmproviderresolution.EdgeConsumerAgent:
+		if id := m.consumer_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	case llmproviderresolution.EdgeProviderAgent:
+		if id := m.provider_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *LLMProviderResolutionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *LLMProviderResolutionMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *LLMProviderResolutionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedconsumer_agent {
+		edges = append(edges, llmproviderresolution.EdgeConsumerAgent)
+	}
+	if m.clearedprovider_agent {
+		edges = append(edges, llmproviderresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *LLMProviderResolutionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case llmproviderresolution.EdgeConsumerAgent:
+		return m.clearedconsumer_agent
+	case llmproviderresolution.EdgeProviderAgent:
+		return m.clearedprovider_agent
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *LLMProviderResolutionMutation) ClearEdge(name string) error {
+	switch name {
+	case llmproviderresolution.EdgeConsumerAgent:
+		m.ClearConsumerAgent()
+		return nil
+	case llmproviderresolution.EdgeProviderAgent:
+		m.ClearProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMProviderResolution unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *LLMProviderResolutionMutation) ResetEdge(name string) error {
+	switch name {
+	case llmproviderresolution.EdgeConsumerAgent:
+		m.ResetConsumerAgent()
+		return nil
+	case llmproviderresolution.EdgeProviderAgent:
+		m.ResetProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMProviderResolution edge %s", name)
+}
+
+// LLMToolResolutionMutation represents an operation that mutates the LLMToolResolution nodes in the graph.
+type LLMToolResolutionMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *int
+	consumer_function_name *string
+	filter_capability      *string
+	filter_tags            *[]string
+	appendfilter_tags      []string
+	filter_mode            *string
+	provider_function_name *string
+	provider_capability    *string
+	endpoint               *string
+	status                 *llmtoolresolution.Status
+	resolved_at            *time.Time
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	consumer_agent         *string
+	clearedconsumer_agent  bool
+	provider_agent         *string
+	clearedprovider_agent  bool
+	done                   bool
+	oldValue               func(context.Context) (*LLMToolResolution, error)
+	predicates             []predicate.LLMToolResolution
+}
+
+var _ ent.Mutation = (*LLMToolResolutionMutation)(nil)
+
+// llmtoolresolutionOption allows management of the mutation configuration using functional options.
+type llmtoolresolutionOption func(*LLMToolResolutionMutation)
+
+// newLLMToolResolutionMutation creates new mutation for the LLMToolResolution entity.
+func newLLMToolResolutionMutation(c config, op Op, opts ...llmtoolresolutionOption) *LLMToolResolutionMutation {
+	m := &LLMToolResolutionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeLLMToolResolution,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withLLMToolResolutionID sets the ID field of the mutation.
+func withLLMToolResolutionID(id int) llmtoolresolutionOption {
+	return func(m *LLMToolResolutionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *LLMToolResolution
+		)
+		m.oldValue = func(ctx context.Context) (*LLMToolResolution, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().LLMToolResolution.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withLLMToolResolution sets the old LLMToolResolution of the mutation.
+func withLLMToolResolution(node *LLMToolResolution) llmtoolresolutionOption {
+	return func(m *LLMToolResolutionMutation) {
+		m.oldValue = func(context.Context) (*LLMToolResolution, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m LLMToolResolutionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m LLMToolResolutionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *LLMToolResolutionMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *LLMToolResolutionMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().LLMToolResolution.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetConsumerAgentID sets the "consumer_agent_id" field.
+func (m *LLMToolResolutionMutation) SetConsumerAgentID(s string) {
+	m.consumer_agent = &s
+}
+
+// ConsumerAgentID returns the value of the "consumer_agent_id" field in the mutation.
+func (m *LLMToolResolutionMutation) ConsumerAgentID() (r string, exists bool) {
+	v := m.consumer_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerAgentID returns the old "consumer_agent_id" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldConsumerAgentID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerAgentID: %w", err)
+	}
+	return oldValue.ConsumerAgentID, nil
+}
+
+// ResetConsumerAgentID resets all changes to the "consumer_agent_id" field.
+func (m *LLMToolResolutionMutation) ResetConsumerAgentID() {
+	m.consumer_agent = nil
+}
+
+// SetConsumerFunctionName sets the "consumer_function_name" field.
+func (m *LLMToolResolutionMutation) SetConsumerFunctionName(s string) {
+	m.consumer_function_name = &s
+}
+
+// ConsumerFunctionName returns the value of the "consumer_function_name" field in the mutation.
+func (m *LLMToolResolutionMutation) ConsumerFunctionName() (r string, exists bool) {
+	v := m.consumer_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsumerFunctionName returns the old "consumer_function_name" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldConsumerFunctionName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsumerFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsumerFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsumerFunctionName: %w", err)
+	}
+	return oldValue.ConsumerFunctionName, nil
+}
+
+// ResetConsumerFunctionName resets all changes to the "consumer_function_name" field.
+func (m *LLMToolResolutionMutation) ResetConsumerFunctionName() {
+	m.consumer_function_name = nil
+}
+
+// SetFilterCapability sets the "filter_capability" field.
+func (m *LLMToolResolutionMutation) SetFilterCapability(s string) {
+	m.filter_capability = &s
+}
+
+// FilterCapability returns the value of the "filter_capability" field in the mutation.
+func (m *LLMToolResolutionMutation) FilterCapability() (r string, exists bool) {
+	v := m.filter_capability
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilterCapability returns the old "filter_capability" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldFilterCapability(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilterCapability is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilterCapability requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilterCapability: %w", err)
+	}
+	return oldValue.FilterCapability, nil
+}
+
+// ClearFilterCapability clears the value of the "filter_capability" field.
+func (m *LLMToolResolutionMutation) ClearFilterCapability() {
+	m.filter_capability = nil
+	m.clearedFields[llmtoolresolution.FieldFilterCapability] = struct{}{}
+}
+
+// FilterCapabilityCleared returns if the "filter_capability" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) FilterCapabilityCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldFilterCapability]
+	return ok
+}
+
+// ResetFilterCapability resets all changes to the "filter_capability" field.
+func (m *LLMToolResolutionMutation) ResetFilterCapability() {
+	m.filter_capability = nil
+	delete(m.clearedFields, llmtoolresolution.FieldFilterCapability)
+}
+
+// SetFilterTags sets the "filter_tags" field.
+func (m *LLMToolResolutionMutation) SetFilterTags(s []string) {
+	m.filter_tags = &s
+	m.appendfilter_tags = nil
+}
+
+// FilterTags returns the value of the "filter_tags" field in the mutation.
+func (m *LLMToolResolutionMutation) FilterTags() (r []string, exists bool) {
+	v := m.filter_tags
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilterTags returns the old "filter_tags" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldFilterTags(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilterTags is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilterTags requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilterTags: %w", err)
+	}
+	return oldValue.FilterTags, nil
+}
+
+// AppendFilterTags adds s to the "filter_tags" field.
+func (m *LLMToolResolutionMutation) AppendFilterTags(s []string) {
+	m.appendfilter_tags = append(m.appendfilter_tags, s...)
+}
+
+// AppendedFilterTags returns the list of values that were appended to the "filter_tags" field in this mutation.
+func (m *LLMToolResolutionMutation) AppendedFilterTags() ([]string, bool) {
+	if len(m.appendfilter_tags) == 0 {
+		return nil, false
+	}
+	return m.appendfilter_tags, true
+}
+
+// ClearFilterTags clears the value of the "filter_tags" field.
+func (m *LLMToolResolutionMutation) ClearFilterTags() {
+	m.filter_tags = nil
+	m.appendfilter_tags = nil
+	m.clearedFields[llmtoolresolution.FieldFilterTags] = struct{}{}
+}
+
+// FilterTagsCleared returns if the "filter_tags" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) FilterTagsCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldFilterTags]
+	return ok
+}
+
+// ResetFilterTags resets all changes to the "filter_tags" field.
+func (m *LLMToolResolutionMutation) ResetFilterTags() {
+	m.filter_tags = nil
+	m.appendfilter_tags = nil
+	delete(m.clearedFields, llmtoolresolution.FieldFilterTags)
+}
+
+// SetFilterMode sets the "filter_mode" field.
+func (m *LLMToolResolutionMutation) SetFilterMode(s string) {
+	m.filter_mode = &s
+}
+
+// FilterMode returns the value of the "filter_mode" field in the mutation.
+func (m *LLMToolResolutionMutation) FilterMode() (r string, exists bool) {
+	v := m.filter_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilterMode returns the old "filter_mode" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldFilterMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilterMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilterMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilterMode: %w", err)
+	}
+	return oldValue.FilterMode, nil
+}
+
+// ResetFilterMode resets all changes to the "filter_mode" field.
+func (m *LLMToolResolutionMutation) ResetFilterMode() {
+	m.filter_mode = nil
+}
+
+// SetProviderAgentID sets the "provider_agent_id" field.
+func (m *LLMToolResolutionMutation) SetProviderAgentID(s string) {
+	m.provider_agent = &s
+}
+
+// ProviderAgentID returns the value of the "provider_agent_id" field in the mutation.
+func (m *LLMToolResolutionMutation) ProviderAgentID() (r string, exists bool) {
+	v := m.provider_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderAgentID returns the old "provider_agent_id" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldProviderAgentID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderAgentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderAgentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderAgentID: %w", err)
+	}
+	return oldValue.ProviderAgentID, nil
+}
+
+// ClearProviderAgentID clears the value of the "provider_agent_id" field.
+func (m *LLMToolResolutionMutation) ClearProviderAgentID() {
+	m.provider_agent = nil
+	m.clearedFields[llmtoolresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentIDCleared returns if the "provider_agent_id" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) ProviderAgentIDCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldProviderAgentID]
+	return ok
+}
+
+// ResetProviderAgentID resets all changes to the "provider_agent_id" field.
+func (m *LLMToolResolutionMutation) ResetProviderAgentID() {
+	m.provider_agent = nil
+	delete(m.clearedFields, llmtoolresolution.FieldProviderAgentID)
+}
+
+// SetProviderFunctionName sets the "provider_function_name" field.
+func (m *LLMToolResolutionMutation) SetProviderFunctionName(s string) {
+	m.provider_function_name = &s
+}
+
+// ProviderFunctionName returns the value of the "provider_function_name" field in the mutation.
+func (m *LLMToolResolutionMutation) ProviderFunctionName() (r string, exists bool) {
+	v := m.provider_function_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderFunctionName returns the old "provider_function_name" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldProviderFunctionName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderFunctionName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderFunctionName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderFunctionName: %w", err)
+	}
+	return oldValue.ProviderFunctionName, nil
+}
+
+// ClearProviderFunctionName clears the value of the "provider_function_name" field.
+func (m *LLMToolResolutionMutation) ClearProviderFunctionName() {
+	m.provider_function_name = nil
+	m.clearedFields[llmtoolresolution.FieldProviderFunctionName] = struct{}{}
+}
+
+// ProviderFunctionNameCleared returns if the "provider_function_name" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) ProviderFunctionNameCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldProviderFunctionName]
+	return ok
+}
+
+// ResetProviderFunctionName resets all changes to the "provider_function_name" field.
+func (m *LLMToolResolutionMutation) ResetProviderFunctionName() {
+	m.provider_function_name = nil
+	delete(m.clearedFields, llmtoolresolution.FieldProviderFunctionName)
+}
+
+// SetProviderCapability sets the "provider_capability" field.
+func (m *LLMToolResolutionMutation) SetProviderCapability(s string) {
+	m.provider_capability = &s
+}
+
+// ProviderCapability returns the value of the "provider_capability" field in the mutation.
+func (m *LLMToolResolutionMutation) ProviderCapability() (r string, exists bool) {
+	v := m.provider_capability
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderCapability returns the old "provider_capability" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldProviderCapability(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderCapability is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderCapability requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderCapability: %w", err)
+	}
+	return oldValue.ProviderCapability, nil
+}
+
+// ClearProviderCapability clears the value of the "provider_capability" field.
+func (m *LLMToolResolutionMutation) ClearProviderCapability() {
+	m.provider_capability = nil
+	m.clearedFields[llmtoolresolution.FieldProviderCapability] = struct{}{}
+}
+
+// ProviderCapabilityCleared returns if the "provider_capability" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) ProviderCapabilityCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldProviderCapability]
+	return ok
+}
+
+// ResetProviderCapability resets all changes to the "provider_capability" field.
+func (m *LLMToolResolutionMutation) ResetProviderCapability() {
+	m.provider_capability = nil
+	delete(m.clearedFields, llmtoolresolution.FieldProviderCapability)
+}
+
+// SetEndpoint sets the "endpoint" field.
+func (m *LLMToolResolutionMutation) SetEndpoint(s string) {
+	m.endpoint = &s
+}
+
+// Endpoint returns the value of the "endpoint" field in the mutation.
+func (m *LLMToolResolutionMutation) Endpoint() (r string, exists bool) {
+	v := m.endpoint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpoint returns the old "endpoint" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldEndpoint(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpoint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpoint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpoint: %w", err)
+	}
+	return oldValue.Endpoint, nil
+}
+
+// ClearEndpoint clears the value of the "endpoint" field.
+func (m *LLMToolResolutionMutation) ClearEndpoint() {
+	m.endpoint = nil
+	m.clearedFields[llmtoolresolution.FieldEndpoint] = struct{}{}
+}
+
+// EndpointCleared returns if the "endpoint" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) EndpointCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldEndpoint]
+	return ok
+}
+
+// ResetEndpoint resets all changes to the "endpoint" field.
+func (m *LLMToolResolutionMutation) ResetEndpoint() {
+	m.endpoint = nil
+	delete(m.clearedFields, llmtoolresolution.FieldEndpoint)
+}
+
+// SetStatus sets the "status" field.
+func (m *LLMToolResolutionMutation) SetStatus(l llmtoolresolution.Status) {
+	m.status = &l
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *LLMToolResolutionMutation) Status() (r llmtoolresolution.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldStatus(ctx context.Context) (v llmtoolresolution.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *LLMToolResolutionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetResolvedAt sets the "resolved_at" field.
+func (m *LLMToolResolutionMutation) SetResolvedAt(t time.Time) {
+	m.resolved_at = &t
+}
+
+// ResolvedAt returns the value of the "resolved_at" field in the mutation.
+func (m *LLMToolResolutionMutation) ResolvedAt() (r time.Time, exists bool) {
+	v := m.resolved_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResolvedAt returns the old "resolved_at" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldResolvedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResolvedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResolvedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResolvedAt: %w", err)
+	}
+	return oldValue.ResolvedAt, nil
+}
+
+// ClearResolvedAt clears the value of the "resolved_at" field.
+func (m *LLMToolResolutionMutation) ClearResolvedAt() {
+	m.resolved_at = nil
+	m.clearedFields[llmtoolresolution.FieldResolvedAt] = struct{}{}
+}
+
+// ResolvedAtCleared returns if the "resolved_at" field was cleared in this mutation.
+func (m *LLMToolResolutionMutation) ResolvedAtCleared() bool {
+	_, ok := m.clearedFields[llmtoolresolution.FieldResolvedAt]
+	return ok
+}
+
+// ResetResolvedAt resets all changes to the "resolved_at" field.
+func (m *LLMToolResolutionMutation) ResetResolvedAt() {
+	m.resolved_at = nil
+	delete(m.clearedFields, llmtoolresolution.FieldResolvedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *LLMToolResolutionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *LLMToolResolutionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *LLMToolResolutionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *LLMToolResolutionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *LLMToolResolutionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the LLMToolResolution entity.
+// If the LLMToolResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *LLMToolResolutionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *LLMToolResolutionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearConsumerAgent clears the "consumer_agent" edge to the Agent entity.
+func (m *LLMToolResolutionMutation) ClearConsumerAgent() {
+	m.clearedconsumer_agent = true
+	m.clearedFields[llmtoolresolution.FieldConsumerAgentID] = struct{}{}
+}
+
+// ConsumerAgentCleared reports if the "consumer_agent" edge to the Agent entity was cleared.
+func (m *LLMToolResolutionMutation) ConsumerAgentCleared() bool {
+	return m.clearedconsumer_agent
+}
+
+// ConsumerAgentIDs returns the "consumer_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ConsumerAgentID instead. It exists only for internal usage by the builders.
+func (m *LLMToolResolutionMutation) ConsumerAgentIDs() (ids []string) {
+	if id := m.consumer_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetConsumerAgent resets all changes to the "consumer_agent" edge.
+func (m *LLMToolResolutionMutation) ResetConsumerAgent() {
+	m.consumer_agent = nil
+	m.clearedconsumer_agent = false
+}
+
+// ClearProviderAgent clears the "provider_agent" edge to the Agent entity.
+func (m *LLMToolResolutionMutation) ClearProviderAgent() {
+	m.clearedprovider_agent = true
+	m.clearedFields[llmtoolresolution.FieldProviderAgentID] = struct{}{}
+}
+
+// ProviderAgentCleared reports if the "provider_agent" edge to the Agent entity was cleared.
+func (m *LLMToolResolutionMutation) ProviderAgentCleared() bool {
+	return m.ProviderAgentIDCleared() || m.clearedprovider_agent
+}
+
+// ProviderAgentIDs returns the "provider_agent" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ProviderAgentID instead. It exists only for internal usage by the builders.
+func (m *LLMToolResolutionMutation) ProviderAgentIDs() (ids []string) {
+	if id := m.provider_agent; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetProviderAgent resets all changes to the "provider_agent" edge.
+func (m *LLMToolResolutionMutation) ResetProviderAgent() {
+	m.provider_agent = nil
+	m.clearedprovider_agent = false
+}
+
+// Where appends a list predicates to the LLMToolResolutionMutation builder.
+func (m *LLMToolResolutionMutation) Where(ps ...predicate.LLMToolResolution) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the LLMToolResolutionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *LLMToolResolutionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.LLMToolResolution, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *LLMToolResolutionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *LLMToolResolutionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (LLMToolResolution).
+func (m *LLMToolResolutionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *LLMToolResolutionMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.consumer_agent != nil {
+		fields = append(fields, llmtoolresolution.FieldConsumerAgentID)
+	}
+	if m.consumer_function_name != nil {
+		fields = append(fields, llmtoolresolution.FieldConsumerFunctionName)
+	}
+	if m.filter_capability != nil {
+		fields = append(fields, llmtoolresolution.FieldFilterCapability)
+	}
+	if m.filter_tags != nil {
+		fields = append(fields, llmtoolresolution.FieldFilterTags)
+	}
+	if m.filter_mode != nil {
+		fields = append(fields, llmtoolresolution.FieldFilterMode)
+	}
+	if m.provider_agent != nil {
+		fields = append(fields, llmtoolresolution.FieldProviderAgentID)
+	}
+	if m.provider_function_name != nil {
+		fields = append(fields, llmtoolresolution.FieldProviderFunctionName)
+	}
+	if m.provider_capability != nil {
+		fields = append(fields, llmtoolresolution.FieldProviderCapability)
+	}
+	if m.endpoint != nil {
+		fields = append(fields, llmtoolresolution.FieldEndpoint)
+	}
+	if m.status != nil {
+		fields = append(fields, llmtoolresolution.FieldStatus)
+	}
+	if m.resolved_at != nil {
+		fields = append(fields, llmtoolresolution.FieldResolvedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, llmtoolresolution.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, llmtoolresolution.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *LLMToolResolutionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case llmtoolresolution.FieldConsumerAgentID:
+		return m.ConsumerAgentID()
+	case llmtoolresolution.FieldConsumerFunctionName:
+		return m.ConsumerFunctionName()
+	case llmtoolresolution.FieldFilterCapability:
+		return m.FilterCapability()
+	case llmtoolresolution.FieldFilterTags:
+		return m.FilterTags()
+	case llmtoolresolution.FieldFilterMode:
+		return m.FilterMode()
+	case llmtoolresolution.FieldProviderAgentID:
+		return m.ProviderAgentID()
+	case llmtoolresolution.FieldProviderFunctionName:
+		return m.ProviderFunctionName()
+	case llmtoolresolution.FieldProviderCapability:
+		return m.ProviderCapability()
+	case llmtoolresolution.FieldEndpoint:
+		return m.Endpoint()
+	case llmtoolresolution.FieldStatus:
+		return m.Status()
+	case llmtoolresolution.FieldResolvedAt:
+		return m.ResolvedAt()
+	case llmtoolresolution.FieldCreatedAt:
+		return m.CreatedAt()
+	case llmtoolresolution.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *LLMToolResolutionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case llmtoolresolution.FieldConsumerAgentID:
+		return m.OldConsumerAgentID(ctx)
+	case llmtoolresolution.FieldConsumerFunctionName:
+		return m.OldConsumerFunctionName(ctx)
+	case llmtoolresolution.FieldFilterCapability:
+		return m.OldFilterCapability(ctx)
+	case llmtoolresolution.FieldFilterTags:
+		return m.OldFilterTags(ctx)
+	case llmtoolresolution.FieldFilterMode:
+		return m.OldFilterMode(ctx)
+	case llmtoolresolution.FieldProviderAgentID:
+		return m.OldProviderAgentID(ctx)
+	case llmtoolresolution.FieldProviderFunctionName:
+		return m.OldProviderFunctionName(ctx)
+	case llmtoolresolution.FieldProviderCapability:
+		return m.OldProviderCapability(ctx)
+	case llmtoolresolution.FieldEndpoint:
+		return m.OldEndpoint(ctx)
+	case llmtoolresolution.FieldStatus:
+		return m.OldStatus(ctx)
+	case llmtoolresolution.FieldResolvedAt:
+		return m.OldResolvedAt(ctx)
+	case llmtoolresolution.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case llmtoolresolution.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown LLMToolResolution field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LLMToolResolutionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case llmtoolresolution.FieldConsumerAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerAgentID(v)
+		return nil
+	case llmtoolresolution.FieldConsumerFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsumerFunctionName(v)
+		return nil
+	case llmtoolresolution.FieldFilterCapability:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilterCapability(v)
+		return nil
+	case llmtoolresolution.FieldFilterTags:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilterTags(v)
+		return nil
+	case llmtoolresolution.FieldFilterMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilterMode(v)
+		return nil
+	case llmtoolresolution.FieldProviderAgentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderAgentID(v)
+		return nil
+	case llmtoolresolution.FieldProviderFunctionName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderFunctionName(v)
+		return nil
+	case llmtoolresolution.FieldProviderCapability:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderCapability(v)
+		return nil
+	case llmtoolresolution.FieldEndpoint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpoint(v)
+		return nil
+	case llmtoolresolution.FieldStatus:
+		v, ok := value.(llmtoolresolution.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case llmtoolresolution.FieldResolvedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResolvedAt(v)
+		return nil
+	case llmtoolresolution.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case llmtoolresolution.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown LLMToolResolution field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *LLMToolResolutionMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *LLMToolResolutionMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *LLMToolResolutionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown LLMToolResolution numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *LLMToolResolutionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(llmtoolresolution.FieldFilterCapability) {
+		fields = append(fields, llmtoolresolution.FieldFilterCapability)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldFilterTags) {
+		fields = append(fields, llmtoolresolution.FieldFilterTags)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldProviderAgentID) {
+		fields = append(fields, llmtoolresolution.FieldProviderAgentID)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldProviderFunctionName) {
+		fields = append(fields, llmtoolresolution.FieldProviderFunctionName)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldProviderCapability) {
+		fields = append(fields, llmtoolresolution.FieldProviderCapability)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldEndpoint) {
+		fields = append(fields, llmtoolresolution.FieldEndpoint)
+	}
+	if m.FieldCleared(llmtoolresolution.FieldResolvedAt) {
+		fields = append(fields, llmtoolresolution.FieldResolvedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *LLMToolResolutionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *LLMToolResolutionMutation) ClearField(name string) error {
+	switch name {
+	case llmtoolresolution.FieldFilterCapability:
+		m.ClearFilterCapability()
+		return nil
+	case llmtoolresolution.FieldFilterTags:
+		m.ClearFilterTags()
+		return nil
+	case llmtoolresolution.FieldProviderAgentID:
+		m.ClearProviderAgentID()
+		return nil
+	case llmtoolresolution.FieldProviderFunctionName:
+		m.ClearProviderFunctionName()
+		return nil
+	case llmtoolresolution.FieldProviderCapability:
+		m.ClearProviderCapability()
+		return nil
+	case llmtoolresolution.FieldEndpoint:
+		m.ClearEndpoint()
+		return nil
+	case llmtoolresolution.FieldResolvedAt:
+		m.ClearResolvedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMToolResolution nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *LLMToolResolutionMutation) ResetField(name string) error {
+	switch name {
+	case llmtoolresolution.FieldConsumerAgentID:
+		m.ResetConsumerAgentID()
+		return nil
+	case llmtoolresolution.FieldConsumerFunctionName:
+		m.ResetConsumerFunctionName()
+		return nil
+	case llmtoolresolution.FieldFilterCapability:
+		m.ResetFilterCapability()
+		return nil
+	case llmtoolresolution.FieldFilterTags:
+		m.ResetFilterTags()
+		return nil
+	case llmtoolresolution.FieldFilterMode:
+		m.ResetFilterMode()
+		return nil
+	case llmtoolresolution.FieldProviderAgentID:
+		m.ResetProviderAgentID()
+		return nil
+	case llmtoolresolution.FieldProviderFunctionName:
+		m.ResetProviderFunctionName()
+		return nil
+	case llmtoolresolution.FieldProviderCapability:
+		m.ResetProviderCapability()
+		return nil
+	case llmtoolresolution.FieldEndpoint:
+		m.ResetEndpoint()
+		return nil
+	case llmtoolresolution.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case llmtoolresolution.FieldResolvedAt:
+		m.ResetResolvedAt()
+		return nil
+	case llmtoolresolution.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case llmtoolresolution.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMToolResolution field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *LLMToolResolutionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.consumer_agent != nil {
+		edges = append(edges, llmtoolresolution.EdgeConsumerAgent)
+	}
+	if m.provider_agent != nil {
+		edges = append(edges, llmtoolresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *LLMToolResolutionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case llmtoolresolution.EdgeConsumerAgent:
+		if id := m.consumer_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	case llmtoolresolution.EdgeProviderAgent:
+		if id := m.provider_agent; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *LLMToolResolutionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *LLMToolResolutionMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *LLMToolResolutionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedconsumer_agent {
+		edges = append(edges, llmtoolresolution.EdgeConsumerAgent)
+	}
+	if m.clearedprovider_agent {
+		edges = append(edges, llmtoolresolution.EdgeProviderAgent)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *LLMToolResolutionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case llmtoolresolution.EdgeConsumerAgent:
+		return m.clearedconsumer_agent
+	case llmtoolresolution.EdgeProviderAgent:
+		return m.clearedprovider_agent
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *LLMToolResolutionMutation) ClearEdge(name string) error {
+	switch name {
+	case llmtoolresolution.EdgeConsumerAgent:
+		m.ClearConsumerAgent()
+		return nil
+	case llmtoolresolution.EdgeProviderAgent:
+		m.ClearProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMToolResolution unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *LLMToolResolutionMutation) ResetEdge(name string) error {
+	switch name {
+	case llmtoolresolution.EdgeConsumerAgent:
+		m.ResetConsumerAgent()
+		return nil
+	case llmtoolresolution.EdgeProviderAgent:
+		m.ResetProviderAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown LLMToolResolution edge %s", name)
 }
 
 // RegistryEventMutation represents an operation that mutates the RegistryEvent nodes in the graph.

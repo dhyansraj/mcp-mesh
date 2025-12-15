@@ -56,9 +56,13 @@ type AgentEdges struct {
 	Events []*RegistryEvent `json:"events,omitempty"`
 	// Dependency resolutions for this agent's tools
 	DependencyResolutions []*DependencyResolution `json:"dependency_resolutions,omitempty"`
+	// LLM tool resolutions for @mesh.llm filter
+	LlmToolResolutions []*LLMToolResolution `json:"llm_tool_resolutions,omitempty"`
+	// LLM provider resolutions for @mesh.llm provider
+	LlmProviderResolutions []*LLMProviderResolution `json:"llm_provider_resolutions,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [5]bool
 }
 
 // CapabilitiesOrErr returns the Capabilities value or an error if the edge
@@ -86,6 +90,24 @@ func (e AgentEdges) DependencyResolutionsOrErr() ([]*DependencyResolution, error
 		return e.DependencyResolutions, nil
 	}
 	return nil, &NotLoadedError{edge: "dependency_resolutions"}
+}
+
+// LlmToolResolutionsOrErr returns the LlmToolResolutions value or an error if the edge
+// was not loaded in eager-loading.
+func (e AgentEdges) LlmToolResolutionsOrErr() ([]*LLMToolResolution, error) {
+	if e.loadedTypes[3] {
+		return e.LlmToolResolutions, nil
+	}
+	return nil, &NotLoadedError{edge: "llm_tool_resolutions"}
+}
+
+// LlmProviderResolutionsOrErr returns the LlmProviderResolutions value or an error if the edge
+// was not loaded in eager-loading.
+func (e AgentEdges) LlmProviderResolutionsOrErr() ([]*LLMProviderResolution, error) {
+	if e.loadedTypes[4] {
+		return e.LlmProviderResolutions, nil
+	}
+	return nil, &NotLoadedError{edge: "llm_provider_resolutions"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -218,6 +240,16 @@ func (a *Agent) QueryEvents() *RegistryEventQuery {
 // QueryDependencyResolutions queries the "dependency_resolutions" edge of the Agent entity.
 func (a *Agent) QueryDependencyResolutions() *DependencyResolutionQuery {
 	return NewAgentClient(a.config).QueryDependencyResolutions(a)
+}
+
+// QueryLlmToolResolutions queries the "llm_tool_resolutions" edge of the Agent entity.
+func (a *Agent) QueryLlmToolResolutions() *LLMToolResolutionQuery {
+	return NewAgentClient(a.config).QueryLlmToolResolutions(a)
+}
+
+// QueryLlmProviderResolutions queries the "llm_provider_resolutions" edge of the Agent entity.
+func (a *Agent) QueryLlmProviderResolutions() *LLMProviderResolutionQuery {
+	return NewAgentClient(a.config).QueryLlmProviderResolutions(a)
 }
 
 // Update returns a builder for updating this Agent.

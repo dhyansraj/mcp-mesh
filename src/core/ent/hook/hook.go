@@ -44,6 +44,30 @@ func (f DependencyResolutionFunc) Mutate(ctx context.Context, m ent.Mutation) (e
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DependencyResolutionMutation", m)
 }
 
+// The LLMProviderResolutionFunc type is an adapter to allow the use of ordinary
+// function as LLMProviderResolution mutator.
+type LLMProviderResolutionFunc func(context.Context, *ent.LLMProviderResolutionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f LLMProviderResolutionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.LLMProviderResolutionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.LLMProviderResolutionMutation", m)
+}
+
+// The LLMToolResolutionFunc type is an adapter to allow the use of ordinary
+// function as LLMToolResolution mutator.
+type LLMToolResolutionFunc func(context.Context, *ent.LLMToolResolutionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f LLMToolResolutionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.LLMToolResolutionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.LLMToolResolutionMutation", m)
+}
+
 // The RegistryEventFunc type is an adapter to allow the use of ordinary
 // function as RegistryEvent mutator.
 type RegistryEventFunc func(context.Context, *ent.RegistryEventMutation) (ent.Value, error)

@@ -164,6 +164,134 @@ var (
 			},
 		},
 	}
+	// LlmProviderResolutionsColumns holds the columns for the "llm_provider_resolutions" table.
+	LlmProviderResolutionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "consumer_function_name", Type: field.TypeString},
+		{Name: "required_capability", Type: field.TypeString},
+		{Name: "required_tags", Type: field.TypeJSON, Nullable: true},
+		{Name: "required_version", Type: field.TypeString, Nullable: true},
+		{Name: "required_namespace", Type: field.TypeString, Default: "default"},
+		{Name: "provider_function_name", Type: field.TypeString, Nullable: true},
+		{Name: "endpoint", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"available", "unavailable", "unresolved"}, Default: "unresolved"},
+		{Name: "resolved_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "consumer_agent_id", Type: field.TypeString},
+		{Name: "provider_agent_id", Type: field.TypeString, Nullable: true},
+	}
+	// LlmProviderResolutionsTable holds the schema information for the "llm_provider_resolutions" table.
+	LlmProviderResolutionsTable = &schema.Table{
+		Name:       "llm_provider_resolutions",
+		Columns:    LlmProviderResolutionsColumns,
+		PrimaryKey: []*schema.Column{LlmProviderResolutionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "llm_provider_resolutions_agents_llm_provider_resolutions",
+				Columns:    []*schema.Column{LlmProviderResolutionsColumns[12]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "llm_provider_resolutions_agents_provider_agent",
+				Columns:    []*schema.Column{LlmProviderResolutionsColumns[13]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "llmproviderresolution_consumer_agent_id_consumer_function_name",
+				Unique:  false,
+				Columns: []*schema.Column{LlmProviderResolutionsColumns[12], LlmProviderResolutionsColumns[1]},
+			},
+			{
+				Name:    "llmproviderresolution_provider_agent_id",
+				Unique:  false,
+				Columns: []*schema.Column{LlmProviderResolutionsColumns[13]},
+			},
+			{
+				Name:    "llmproviderresolution_required_capability",
+				Unique:  false,
+				Columns: []*schema.Column{LlmProviderResolutionsColumns[2]},
+			},
+			{
+				Name:    "llmproviderresolution_status",
+				Unique:  false,
+				Columns: []*schema.Column{LlmProviderResolutionsColumns[8]},
+			},
+			{
+				Name:    "llmproviderresolution_consumer_agent_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{LlmProviderResolutionsColumns[12], LlmProviderResolutionsColumns[8]},
+			},
+		},
+	}
+	// LlmToolResolutionsColumns holds the columns for the "llm_tool_resolutions" table.
+	LlmToolResolutionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "consumer_function_name", Type: field.TypeString},
+		{Name: "filter_capability", Type: field.TypeString, Nullable: true},
+		{Name: "filter_tags", Type: field.TypeJSON, Nullable: true},
+		{Name: "filter_mode", Type: field.TypeString, Default: "all"},
+		{Name: "provider_function_name", Type: field.TypeString, Nullable: true},
+		{Name: "provider_capability", Type: field.TypeString, Nullable: true},
+		{Name: "endpoint", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"available", "unavailable", "unresolved"}, Default: "unresolved"},
+		{Name: "resolved_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "consumer_agent_id", Type: field.TypeString},
+		{Name: "provider_agent_id", Type: field.TypeString, Nullable: true},
+	}
+	// LlmToolResolutionsTable holds the schema information for the "llm_tool_resolutions" table.
+	LlmToolResolutionsTable = &schema.Table{
+		Name:       "llm_tool_resolutions",
+		Columns:    LlmToolResolutionsColumns,
+		PrimaryKey: []*schema.Column{LlmToolResolutionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "llm_tool_resolutions_agents_llm_tool_resolutions",
+				Columns:    []*schema.Column{LlmToolResolutionsColumns[12]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "llm_tool_resolutions_agents_provider_agent",
+				Columns:    []*schema.Column{LlmToolResolutionsColumns[13]},
+				RefColumns: []*schema.Column{AgentsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "llmtoolresolution_consumer_agent_id_consumer_function_name",
+				Unique:  false,
+				Columns: []*schema.Column{LlmToolResolutionsColumns[12], LlmToolResolutionsColumns[1]},
+			},
+			{
+				Name:    "llmtoolresolution_provider_agent_id",
+				Unique:  false,
+				Columns: []*schema.Column{LlmToolResolutionsColumns[13]},
+			},
+			{
+				Name:    "llmtoolresolution_filter_capability",
+				Unique:  false,
+				Columns: []*schema.Column{LlmToolResolutionsColumns[2]},
+			},
+			{
+				Name:    "llmtoolresolution_status",
+				Unique:  false,
+				Columns: []*schema.Column{LlmToolResolutionsColumns[8]},
+			},
+			{
+				Name:    "llmtoolresolution_consumer_agent_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{LlmToolResolutionsColumns[12], LlmToolResolutionsColumns[8]},
+			},
+		},
+	}
 	// RegistryEventsColumns holds the columns for the "registry_events" table.
 	RegistryEventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -204,6 +332,8 @@ var (
 		AgentsTable,
 		CapabilitiesTable,
 		DependencyResolutionsTable,
+		LlmProviderResolutionsTable,
+		LlmToolResolutionsTable,
 		RegistryEventsTable,
 	}
 )
@@ -212,5 +342,9 @@ func init() {
 	CapabilitiesTable.ForeignKeys[0].RefTable = AgentsTable
 	DependencyResolutionsTable.ForeignKeys[0].RefTable = AgentsTable
 	DependencyResolutionsTable.ForeignKeys[1].RefTable = AgentsTable
+	LlmProviderResolutionsTable.ForeignKeys[0].RefTable = AgentsTable
+	LlmProviderResolutionsTable.ForeignKeys[1].RefTable = AgentsTable
+	LlmToolResolutionsTable.ForeignKeys[0].RefTable = AgentsTable
+	LlmToolResolutionsTable.ForeignKeys[1].RefTable = AgentsTable
 	RegistryEventsTable.ForeignKeys[0].RefTable = AgentsTable
 }
