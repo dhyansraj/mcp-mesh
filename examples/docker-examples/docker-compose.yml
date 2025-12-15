@@ -443,6 +443,172 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # LLM With Deps Agent - demonstrates both static dependencies AND LLM provider
+  llm-with-deps-agent:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    container_name: mcp-mesh-llm-with-deps
+    hostname: llm-with-deps-agent
+    ports:
+      - "8087:8080"
+    volumes:
+      # Mount LLM with deps agent code
+      - ../simple/llm_with_deps_agent.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=llm-with-deps-agent
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=llm-with-deps-agent
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=llm-with-deps
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # OpenAI LLM Provider - Provides OpenAI GPT API access to mesh
+  openai-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    container_name: mcp-mesh-openai-provider
+    hostname: openai-provider
+    ports:
+      - "8091:8080"
+    volumes:
+      # Mount OpenAI provider agent code
+      - ./agents/openai-provider/main.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # OpenAI API key
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=openai-provider
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=openai-provider
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=openai-provider
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Claude LLM Provider - Provides Anthropic Claude API access to mesh
+  claude-provider:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/agents/base/Dockerfile.base
+    container_name: mcp-mesh-claude-provider
+    hostname: claude-provider
+    ports:
+      - "8090:8080"
+    volumes:
+      # Mount Claude provider agent code
+      - ./agents/claude-provider/main.py:/app/agent.py:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # Anthropic API key
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # MCP Mesh configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=claude-provider
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=claude-provider
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=claude-provider
+      - MCP_MESH_NAMESPACE=${MCP_MESH_NAMESPACE:-default}
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=${MCP_MESH_AUTO_RUN:-true}
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=${MCP_MESH_DYNAMIC_UPDATES:-true}
+      # Enable distributed tracing
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_UPDATE_STRATEGY=${MCP_MESH_UPDATE_STRATEGY:-immediate}
+      # Redis connection for tracing and session storage
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - mcp-mesh
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
   # Tempo - Distributed tracing backend
   tempo:
     image: grafana/tempo:2.8.1

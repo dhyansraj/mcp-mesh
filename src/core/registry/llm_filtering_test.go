@@ -189,13 +189,13 @@ func TestLLMToolFiltering(t *testing.T) {
 			if tt.expectedCount > 0 {
 				actualNames := make([]string, len(filtered))
 				for i, tool := range filtered {
-					actualNames[i] = tool.FunctionName
+					actualNames[i] = tool.Name
 				}
 				assert.ElementsMatch(t, tt.expectedNames, actualNames, "Tool names don't match")
 
 				// Verify each tool has required fields
 				for _, tool := range filtered {
-					assert.NotEmpty(t, tool.FunctionName)
+					assert.NotEmpty(t, tool.Name)
 					assert.NotEmpty(t, tool.Capability)
 					assert.NotEmpty(t, tool.Description)
 					assert.NotNil(t, tool.InputSchema, "InputSchema should not be nil")
@@ -323,10 +323,10 @@ func TestLLMToolFilteringDuplicateFunctionNames(t *testing.T) {
 			// Verify no duplicate function names in result
 			functionNames := make(map[string]bool)
 			for _, tool := range filtered {
-				if functionNames[tool.FunctionName] {
-					t.Errorf("Duplicate function name found: %s. LLM APIs require unique function names.", tool.FunctionName)
+				if functionNames[tool.Name] {
+					t.Errorf("Duplicate function name found: %s. LLM APIs require unique function names.", tool.Name)
 				}
-				functionNames[tool.FunctionName] = true
+				functionNames[tool.Name] = true
 			}
 		})
 	}

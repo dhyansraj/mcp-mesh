@@ -754,6 +754,52 @@ func HasDependencyResolutionsWith(preds ...predicate.DependencyResolution) predi
 	})
 }
 
+// HasLlmToolResolutions applies the HasEdge predicate on the "llm_tool_resolutions" edge.
+func HasLlmToolResolutions() predicate.Agent {
+	return predicate.Agent(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, LlmToolResolutionsTable, LlmToolResolutionsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasLlmToolResolutionsWith applies the HasEdge predicate on the "llm_tool_resolutions" edge with a given conditions (other predicates).
+func HasLlmToolResolutionsWith(preds ...predicate.LLMToolResolution) predicate.Agent {
+	return predicate.Agent(func(s *sql.Selector) {
+		step := newLlmToolResolutionsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasLlmProviderResolutions applies the HasEdge predicate on the "llm_provider_resolutions" edge.
+func HasLlmProviderResolutions() predicate.Agent {
+	return predicate.Agent(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, LlmProviderResolutionsTable, LlmProviderResolutionsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasLlmProviderResolutionsWith applies the HasEdge predicate on the "llm_provider_resolutions" edge with a given conditions (other predicates).
+func HasLlmProviderResolutionsWith(preds ...predicate.LLMProviderResolution) predicate.Agent {
+	return predicate.Agent(func(s *sql.Selector) {
+		step := newLlmProviderResolutionsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.Agent) predicate.Agent {
 	return predicate.Agent(sql.AndPredicates(predicates...))

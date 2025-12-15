@@ -9,6 +9,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"time"
 
@@ -232,6 +234,36 @@ func (ac *AgentCreate) AddDependencyResolutions(d ...*DependencyResolution) *Age
 		ids[i] = d[i].ID
 	}
 	return ac.AddDependencyResolutionIDs(ids...)
+}
+
+// AddLlmToolResolutionIDs adds the "llm_tool_resolutions" edge to the LLMToolResolution entity by IDs.
+func (ac *AgentCreate) AddLlmToolResolutionIDs(ids ...int) *AgentCreate {
+	ac.mutation.AddLlmToolResolutionIDs(ids...)
+	return ac
+}
+
+// AddLlmToolResolutions adds the "llm_tool_resolutions" edges to the LLMToolResolution entity.
+func (ac *AgentCreate) AddLlmToolResolutions(l ...*LLMToolResolution) *AgentCreate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return ac.AddLlmToolResolutionIDs(ids...)
+}
+
+// AddLlmProviderResolutionIDs adds the "llm_provider_resolutions" edge to the LLMProviderResolution entity by IDs.
+func (ac *AgentCreate) AddLlmProviderResolutionIDs(ids ...int) *AgentCreate {
+	ac.mutation.AddLlmProviderResolutionIDs(ids...)
+	return ac
+}
+
+// AddLlmProviderResolutions adds the "llm_provider_resolutions" edges to the LLMProviderResolution entity.
+func (ac *AgentCreate) AddLlmProviderResolutions(l ...*LLMProviderResolution) *AgentCreate {
+	ids := make([]int, len(l))
+	for i := range l {
+		ids[i] = l[i].ID
+	}
+	return ac.AddLlmProviderResolutionIDs(ids...)
 }
 
 // Mutation returns the AgentMutation object of the builder.
@@ -466,6 +498,38 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(dependencyresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := ac.mutation.LlmToolResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmToolResolutionsTable,
+			Columns: []string{agent.LlmToolResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmtoolresolution.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := ac.mutation.LlmProviderResolutionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   agent.LlmProviderResolutionsTable,
+			Columns: []string{agent.LlmProviderResolutionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(llmproviderresolution.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

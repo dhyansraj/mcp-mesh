@@ -16,13 +16,14 @@ import (
 // LLMToolInfo represents a filtered tool for LLM consumption
 // JSON field names match the OpenAPI spec exactly (camelCase)
 type LLMToolInfo struct {
-	FunctionName string                 `json:"name"` // OpenAPI spec uses "name"
+	Name         string                 `json:"name"` // OpenAPI spec uses "name"
 	Capability   string                 `json:"capability"`
 	Description  string                 `json:"description"`
 	InputSchema  map[string]interface{} `json:"inputSchema,omitempty"` // OpenAPI spec uses "inputSchema" (camelCase)
 	Tags         []string               `json:"tags,omitempty"`
 	Version      string                 `json:"version"`
 	Endpoint     string                 `json:"endpoint"`
+	AgentID      string                 `json:"agent_id,omitempty"` // For resolution tracking
 }
 
 // FilterToolsForLLM filters available tools based on LLM filter criteria
@@ -275,14 +276,19 @@ func convertToLLMToolInfo(caps []*ent.Capability) []LLMToolInfo {
 		// Build endpoint from agent info
 		endpoint := buildEndpoint(cap)
 
+		agentID := ""
+		if cap.Edges.Agent != nil {
+			agentID = cap.Edges.Agent.ID
+		}
 		tool := LLMToolInfo{
-			FunctionName: cap.FunctionName,
-			Capability:   cap.Capability,
-			Description:  cap.Description,
-			InputSchema:  cap.InputSchema,
-			Tags:         cap.Tags,
-			Version:      cap.Version,
-			Endpoint:     endpoint,
+			Name:        cap.FunctionName,
+			Capability:  cap.Capability,
+			Description: cap.Description,
+			InputSchema: cap.InputSchema,
+			Tags:        cap.Tags,
+			Version:     cap.Version,
+			Endpoint:    endpoint,
+			AgentID:     agentID,
 		}
 		tools = append(tools, tool)
 	}

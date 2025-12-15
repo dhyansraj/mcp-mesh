@@ -18,6 +18,10 @@ type Tx struct {
 	Capability *CapabilityClient
 	// DependencyResolution is the client for interacting with the DependencyResolution builders.
 	DependencyResolution *DependencyResolutionClient
+	// LLMProviderResolution is the client for interacting with the LLMProviderResolution builders.
+	LLMProviderResolution *LLMProviderResolutionClient
+	// LLMToolResolution is the client for interacting with the LLMToolResolution builders.
+	LLMToolResolution *LLMToolResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
 
@@ -154,6 +158,8 @@ func (tx *Tx) init() {
 	tx.Agent = NewAgentClient(tx.config)
 	tx.Capability = NewCapabilityClient(tx.config)
 	tx.DependencyResolution = NewDependencyResolutionClient(tx.config)
+	tx.LLMProviderResolution = NewLLMProviderResolutionClient(tx.config)
+	tx.LLMToolResolution = NewLLMToolResolutionClient(tx.config)
 	tx.RegistryEvent = NewRegistryEventClient(tx.config)
 }
 

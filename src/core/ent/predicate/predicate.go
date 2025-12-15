@@ -15,5 +15,11 @@ type Capability func(*sql.Selector)
 // DependencyResolution is the predicate function for dependencyresolution builders.
 type DependencyResolution func(*sql.Selector)
 
+// LLMProviderResolution is the predicate function for llmproviderresolution builders.
+type LLMProviderResolution func(*sql.Selector)
+
+// LLMToolResolution is the predicate function for llmtoolresolution builders.
+type LLMToolResolution func(*sql.Selector)
+
 // RegistryEvent is the predicate function for registryevent builders.
 type RegistryEvent func(*sql.Selector)

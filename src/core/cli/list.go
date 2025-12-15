@@ -104,36 +104,86 @@ type RegistryStatus struct {
 
 // EnhancedAgent contains comprehensive agent information for display
 type EnhancedAgent struct {
-	ID                    string                 `json:"id"`
-	Name                  string                 `json:"name"`
-	AgentType             string                 `json:"agent_type"`
-	Status                string                 `json:"status"`
-	Endpoint              string                 `json:"endpoint"`
-	Tools                 []ToolInfo             `json:"tools"`
-	Dependencies          []Dependency           `json:"dependencies"`
-	DependencyResolutions []DependencyResolution `json:"dependency_resolutions,omitempty"`
-	DependenciesResolved  int                    `json:"dependencies_resolved"`
-	DependenciesTotal     int                    `json:"dependencies_total"`
-	LastHeartbeat         *time.Time             `json:"last_heartbeat,omitempty"`
-	CreatedAt             time.Time              `json:"created_at"`
-	UpdatedAt             time.Time              `json:"updated_at"`
-	Version               string                 `json:"version,omitempty"`
-	PID                   int                    `json:"pid,omitempty"`
-	FilePath              string                 `json:"file_path,omitempty"`
-	StartTime             time.Time              `json:"start_time,omitempty"`
-	Config                map[string]interface{} `json:"config,omitempty"`
-	Labels                map[string]interface{} `json:"labels,omitempty"`
+	ID                       string                   `json:"id"`
+	Name                     string                   `json:"name"`
+	AgentType                string                   `json:"agent_type"`
+	Status                   string                   `json:"status"`
+	Endpoint                 string                   `json:"endpoint"`
+	Tools                    []ToolInfo               `json:"tools"`
+	Dependencies             []Dependency             `json:"dependencies"`
+	DependencyResolutions    []DependencyResolution   `json:"dependency_resolutions,omitempty"`
+	LLMToolResolutions       []LLMToolResolution      `json:"llm_tool_resolutions,omitempty"`
+	LLMProviderResolutions   []LLMProviderResolution  `json:"llm_provider_resolutions,omitempty"`
+	DependenciesResolved     int                      `json:"dependencies_resolved"`
+	DependenciesTotal        int                      `json:"dependencies_total"`
+	LastHeartbeat            *time.Time               `json:"last_heartbeat,omitempty"`
+	CreatedAt                time.Time                `json:"created_at"`
+	UpdatedAt                time.Time                `json:"updated_at"`
+	Version                  string                   `json:"version,omitempty"`
+	PID                      int                      `json:"pid,omitempty"`
+	FilePath                 string                   `json:"file_path,omitempty"`
+	StartTime                time.Time                `json:"start_time,omitempty"`
+	Config                   map[string]interface{}   `json:"config,omitempty"`
+	Labels                   map[string]interface{}   `json:"labels,omitempty"`
+}
+
+// ToolFilter represents a single filter specification for matching tools
+type ToolFilter struct {
+	Capability string   `json:"capability,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	Namespace  string   `json:"namespace,omitempty"`
+}
+
+// LLMToolFilter represents LLM tool filter specification from @mesh.llm decorator
+type LLMToolFilter struct {
+	Filter     []ToolFilter `json:"filter,omitempty"`
+	FilterMode string       `json:"filter_mode,omitempty"`
+}
+
+// LLMProvider represents LLM provider specification for mesh delegation
+type LLMProvider struct {
+	Capability string   `json:"capability,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	Namespace  string   `json:"namespace,omitempty"`
+}
+
+// LLMToolResolution represents a resolved LLM tool from @mesh.llm filter
+type LLMToolResolution struct {
+	FunctionName       string   `json:"function_name"`
+	FilterCapability   string   `json:"filter_capability,omitempty"`
+	FilterTags         []string `json:"filter_tags,omitempty"`
+	FilterMode         string   `json:"filter_mode,omitempty"`
+	MCPTool            string   `json:"mcp_tool,omitempty"`
+	ProviderCapability string   `json:"provider_capability,omitempty"`
+	ProviderAgentID    string   `json:"provider_agent_id,omitempty"`
+	Endpoint           string   `json:"endpoint,omitempty"`
+	Status             string   `json:"status"`
+}
+
+// LLMProviderResolution represents a resolved LLM provider from @mesh.llm provider
+type LLMProviderResolution struct {
+	FunctionName       string   `json:"function_name"`
+	RequiredCapability string   `json:"required_capability"`
+	RequiredTags       []string `json:"required_tags,omitempty"`
+	MCPTool            string   `json:"mcp_tool,omitempty"`
+	ProviderAgentID    string   `json:"provider_agent_id,omitempty"`
+	Endpoint           string   `json:"endpoint,omitempty"`
+	Status             string   `json:"status"`
 }
 
 // ToolInfo represents tool/capability information
 type ToolInfo struct {
-	ID           int      `json:"id"`
-	Name         string   `json:"name"`
-	Capability   string   `json:"capability"`
-	FunctionName string   `json:"function_name"`
-	Version      string   `json:"version"`
-	Tags         []string `json:"tags,omitempty"`
-	Dependencies []string `json:"dependencies,omitempty"`
+	ID           int            `json:"id"`
+	Name         string         `json:"name"`
+	Capability   string         `json:"capability"`
+	FunctionName string         `json:"function_name"`
+	Version      string         `json:"version"`
+	Tags         []string       `json:"tags,omitempty"`
+	Dependencies []string       `json:"dependencies,omitempty"`
+	LLMFilter    *LLMToolFilter `json:"llm_filter,omitempty"`
+	LLMProvider  *LLMProvider   `json:"llm_provider,omitempty"`
 }
 
 // Dependency represents a resolved dependency
@@ -304,11 +354,13 @@ type AgentInfoAPI struct {
 	TotalDependencies    int         `json:"total_dependencies"`
 	DependenciesResolved int         `json:"dependencies_resolved"`
 	Capabilities         []struct {
-		Name         string   `json:"name"`
-		Version      string   `json:"version"`
-		FunctionName string   `json:"function_name"`
-		Description  *string  `json:"description,omitempty"`
-		Tags         []string `json:"tags,omitempty"`
+		Name         string         `json:"name"`
+		Version      string         `json:"version"`
+		FunctionName string         `json:"function_name"`
+		Description  *string        `json:"description,omitempty"`
+		Tags         []string       `json:"tags,omitempty"`
+		LlmFilter    *LLMToolFilter `json:"llm_filter,omitempty"`
+		LlmProvider  *LLMProvider   `json:"llm_provider,omitempty"`
 	} `json:"capabilities"`
 	DependencyResolutions []struct {
 		FunctionName    string   `json:"function_name"`
@@ -319,6 +371,26 @@ type AgentInfoAPI struct {
 		Endpoint        string   `json:"endpoint,omitempty"`
 		Status          string   `json:"status"`
 	} `json:"dependency_resolutions,omitempty"`
+	LLMToolResolutions []struct {
+		ConsumerFunctionName string   `json:"function_name"`
+		FilterCapability     string   `json:"filter_capability,omitempty"`
+		FilterTags           []string `json:"filter_tags,omitempty"`
+		FilterMode           string   `json:"filter_mode,omitempty"`
+		ProviderAgentID      string   `json:"provider_agent_id,omitempty"`
+		ProviderFunctionName string   `json:"mcp_tool,omitempty"`
+		ProviderCapability   string   `json:"provider_capability,omitempty"`
+		Endpoint             string   `json:"endpoint,omitempty"`
+		Status               string   `json:"status"`
+	} `json:"llm_tool_resolutions,omitempty"`
+	LLMProviderResolutions []struct {
+		ConsumerFunctionName string   `json:"function_name"`
+		RequiredCapability   string   `json:"required_capability"`
+		RequiredTags         []string `json:"required_tags,omitempty"`
+		ProviderAgentID      string   `json:"provider_agent_id,omitempty"`
+		ProviderFunctionName string   `json:"mcp_tool,omitempty"`
+		Endpoint             string   `json:"endpoint,omitempty"`
+		Status               string   `json:"status"`
+	} `json:"llm_provider_resolutions,omitempty"`
 }
 
 // AgentsListResponseAPI represents the API response structure
@@ -393,6 +465,12 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 			if len(cap.Tags) > 0 {
 				capMap["tags"] = cap.Tags
 			}
+			if cap.LlmFilter != nil {
+				capMap["llm_filter"] = cap.LlmFilter
+			}
+			if cap.LlmProvider != nil {
+				capMap["llm_provider"] = cap.LlmProvider
+			}
 			capabilities[j] = capMap
 		}
 		agentMap["capabilities"] = capabilities
@@ -415,6 +493,50 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 				depResolutions[j] = depResMap
 			}
 			agentMap["dependency_resolutions"] = depResolutions
+		}
+
+		// Convert LLM tool resolutions to the expected format
+		// Use API field names for consistency
+		if len(agent.LLMToolResolutions) > 0 {
+			llmToolRes := make([]interface{}, len(agent.LLMToolResolutions))
+			for j, res := range agent.LLMToolResolutions {
+				resMap := map[string]interface{}{
+					"function_name":       res.ConsumerFunctionName,
+					"filter_capability":   res.FilterCapability,
+					"filter_mode":         res.FilterMode,
+					"provider_agent_id":   res.ProviderAgentID,
+					"mcp_tool":            res.ProviderFunctionName,
+					"provider_capability": res.ProviderCapability,
+					"endpoint":            res.Endpoint,
+					"status":              res.Status,
+				}
+				if len(res.FilterTags) > 0 {
+					resMap["filter_tags"] = res.FilterTags
+				}
+				llmToolRes[j] = resMap
+			}
+			agentMap["llm_tool_resolutions"] = llmToolRes
+		}
+
+		// Convert LLM provider resolutions to the expected format
+		// Use API field names for consistency
+		if len(agent.LLMProviderResolutions) > 0 {
+			llmProviderRes := make([]interface{}, len(agent.LLMProviderResolutions))
+			for j, res := range agent.LLMProviderResolutions {
+				resMap := map[string]interface{}{
+					"function_name":     res.ConsumerFunctionName,
+					"required_capability": res.RequiredCapability,
+					"provider_agent_id": res.ProviderAgentID,
+					"mcp_tool":          res.ProviderFunctionName,
+					"endpoint":          res.Endpoint,
+					"status":            res.Status,
+				}
+				if len(res.RequiredTags) > 0 {
+					resMap["required_tags"] = res.RequiredTags
+				}
+				llmProviderRes[j] = resMap
+			}
+			agentMap["llm_provider_resolutions"] = llmProviderRes
 		}
 
 		agents[i] = agentMap
@@ -517,6 +639,18 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 				if id := getFloat(capMap, "id"); id > 0 {
 					tool.ID = int(id)
 				}
+				// Parse LLM filter if present
+				if llmFilter, ok := capMap["llm_filter"].(*LLMToolFilter); ok {
+					tool.LLMFilter = llmFilter
+				} else if llmFilterMap, ok := capMap["llm_filter"].(map[string]interface{}); ok {
+					tool.LLMFilter = parseLLMToolFilter(llmFilterMap)
+				}
+				// Parse LLM provider if present
+				if llmProvider, ok := capMap["llm_provider"].(*LLMProvider); ok {
+					tool.LLMProvider = llmProvider
+				} else if llmProviderMap, ok := capMap["llm_provider"].(map[string]interface{}); ok {
+					tool.LLMProvider = parseLLMProvider(llmProviderMap)
+				}
 				agent.Tools = append(agent.Tools, tool)
 			}
 		}
@@ -555,6 +689,84 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 				}
 
 				agent.DependencyResolutions = append(agent.DependencyResolutions, resolution)
+			}
+		}
+	}
+
+	// Parse LLM tool resolutions from API
+	if llmToolResolutions, ok := data["llm_tool_resolutions"].([]interface{}); ok {
+		for _, res := range llmToolResolutions {
+			if resMap, ok := res.(map[string]interface{}); ok {
+				// Try both field name formats for compatibility
+				funcName := getString(resMap, "function_name")
+				if funcName == "" {
+					funcName = getString(resMap, "consumer_function_name")
+				}
+				mcpTool := getString(resMap, "mcp_tool")
+				if mcpTool == "" {
+					mcpTool = getString(resMap, "provider_function_name")
+				}
+				resolution := LLMToolResolution{
+					FunctionName:       funcName,
+					FilterCapability:   getString(resMap, "filter_capability"),
+					FilterMode:         getString(resMap, "filter_mode"),
+					MCPTool:            mcpTool,
+					ProviderCapability: getString(resMap, "provider_capability"),
+					ProviderAgentID:    getString(resMap, "provider_agent_id"),
+					Endpoint:           getString(resMap, "endpoint"),
+					Status:             getString(resMap, "status"),
+				}
+
+				// Parse filter tags if present
+				if tagsSlice, ok := resMap["filter_tags"].([]string); ok {
+					resolution.FilterTags = tagsSlice
+				} else if tagsData, ok := resMap["filter_tags"].([]interface{}); ok {
+					for _, tag := range tagsData {
+						if tagStr, ok := tag.(string); ok {
+							resolution.FilterTags = append(resolution.FilterTags, tagStr)
+						}
+					}
+				}
+
+				agent.LLMToolResolutions = append(agent.LLMToolResolutions, resolution)
+			}
+		}
+	}
+
+	// Parse LLM provider resolutions from API
+	if llmProviderResolutions, ok := data["llm_provider_resolutions"].([]interface{}); ok {
+		for _, res := range llmProviderResolutions {
+			if resMap, ok := res.(map[string]interface{}); ok {
+				// Try both field name formats for compatibility
+				funcName := getString(resMap, "function_name")
+				if funcName == "" {
+					funcName = getString(resMap, "consumer_function_name")
+				}
+				mcpTool := getString(resMap, "mcp_tool")
+				if mcpTool == "" {
+					mcpTool = getString(resMap, "provider_function_name")
+				}
+				resolution := LLMProviderResolution{
+					FunctionName:       funcName,
+					RequiredCapability: getString(resMap, "required_capability"),
+					MCPTool:            mcpTool,
+					ProviderAgentID:    getString(resMap, "provider_agent_id"),
+					Endpoint:           getString(resMap, "endpoint"),
+					Status:             getString(resMap, "status"),
+				}
+
+				// Parse required tags if present
+				if tagsSlice, ok := resMap["required_tags"].([]string); ok {
+					resolution.RequiredTags = tagsSlice
+				} else if tagsData, ok := resMap["required_tags"].([]interface{}); ok {
+					for _, tag := range tagsData {
+						if tagStr, ok := tag.(string); ok {
+							resolution.RequiredTags = append(resolution.RequiredTags, tagStr)
+						}
+					}
+				}
+
+				agent.LLMProviderResolutions = append(agent.LLMProviderResolutions, resolution)
 			}
 		}
 	}
@@ -598,6 +810,67 @@ func getMapInterface(data map[string]interface{}, key string) map[string]interfa
 		}
 	}
 	return map[string]interface{}{}
+}
+
+// parseToolFilterSpec converts a map to ToolFilter (for LLM filter parsing)
+func parseToolFilterSpec(data map[string]interface{}) ToolFilter {
+	tf := ToolFilter{
+		Capability: getString(data, "capability"),
+		Version:    getString(data, "version"),
+		Namespace:  getString(data, "namespace"),
+	}
+	// Parse tags
+	if tagsSlice, ok := data["tags"].([]string); ok {
+		tf.Tags = tagsSlice
+	} else if tagsData, ok := data["tags"].([]interface{}); ok {
+		for _, tag := range tagsData {
+			if tagStr, ok := tag.(string); ok {
+				tf.Tags = append(tf.Tags, tagStr)
+			}
+		}
+	}
+	return tf
+}
+
+func parseLLMToolFilter(data map[string]interface{}) *LLMToolFilter {
+	if len(data) == 0 {
+		return nil
+	}
+	llmFilter := &LLMToolFilter{
+		FilterMode: getString(data, "filter_mode"),
+	}
+	// Parse filter array
+	if filterArray, ok := data["filter"].([]interface{}); ok {
+		for _, item := range filterArray {
+			if filterMap, ok := item.(map[string]interface{}); ok {
+				llmFilter.Filter = append(llmFilter.Filter, parseToolFilterSpec(filterMap))
+			}
+		}
+	}
+	return llmFilter
+}
+
+// parseLLMProvider converts a map to LLMProvider
+func parseLLMProvider(data map[string]interface{}) *LLMProvider {
+	if len(data) == 0 {
+		return nil
+	}
+	provider := &LLMProvider{
+		Capability: getString(data, "capability"),
+		Version:    getString(data, "version"),
+		Namespace:  getString(data, "namespace"),
+	}
+	// Parse tags
+	if tagsSlice, ok := data["tags"].([]string); ok {
+		provider.Tags = tagsSlice
+	} else if tagsData, ok := data["tags"].([]interface{}); ok {
+		for _, tag := range tagsData {
+			if tagStr, ok := tag.(string); ok {
+				provider.Tags = append(provider.Tags, tagStr)
+			}
+		}
+	}
+	return provider
 }
 
 // calculateDependencies extracts dependencies from tools (placeholder implementation)
@@ -1191,6 +1464,176 @@ func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool)
 				functionName,
 				version,
 				tags)
+		}
+	}
+
+	// LLM Tool Filters (from @mesh.llm decorator wiring to tools)
+	var llmFilterTools []ToolInfo
+	for _, tool := range targetAgent.Tools {
+		if tool.LLMFilter != nil && len(tool.LLMFilter.Filter) > 0 {
+			llmFilterTools = append(llmFilterTools, tool)
+		}
+	}
+	if len(llmFilterTools) > 0 {
+		fmt.Printf("\n%sLLM Tool Filters (%d):%s\n", colorBlue, len(llmFilterTools), colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+		fmt.Printf("%-25s %-15s %-20s %-20s\n", "CAPABILITY", "FILTER MODE", "FILTER CAPABILITY", "FILTER TAGS")
+		fmt.Println(strings.Repeat("-", 80))
+
+		for _, tool := range llmFilterTools {
+			capability := tool.Capability
+			if capability == "" {
+				capability = tool.Name
+			}
+
+			filterMode := "-"
+			if tool.LLMFilter != nil && tool.LLMFilter.FilterMode != "" {
+				filterMode = tool.LLMFilter.FilterMode
+			}
+
+			// Iterate through each filter spec in the filter array
+			if tool.LLMFilter != nil && len(tool.LLMFilter.Filter) > 0 {
+				for i, filterSpec := range tool.LLMFilter.Filter {
+					filterCapability := "-"
+					filterTags := "-"
+
+					if filterSpec.Capability != "" {
+						filterCapability = filterSpec.Capability
+					}
+					if len(filterSpec.Tags) > 0 {
+						filterTags = strings.Join(filterSpec.Tags, ",")
+					}
+
+					// Only show capability name on first row for this tool
+					displayCapability := capability
+					displayFilterMode := filterMode
+					if i > 0 {
+						displayCapability = ""
+						displayFilterMode = ""
+					}
+
+					fmt.Printf("%-25s %-15s %-20s %-20s\n",
+						displayCapability,
+						displayFilterMode,
+						filterCapability,
+						filterTags)
+				}
+			}
+		}
+	}
+
+	// LLM Tool Resolutions (resolved tools from @mesh.llm filter)
+	if len(targetAgent.LLMToolResolutions) > 0 {
+		fmt.Printf("\n%sLLM Tool Resolutions (%d):%s\n", colorBlue, len(targetAgent.LLMToolResolutions), colorReset)
+		fmt.Println(strings.Repeat("-", 100))
+		fmt.Printf("%-20s %-20s %-25s %-35s\n", "FUNCTION", "FILTER", "MCP TOOL", "ENDPOINT")
+		fmt.Println(strings.Repeat("-", 100))
+
+		for _, res := range targetAgent.LLMToolResolutions {
+			mcpTool := res.MCPTool
+			endpoint := res.Endpoint
+			lineColor := ""
+
+			// Build filter description
+			filterDesc := res.FilterCapability
+			if len(res.FilterTags) > 0 {
+				filterDesc = strings.Join(res.FilterTags, ",")
+			}
+			if filterDesc == "" {
+				filterDesc = "-"
+			}
+
+			// Handle unresolved - show entire line in red
+			if res.Status == "unresolved" {
+				mcpTool = "NOT FOUND"
+				endpoint = "-"
+				lineColor = colorRed
+			}
+
+			fmt.Printf("%s%-20s %-20s %-25s %-35s%s\n",
+				lineColor,
+				truncateStringForList(res.FunctionName, 18),
+				truncateStringForList(filterDesc, 18),
+				truncateStringForList(mcpTool, 23),
+				truncateStringForList(endpoint, 33),
+				colorReset)
+		}
+	}
+
+	// LLM Providers (mesh delegation)
+	var llmProviderTools []ToolInfo
+	for _, tool := range targetAgent.Tools {
+		if tool.LLMProvider != nil {
+			llmProviderTools = append(llmProviderTools, tool)
+		}
+	}
+	if len(llmProviderTools) > 0 {
+		fmt.Printf("\n%sLLM Providers (%d):%s\n", colorBlue, len(llmProviderTools), colorReset)
+		fmt.Println(strings.Repeat("-", 80))
+		fmt.Printf("%-25s %-25s %-15s %-15s\n", "CAPABILITY", "PROVIDER CAPABILITY", "PROVIDER TAGS", "PROVIDER VER")
+		fmt.Println(strings.Repeat("-", 80))
+
+		for _, tool := range llmProviderTools {
+			capability := tool.Capability
+			if capability == "" {
+				capability = tool.Name
+			}
+
+			providerCapability := "-"
+			providerTags := "-"
+			providerVersion := "-"
+
+			if tool.LLMProvider != nil {
+				if tool.LLMProvider.Capability != "" {
+					providerCapability = tool.LLMProvider.Capability
+				}
+				if len(tool.LLMProvider.Tags) > 0 {
+					providerTags = strings.Join(tool.LLMProvider.Tags, ",")
+				}
+				if tool.LLMProvider.Version != "" {
+					providerVersion = tool.LLMProvider.Version
+				}
+			}
+
+			fmt.Printf("%-25s %-25s %-15s %-15s\n",
+				capability,
+				providerCapability,
+				providerTags,
+				providerVersion)
+		}
+	}
+
+	// LLM Provider Resolutions (resolved providers from @mesh.llm provider)
+	if len(targetAgent.LLMProviderResolutions) > 0 {
+		fmt.Printf("\n%sLLM Provider Resolutions (%d):%s\n", colorBlue, len(targetAgent.LLMProviderResolutions), colorReset)
+		fmt.Println(strings.Repeat("-", 100))
+		fmt.Printf("%-20s %-20s %-25s %-35s\n", "FUNCTION", "REQUIRED CAP", "MCP TOOL", "ENDPOINT")
+		fmt.Println(strings.Repeat("-", 100))
+
+		for _, res := range targetAgent.LLMProviderResolutions {
+			mcpTool := res.MCPTool
+			endpoint := res.Endpoint
+			lineColor := ""
+
+			requiredCap := res.RequiredCapability
+			if requiredCap == "" {
+				requiredCap = "-"
+			}
+
+			// Handle unresolved - show entire line in red
+			if res.Status == "unresolved" {
+				mcpTool = "NOT FOUND"
+				endpoint = "-"
+				lineColor = colorRed
+			}
+
+			fmt.Printf("%s%-20s %-20s %-25s %-35s%s\n",
+				lineColor,
+				truncateStringForList(res.FunctionName, 18),
+				truncateStringForList(requiredCap, 18),
+				truncateStringForList(mcpTool, 23),
+				truncateStringForList(endpoint, 33),
+				colorReset)
 		}
 	}
 

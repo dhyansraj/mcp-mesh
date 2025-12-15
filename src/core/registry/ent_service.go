@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
@@ -326,6 +329,21 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 							if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
 								if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
 									capCreate = capCreate.SetLlmProvider(llmProvider)
+								} else if llmProvider, ok := llmProviderInterface.(generated.LLMProvider); ok {
+									// Convert generated.LLMProvider to map for storage
+									providerMap := map[string]interface{}{
+										"capability": llmProvider.Capability,
+									}
+									if llmProvider.Tags != nil {
+										providerMap["tags"] = *llmProvider.Tags
+									}
+									if llmProvider.Version != nil {
+										providerMap["version"] = *llmProvider.Version
+									}
+									if llmProvider.Namespace != nil {
+										providerMap["namespace"] = *llmProvider.Namespace
+									}
+									capCreate = capCreate.SetLlmProvider(providerMap)
 								}
 							}
 
@@ -417,6 +435,28 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
 	if err != nil {
 		s.logger.Warning("Failed to store dependency resolutions: %v", err)
+		// Don't fail registration over this
+	}
+
+	// Resolve and store LLM tool resolutions
+	llmTools, err := s.ResolveLLMToolsFromMetadata(ctx, req.AgentID, req.Metadata)
+	if err != nil {
+		llmTools = make(map[string][]LLMToolInfo)
+	}
+	err = s.StoreLLMToolResolutions(ctx, req.AgentID, req.Metadata, llmTools)
+	if err != nil {
+		s.logger.Warning("Failed to store LLM tool resolutions: %v", err)
+		// Don't fail registration over this
+	}
+
+	// Resolve and store LLM provider resolutions
+	llmProviders, err := s.ResolveLLMProvidersFromMetadata(ctx, req.AgentID, req.Metadata)
+	if err != nil {
+		llmProviders = make(map[string]*generated.ResolvedLLMProvider)
+	}
+	err = s.StoreLLMProviderResolutions(ctx, req.AgentID, req.Metadata, llmProviders)
+	if err != nil {
+		s.logger.Warning("Failed to store LLM provider resolutions: %v", err)
 		// Don't fail registration over this
 	}
 
@@ -588,6 +628,284 @@ func (s *EntService) UpdateDependencyStatusOnAgentOffline(ctx context.Context, a
 	}
 
 	s.logger.Info("Updated dependency status for offline agent %s", agentID)
+	return nil
+}
+
+// StoreLLMToolResolutions persists LLM tool resolution information to the database
+func (s *EntService) StoreLLMToolResolutions(
+	ctx context.Context,
+	agentID string,
+	metadata map[string]interface{},
+	llmToolsResolved map[string][]LLMToolInfo,
+) error {
+	s.logger.Info("StoreLLMToolResolutions called for agent %s", agentID)
+
+	// Extract tools from metadata to get llm_filter configurations
+	toolsData, exists := metadata["tools"]
+	if !exists {
+		return nil
+	}
+
+	toolsList, ok := toolsData.([]interface{})
+	if !ok {
+		return fmt.Errorf("tools is not an array")
+	}
+
+	// Delete existing LLM tool resolutions for this agent
+	_, err := s.entDB.LLMToolResolution.Delete().
+		Where(llmtoolresolution.ConsumerAgentIDEQ(agentID)).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete old LLM tool resolutions: %w", err)
+	}
+
+	// Process each tool and store its LLM tool resolutions
+	for _, toolData := range toolsList {
+		toolMap, ok := toolData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		functionName, ok := toolMap["function_name"].(string)
+		if !ok {
+			continue
+		}
+
+		// Check if tool has llm_filter
+		llmFilterData, exists := toolMap["llm_filter"]
+		if !exists {
+			continue
+		}
+
+		llmFilterMap, ok := llmFilterData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract filter mode
+		filterMode := "all"
+		if fm, exists := llmFilterMap["filter_mode"]; exists {
+			if fmStr, ok := fm.(string); ok {
+				filterMode = fmStr
+			}
+		}
+
+		// Extract filter array
+		filterData, exists := llmFilterMap["filter"]
+		if !exists {
+			continue
+		}
+
+		filterArray, ok := filterData.([]interface{})
+		if !ok {
+			continue
+		}
+
+		// Get resolved tools for this function
+		resolvedTools, hasResolved := llmToolsResolved[functionName]
+
+		// Process each filter specification
+		for _, filterSpec := range filterArray {
+			var filterCapability string
+			var filterTags []string
+
+			switch f := filterSpec.(type) {
+			case string:
+				filterCapability = f
+			case map[string]interface{}:
+				filterCapability = getString(f, "capability")
+				filterTags = getStringSlice(f, "tags")
+			}
+
+			if filterCapability == "" {
+				continue
+			}
+
+			// Find matching resolved tools
+			var matchedTools []LLMToolInfo
+			if hasResolved {
+				for _, tool := range resolvedTools {
+					if tool.Capability == filterCapability {
+						matchedTools = append(matchedTools, tool)
+					}
+				}
+			}
+
+			if len(matchedTools) > 0 {
+				// Create resolution record for each matched tool
+				for _, tool := range matchedTools {
+					create := s.entDB.LLMToolResolution.Create().
+						SetConsumerAgentID(agentID).
+						SetConsumerFunctionName(functionName).
+						SetFilterMode(filterMode).
+						SetNillableFilterCapability(&filterCapability).
+						SetNillableProviderAgentID(&tool.AgentID).
+						SetNillableProviderFunctionName(&tool.Name).
+						SetNillableProviderCapability(&tool.Capability).
+						SetNillableEndpoint(&tool.Endpoint).
+						SetStatus(llmtoolresolution.StatusAvailable).
+						SetResolvedAt(time.Now().UTC())
+
+					if len(filterTags) > 0 {
+						create = create.SetFilterTags(filterTags)
+					}
+
+					_, err := create.Save(ctx)
+					if err != nil {
+						s.logger.Warning("Failed to save LLM tool resolution for %s/%s: %v",
+							agentID, functionName, err)
+					}
+				}
+			} else {
+				// No tools resolved for this filter - create unresolved record
+				create := s.entDB.LLMToolResolution.Create().
+					SetConsumerAgentID(agentID).
+					SetConsumerFunctionName(functionName).
+					SetFilterMode(filterMode).
+					SetNillableFilterCapability(&filterCapability).
+					SetStatus(llmtoolresolution.StatusUnresolved)
+
+				if len(filterTags) > 0 {
+					create = create.SetFilterTags(filterTags)
+				}
+
+				_, err := create.Save(ctx)
+				if err != nil {
+					s.logger.Warning("Failed to save unresolved LLM tool resolution for %s/%s: %v",
+						agentID, functionName, err)
+				}
+			}
+		}
+	}
+
+	s.logger.Info("StoreLLMToolResolutions completed for agent %s", agentID)
+	return nil
+}
+
+// StoreLLMProviderResolutions persists LLM provider resolution information to the database
+func (s *EntService) StoreLLMProviderResolutions(
+	ctx context.Context,
+	agentID string,
+	metadata map[string]interface{},
+	llmProvidersResolved map[string]*generated.ResolvedLLMProvider,
+) error {
+	s.logger.Info("StoreLLMProviderResolutions called for agent %s", agentID)
+
+	// Extract tools from metadata to get llm_provider configurations
+	toolsData, exists := metadata["tools"]
+	if !exists {
+		return nil
+	}
+
+	toolsList, ok := toolsData.([]interface{})
+	if !ok {
+		return fmt.Errorf("tools is not an array")
+	}
+
+	// Delete existing LLM provider resolutions for this agent
+	_, err := s.entDB.LLMProviderResolution.Delete().
+		Where(llmproviderresolution.ConsumerAgentIDEQ(agentID)).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete old LLM provider resolutions: %w", err)
+	}
+
+	// Process each tool and store its LLM provider resolution
+	for _, toolData := range toolsList {
+		toolMap, ok := toolData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		functionName, ok := toolMap["function_name"].(string)
+		if !ok {
+			continue
+		}
+
+		// Check if tool has llm_provider
+		llmProviderData, exists := toolMap["llm_provider"]
+		if !exists {
+			continue
+		}
+
+		var requiredCapability string
+		var requiredTags []string
+		var requiredVersion string
+		var requiredNamespace string
+
+		// Handle both map[string]interface{} and generated.LLMProvider types
+		switch p := llmProviderData.(type) {
+		case map[string]interface{}:
+			requiredCapability = getString(p, "capability")
+			requiredTags = getStringSlice(p, "tags")
+			requiredVersion = getString(p, "version")
+			requiredNamespace = getString(p, "namespace")
+		case generated.LLMProvider:
+			requiredCapability = p.Capability
+			if p.Tags != nil {
+				requiredTags = *p.Tags
+			}
+			if p.Version != nil {
+				requiredVersion = *p.Version
+			}
+			if p.Namespace != nil {
+				requiredNamespace = *p.Namespace
+			}
+		}
+
+		if requiredCapability == "" {
+			continue
+		}
+
+		if requiredNamespace == "" {
+			requiredNamespace = "default"
+		}
+
+		// Get resolved provider for this function
+		resolvedProvider, hasResolved := llmProvidersResolved[functionName]
+
+		// Create provider resolution record
+		create := s.entDB.LLMProviderResolution.Create().
+			SetConsumerAgentID(agentID).
+			SetConsumerFunctionName(functionName).
+			SetRequiredCapability(requiredCapability).
+			SetRequiredNamespace(requiredNamespace)
+
+		if len(requiredTags) > 0 {
+			create = create.SetRequiredTags(requiredTags)
+		}
+		if requiredVersion != "" {
+			create = create.SetNillableRequiredVersion(&requiredVersion)
+		}
+
+		if hasResolved && resolvedProvider != nil {
+			// Provider was resolved
+			create = create.
+				SetNillableProviderAgentID(&resolvedProvider.AgentId).
+				SetNillableProviderFunctionName(&resolvedProvider.Name).
+				SetNillableEndpoint(&resolvedProvider.Endpoint).
+				SetStatus(llmproviderresolution.StatusAvailable).
+				SetResolvedAt(time.Now().UTC())
+		} else {
+			// Provider is unresolved
+			create = create.SetStatus(llmproviderresolution.StatusUnresolved)
+		}
+
+		_, err := create.Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to save LLM provider resolution for %s/%s: %v",
+				agentID, functionName, err)
+		} else {
+			status := "unresolved"
+			if hasResolved && resolvedProvider != nil {
+				status = "available"
+			}
+			s.logger.Info("Saved LLM provider resolution: %s/%s -> %s (status: %s)",
+				agentID, functionName, requiredCapability, status)
+		}
+	}
+
+	s.logger.Info("StoreLLMProviderResolutions completed for agent %s", agentID)
 	return nil
 }
 
@@ -792,6 +1110,21 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 									if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
 										if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
 											capCreate = capCreate.SetLlmProvider(llmProvider)
+										} else if llmProvider, ok := llmProviderInterface.(generated.LLMProvider); ok {
+											// Convert generated.LLMProvider to map for storage
+											providerMap := map[string]interface{}{
+												"capability": llmProvider.Capability,
+											}
+											if llmProvider.Tags != nil {
+												providerMap["tags"] = *llmProvider.Tags
+											}
+											if llmProvider.Version != nil {
+												providerMap["version"] = *llmProvider.Version
+											}
+											if llmProvider.Namespace != nil {
+												providerMap["namespace"] = *llmProvider.Namespace
+											}
+											capCreate = capCreate.SetLlmProvider(providerMap)
 										}
 									}
 
@@ -867,12 +1200,23 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				llmTools = make(map[string][]LLMToolInfo)
 			}
 
+			// Store LLM tool resolutions in database
+			err = s.StoreLLMToolResolutions(ctx, req.AgentID, req.Metadata, llmTools)
+			if err != nil {
+				s.logger.Warning("Failed to store LLM tool resolutions: %v", err)
+			}
+
 			// Resolve LLM providers for functions with llm_provider (v0.6.1)
 			llmProviders, err := s.ResolveLLMProvidersFromMetadata(ctx, req.AgentID, req.Metadata)
 			if err != nil {
 				llmProviders = make(map[string]*generated.ResolvedLLMProvider)
 			}
-			s.logger.Info("DEBUG: llmProviders map before response: %d entries, content: %+v", len(llmProviders), llmProviders)
+
+			// Store LLM provider resolutions in database
+			err = s.StoreLLMProviderResolutions(ctx, req.AgentID, req.Metadata, llmProviders)
+			if err != nil {
+				s.logger.Warning("Failed to store LLM provider resolutions: %v", err)
+			}
 
 			return &HeartbeatResponse{
 				Status:               "success",
@@ -922,8 +1266,8 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		}
 	}
 
-	// Execute query with capabilities and dependency resolutions
-	agents, err := query.WithCapabilities().WithDependencyResolutions().All(ctx)
+	// Execute query with capabilities, dependency resolutions, and LLM resolutions
+	agents, err := query.WithCapabilities().WithDependencyResolutions().WithLlmToolResolutions().WithLlmProviderResolutions().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agents: %w", err)
 	}
@@ -986,13 +1330,25 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		// Add capabilities
 		var capabilities []generated.CapabilityInfo
 		for _, cap := range a.Edges.Capabilities {
-			capabilities = append(capabilities, generated.CapabilityInfo{
+			capInfo := generated.CapabilityInfo{
 				FunctionName: cap.FunctionName,
 				Name:         cap.Capability,
 				Version:      cap.Version,
 				Description:  &cap.Description,
 				Tags:         &cap.Tags,
-			})
+			}
+
+			// Add LLM filter if present
+			if cap.LlmFilter != nil {
+				capInfo.LlmFilter = convertToLLMToolFilter(cap.LlmFilter)
+			}
+
+			// Add LLM provider if present
+			if cap.LlmProvider != nil {
+				capInfo.LlmProvider = convertToLLMProvider(cap.LlmProvider)
+			}
+
+			capabilities = append(capabilities, capInfo)
 		}
 		agentInfo.Capabilities = capabilities
 
@@ -1028,6 +1384,73 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			depResolutions = append(depResolutions, depInfo)
 		}
 		agentInfo.DependencyResolutions = &depResolutions
+
+		// Add LLM tool resolutions
+		var llmToolResolutions []generated.LLMToolResolutionInfo
+		for _, toolRes := range a.Edges.LlmToolResolutions {
+			toolInfo := generated.LLMToolResolutionInfo{
+				FunctionName: toolRes.ConsumerFunctionName,
+				Status:       generated.LLMToolResolutionInfoStatus(toolRes.Status),
+			}
+
+			// Add filter information
+			if toolRes.FilterCapability != nil {
+				toolInfo.FilterCapability = toolRes.FilterCapability
+			}
+			if len(toolRes.FilterTags) > 0 {
+				toolInfo.FilterTags = &toolRes.FilterTags
+			}
+
+			// Set filter mode
+			filterMode := generated.LLMToolResolutionInfoFilterMode(toolRes.FilterMode)
+			toolInfo.FilterMode = &filterMode
+
+			// Add resolved provider information (if available)
+			if toolRes.ProviderAgentID != nil {
+				toolInfo.ProviderAgentId = toolRes.ProviderAgentID
+			}
+			if toolRes.ProviderFunctionName != nil {
+				toolInfo.McpTool = toolRes.ProviderFunctionName
+			}
+			if toolRes.ProviderCapability != nil {
+				toolInfo.ProviderCapability = toolRes.ProviderCapability
+			}
+			if toolRes.Endpoint != nil {
+				toolInfo.Endpoint = toolRes.Endpoint
+			}
+
+			llmToolResolutions = append(llmToolResolutions, toolInfo)
+		}
+		agentInfo.LlmToolResolutions = &llmToolResolutions
+
+		// Add LLM provider resolutions
+		var llmProviderResolutions []generated.LLMProviderResolutionInfo
+		for _, provRes := range a.Edges.LlmProviderResolutions {
+			provInfo := generated.LLMProviderResolutionInfo{
+				FunctionName:       provRes.ConsumerFunctionName,
+				RequiredCapability: provRes.RequiredCapability,
+				Status:             generated.LLMProviderResolutionInfoStatus(provRes.Status),
+			}
+
+			// Add required tags
+			if len(provRes.RequiredTags) > 0 {
+				provInfo.RequiredTags = &provRes.RequiredTags
+			}
+
+			// Add resolved provider information (if available)
+			if provRes.ProviderAgentID != nil {
+				provInfo.ProviderAgentId = provRes.ProviderAgentID
+			}
+			if provRes.ProviderFunctionName != nil {
+				provInfo.McpTool = provRes.ProviderFunctionName
+			}
+			if provRes.Endpoint != nil {
+				provInfo.Endpoint = provRes.Endpoint
+			}
+
+			llmProviderResolutions = append(llmProviderResolutions, provInfo)
+		}
+		agentInfo.LlmProviderResolutions = &llmProviderResolutions
 
 		agentInfos = append(agentInfos, agentInfo)
 	}
@@ -1868,4 +2291,46 @@ func getStringSlice(data map[string]interface{}, key string) []string {
 		}
 	}
 	return []string{}
+}
+
+// convertToLLMToolFilter converts a map to generated.LLMToolFilter
+// Returns nil if the map is empty or conversion fails
+func convertToLLMToolFilter(data map[string]interface{}) *generated.LLMToolFilter {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Marshal the map to JSON, then unmarshal to the struct
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+
+	var filter generated.LLMToolFilter
+	if err := json.Unmarshal(jsonBytes, &filter); err != nil {
+		return nil
+	}
+
+	return &filter
+}
+
+// convertToLLMProvider converts a map to generated.LLMProvider
+// Returns nil if the map is empty or conversion fails
+func convertToLLMProvider(data map[string]interface{}) *generated.LLMProvider {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Marshal the map to JSON, then unmarshal to the struct
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+
+	var provider generated.LLMProvider
+	if err := json.Unmarshal(jsonBytes, &provider); err != nil {
+		return nil
+	}
+
+	return &provider
 }

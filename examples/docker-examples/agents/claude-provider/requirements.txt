@@ -1,0 +1,11 @@
+# MCP Mesh SDK
+mcp-mesh>=0.7.0
+
+# FastMCP for MCP server
+fastmcp
+
+# LiteLLM for LLM provider
+litellm
+
+# HTTP client for health checks
+httpx

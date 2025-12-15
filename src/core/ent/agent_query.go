@@ -10,6 +10,8 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/llmproviderresolution"
+	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
 
@@ -22,13 +24,15 @@ import (
 // AgentQuery is the builder for querying Agent entities.
 type AgentQuery struct {
 	config
-	ctx                       *QueryContext
-	order                     []agent.OrderOption
-	inters                    []Interceptor
-	predicates                []predicate.Agent
-	withCapabilities          *CapabilityQuery
-	withEvents                *RegistryEventQuery
-	withDependencyResolutions *DependencyResolutionQuery
+	ctx                        *QueryContext
+	order                      []agent.OrderOption
+	inters                     []Interceptor
+	predicates                 []predicate.Agent
+	withCapabilities           *CapabilityQuery
+	withEvents                 *RegistryEventQuery
+	withDependencyResolutions  *DependencyResolutionQuery
+	withLlmToolResolutions     *LLMToolResolutionQuery
+	withLlmProviderResolutions *LLMProviderResolutionQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -124,6 +128,50 @@ func (aq *AgentQuery) QueryDependencyResolutions() *DependencyResolutionQuery {
 			sqlgraph.From(agent.Table, agent.FieldID, selector),
 			sqlgraph.To(dependencyresolution.Table, dependencyresolution.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, agent.DependencyResolutionsTable, agent.DependencyResolutionsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(aq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryLlmToolResolutions chains the current query on the "llm_tool_resolutions" edge.
+func (aq *AgentQuery) QueryLlmToolResolutions() *LLMToolResolutionQuery {
+	query := (&LLMToolResolutionClient{config: aq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := aq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := aq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, selector),
+			sqlgraph.To(llmtoolresolution.Table, llmtoolresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.LlmToolResolutionsTable, agent.LlmToolResolutionsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(aq.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryLlmProviderResolutions chains the current query on the "llm_provider_resolutions" edge.
+func (aq *AgentQuery) QueryLlmProviderResolutions() *LLMProviderResolutionQuery {
+	query := (&LLMProviderResolutionClient{config: aq.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := aq.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := aq.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(agent.Table, agent.FieldID, selector),
+			sqlgraph.To(llmproviderresolution.Table, llmproviderresolution.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, agent.LlmProviderResolutionsTable, agent.LlmProviderResolutionsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(aq.driver.Dialect(), step)
 		return fromU, nil
@@ -318,14 +366,16 @@ func (aq *AgentQuery) Clone() *AgentQuery {
 		return nil
 	}
 	return &AgentQuery{
-		config:                    aq.config,
-		ctx:                       aq.ctx.Clone(),
-		order:                     append([]agent.OrderOption{}, aq.order...),
-		inters:                    append([]Interceptor{}, aq.inters...),
-		predicates:                append([]predicate.Agent{}, aq.predicates...),
-		withCapabilities:          aq.withCapabilities.Clone(),
-		withEvents:                aq.withEvents.Clone(),
-		withDependencyResolutions: aq.withDependencyResolutions.Clone(),
+		config:                     aq.config,
+		ctx:                        aq.ctx.Clone(),
+		order:                      append([]agent.OrderOption{}, aq.order...),
+		inters:                     append([]Interceptor{}, aq.inters...),
+		predicates:                 append([]predicate.Agent{}, aq.predicates...),
+		withCapabilities:           aq.withCapabilities.Clone(),
+		withEvents:                 aq.withEvents.Clone(),
+		withDependencyResolutions:  aq.withDependencyResolutions.Clone(),
+		withLlmToolResolutions:     aq.withLlmToolResolutions.Clone(),
+		withLlmProviderResolutions: aq.withLlmProviderResolutions.Clone(),
 		// clone intermediate query.
 		sql:  aq.sql.Clone(),
 		path: aq.path,
@@ -362,6 +412,28 @@ func (aq *AgentQuery) WithDependencyResolutions(opts ...func(*DependencyResoluti
 		opt(query)
 	}
 	aq.withDependencyResolutions = query
+	return aq
+}
+
+// WithLlmToolResolutions tells the query-builder to eager-load the nodes that are connected to
+// the "llm_tool_resolutions" edge. The optional arguments are used to configure the query builder of the edge.
+func (aq *AgentQuery) WithLlmToolResolutions(opts ...func(*LLMToolResolutionQuery)) *AgentQuery {
+	query := (&LLMToolResolutionClient{config: aq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	aq.withLlmToolResolutions = query
+	return aq
+}
+
+// WithLlmProviderResolutions tells the query-builder to eager-load the nodes that are connected to
+// the "llm_provider_resolutions" edge. The optional arguments are used to configure the query builder of the edge.
+func (aq *AgentQuery) WithLlmProviderResolutions(opts ...func(*LLMProviderResolutionQuery)) *AgentQuery {
+	query := (&LLMProviderResolutionClient{config: aq.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	aq.withLlmProviderResolutions = query
 	return aq
 }
 
@@ -443,10 +515,12 @@ func (aq *AgentQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Agent,
 	var (
 		nodes       = []*Agent{}
 		_spec       = aq.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [5]bool{
 			aq.withCapabilities != nil,
 			aq.withEvents != nil,
 			aq.withDependencyResolutions != nil,
+			aq.withLlmToolResolutions != nil,
+			aq.withLlmProviderResolutions != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -486,6 +560,24 @@ func (aq *AgentQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Agent,
 			func(n *Agent) { n.Edges.DependencyResolutions = []*DependencyResolution{} },
 			func(n *Agent, e *DependencyResolution) {
 				n.Edges.DependencyResolutions = append(n.Edges.DependencyResolutions, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := aq.withLlmToolResolutions; query != nil {
+		if err := aq.loadLlmToolResolutions(ctx, query, nodes,
+			func(n *Agent) { n.Edges.LlmToolResolutions = []*LLMToolResolution{} },
+			func(n *Agent, e *LLMToolResolution) {
+				n.Edges.LlmToolResolutions = append(n.Edges.LlmToolResolutions, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := aq.withLlmProviderResolutions; query != nil {
+		if err := aq.loadLlmProviderResolutions(ctx, query, nodes,
+			func(n *Agent) { n.Edges.LlmProviderResolutions = []*LLMProviderResolution{} },
+			func(n *Agent, e *LLMProviderResolution) {
+				n.Edges.LlmProviderResolutions = append(n.Edges.LlmProviderResolutions, e)
 			}); err != nil {
 			return nil, err
 		}
@@ -570,6 +662,66 @@ func (aq *AgentQuery) loadDependencyResolutions(ctx context.Context, query *Depe
 	}
 	query.Where(predicate.DependencyResolution(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(agent.DependencyResolutionsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ConsumerAgentID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "consumer_agent_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (aq *AgentQuery) loadLlmToolResolutions(ctx context.Context, query *LLMToolResolutionQuery, nodes []*Agent, init func(*Agent), assign func(*Agent, *LLMToolResolution)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*Agent)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(llmtoolresolution.FieldConsumerAgentID)
+	}
+	query.Where(predicate.LLMToolResolution(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(agent.LlmToolResolutionsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ConsumerAgentID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "consumer_agent_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (aq *AgentQuery) loadLlmProviderResolutions(ctx context.Context, query *LLMProviderResolutionQuery, nodes []*Agent, init func(*Agent), assign func(*Agent, *LLMProviderResolution)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*Agent)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(llmproviderresolution.FieldConsumerAgentID)
+	}
+	query.Where(predicate.LLMProviderResolution(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(agent.LlmProviderResolutionsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

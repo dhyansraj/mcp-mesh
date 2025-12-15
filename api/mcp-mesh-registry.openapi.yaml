@@ -1183,6 +1183,33 @@ components:
               capability: "weather_service"
               tags: ["weather"]
               status: "unresolved"
+        llm_tool_resolutions:
+          type: array
+          items:
+            $ref: "#/components/schemas/LLMToolResolutionInfo"
+          description: "List of all LLM tool resolutions for @mesh.llm filter"
+          example:
+            - function_name: "smart_analyze"
+              filter_capability: "time_service"
+              filter_mode: "best_match"
+              mcp_tool: "get_current_time"
+              provider_capability: "time_service"
+              provider_agent_id: "fastmcp-service-e60355f6"
+              endpoint: "http://fastmcp-agent:8080"
+              status: "available"
+        llm_provider_resolutions:
+          type: array
+          items:
+            $ref: "#/components/schemas/LLMProviderResolutionInfo"
+          description: "List of all LLM provider resolutions for @mesh.llm provider"
+          example:
+            - function_name: "smart_analyze"
+              required_capability: "llm"
+              required_tags: ["llm", "+claude"]
+              mcp_tool: "llm"
+              provider_agent_id: "claude-provider-abc123"
+              endpoint: "http://claude-provider:9020"
+              status: "available"
         last_seen:
           type: string
           format: date-time
@@ -1222,6 +1249,16 @@ components:
           type: string
           example: "Provides greeting functionality"
           description: "Human-readable description of the capability"
+        llm_filter:
+          $ref: "#/components/schemas/LLMToolFilter"
+          description: |
+            LLM tool filter specification if this capability uses @mesh.llm decorator.
+            Contains filter criteria and filter_mode for tool discovery.
+        llm_provider:
+          $ref: "#/components/schemas/LLMProvider"
+          description: |
+            LLM provider specification if this capability uses mesh delegation.
+            Contains capability, tags, version, namespace for provider matching.
 
     # Dependency resolution schema
     DependencyResolutionInfo:
@@ -1262,6 +1299,101 @@ components:
           enum: [available, unavailable, unresolved]
           example: "available"
           description: "Dependency resolution status"
+
+    # LLM Tool resolution schema
+    LLMToolResolutionInfo:
+      type: object
+      required: [function_name, status]
+      description: |
+        Resolution info for LLM tool filters (@mesh.llm filter).
+        Shows which tools were resolved to match the filter specification.
+      properties:
+        function_name:
+          type: string
+          minLength: 1
+          example: "smart_analyze"
+          description: "Function with @mesh.llm decorator"
+        filter_capability:
+          type: string
+          example: "time_service"
+          description: "Capability specified in the filter"
+        filter_tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["system"]
+          description: "Tags specified in the filter"
+        filter_mode:
+          type: string
+          enum: [all, best_match, "*"]
+          default: "all"
+          example: "best_match"
+          description: "Filter mode used"
+        mcp_tool:
+          type: string
+          example: "get_current_time"
+          description: "MCP tool name on provider (NULL if unresolved)"
+        provider_capability:
+          type: string
+          example: "time_service"
+          description: "Capability of the resolved tool"
+        provider_agent_id:
+          type: string
+          example: "fastmcp-service-e60355f6"
+          description: "Provider agent ID (NULL if unresolved)"
+        endpoint:
+          type: string
+          example: "http://fastmcp-agent:8080"
+          description: "Provider endpoint (NULL if unresolved)"
+        status:
+          type: string
+          enum: [available, unavailable, unresolved]
+          example: "available"
+          description: "Tool resolution status"
+
+    # LLM Provider resolution schema
+    LLMProviderResolutionInfo:
+      type: object
+      required: [function_name, required_capability, status]
+      description: |
+        Resolution info for LLM provider (@mesh.llm provider).
+        Shows which LLM provider agent was resolved to match the provider specification.
+      properties:
+        function_name:
+          type: string
+          minLength: 1
+          example: "smart_analyze"
+          description: "Function with @mesh.llm decorator"
+        required_capability:
+          type: string
+          minLength: 1
+          example: "llm"
+          description: "Required capability (typically 'llm')"
+        required_tags:
+          type: array
+          items:
+            type: string
+          default: []
+          example: ["llm", "+claude"]
+          description: "Required tags for matching"
+        mcp_tool:
+          type: string
+          example: "llm"
+          description: "MCP tool name on provider (NULL if unresolved)"
+        provider_agent_id:
+          type: string
+          example: "claude-provider-abc123"
+          description: "Provider agent ID (NULL if unresolved)"
+        endpoint:
+          type: string
+          example: "http://claude-provider:9020"
+          description: "Provider endpoint (NULL if unresolved)"
+        status:
+          type: string
+          enum: [available, unavailable, unresolved]
+          example: "available"
+          description: "Provider resolution status"
 
     # Dependency resolution schemas
     DependencyInfo:
