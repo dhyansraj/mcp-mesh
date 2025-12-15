@@ -4,18 +4,18 @@
 
 ## Essential Requirements
 
-You need Python 3.9+ and understanding of the dual decorator pattern:
+You need Python 3.11+ and understanding of the dual decorator pattern:
 
-### 1. Python 3.9+
+### 1. Python 3.11+
 
 ```bash
 # Check your Python version
 python --version
 
-# Should show: Python 3.9.x or higher
+# Should show: Python 3.11.x or higher
 ```
 
-**Don't have Python 3.9+?**
+**Don't have Python 3.11+?**
 
 - **macOS**: `brew install python@3.11`
 - **Ubuntu/Debian**: `sudo apt install python3.11`
@@ -80,7 +80,7 @@ curl --version
 
 ## System Support
 
-- ✅ **Linux**: All distributions with Python 3.9+
+- ✅ **Linux**: All distributions with Python 3.11+
 - ✅ **macOS**: 10.15 (Catalina) or later
 - ✅ **Windows**: Windows 10/11 (WSL2 recommended for best experience)
 
@@ -91,7 +91,7 @@ curl --version
 python3 -c "
 import sys
 print('Python:', sys.version)
-print('✅ Ready!' if sys.version_info >= (3, 9) else '❌ Need Python 3.9+')
+print('✅ Ready!' if sys.version_info >= (3, 11) else '❌ Need Python 3.11+')
 "
 ```
 

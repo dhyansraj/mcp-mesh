@@ -86,7 +86,7 @@ mcp-mesh/
 
 ### Python (SDK)
 
-- Python 3.9+ compatible
+- Python 3.11+ compatible
 - Type hints required
 - Docstrings for public functions
 - Follow existing patterns in `src/runtime/python/_mcp_mesh/`

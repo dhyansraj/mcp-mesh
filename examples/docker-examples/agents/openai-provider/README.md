@@ -10,7 +10,7 @@ This is a zero-code LLM provider that exposes openai/gpt-4o to other MCP Mesh ag
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - MCP Mesh SDK
 - FastMCP
 - LiteLLM

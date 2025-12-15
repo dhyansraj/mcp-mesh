@@ -109,6 +109,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "CLI Commands",
 		Description: "meshctl call, list, status for development and testing",
 	},
+	"prerequisites": {
+		Name:        "prerequisites",
+		Aliases:     []string{"prereq", "setup", "install"},
+		Title:       "Prerequisites",
+		Description: "System requirements, Python 3.11+, and environment setup",
+	},
 }
 
 // aliasMap maps aliases to canonical guide names.
@@ -149,7 +155,7 @@ func ListGuides() []*Guide {
 	guides := make([]*Guide, 0, len(guideRegistry))
 	// Return in a consistent order
 	order := []string{
-		"overview", "capabilities", "tags", "decorators",
+		"prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
 		"proxies", "fastapi", "environment", "deployment", "testing",
 		"scaffold", "cli",
