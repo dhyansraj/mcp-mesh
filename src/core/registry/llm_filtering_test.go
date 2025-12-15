@@ -317,7 +317,7 @@ func TestLLMToolFilteringDuplicateFunctionNames(t *testing.T) {
 
 			// Verify the returned tool is named "chat"
 			if len(filtered) > 0 {
-				assert.Equal(t, "chat", filtered[0].FunctionName)
+				assert.Equal(t, "chat", filtered[0].Name)
 			}
 
 			// Verify no duplicate function names in result
@@ -403,7 +403,7 @@ func TestLLMToolFilteringWithVersionConstraints(t *testing.T) {
 
 			assert.Equal(t, tt.expectedCount, len(filtered))
 			if tt.expectedCount > 0 {
-				assert.Equal(t, tt.expectedName, filtered[0].FunctionName)
+				assert.Equal(t, tt.expectedName, filtered[0].Name)
 			}
 		})
 	}
