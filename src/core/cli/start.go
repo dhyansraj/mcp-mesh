@@ -1049,16 +1049,33 @@ func startAgentsWithFileWatching(agentPaths []string, env []string, cmd *cobra.C
 			if !quiet {
 				fmt.Println("\nShutting down all services...")
 			}
-			// Stop all agents
+
+			shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
+			if shutdownTimeout == 0 {
+				shutdownTimeout = config.ShutdownTimeout
+			}
+
+			// Stop all agents from our local map
 			for _, agentCmd := range agentCmds {
 				if agentCmd != nil && agentCmd.Process != nil {
-					shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
-					if shutdownTimeout == 0 {
-						shutdownTimeout = config.ShutdownTimeout
-					}
 					KillProcess(agentCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
 				}
 			}
+
+			// Also stop any processes from the process list (e.g., registry)
+			processes, err := GetRunningProcesses()
+			if err == nil {
+				for _, proc := range processes {
+					if !quiet {
+						fmt.Printf("Stopping %s (PID: %d)\n", proc.Name, proc.PID)
+					}
+					if err := KillProcess(proc.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
+						fmt.Printf("Failed to stop %s: %v\n", proc.Name, err)
+					}
+					RemoveRunningProcess(proc.PID)
+				}
+			}
+
 			return nil
 		}
 	}
