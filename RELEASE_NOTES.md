@@ -1,5 +1,15 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.7...v0.7.8)
+
+## v0.7.8 (2025-12-15)
+
+### 🐛 Bug Fixes
+
+- **meshctl start**: Fixed `mcp-mesh-registry` not found when installed via npm (#245)
+  - Registry binary lookup now properly searches the system PATH using `exec.LookPath()`
+  - Previously only checked local directories with `os.Stat()`, which doesn't search PATH
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.6...v0.7.7)
 
 ## v0.7.7 (2025-12-15)
