@@ -1,5 +1,24 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.8...v0.7.9)
+
+## v0.7.9 (2025-12-15)
+
+### 🐛 Bug Fixes
+
+- **meshctl start**: Fixed Ctrl+C to properly stop registry in file watching mode (#251)
+  - Previously, pressing Ctrl+C only stopped the agent but left the registry running
+  - Now both agent and registry stop cleanly with a single Ctrl+C
+
+### 📚 Documentation
+
+- **meshctl man prerequisites**: New man topic covering system requirements (#249)
+  - Local development setup with Python 3.11+ and virtual environments
+  - Docker deployment prerequisites
+  - Kubernetes deployment with Helm charts
+  - Windows WSL2/Git Bash requirement note
+- **Python 3.11+**: Updated minimum Python version from 3.9 to 3.11+ across all documentation (#249)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.7...v0.7.8)
 
 ## v0.7.8 (2025-12-15)
