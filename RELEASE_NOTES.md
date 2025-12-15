@@ -1,5 +1,23 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.6...v0.7.7)
+
+## v0.7.7 (2025-12-15)
+
+### 🐛 Bug Fixes
+
+- **@mesh.llm with text mode**: Fixed `AttributeError: type object 'str' has no attribute 'model_json_schema'` when using `response_format="text"` (#239)
+
+### ✨ Features
+
+- **meshctl list --id**: New LLM resolution display sections (#241)
+  - LLM Tool Filters - Shows filter configuration from `@mesh.llm` decorator
+  - LLM Tool Resolutions - Shows resolved tools with endpoints
+  - LLM Providers - Shows provider requirements with preference tags
+  - LLM Provider Resolutions - Shows which provider agent was selected
+- **Example LLM providers**: Added `claude-provider` and `openai-provider` example agents (#241)
+- **Example agent**: Added `llm_with_deps_agent.py` demonstrating both LLM and static dependencies (#241)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.5...v0.7.6)
 
 ## v0.7.6 (2025-12-14)
