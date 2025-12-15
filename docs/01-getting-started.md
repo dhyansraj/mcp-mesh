@@ -69,11 +69,11 @@ Before you begin, ensure you have the required tools installed.
 
 ### Required
 
-#### Python 3.9+
+#### Python 3.11+
 
 ```bash
 # Check version
-python --version  # Should show 3.9 or higher
+python --version  # Should show 3.11 or higher
 
 # Install if needed
 # macOS
@@ -425,7 +425,7 @@ Common issues when getting started:
 
 **Local Development Issues:**
 
-- **Build errors**: Ensure Go 1.21+ and Python 3.9+ are installed
+- **Build errors**: Ensure Go 1.21+ and Python 3.11+ are installed
 - **Registry not starting**: Check if port 8000 is available
 - **Agent connection failures**: Verify registry is running first
 - **Import errors**: Run `make install-dev` to install dependencies
@@ -441,7 +441,7 @@ For detailed solutions, see the troubleshooting sections in each example README.
 ## ⚠️ Known Limitations
 
 - **Windows Support**: Native Windows support is experimental; WSL2 or Docker recommended
-- **Python 3.8**: Not supported; requires Python 3.9+
+- **Python 3.10 and below**: Not supported; requires Python 3.11+
 - **Network Policies**: Strict firewall/network policies may block agent communication
 
 ## 🎯 What's Next?

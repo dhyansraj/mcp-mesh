@@ -64,7 +64,7 @@ For contributors or advanced users who want to build from source:
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.11 or higher
 - Go 1.23 or higher
 - Make (build tool)
 
@@ -128,7 +128,7 @@ When you install MCP Mesh, you get:
 
 ## System Requirements
 
-- **Python**: 3.9 or higher
+- **Python**: 3.11 or higher
 - **OS**: Linux, macOS, or Windows (WSL2 recommended)
 - **Memory**: 1GB free RAM
 - **Disk**: 500MB free space

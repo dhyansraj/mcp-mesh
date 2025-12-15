@@ -85,13 +85,13 @@ Create `pyproject.toml` for modern Python tooling:
 ```toml
 [tool.black]
 line-length = 88
-target-version = ['py39']
+target-version = ['py311']
 
 [tool.pylint.messages_control]
 disable = "C0330, C0326"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 
