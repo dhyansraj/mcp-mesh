@@ -100,13 +100,36 @@ class UnifiedMCPProxy:
             # Try to get current trace context for header injection
             trace_headers = self._get_trace_headers()
 
+            # Use stream_timeout for read timeout (default 300s for LLM calls)
+            # Note: sse_read_timeout is deprecated, use httpx_client_factory instead
+            import httpx
+
+            def create_httpx_client(**kwargs):
+                # Override timeout to use stream_timeout for long-running LLM calls
+                kwargs["timeout"] = httpx.Timeout(
+                    timeout=self.stream_timeout,
+                    connect=30.0,  # 30s for connection
+                    read=self.stream_timeout,  # Long read timeout for SSE streams
+                    write=30.0,  # 30s for writes
+                    pool=30.0,  # 30s for pool
+                )
+                return httpx.AsyncClient(**kwargs)
+
             if trace_headers:
                 # Create client with trace headers for distributed tracing
-                transport = StreamableHttpTransport(url=endpoint, headers=trace_headers)
+                transport = StreamableHttpTransport(
+                    url=endpoint,
+                    headers=trace_headers,
+                    httpx_client_factory=create_httpx_client,
+                )
                 return Client(transport)
             else:
                 # Create standard client when no trace context available
-                return Client(endpoint)
+                transport = StreamableHttpTransport(
+                    url=endpoint,
+                    httpx_client_factory=create_httpx_client,
+                )
+                return Client(transport)
 
         except ImportError as e:
             # DNS names or FastMCP not available - this will trigger HTTP fallback
