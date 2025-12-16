@@ -717,17 +717,25 @@ func (s *EntService) StoreLLMToolResolutions(
 				filterTags = getStringSlice(f, "tags")
 			}
 
-			if filterCapability == "" {
+			// Skip only if BOTH capability AND tags are empty
+			if filterCapability == "" && len(filterTags) == 0 {
 				continue
 			}
 
 			// Find matching resolved tools
 			var matchedTools []LLMToolInfo
 			if hasResolved {
-				for _, tool := range resolvedTools {
-					if tool.Capability == filterCapability {
-						matchedTools = append(matchedTools, tool)
+				if filterCapability != "" {
+					// Capability-based filter: match by capability name
+					for _, tool := range resolvedTools {
+						if tool.Capability == filterCapability {
+							matchedTools = append(matchedTools, tool)
+						}
 					}
+				} else {
+					// Tags-only filter: all resolved tools are matches
+					// (FilterToolsForLLM already filtered by tags)
+					matchedTools = resolvedTools
 				}
 			}
 
