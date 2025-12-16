@@ -15,7 +15,6 @@ MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.
     max_iterations=5,
     system_prompt="file://prompts/assistant.jinja2",
     context_param="ctx",
-    response_format="json",
     filter=[{"tags": ["tools"]}],
     filter_mode="all",
 )
@@ -23,7 +22,7 @@ MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
     return llm("Help the user with their request")
 ```
 
@@ -35,9 +34,10 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
 | `max_iterations`  | int  | Max agentic loop iterations (default: 1)          |
 | `system_prompt`   | str  | Inline prompt or `file://path` to Jinja2 template |
 | `context_param`   | str  | Parameter name receiving context object           |
-| `response_format` | str  | `"text"` or `"json"`                              |
 | `filter`          | list | Tool filter criteria                              |
 | `filter_mode`     | str  | `"all"`, `"best_match"`, or `"*"`                 |
+
+**Note**: Response format is determined by the function's return type annotation, not a parameter. See [Response Formats](#response-formats).
 
 ## LLM Provider Selection
 
@@ -160,21 +160,23 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
 
 ## Response Formats
 
+Response format is determined by the **return type annotation** - not a decorator parameter.
+
+| Return Type      | Output         | Description                    |
+| ---------------- | -------------- | ------------------------------ |
+| `-> str`         | Plain text     | LLM returns unstructured text  |
+| `-> PydanticModel` | Structured JSON | LLM returns validated object |
+
 ### Text Response
 
 ```python
-response_format="text"
-# Returns: str
+@mesh.llm(provider={"capability": "llm"}, ...)
+@mesh.tool(capability="summarize")
+def summarize(ctx: SummaryContext, llm: mesh.MeshLlmAgent = None) -> str:
+    return llm("Summarize the input")  # Returns plain text
 ```
 
-### JSON Response
-
-```python
-response_format="json"
-# Returns: Pydantic model or dict
-```
-
-With response model:
+### Structured JSON Response
 
 ```python
 class AssistResponse(BaseModel):
@@ -182,9 +184,10 @@ class AssistResponse(BaseModel):
     confidence: float
     sources: list[str]
 
-@mesh.llm(response_format="json", ...)
+@mesh.llm(provider={"capability": "llm"}, ...)
+@mesh.tool(capability="smart_assistant")
 def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return llm("Analyze and respond")
+    return llm("Analyze and respond")  # Returns validated Pydantic object
 ```
 
 ## Agentic Loops
