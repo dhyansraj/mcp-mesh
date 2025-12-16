@@ -73,6 +73,11 @@ def configure_logging():
     logging.getLogger("mcp_mesh").setLevel(log_level)
     logging.getLogger("_mcp_mesh").setLevel(log_level)
 
+    # Suppress noisy third-party loggers
+    # docket (task queue used by fastmcp) produces excessive DEBUG logs like
+    # "Scheduling due tasks", "Getting redeliveries", "Getting new deliveries" in tight loops
+    logging.getLogger("docket").setLevel(logging.WARNING)
+
     # Return the configured level for reference
     return log_level
 
