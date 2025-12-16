@@ -24,7 +24,8 @@ Examples:
   meshctl status --json                           # Output in JSON format
   meshctl status --registry-port 8002             # Connect to registry on custom port
   meshctl status --registry-url http://remote:8000 # Connect to remote registry
-  meshctl status --registry-host prod.example.com # Connect to remote host`,
+  meshctl status --registry-host prod.example.com # Connect to remote host
+  meshctl status --registry-scheme https --insecure # HTTPS with self-signed cert`,
 		RunE: runStatusCommand,
 	}
 
@@ -37,6 +38,7 @@ Examples:
 	cmd.Flags().String("registry-host", "", "Registry host (default: localhost)")
 	cmd.Flags().Int("registry-port", 0, "Registry port (default: 8000)")
 	cmd.Flags().String("registry-scheme", "http", "Registry URL scheme (http/https)")
+	cmd.Flags().Bool("insecure", false, "Skip TLS certificate verification")
 
 	return cmd
 }
@@ -98,6 +100,10 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 	registryHost, _ := cmd.Flags().GetString("registry-host")
 	registryPort, _ := cmd.Flags().GetInt("registry-port")
 	registryScheme, _ := cmd.Flags().GetString("registry-scheme")
+	insecure, _ := cmd.Flags().GetBool("insecure")
+
+	// Configure HTTP client with TLS settings
+	configureHTTPClientWithTLS(10, insecure)
 
 	// Determine final registry URL
 	finalRegistryURL := determineRegistryURL(config, registryURL, registryHost, registryPort, registryScheme)
