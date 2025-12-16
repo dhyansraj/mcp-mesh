@@ -87,7 +87,6 @@ Enables LLM-powered tools with automatic tool discovery.
     max_iterations=5,                    # Max agentic loop iterations
     system_prompt="file://prompts/agent.jinja2",  # Jinja2 template
     context_param="ctx",                 # Parameter name for context
-    response_format="json",              # "text" or "json"
     filter=[{"tags": ["tools"]}],        # Tool filter for discovery
     filter_mode="all",                   # "all", "best_match", or "*"
 )
@@ -95,9 +94,11 @@ Enables LLM-powered tools with automatic tool discovery.
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
     return llm("Help the user with their request")
 ```
+
+**Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON.
 
 ### Filter Modes
 

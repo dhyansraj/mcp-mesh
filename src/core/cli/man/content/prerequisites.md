@@ -28,8 +28,11 @@ sudo apt install python3.11       # Ubuntu/Debian
 
 ### Virtual Environment (Recommended)
 
+Create a virtual environment at your **project root** (where you run `meshctl`).
+All agents share this single venv - do not create separate venvs inside agent folders.
+
 ```bash
-# Create and activate
+# At project root
 python3.11 -m venv .venv
 source .venv/bin/activate         # macOS/Linux
 .venv\Scripts\activate            # Windows
@@ -50,15 +53,17 @@ python -c "import mesh; print('Ready!')"
 ### Quick Start
 
 ```bash
-# Create project
-mkdir my-agent && cd my-agent
+# Setup venv at project root
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install "mcp-mesh>=0.7,<0.8"
 
-# Scaffold and run
+# Scaffold agents (creates subfolders)
 meshctl scaffold --name hello --agent-type basic
+meshctl scaffold --name assistant --agent-type llm-agent
+
+# Run (from project root)
 meshctl start hello/main.py --debug
 ```
 
