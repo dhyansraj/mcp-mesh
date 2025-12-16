@@ -42,20 +42,20 @@ async def health_check() -> dict:
         errors.append("ANTHROPIC_API_KEY not set")
         status = "unhealthy"
 
-    # Check API connectivity
+    # Check API connectivity (uses /v1/models - free, no tokens consumed)
     if api_key:
         try:
             import httpx
 
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.head(
-                    "https://api.anthropic.com/v1/messages",
+                response = await client.get(
+                    "https://api.anthropic.com/v1/models",
                     headers={
                         "anthropic-version": "2023-06-01",
                         "x-api-key": api_key,
                     },
                 )
-                if response.status_code in [400, 405]:
+                if response.status_code == 200:
                     checks["anthropic_api_reachable"] = True
                     checks["anthropic_api_key_valid"] = True
                 elif response.status_code == 401:
