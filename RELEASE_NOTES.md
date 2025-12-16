@@ -1,5 +1,23 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.10...v0.7.11)
+
+## v0.7.11 (2025-12-16)
+
+### 🐛 Bug Fixes
+
+- **SSE read timeout**: Fixed MCP SDK 1.24.0+ compatibility issue (#268)
+  - MCP SDK deprecated `sse_read_timeout` parameter on `StreamableHttpTransport`
+  - Now uses `httpx_client_factory` to configure httpx client with custom timeouts
+  - Fixes connection timeout errors when agents take longer than default timeout
+
+### 📚 Documentation
+
+- **meshctl man prerequisites**: Clarified that meshctl auto-detects `.venv` (#270)
+  - meshctl is a Go binary that auto-detects `.venv` in the current directory
+  - Users only need to activate venv for `pip` commands
+  - meshctl uses `.venv/bin/python` automatically when running agents
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.9...v0.7.10)
 
 ## v0.7.10 (2025-12-16)
