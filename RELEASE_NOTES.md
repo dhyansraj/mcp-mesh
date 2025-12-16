@@ -1,5 +1,34 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.9...v0.7.10)
+
+## v0.7.10 (2025-12-16)
+
+### 🐛 Bug Fixes
+
+- **LLM tool resolutions**: Fixed tags-only filters not being stored in registry database (#257)
+  - Previously, `filter=[{"tags": ["tools"]}]` was skipped during storage
+  - Now all resolved tools are properly stored for tags-only filters
+
+### ✨ Enhancements
+
+- **meshctl status --insecure**: Added `--insecure` flag for self-signed TLS certificates (#259)
+  - Consistent with `meshctl list` and `meshctl call` commands
+- **Cleaner DEBUG logs**: Suppressed noisy docket task queue logs (#261)
+  - Removed spam like "Scheduling due tasks", "Getting redeliveries" in tight loops
+  - MCP Mesh DEBUG logs remain visible
+- **Anthropic health check**: Use GET /v1/models instead of HEAD /v1/messages (#263)
+  - Returns proper 200 status (not hacky 405 workaround)
+  - Free endpoint, no tokens consumed
+  - Validates API key and confirms API reachability
+
+### 📚 Documentation
+
+- **@mesh.llm response_format**: Clarified that format is determined by return type annotation (#264)
+  - `-> str` for text output, `-> PydanticModel` for structured JSON
+  - Removed misleading `response_format` parameter from examples
+- **Virtual environment**: Clarified venv should be at project root, shared by all agents (#264)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.8...v0.7.9)
 
 ## v0.7.9 (2025-12-15)
