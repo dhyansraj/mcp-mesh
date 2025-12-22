@@ -8,16 +8,26 @@
 /* Logo styling */
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
-  height: 2.5rem !important;
+  height: 1.5rem !important;
   width: auto !important;
-  filter: brightness(0) invert(1);
 }
 
 .md-logo img,
 .md-logo svg {
-  height: 2.5rem !important;
+  height: 1.5rem !important;
   width: auto !important;
-  filter: brightness(0) invert(1);
+}
+
+/* Reduce gap between logo and title */
+.md-header__button.md-logo {
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Align logo bottom with title bottom */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  vertical-align: text-bottom !important;
 }
 
 /* Feature grid styling */
