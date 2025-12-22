@@ -15,10 +15,11 @@ var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "meshctl",
-	Short: "MCP Mesh Control CLI",
-	Long: `Control CLI for MCP Mesh to start, stop, and manage MCP agents with mesh runtime capabilities.
+	Short: "MCP Mesh - Framework for building MCP agents",
+	Long: `MCP Mesh - Framework for building MCP agents with automatic service discovery and dependency injection.
 
-This CLI provides commands to manage MCP agents with distributed mesh networking and service discovery.`,
+Scaffold agents from templates, run them locally or in containers. Agents discover each other
+and inject dependencies automatically—no central orchestrator or manual wiring needed.`,
 }
 
 func init() {
