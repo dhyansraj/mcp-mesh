@@ -6,6 +6,14 @@
 
 MCP Mesh provides `@mesh.route` decorator for FastAPI applications that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
 
+**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
+
+## Installation
+
+```bash
+pip install mcp-mesh
+```
+
 ## Two Architectures
 
 | Pattern         | Decorator                    | Use Case                              |
@@ -128,15 +136,16 @@ async def get_history(
 app.include_router(router)
 ```
 
-## Running the Backend
+## Running Your FastAPI App
+
+Run your existing FastAPI application as you normally would:
 
 ```bash
-# Set registry URL
 export MCP_MESH_REGISTRY_URL=http://localhost:8000
-
-# Run with uvicorn
 uvicorn main:app --host 0.0.0.0 --port 8080
 ```
+
+**Note**: Unlike MCP agents, FastAPI backends are NOT started with `meshctl start`.
 
 The backend will:
 
