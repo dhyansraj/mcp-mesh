@@ -1,4 +1,4 @@
-# <img src="logo.svg#gh-light-mode-only" height="32" alt=""><img src="logo-dark.svg#gh-dark-mode-only" height="32" alt=""> MCP Mesh
+# <img src="logo-cyan.svg" height="32" alt=""> MCP Mesh
 
 [![Release](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml/badge.svg)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml)
 [![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
