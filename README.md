@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="logo.svg">
+    <img alt="MCP Mesh" src="logo.svg" height="60">
+  </picture>
+</p>
+
 # MCP Mesh
 
 [![Release](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml/badge.svg)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml)
