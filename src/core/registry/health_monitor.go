@@ -122,8 +122,6 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	}
 
 	if len(agentsToUpdate) == 0 {
-		duration := time.Since(startTime)
-		h.logger.Info("Health monitor check completed - all agents are healthy (took %v)", duration)
 		return
 	}
 

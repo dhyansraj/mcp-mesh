@@ -387,7 +387,6 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 
 	if hasChanges {
 		// Topology changed - please send full POST heartbeat
-		h.entService.logger.Info("Agent %s: topology changed, returning 202 (last_full_refresh: %v)", agentId, agentEntity.LastFullRefresh)
 		c.Status(http.StatusAccepted) // 202
 		return
 	}
