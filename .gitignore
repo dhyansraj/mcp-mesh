@@ -182,7 +182,7 @@ prompts/
 mcp-mesh-dev
 /mcp-mesh-registry
 /meshctl
-bin/meshctl
+bin/
 *.exe
 *.dll
 *.dylib
