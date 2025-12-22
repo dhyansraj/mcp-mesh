@@ -270,6 +270,9 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 		}
 	}
 
+	// Add volumes for new agents
+	addVolumesForAgents(&doc, agentsToAdd)
+
 	// Write back the merged document
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)
@@ -284,6 +287,94 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 	}
 
 	return result, nil
+}
+
+// addVolumesForAgents adds named volumes for new agents to the document
+func addVolumesForAgents(doc *yaml.Node, agents []DetectedAgent) {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return
+	}
+
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return
+	}
+
+	// Find or create volumes section
+	var volumesNode *yaml.Node
+	var volumesKeyIndex int = -1
+
+	for i := 0; i < len(root.Content)-1; i += 2 {
+		if root.Content[i].Value == "volumes" {
+			volumesNode = root.Content[i+1]
+			volumesKeyIndex = i
+			break
+		}
+	}
+
+	// If volumes section doesn't exist, create it before networks
+	if volumesNode == nil {
+		volumesNode = &yaml.Node{
+			Kind:    yaml.MappingNode,
+			Content: []*yaml.Node{},
+		}
+		volumesKeyNode := &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Value: "volumes",
+		}
+
+		// Find networks section to insert before it
+		networksIndex := -1
+		for i := 0; i < len(root.Content)-1; i += 2 {
+			if root.Content[i].Value == "networks" {
+				networksIndex = i
+				break
+			}
+		}
+
+		if networksIndex >= 0 {
+			// Insert before networks
+			newContent := make([]*yaml.Node, 0, len(root.Content)+2)
+			newContent = append(newContent, root.Content[:networksIndex]...)
+			newContent = append(newContent, volumesKeyNode, volumesNode)
+			newContent = append(newContent, root.Content[networksIndex:]...)
+			root.Content = newContent
+		} else {
+			// Append at the end
+			root.Content = append(root.Content, volumesKeyNode, volumesNode)
+		}
+		volumesKeyIndex = len(root.Content) - 2
+	}
+
+	// Get existing volume names
+	existingVolumes := make(map[string]bool)
+	if volumesNode.Kind == yaml.MappingNode {
+		for i := 0; i < len(volumesNode.Content)-1; i += 2 {
+			existingVolumes[volumesNode.Content[i].Value] = true
+		}
+	}
+
+	// Add new agent volumes
+	for _, agent := range agents {
+		volumeName := agent.Name + "-packages"
+		if !existingVolumes[volumeName] {
+			keyNode := &yaml.Node{
+				Kind:  yaml.ScalarNode,
+				Value: volumeName,
+			}
+			valueNode := &yaml.Node{
+				Kind:  yaml.MappingNode,
+				Tag:   "!!map",
+				Content: []*yaml.Node{},
+			}
+			volumesNode.Content = append(volumesNode.Content, keyNode, valueNode)
+		}
+	}
+
+	// Update the volumes node in root if we modified it
+	if volumesKeyIndex >= 0 && volumesKeyIndex+1 < len(root.Content) {
+		root.Content[volumesKeyIndex+1] = volumesNode
+	}
 }
 
 // findServicesNode finds the services mapping node in the document
@@ -345,13 +436,17 @@ const agentServicesTemplate = `{{- range .Agents }}
   image: mcpmesh/python-runtime:0.7
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
+  user: root
   ports:
     - "{{ .Port }}:{{ .Port }}"
   volumes:
     - ./{{ .Dir }}:/app:ro
+    - {{ .Name }}-packages:/packages
   working_dir: /app
-  command: ["main.py"]
+  entrypoint: ["sh", "-c"]
+  command: ["chown -R mcp-mesh:mcp-mesh /packages && su mcp-mesh -c 'if [ -f /app/requirements.txt ]; then pip install --target /packages -q -r /app/requirements.txt 2>/dev/null; fi && python main.py'"]
   environment:
+    PYTHONPATH: /packages
     MCP_MESH_REGISTRY_URL: http://registry:8000
     AGENT_NAME: {{ .Name }}
     AGENT_PORT: "{{ .Port }}"
@@ -375,6 +470,7 @@ const agentServicesTemplate = `{{- range .Agents }}
     interval: 5s
     timeout: 3s
     retries: 10
+    start_period: 30s
   networks:
     - {{ $.NetworkName }}
 {{- end }}`
@@ -514,13 +610,17 @@ services:
     image: mcpmesh/python-runtime:0.7
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
+    user: root
     ports:
       - "{{ .Port }}:{{ .Port }}"
     volumes:
       - ./{{ .Dir }}:/app:ro
+      - {{ .Name }}-packages:/packages
     working_dir: /app
-    command: ["main.py"]
+    entrypoint: ["sh", "-c"]
+    command: ["chown -R mcp-mesh:mcp-mesh /packages && su mcp-mesh -c 'if [ -f /app/requirements.txt ]; then pip install --target /packages -q -r /app/requirements.txt 2>/dev/null; fi && python main.py'"]
     environment:
+      PYTHONPATH: /packages
       MCP_MESH_REGISTRY_URL: http://registry:8000
       AGENT_NAME: {{ .Name }}
       AGENT_PORT: "{{ .Port }}"
@@ -544,8 +644,16 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 30s
     networks:
       - {{ $.NetworkName }}
+{{- end }}
+{{- end }}
+{{- if .Agents }}
+
+volumes:
+{{- range .Agents }}
+  {{ .Name }}-packages:
 {{- end }}
 {{- end }}
 
