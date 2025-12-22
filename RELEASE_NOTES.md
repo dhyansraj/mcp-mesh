@@ -1,5 +1,38 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.11...v0.7.12)
+
+## v0.7.12 (2025-12-22)
+
+### 🐛 Bug Fixes
+
+- **scaffold --compose**: Preserve existing service configurations (#281)
+  - Merges new agents without overwriting user modifications
+  - Added `--force` flag to regenerate all configurations when needed
+  - Infrastructure services never overwritten unless `--force` used
+
+- **scaffold --compose**: Install requirements.txt dependencies at container startup (#283)
+  - Third-party packages now work in dev mode (beautifulsoup4, pandas, etc.)
+  - Packages cached in named volumes for fast subsequent starts
+
+- **Logging cleanup**: Allowlist approach + remove noisy logs (#284)
+  - Python: Root logger stays INFO, only mcp-mesh loggers get DEBUG
+  - Go: Removed excessive troubleshooting logs from registry
+
+### 📚 Documentation
+
+- Update Helm chart version references to 0.7.11 (#287)
+- Add ENTRYPOINT comments to Dockerfile templates for AI assistants
+- Clarify FastAPI integration is for existing apps
+- Update meshctl --help to emphasize framework over ops tool
+- Add port strategy section for local vs Kubernetes
+- Improve meshctl call docs for Docker Compose and Kubernetes
+
+### ✨ Branding
+
+- Add cyan logo to README with dark mode support (#285)
+- Add YouTube channel link to README and mkdocs (#286)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.10...v0.7.11)
 
 ## v0.7.11 (2025-12-16)
