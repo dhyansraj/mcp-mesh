@@ -14,6 +14,7 @@
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://hub.docker.com/u/mcpmesh)
 [![Kubernetes](https://img.shields.io/badge/kubernetes-ready-green.svg)](https://kubernetes.io)
 [![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
+[![YouTube](https://img.shields.io/badge/YouTube-MCPMesh-red?logo=youtube&logoColor=white)](https://www.youtube.com/@MCPMesh)
 [![License](https://img.shields.io/badge/license-Open%20Source-blue.svg)](#license)
 
 > **The future of AI is not one large model, but many specialized agents working together.**
@@ -21,6 +22,7 @@
 <p align="center">
   <a href="https://dhyansraj.github.io/mcp-mesh/"><strong>📚 Documentation</strong></a> ·
   <a href="https://dhyansraj.github.io/mcp-mesh/01-getting-started/"><strong>🚀 Quick Start</strong></a> ·
+  <a href="https://www.youtube.com/@MCPMesh"><strong>🎬 YouTube</strong></a> ·
   <a href="https://discord.gg/KDFDREphWn"><strong>💬 Discord</strong></a>
 </p>
 
