@@ -8,12 +8,13 @@ MCP Mesh can be configured using environment variables. They override `@mesh.age
 
 ## Configuration Hierarchy
 
-Environment variables are applied in this order (last wins):
+Configuration sources in order of precedence (highest wins):
 
-1. System environment variables
-2. Environment files (`.env`)
-3. meshctl `--env` flags
-4. `@mesh.agent` decorator parameters
+1. Environment variables (system or `.env` files)
+2. meshctl `--env` flags
+3. `@mesh.agent` decorator parameters (lowest priority)
+
+**Key point**: Environment variables override decorator parameters. This enables the same code to run locally (using decorator defaults) and in Kubernetes (using Helm-injected env vars) without modification.
 
 ## Agent Configuration
 
