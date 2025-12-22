@@ -1001,7 +1001,6 @@ func startAgentsWithFileWatching(agentPaths []string, env []string, cmd *cobra.C
 	}
 
 	if !quiet {
-		fmt.Println("File watching enabled. Agents will auto-restart on file changes.")
 		fmt.Println("Press Ctrl+C to stop all services.")
 	}
 
