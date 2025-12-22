@@ -415,7 +415,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		resolvedDeps += len(deps)
 	}
 
-	s.logger.Info("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedDeps)
+	s.logger.Debug("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedDeps)
 
 	// Update dependency counts in agent record (outside transaction)
 	ctx = context.Background()
@@ -476,12 +476,9 @@ func (s *EntService) StoreDependencyResolutions(
 	metadata map[string]interface{},
 	dependenciesResolved map[string][]*DependencyResolution,
 ) error {
-	s.logger.Info("StoreDependencyResolutions called for agent %s", agentID)
-
 	// Extract tools from metadata to get requested dependencies
 	toolsData, exists := metadata["tools"]
 	if !exists {
-		s.logger.Info("StoreDependencyResolutions: No tools in metadata for agent %s", agentID)
 		return nil // No tools means no dependencies
 	}
 
@@ -489,9 +486,6 @@ func (s *EntService) StoreDependencyResolutions(
 	if !ok {
 		return fmt.Errorf("tools is not an array")
 	}
-
-	s.logger.Info("StoreDependencyResolutions: Found %d tools for agent %s", len(toolsList), agentID)
-	s.logger.Info("StoreDependencyResolutions: dependenciesResolved map has %d entries", len(dependenciesResolved))
 
 	// Delete existing dependency resolutions for this agent
 	_, err := s.entDB.DependencyResolution.Delete().
@@ -605,13 +599,12 @@ func (s *EntService) StoreDependencyResolutions(
 					agentID, functionName, err)
 				// Continue processing other dependencies
 			} else {
-				s.logger.Info("Saved dependency resolution: %s/%s -> %s (status: %s)",
+				s.logger.Debug("Saved dependency resolution: %s/%s -> %s (status: %s)",
 					agentID, functionName, capability, savedResolution.Status)
 			}
 		}
 	}
 
-	s.logger.Info("StoreDependencyResolutions completed for agent %s", agentID)
 	return nil
 }
 
@@ -638,8 +631,6 @@ func (s *EntService) StoreLLMToolResolutions(
 	metadata map[string]interface{},
 	llmToolsResolved map[string][]LLMToolInfo,
 ) error {
-	s.logger.Info("StoreLLMToolResolutions called for agent %s", agentID)
-
 	// Extract tools from metadata to get llm_filter configurations
 	toolsData, exists := metadata["tools"]
 	if !exists {
@@ -786,7 +777,6 @@ func (s *EntService) StoreLLMToolResolutions(
 		}
 	}
 
-	s.logger.Info("StoreLLMToolResolutions completed for agent %s", agentID)
 	return nil
 }
 
@@ -797,8 +787,6 @@ func (s *EntService) StoreLLMProviderResolutions(
 	metadata map[string]interface{},
 	llmProvidersResolved map[string]*generated.ResolvedLLMProvider,
 ) error {
-	s.logger.Info("StoreLLMProviderResolutions called for agent %s", agentID)
-
 	// Extract tools from metadata to get llm_provider configurations
 	toolsData, exists := metadata["tools"]
 	if !exists {
@@ -903,17 +891,9 @@ func (s *EntService) StoreLLMProviderResolutions(
 		if err != nil {
 			s.logger.Warning("Failed to save LLM provider resolution for %s/%s: %v",
 				agentID, functionName, err)
-		} else {
-			status := "unresolved"
-			if hasResolved && resolvedProvider != nil {
-				status = "available"
-			}
-			s.logger.Info("Saved LLM provider resolution: %s/%s -> %s (status: %s)",
-				agentID, functionName, requiredCapability, status)
 		}
 	}
 
-	s.logger.Info("StoreLLMProviderResolutions completed for agent %s", agentID)
 	return nil
 }
 
@@ -1247,8 +1227,6 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 		return nil, fmt.Errorf("failed to update agent heartbeat: %w", err)
 	}
 
-	s.logger.Info("Heartbeat updated for agent %s", req.AgentID)
-
 	return &HeartbeatResponse{
 		Status:    "success",
 		Timestamp: now.Format(time.RFC3339),
@@ -1570,23 +1548,16 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 									dep.Tags[i] = tagStr
 								}
 							}
-							s.logger.Info("Parsed dependency tags: %v", dep.Tags)
 						} else if stringSlice, ok := tags.([]string); ok {
 							// Handle direct []string case
 							dep.Tags = stringSlice
-							s.logger.Debug("Direct string slice tags: %v", dep.Tags)
-						} else {
-							s.logger.Info("Tags not []interface{} or []string, type is: %T", tags)
 						}
-					} else {
-						s.logger.Info("No tags field found in dependency")
 					}
 
 					// Find provider with TTL and strict matching using Ent
 					s.logger.Debug("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
 					provider := s.findHealthyProviderWithTTL(dep)
 					if provider != nil {
-						s.logger.Info("Found provider for %s: %+v", dep.Capability, provider)
 						resolvedDeps = append(resolvedDeps, provider)
 					} else {
 						// Dependency cannot be resolved - log but continue with other dependencies
@@ -1620,10 +1591,8 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 	// Extract tools from metadata
 	toolsData, exists := metadata["tools"]
 	if !exists {
-		s.logger.Debug("No tools in metadata for agent %s", agentID)
 		return llmTools, nil
 	}
-	s.logger.Info("ResolveLLMTools: agent=%s has tools in metadata", agentID)
 
 	toolsList, ok := toolsData.([]interface{})
 	if !ok {
@@ -1641,15 +1610,12 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 		if functionName == "" {
 			continue
 		}
-		s.logger.Info("ResolveLLMTools: checking function '%s' for llm_filter", functionName)
 
 		// Check if tool has llm_filter
 		llmFilterData, exists := toolMap["llm_filter"]
 		if !exists {
-			s.logger.Info("ResolveLLMTools: function '%s' has NO llm_filter", functionName)
 			continue
 		}
-		s.logger.Info("ResolveLLMTools: function '%s' HAS llm_filter!", functionName)
 
 		llmFilterMap, ok := llmFilterData.(map[string]interface{})
 		if !ok {
@@ -1668,7 +1634,6 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 			s.logger.Warning("filter is not an array for %s: %T", functionName, filterData)
 			continue
 		}
-		s.logger.Info("Filter array for %s: %+v", functionName, filterArray)
 
 		// Extract filter_mode (default to "all")
 		filterMode := "all"
@@ -1677,7 +1642,6 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 				filterMode = fm
 			}
 		}
-		s.logger.Info("Filter mode for %s: %s", functionName, filterMode)
 
 		// Call FilterToolsForLLM to get filtered tools (excluding this agent's own tools)
 		filteredTools, err := FilterToolsForLLM(ctx, s.entDB.Client, filterArray, filterMode, agentID)
@@ -1820,15 +1784,12 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			UpdatedAt:    cap.Edges.Agent.UpdatedAt,
 		}
 		candidates = append(candidates, candidate)
-		s.logger.Info("Found candidate for %s: AgentID=%s, Version=%s, Tags=%v",
-			dep.Capability, candidate.AgentID, candidate.Version, candidate.Tags)
 	}
 
 	s.logger.Debug("Total candidates found for %s: %d", dep.Capability, len(candidates))
 
 	// Filter by version constraint if specified
 	if dep.Version != "" && len(candidates) > 0 {
-		s.logger.Info("Filtering candidates by version constraint: %s", dep.Version)
 		filtered := make([]struct {
 			AgentID      string
 			FunctionName string
@@ -1846,7 +1807,6 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			}
 		}
 		candidates = filtered
-		s.logger.Info("After version filtering: %d candidates remain", len(candidates))
 	}
 
 	// Filter by tags using enhanced tag matching with priority scoring
@@ -2139,7 +2099,6 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 		return false, fmt.Errorf("failed to check topology changes: %w", err)
 	}
 
-	s.logger.Info("Topology changes check for agent %s: found %d events since %v", agentID, count, lastRefresh)
 	return count > 0, nil
 }
 
