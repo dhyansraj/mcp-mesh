@@ -119,6 +119,33 @@ Error: Invalid request
 Fix: Ensure body has jsonrpc, id, method, and params fields
 ```
 
+## Testing in Docker Compose
+
+When agents run in Docker Compose, they register with container hostnames (e.g., `agent-one:9001`) which aren't resolvable from your host machine.
+
+Use `--agent-url` with the mapped localhost port:
+
+```bash
+# Find mapped ports
+docker compose ps
+
+# Call using localhost with mapped port
+meshctl call greet --agent-url http://localhost:9001
+meshctl call calculator:add '{"a": 1, "b": 2}' --agent-url http://localhost:9002
+```
+
+## Testing in Kubernetes
+
+For Kubernetes with ingress configured, use ingress mode:
+
+```bash
+# With DNS configured for the ingress domain
+meshctl call greet --ingress-domain mcp-mesh.local
+
+# Without DNS (direct IP or port-forwarded)
+meshctl call greet --ingress-domain mcp-mesh.local --ingress-url http://localhost:9080
+```
+
 ## Testing with meshctl
 
 ```bash

@@ -244,3 +244,4 @@ helm/*/charts/*.tgz
 # Helm chart files copied during release (generated from observability/)
 helm/mcp-mesh-grafana/files/
 helm/mcp-mesh-tempo/files/
+*.DS_Store

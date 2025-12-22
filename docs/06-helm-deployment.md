@@ -196,7 +196,7 @@ Start with [Understanding MCP Mesh Helm Charts](./06-helm-deployment/01-understa
 
    # Upgrade existing release
    helm upgrade mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
-     --version 0.7.1 -n mcp-mesh
+     --version 0.7.11 -n mcp-mesh
    ```
 
 2. **Values not taking effect**

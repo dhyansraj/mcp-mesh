@@ -432,6 +432,9 @@ func generateAgentServicesYAML(agents []DetectedAgent, config *ComposeConfig) (s
 
 // agentServicesTemplate generates only the agent service definitions
 const agentServicesTemplate = `{{- range .Agents }}
+# Agent: {{ .Name }}
+# NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
+#       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{ .Name }}:
   image: mcpmesh/python-runtime:0.7
   container_name: {{ $.ProjectName }}-{{ .Name }}
@@ -604,6 +607,8 @@ services:
 {{- if .Agents }}
 
   # ===== AGENTS =====
+  # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
+  #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{- range .Agents }}
 
   {{ .Name }}:

@@ -71,6 +71,8 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/dhyansraj/mcp-mesh
+    - icon: fontawesome/brands/youtube
+      link: https://www.youtube.com/@MCPMesh
     - icon: fontawesome/brands/discord
       link: https://discord.gg/KDFDREphWn
     - icon: fontawesome/brands/python

@@ -140,12 +140,12 @@ For production Kubernetes deployment, use the official Helm charts from the MCP 
 # Install core infrastructure (registry + database + observability)
 # No "helm repo add" needed - uses OCI registry directly
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.1 \
+  --version 0.7.11 \
   -n mcp-mesh --create-namespace
 
 # Deploy agent using scaffold-generated helm-values.yaml
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.1 \
+  --version 0.7.11 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -170,7 +170,7 @@ image:
 
 agent:
   name: my-agent
-  port: 9000
+  # port: 8080 (default - no need to specify, see "Port Strategy" section)
 
 mesh:
   enabled: true
@@ -202,7 +202,7 @@ docker push your-registry/my-agent:v1.0.0
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.1 \
+  --version 0.7.11 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
@@ -214,17 +214,49 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 ```bash
 # Core without observability
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.1 \
+  --version 0.7.11 \
   -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.1 \
+  --version 0.7.11 \
   -n mcp-mesh --create-namespace \
   --set postgres.enabled=false
 ```
+
+## Port Strategy: Local vs Kubernetes
+
+Port configuration differs between deployment environments.
+
+| Environment | Port Strategy | Why |
+|-------------|---------------|-----|
+| Local / docker-compose | Unique ports (9001, 9002...) | All containers share host network |
+| Kubernetes | All agents use 8080 | Each pod has its own IP, no conflicts |
+
+### Don't Copy docker-compose Ports to Kubernetes
+
+When moving from docker-compose to Kubernetes, do NOT set custom ports:
+
+```yaml
+# ❌ WRONG - copying docker-compose ports
+agent:
+  port: 9001
+
+# ✅ CORRECT - use defaults
+agent:
+  name: my-agent
+  # port: 8080 is the default, no need to specify
+```
+
+### How It Works
+
+The Helm chart sets `MCP_MESH_HTTP_PORT=8080` environment variable, which overrides whatever port is in your `@mesh.agent(http_port=9001)` decorator. Your code doesn't need to change.
+
+**Precedence:**
+1. `MCP_MESH_HTTP_PORT` env var (set by Helm) ← wins
+2. `http_port` in `@mesh.agent()` (used for local dev)
 
 ## Best Practices
 
