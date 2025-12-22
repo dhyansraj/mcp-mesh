@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"gopkg.in/yaml.v3"
 )
 
 // DetectedAgent represents an agent discovered from main.py
@@ -25,6 +28,14 @@ type ComposeConfig struct {
 	Observability bool   // Include tempo/grafana/redis
 	NetworkName   string // Docker network name
 	ProjectName   string // Docker compose project name
+	Force         bool   // Force regenerate agent configurations
+}
+
+// GenerateResult contains information about what happened during generation
+type GenerateResult struct {
+	WasMerged     bool     // True if we merged with existing file
+	AddedAgents   []string // Names of newly added agents
+	SkippedAgents []string // Names of agents that already existed (preserved)
 }
 
 // ScanForAgents walks the directory tree looking for main.py files with @mesh.agent decorator
@@ -132,10 +143,11 @@ func validateAgentPorts(agents []DetectedAgent) error {
 }
 
 // GenerateDockerCompose generates a docker-compose.yml file for the given configuration
-func GenerateDockerCompose(config *ComposeConfig, outputDir string) error {
+// If the file already exists, it merges new agents without overwriting existing services
+func GenerateDockerCompose(config *ComposeConfig, outputDir string) (*GenerateResult, error) {
 	// Validate ports
 	if err := validateAgentPorts(config.Agents); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Set defaults
@@ -152,27 +164,220 @@ func GenerateDockerCompose(config *ComposeConfig, outputDir string) error {
 		config.NetworkName = config.ProjectName + "-network"
 	}
 
-	// Parse template
+	outputPath := filepath.Join(outputDir, "docker-compose.yml")
+
+	// Check if file exists
+	existingContent, err := os.ReadFile(outputPath)
+	fileExists := err == nil
+
+	// If file doesn't exist or force is set, generate fresh
+	if !fileExists || config.Force {
+		result := &GenerateResult{
+			WasMerged:     false,
+			AddedAgents:   make([]string, 0, len(config.Agents)),
+			SkippedAgents: []string{},
+		}
+		for _, agent := range config.Agents {
+			result.AddedAgents = append(result.AddedAgents, agent.Name)
+		}
+
+		if err := generateFreshCompose(config, outputPath); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	// File exists and force is false - merge new agents
+	return mergeAgentsIntoCompose(config, outputPath, existingContent)
+}
+
+// generateFreshCompose generates a new docker-compose.yml from template
+func generateFreshCompose(config *ComposeConfig, outputPath string) error {
 	tmpl, err := template.New("docker-compose").Parse(dockerComposeTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
 	}
 
-	// Create output file
-	outputPath := filepath.Join(outputDir, "docker-compose.yml")
 	file, err := os.Create(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose.yml: %w", err)
 	}
 	defer file.Close()
 
-	// Execute template
 	if err := tmpl.Execute(file, config); err != nil {
 		return fmt.Errorf("failed to render template: %w", err)
 	}
 
 	return nil
 }
+
+// mergeAgentsIntoCompose adds new agents to an existing docker-compose.yml
+func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingContent []byte) (*GenerateResult, error) {
+	result := &GenerateResult{
+		WasMerged:     true,
+		AddedAgents:   []string{},
+		SkippedAgents: []string{},
+	}
+
+	// Parse existing YAML using Node API to preserve structure
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existingContent, &doc); err != nil {
+		return nil, fmt.Errorf("failed to parse existing docker-compose.yml: %w", err)
+	}
+
+	// Find the services node
+	servicesNode := findServicesNode(&doc)
+	if servicesNode == nil {
+		return nil, fmt.Errorf("could not find 'services' section in existing docker-compose.yml")
+	}
+
+	// Get existing service names
+	existingServices := getExistingServiceNames(servicesNode)
+
+	// Determine which agents to add
+	var agentsToAdd []DetectedAgent
+	for _, agent := range config.Agents {
+		if _, exists := existingServices[agent.Name]; exists {
+			result.SkippedAgents = append(result.SkippedAgents, agent.Name)
+		} else {
+			agentsToAdd = append(agentsToAdd, agent)
+			result.AddedAgents = append(result.AddedAgents, agent.Name)
+		}
+	}
+
+	// If no agents to add, just return
+	if len(agentsToAdd) == 0 {
+		return result, nil
+	}
+
+	// Generate YAML for new agent services
+	newServicesYAML, err := generateAgentServicesYAML(agentsToAdd, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate agent services: %w", err)
+	}
+
+	// Parse the new services YAML
+	var newServicesDoc yaml.Node
+	if err := yaml.Unmarshal([]byte(newServicesYAML), &newServicesDoc); err != nil {
+		return nil, fmt.Errorf("failed to parse generated services: %w", err)
+	}
+
+	// Add new service nodes to existing services
+	if newServicesDoc.Kind == yaml.DocumentNode && len(newServicesDoc.Content) > 0 {
+		newServicesMap := newServicesDoc.Content[0]
+		if newServicesMap.Kind == yaml.MappingNode {
+			servicesNode.Content = append(servicesNode.Content, newServicesMap.Content...)
+		}
+	}
+
+	// Write back the merged document
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&doc); err != nil {
+		return nil, fmt.Errorf("failed to encode merged docker-compose.yml: %w", err)
+	}
+	encoder.Close()
+
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
+	}
+
+	return result, nil
+}
+
+// findServicesNode finds the services mapping node in the document
+func findServicesNode(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root := doc.Content[0]
+		if root.Kind == yaml.MappingNode {
+			for i := 0; i < len(root.Content)-1; i += 2 {
+				if root.Content[i].Value == "services" {
+					return root.Content[i+1]
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// getExistingServiceNames returns a set of existing service names
+func getExistingServiceNames(servicesNode *yaml.Node) map[string]bool {
+	existing := make(map[string]bool)
+	if servicesNode.Kind == yaml.MappingNode {
+		for i := 0; i < len(servicesNode.Content)-1; i += 2 {
+			existing[servicesNode.Content[i].Value] = true
+		}
+	}
+	return existing
+}
+
+// generateAgentServicesYAML generates YAML for agent services only
+func generateAgentServicesYAML(agents []DetectedAgent, config *ComposeConfig) (string, error) {
+	tmpl, err := template.New("agent-services").Parse(agentServicesTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	data := struct {
+		Agents        []DetectedAgent
+		ProjectName   string
+		NetworkName   string
+		Observability bool
+	}{
+		Agents:        agents,
+		ProjectName:   config.ProjectName,
+		NetworkName:   config.NetworkName,
+		Observability: config.Observability,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// agentServicesTemplate generates only the agent service definitions
+const agentServicesTemplate = `{{- range .Agents }}
+{{ .Name }}:
+  image: mcpmesh/python-runtime:0.7
+  container_name: {{ $.ProjectName }}-{{ .Name }}
+  hostname: {{ .Name }}
+  ports:
+    - "{{ .Port }}:{{ .Port }}"
+  volumes:
+    - ./{{ .Dir }}:/app:ro
+  working_dir: /app
+  command: ["main.py"]
+  environment:
+    MCP_MESH_REGISTRY_URL: http://registry:8000
+    AGENT_NAME: {{ .Name }}
+    AGENT_PORT: "{{ .Port }}"
+    HOST: "0.0.0.0"
+    MCP_MESH_HTTP_HOST: {{ .Name }}
+    MCP_MESH_HTTP_PORT: "{{ .Port }}"
+    POD_IP: {{ .Name }}
+    MCP_MESH_HTTP_ENABLED: "true"
+    MCP_MESH_AGENT_NAME: {{ .Name }}
+    MCP_MESH_ENABLED: "true"
+    MCP_MESH_AUTO_RUN: "true"
+    MCP_MESH_LOG_LEVEL: DEBUG
+    MCP_MESH_DEBUG_MODE: "true"
+    PYTHONUNBUFFERED: "1"
+{{- if $.Observability }}
+    REDIS_URL: redis://redis:6379
+    MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+{{- end }}
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ .Port }}/health').read()"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+  networks:
+    - {{ $.NetworkName }}
+{{- end }}`
 
 // dockerComposeTemplate is the embedded template for docker-compose.yml
 const dockerComposeTemplate = `# MCP Mesh Development Docker Compose

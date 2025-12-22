@@ -111,6 +111,7 @@ Infrastructure:
 	cmd.Flags().Bool("compose", false, "Generate docker-compose.yml for all agents in directory")
 	cmd.Flags().Bool("observability", false, "Include observability stack (redis, tempo, grafana) in docker-compose")
 	cmd.Flags().String("project-name", "", "Docker compose project name (default: directory name)")
+	cmd.Flags().Bool("force", false, "Force regenerate all agent configurations (overwrites existing agent services)")
 
 	// Register provider-specific flags
 	for _, name := range scaffold.DefaultRegistry.List() {
@@ -467,6 +468,7 @@ func runComposeGeneration(cmd *cobra.Command) error {
 	output, _ := cmd.Flags().GetString("output")
 	observability, _ := cmd.Flags().GetBool("observability")
 	projectName, _ := cmd.Flags().GetString("project-name")
+	force, _ := cmd.Flags().GetBool("force")
 
 	cmd.Println("Scanning for agents...")
 
@@ -492,25 +494,53 @@ func runComposeGeneration(cmd *cobra.Command) error {
 		Observability: observability,
 		ProjectName:   projectName,
 		NetworkName:   "",
+		Force:         force,
 	}
 
 	// Generate docker-compose.yml
-	if err := scaffold.GenerateDockerCompose(config, output); err != nil {
+	result, err := scaffold.GenerateDockerCompose(config, output)
+	if err != nil {
 		return fmt.Errorf("failed to generate docker-compose.yml: %w", err)
 	}
 
-	cmd.Printf("Successfully generated docker-compose.yml in %s\n", output)
-	cmd.Println()
-	cmd.Println("Services included:")
-	cmd.Println("  - postgres (5432)")
-	cmd.Println("  - registry (8000)")
-	if observability {
-		cmd.Println("  - redis (6379)")
-		cmd.Println("  - tempo (3200, 4317)")
-		cmd.Println("  - grafana (3000)")
-	}
-	for _, agent := range agents {
-		cmd.Printf("  - %s (%d)\n", agent.Name, agent.Port)
+	// Display results based on what happened
+	if result.WasMerged {
+		if len(result.AddedAgents) > 0 {
+			cmd.Printf("Updated docker-compose.yml in %s\n", output)
+			cmd.Println()
+			cmd.Println("New agents added:")
+			for _, name := range result.AddedAgents {
+				for _, agent := range agents {
+					if agent.Name == name {
+						cmd.Printf("  - %s (%d)\n", agent.Name, agent.Port)
+						break
+					}
+				}
+			}
+		} else {
+			cmd.Printf("docker-compose.yml in %s is already up to date\n", output)
+		}
+		if len(result.SkippedAgents) > 0 {
+			cmd.Println()
+			cmd.Println("Existing agents preserved (use --force to regenerate):")
+			for _, name := range result.SkippedAgents {
+				cmd.Printf("  - %s\n", name)
+			}
+		}
+	} else {
+		cmd.Printf("Successfully generated docker-compose.yml in %s\n", output)
+		cmd.Println()
+		cmd.Println("Services included:")
+		cmd.Println("  - postgres (5432)")
+		cmd.Println("  - registry (8000)")
+		if observability {
+			cmd.Println("  - redis (6379)")
+			cmd.Println("  - tempo (3200, 4317)")
+			cmd.Println("  - grafana (3000)")
+		}
+		for _, agent := range agents {
+			cmd.Printf("  - %s (%d)\n", agent.Name, agent.Port)
+		}
 	}
 	cmd.Println()
 	cmd.Println("To start all services:")
