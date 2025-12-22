@@ -31,7 +31,11 @@ class SafeStreamHandler(logging.StreamHandler):
 
 
 def configure_logging():
-    """Configure logging based on MCP_MESH_LOG_LEVEL environment variable."""
+    """Configure logging based on MCP_MESH_LOG_LEVEL environment variable.
+
+    Uses allowlist approach: root logger stays at INFO to keep third-party libs quiet,
+    only mcp-mesh loggers are elevated to DEBUG when debug mode is enabled.
+    """
     # Get log level from environment, default to INFO
     log_level_str = os.environ.get("MCP_MESH_LOG_LEVEL", "INFO").upper()
 
@@ -53,8 +57,6 @@ def configure_logging():
         "1",
         "yes",
     )
-    if debug_mode:
-        log_level = logging.DEBUG
 
     # Clear any existing handlers to avoid conflicts
     root_logger = logging.getLogger()
@@ -63,23 +65,29 @@ def configure_logging():
 
     # Configure with safe stream handler for background threads
     handler = SafeStreamHandler(sys.stdout)
-    handler.setLevel(log_level)
+    handler.setLevel(logging.DEBUG)  # Handler allows all, loggers filter
     handler.setFormatter(logging.Formatter("%(levelname)-8s %(message)s"))
 
     root_logger.addHandler(handler)
-    root_logger.setLevel(log_level)
 
-    # Set level for all mcp_mesh loggers (both mcp_mesh and _mcp_mesh namespaces)
-    logging.getLogger("mcp_mesh").setLevel(log_level)
-    logging.getLogger("_mcp_mesh").setLevel(log_level)
+    # Root logger always INFO - all third-party libs stay quiet
+    # This is the allowlist approach: instead of blocklisting noisy loggers one by one,
+    # we keep root at INFO and only elevate mcp-mesh loggers to DEBUG
+    root_logger.setLevel(logging.INFO)
 
-    # Suppress noisy third-party loggers
-    # docket (task queue used by fastmcp) produces excessive DEBUG logs like
-    # "Scheduling due tasks", "Getting redeliveries", "Getting new deliveries" in tight loops
-    logging.getLogger("docket").setLevel(logging.WARNING)
+    # Only MCP Mesh loggers get DEBUG when debug mode is on
+    if debug_mode:
+        logging.getLogger("mesh").setLevel(logging.DEBUG)
+        logging.getLogger("mcp_mesh").setLevel(logging.DEBUG)
+        logging.getLogger("_mcp_mesh").setLevel(logging.DEBUG)
+    else:
+        # Use the configured log level for mcp-mesh loggers
+        logging.getLogger("mesh").setLevel(log_level)
+        logging.getLogger("mcp_mesh").setLevel(log_level)
+        logging.getLogger("_mcp_mesh").setLevel(log_level)
 
-    # Return the configured level for reference
-    return log_level
+    # Return the configured level for reference (DEBUG if debug mode, else configured level)
+    return logging.DEBUG if debug_mode else log_level
 
 
 # Configure logging on module import
