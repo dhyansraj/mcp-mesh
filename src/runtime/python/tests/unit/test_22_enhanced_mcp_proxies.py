@@ -486,7 +486,6 @@ class TestAutomaticSessionManagement:
         proxy.call_with_session = AsyncMock(
             return_value={"result": "session call success"}
         )
-        proxy.close_session = AsyncMock(return_value=True)
 
         # Test auto-session call
         result = await proxy._call_with_auto_session("test_tool", {"param": "value"})
@@ -499,9 +498,8 @@ class TestAutomaticSessionManagement:
         assert proxy._current_session_id == created_session_id
         assert result == {"result": "session call success"}
 
-        # Test cleanup
+        # Test cleanup - just clears local session ID (server-side cleanup via TTL)
         await proxy.cleanup_auto_session()
-        proxy.close_session.assert_called_once_with(created_session_id)
         assert proxy._current_session_id is None
 
     def test_call_tool_auto_session_routing(self):

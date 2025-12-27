@@ -614,28 +614,13 @@ class EnhancedFullMCPProxy(FullMCPProxy):
             raise
 
     async def cleanup_auto_session(self):
-        """Clean up automatically created session."""
+        """Clean up automatically created session.
+
+        Note: Session cleanup is handled server-side via TTL expiration.
+        This method just clears the local session ID tracking.
+        """
         if self._current_session_id and self.auto_session_management:
-            try:
-                await self.close_session(self._current_session_id)
-                self.logger.info(
-                    f"🧹 Auto-session cleaned up: {self._current_session_id}"
-                )
-                self._current_session_id = None
-            except Exception as e:
-                self.logger.warning(f"⚠️ Failed to cleanup auto-session: {e}")
-
-    def __del__(self):
-        """Cleanup on object destruction."""
-        # Note: async cleanup in __del__ is not ideal, but provides a safety net
-        if hasattr(self, "_current_session_id") and self._current_session_id:
-            import asyncio
-
-            try:
-                # Try to cleanup session on deletion
-                loop = asyncio.get_event_loop()
-                if not loop.is_closed():
-                    loop.create_task(self.cleanup_auto_session())
-            except Exception:
-                # Silent failure in destructor
-                pass
+            self.logger.debug(
+                f"🧹 Clearing local session ID: {self._current_session_id}"
+            )
+            self._current_session_id = None
