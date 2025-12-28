@@ -1,7 +1,7 @@
 """Unified MCP Proxy using FastMCP's built-in client.
 
-This replaces both MCPClientProxy and FullMCPProxy with a single implementation
-that uses FastMCP's superior client capabilities.
+This is the primary MCP client proxy for cross-service communication,
+using FastMCP's superior client capabilities with async support.
 """
 
 import asyncio
@@ -9,6 +9,13 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
+
+from ..shared.logging_config import (
+    format_log_value,
+    format_result_summary,
+    get_trace_prefix,
+)
+from ..shared.sse_parser import SSEParser
 
 logger = logging.getLogger(__name__)
 
@@ -397,12 +404,22 @@ class UnifiedMCPProxy:
 
         start_time = time.time()
 
+        # Get trace prefix if available
+        tp = get_trace_prefix()
+
+        # Log cross-agent call - summary line
+        arg_keys = list(arguments.keys()) if arguments else []
+        self.logger.debug(
+            f"{tp}🔄 Cross-agent call: {self.endpoint}/{name} (timeout: {self.timeout}s, args={arg_keys})"
+        )
+        # Log full args (will be TRACE later)
+        self.logger.debug(
+            f"{tp}🔄 Cross-agent call args: {format_log_value(arguments)}"
+        )
+
         try:
             # Use correct FastMCP client endpoint - agents expose MCP on /mcp
             mcp_endpoint = f"{self.endpoint}/mcp"
-            self.logger.debug(f"🔄 Trying FastMCP client with endpoint: {mcp_endpoint}")
-
-            # Create client with automatic trace header injection
             client_instance = self._create_fastmcp_client(mcp_endpoint)
 
             async with client_instance as client:
@@ -435,8 +452,13 @@ class UnifiedMCPProxy:
                         "distributed_tracing": self.distributed_tracing_enabled,
                     }
 
+                # Log success - summary line
                 self.logger.info(
-                    f"✅ FastMCP tool call successful: {name} in {duration_ms}ms"
+                    f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
+                )
+                # Log full result (will be TRACE later)
+                self.logger.debug(
+                    f"{tp}🔄 Cross-agent call result: {format_log_value(converted_result)}"
                 )
                 return converted_result
 
@@ -614,41 +636,10 @@ class UnifiedMCPProxy:
                     f"📄 Response length: {len(response_text)} chars, starts with: {response_text[:100]}"
                 )
 
-                data = None
-
-                # Handle SSE format
-                if response_text.startswith("event:") or "data:" in response_text:
-                    self.logger.debug("🔄 Parsing SSE format response")
-                    # Parse SSE format - handle multiple events
-                    for line in response_text.split("\n"):
-                        line = line.strip()
-                        if line.startswith("data:"):
-                            json_str = line[5:].strip()
-                            if json_str and json_str != "":
-                                try:
-                                    data = json.loads(json_str)
-                                    self.logger.debug(
-                                        f"✅ Successfully parsed SSE data: {type(data)}"
-                                    )
-                                    break
-                                except json.JSONDecodeError as e:
-                                    self.logger.warning(
-                                        f"⚠️ Failed to parse SSE line: {json_str[:100]}, error: {e}"
-                                    )
-                                    continue
-                else:
-                    # Plain JSON response
-                    self.logger.debug("🔄 Parsing plain JSON response")
-                    try:
-                        data = json.loads(response_text)
-                    except json.JSONDecodeError as e:
-                        self.logger.error(
-                            f"❌ Failed to parse JSON response: {e}, content: {response_text[:200]}"
-                        )
-                        raise RuntimeError(f"Invalid JSON response: {e}")
-
-                if data is None:
-                    raise RuntimeError("No valid data found in response")
+                # Use shared SSE parser for both SSE and plain JSON responses
+                data = SSEParser.parse_sse_response(
+                    response_text, f"UnifiedMCPProxy.{name}"
+                )
 
                 # Check for JSON-RPC error
                 if "error" in data:

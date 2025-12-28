@@ -1,10 +1,12 @@
 """Async HTTP client for MCP JSON-RPC protocol."""
 
+import asyncio
+import atexit
 import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, ClassVar, Optional
 
 from ..shared.sse_parser import SSEParser
 
@@ -12,12 +14,66 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncMCPClient:
-    """Async HTTP client for MCP JSON-RPC protocol."""
+    """Async HTTP client for MCP JSON-RPC protocol.
+
+    Uses connection pooling to reuse HTTP connections across requests,
+    reducing TCP/SSL handshake overhead and preventing port exhaustion.
+    """
+
+    # Class-level connection pool (shared across instances for same endpoint)
+    _client_pool: ClassVar[dict[str, "httpx.AsyncClient"]] = {}
+    _pool_lock: ClassVar[Optional[asyncio.Lock]] = None
+
+    # Default connection limits for pooling
+    DEFAULT_MAX_CONNECTIONS = 100
+    DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 20
 
     def __init__(self, endpoint: str, timeout: float = 30.0):
         self.endpoint = endpoint
         self.timeout = timeout
         self.logger = logger.getChild(f"client.{endpoint}")
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Get or create the class-level lock (handles event loop creation)."""
+        if cls._pool_lock is None:
+            cls._pool_lock = asyncio.Lock()
+        return cls._pool_lock
+
+    @classmethod
+    async def _get_pooled_client(
+        cls, endpoint: str, timeout: float
+    ) -> "httpx.AsyncClient":
+        """Get or create a pooled httpx client for the endpoint.
+
+        This enables connection reuse across multiple requests to the same endpoint,
+        significantly reducing overhead from TCP connection establishment and SSL handshakes.
+        """
+        import httpx
+
+        async with cls._get_lock():
+            if endpoint not in cls._client_pool:
+                cls._client_pool[endpoint] = httpx.AsyncClient(
+                    timeout=timeout,
+                    limits=httpx.Limits(
+                        max_connections=cls.DEFAULT_MAX_CONNECTIONS,
+                        max_keepalive_connections=cls.DEFAULT_MAX_KEEPALIVE_CONNECTIONS,
+                    ),
+                )
+                logger.debug(f"Created pooled client for endpoint: {endpoint}")
+            return cls._client_pool[endpoint]
+
+    @classmethod
+    async def close_all_clients(cls) -> None:
+        """Close all pooled clients. Call during application shutdown."""
+        async with cls._get_lock():
+            for endpoint, client in list(cls._client_pool.items()):
+                try:
+                    await client.aclose()
+                    logger.debug(f"Closed pooled client for: {endpoint}")
+                except Exception as e:
+                    logger.warning(f"Error closing client for {endpoint}: {e}")
+            cls._client_pool.clear()
 
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:
         """Call remote tool using MCP JSON-RPC protocol."""
@@ -38,36 +94,38 @@ class AsyncMCPClient:
             raise
 
     async def _make_request(self, payload: dict) -> dict:
-        """Make async HTTP request to MCP endpoint."""
+        """Make async HTTP request to MCP endpoint using pooled connections."""
         url = f"{self.endpoint}/mcp"
 
         try:
-            # Use httpx for proper async HTTP requests (better threading support than aiohttp)
+            # Use httpx with connection pooling for better resource management
             import httpx
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream",
-                    },
+            # Get pooled client (reuses connections across requests)
+            client = await self._get_pooled_client(self.endpoint, self.timeout)
+
+            response = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+
+            if response.status_code == 404:
+                raise RuntimeError(f"MCP endpoint not found at {url}")
+            elif response.status_code >= 400:
+                raise RuntimeError(
+                    f"HTTP error {response.status_code}: {response.reason_phrase}"
                 )
 
-                if response.status_code == 404:
-                    raise RuntimeError(f"MCP endpoint not found at {url}")
-                elif response.status_code >= 400:
-                    raise RuntimeError(
-                        f"HTTP error {response.status_code}: {response.reason_phrase}"
-                    )
+            response_text = response.text
 
-                response_text = response.text
-
-                # Use shared SSE parser
-                data = SSEParser.parse_sse_response(
-                    response_text, f"AsyncMCPClient.{self.endpoint}"
-                )
+            # Use shared SSE parser
+            data = SSEParser.parse_sse_response(
+                response_text, f"AsyncMCPClient.{self.endpoint}"
+            )
 
             # Check for JSON-RPC error
             if "error" in data:
@@ -169,5 +227,10 @@ class AsyncMCPClient:
         return result
 
     async def close(self):
-        """Close client (no persistent connection to close)."""
+        """Close client instance (no-op as connections are pooled at class level).
+
+        Connection pooling is managed at the class level for efficiency.
+        To close all pooled connections during shutdown, use:
+            await AsyncMCPClient.close_all_clients()
+        """
         pass

@@ -72,7 +72,7 @@ class RegistryClientWrapper:
                 )
 
             registration_json = json.dumps(registration_dict, indent=2, default=str)
-            self.logger.debug(
+            self.logger.trace(
                 f"🔍 Full heartbeat registration payload:\n{registration_json}"
             )
 
@@ -148,7 +148,7 @@ class RegistryClientWrapper:
                                 )
 
                             parsed_dep["kwargs"] = kwargs_data
-                            self.logger.debug(
+                            self.logger.trace(
                                 f"🔧 Parsed kwargs for {dep_resolution.get('capability')}: {kwargs_data}"
                             )
                         except (json.JSONDecodeError, TypeError) as e:
@@ -178,7 +178,7 @@ class RegistryClientWrapper:
             FastHeartbeatStatus indicating required action
         """
         try:
-            self.logger.debug(
+            self.logger.trace(
                 f"🚀 Performing fast heartbeat check for agent '{agent_id}'"
             )
 
@@ -189,14 +189,14 @@ class RegistryClientWrapper:
 
             # Extract the actual HTTP status code from the response
             status_code = http_response.status_code
-            self.logger.debug(
+            self.logger.trace(
                 f"Fast heartbeat HEAD request for agent '{agent_id}' returned HTTP {status_code}"
             )
 
             # Convert HTTP status to semantic status
             status = FastHeartbeatStatusUtil.from_http_code(status_code)
 
-            self.logger.debug(
+            self.logger.trace(
                 f"✅ Fast heartbeat check completed for agent '{agent_id}': {status.value}"
             )
             return status
@@ -214,7 +214,7 @@ class RegistryClientWrapper:
 
             # Handle 410 Gone specifically (agent unknown)
             if "(410)" in error_str or "Gone" in error_str:
-                self.logger.debug(
+                self.logger.trace(
                     f"🔍 Fast heartbeat: Agent '{agent_id}' unknown (410 Gone) - re-registration needed"
                 )
                 return FastHeartbeatStatus.AGENT_UNKNOWN
@@ -423,7 +423,7 @@ class RegistryClientWrapper:
                         "filter_mode": filter_mode,
                     }
 
-                    self.logger.debug(
+                    self.logger.trace(
                         f"🤖 Extracted llm_filter for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}"
                     )
                     break
@@ -449,7 +449,7 @@ class RegistryClientWrapper:
                             namespace=provider.get("namespace", "default"),
                         )
 
-                        self.logger.debug(
+                        self.logger.trace(
                             f"🔌 Extracted llm_provider for {func_name}: {llm_provider_data.model_dump()}"
                         )
                     break

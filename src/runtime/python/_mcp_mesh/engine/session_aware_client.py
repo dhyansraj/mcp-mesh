@@ -11,8 +11,8 @@ import logging
 import random
 from typing import Any, Dict, List, Optional
 
-from .mcp_client_proxy import MCPClientProxy
 from .session_manager import get_session_manager
+from .unified_mcp_proxy import UnifiedMCPProxy
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +72,10 @@ class SessionAwareMCPClient:
         )
 
         # Create client proxy and make the call
-        client = MCPClientProxy(target_agent["endpoint"], capability)
+        proxy = UnifiedMCPProxy(target_agent["endpoint"], capability)
 
         try:
-            result = await client._async_call(**arguments)
+            result = await proxy(**arguments)
 
             # Update session affinity if this was a session-required call
             if session_id and routing_strategy.get("session_required"):

@@ -39,7 +39,7 @@ class LLMToolsResolutionStep(PipelineStep):
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
         """Process LLM tools resolution with hash-based change detection."""
-        self.logger.debug("Processing LLM tools resolution...")
+        self.logger.trace("Processing LLM tools resolution...")
 
         result = PipelineResult(message="LLM tools resolution processed")
 
@@ -50,7 +50,7 @@ class LLMToolsResolutionStep(PipelineStep):
             if heartbeat_response is None:
                 result.status = PipelineStatus.SUCCESS
                 result.message = "No heartbeat response - completed successfully"
-                self.logger.debug("ℹ️ No heartbeat response to process - this is normal")
+                self.logger.trace("ℹ️ No heartbeat response to process - this is normal")
                 return result
 
             # Use hash-based change detection and processing logic
@@ -73,14 +73,16 @@ class LLMToolsResolutionStep(PipelineStep):
             result.add_context("llm_tools", llm_tools)
             result.add_context("llm_providers", llm_providers)
 
-            result.message = "LLM tools and providers resolution completed (efficient hash-based)"
+            result.message = (
+                "LLM tools and providers resolution completed (efficient hash-based)"
+            )
 
             if function_count > 0 or provider_count > 0:
                 self.logger.info(
                     f"🤖 LLM state resolved: {function_count} functions, {tool_count} tools, {provider_count} providers"
                 )
 
-            self.logger.debug(
+            self.logger.trace(
                 "🤖 LLM tools and providers resolution step completed using hash-based change detection"
             )
 
@@ -113,14 +115,16 @@ class LLMToolsResolutionStep(PipelineStep):
             llm_tools = {}
 
         if not isinstance(llm_providers, dict):
-            self.logger.warning(f"llm_providers is not a dict, type={type(llm_providers)}")
+            self.logger.warning(
+                f"llm_providers is not a dict, type={type(llm_providers)}"
+            )
             llm_providers = {}
 
         # Build state with both llm_tools and llm_providers
         # This ensures hash changes when EITHER tools OR providers change
         state = {
             "llm_tools": {},
-            "llm_providers": llm_providers  # Include providers directly
+            "llm_providers": llm_providers,  # Include providers directly
         }
 
         # Filter out non-list values for llm_tools
@@ -165,7 +169,7 @@ class LLMToolsResolutionStep(PipelineStep):
             if not heartbeat_response:
                 # No response from registry (connection error, timeout, 5xx)
                 # → Skip entirely for resilience (keep existing LLM tools and providers)
-                self.logger.debug(
+                self.logger.trace(
                     "No heartbeat response - skipping LLM state processing for resilience"
                 )
                 return
@@ -182,7 +186,7 @@ class LLMToolsResolutionStep(PipelineStep):
             # Compare with previous state (use global variable)
             global _last_llm_tools_hash
             if current_hash == _last_llm_tools_hash:
-                self.logger.debug(
+                self.logger.trace(
                     f"🔄 LLM state unchanged (hash: {current_hash}), skipping processing"
                 )
                 return
@@ -222,13 +226,13 @@ class LLMToolsResolutionStep(PipelineStep):
             # Determine if this is initial processing or an update
             if _last_llm_tools_hash is None:
                 # Initial processing - use process_llm_tools
-                self.logger.debug(
+                self.logger.trace(
                     "🤖 Initial LLM tools processing - calling process_llm_tools()"
                 )
                 injector.process_llm_tools(llm_tools)
             else:
                 # Update - use update_llm_tools
-                self.logger.debug("🤖 LLM tools update - calling update_llm_tools()")
+                self.logger.trace("🤖 LLM tools update - calling update_llm_tools()")
                 injector.update_llm_tools(llm_tools)
 
             # Process LLM providers (v0.6.1 mesh delegation)
@@ -239,7 +243,7 @@ class LLMToolsResolutionStep(PipelineStep):
                 )
                 injector.process_llm_providers(llm_providers)
             else:
-                self.logger.debug("🔌 No llm_providers in current state")
+                self.logger.trace("🔌 No llm_providers in current state")
 
             # Store new hash for next comparison (use global variable)
             _last_llm_tools_hash = current_hash

@@ -42,7 +42,7 @@ class APIFastHeartbeatStep(PipelineStep):
         Returns:
             PipelineResult with fast_heartbeat_status in context
         """
-        self.logger.debug("Starting API fast heartbeat check...")
+        self.logger.trace("Starting API fast heartbeat check...")
 
         result = PipelineResult(message="API fast heartbeat check completed")
 
@@ -57,7 +57,7 @@ class APIFastHeartbeatStep(PipelineStep):
             if not registry_wrapper:
                 raise ValueError("registry_wrapper is required in context")
 
-            self.logger.debug(
+            self.logger.trace(
                 f"🚀 Performing API fast heartbeat check for service '{service_id}'"
             )
 

@@ -664,27 +664,28 @@ class DecoratorRegistry:
         cls._immediate_uvicorn_server = None
         logger.debug("🔄 REGISTRY: Cleared immediate uvicorn server reference")
 
-    # Health check result storage
-    _health_check_result: dict | None = None
+    # Health check result storage (delegated to health_check_manager)
 
     @classmethod
     def store_health_check_result(cls, result: dict) -> None:
         """Store health check result for /health endpoint."""
-        cls._health_check_result = result
-        logger.debug(
-            f"💾 REGISTRY: Stored health check result: {result.get('status', 'unknown')}"
-        )
+        from ..shared.health_check_manager import store_health_check_result
+
+        store_health_check_result(result)
 
     @classmethod
     def get_health_check_result(cls) -> dict | None:
         """Get stored health check result."""
-        return cls._health_check_result
+        from ..shared.health_check_manager import get_health_check_result
+
+        return get_health_check_result()
 
     @classmethod
     def clear_health_check_result(cls) -> None:
         """Clear stored health check result."""
-        cls._health_check_result = None
-        logger.debug("🗑️ REGISTRY: Cleared health check result")
+        from ..shared.health_check_manager import clear_health_check_result
+
+        clear_health_check_result()
 
     @classmethod
     def store_fastmcp_lifespan(cls, lifespan: Any) -> None:

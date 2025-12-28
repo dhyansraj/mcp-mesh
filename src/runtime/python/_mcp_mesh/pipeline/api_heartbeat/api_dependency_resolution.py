@@ -215,11 +215,6 @@ class APIDependencyResolutionStep(PipelineStep):
 
             # Import here to avoid circular imports
             from ...engine.dependency_injector import get_global_injector
-            from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-            from ...engine.mcp_client_proxy import (
-                EnhancedMCPClientProxy,
-                MCPClientProxy,
-            )
 
             injector = get_global_injector()
 
@@ -421,87 +416,3 @@ class APIDependencyResolutionStep(PipelineStep):
                 f"❌ Failed to process API heartbeat response for rewiring: {e}"
             )
             # Don't raise - this should not break the heartbeat loop
-
-    def _determine_api_proxy_type_for_capability(
-        self, capability: str, injector
-    ) -> str:
-        """
-        Determine which proxy type to use for API route handlers.
-
-        Since McpAgent has been removed, all API route handlers now use MCPClientProxy
-        for McpMeshAgent parameters.
-
-        Args:
-            capability: The capability name to check
-            injector: The dependency injector instance
-
-        Returns:
-            "MCPClientProxy"
-        """
-        # Note: This method always returns "MCPClientProxy" since McpAgent was removed.
-        # All McpMeshAgent parameters use MCPClientProxy.
-        self.logger.debug(
-            f"🔍 API route handlers for capability '{capability}' → using MCPClientProxy"
-        )
-        return "MCPClientProxy"
-
-    def _create_proxy_for_api(
-        self,
-        proxy_type: str,
-        endpoint: str,
-        dep_function_name: str,
-        kwargs_config: dict,
-    ):
-        """
-        Create the appropriate proxy instance for API route handlers.
-
-        Args:
-            proxy_type: "FullMCPProxy" or "MCPClientProxy"
-            endpoint: Target endpoint URL
-            dep_function_name: Target function name
-            kwargs_config: Additional configuration (timeout, retry, etc.)
-
-        Returns:
-            Proxy instance
-        """
-        from ...engine.full_mcp_proxy import EnhancedFullMCPProxy, FullMCPProxy
-        from ...engine.mcp_client_proxy import EnhancedMCPClientProxy, MCPClientProxy
-
-        if proxy_type == "FullMCPProxy":
-            # Use enhanced proxy if kwargs available
-            if kwargs_config:
-                proxy = EnhancedFullMCPProxy(
-                    endpoint,
-                    dep_function_name,
-                    kwargs_config=kwargs_config,
-                )
-                self.logger.debug(
-                    f"🔧 Created EnhancedFullMCPProxy for API with kwargs: {kwargs_config}"
-                )
-            else:
-                proxy = FullMCPProxy(
-                    endpoint,
-                    dep_function_name,
-                    kwargs_config=kwargs_config,
-                )
-                self.logger.debug("🔧 Created FullMCPProxy for API (no kwargs)")
-            return proxy
-        else:
-            # Use enhanced proxy if kwargs available
-            if kwargs_config:
-                proxy = EnhancedMCPClientProxy(
-                    endpoint,
-                    dep_function_name,
-                    kwargs_config=kwargs_config,
-                )
-                self.logger.debug(
-                    f"🔧 Created EnhancedMCPClientProxy for API with kwargs: {kwargs_config}"
-                )
-            else:
-                proxy = MCPClientProxy(
-                    endpoint,
-                    dep_function_name,
-                    kwargs_config=kwargs_config,
-                )
-                self.logger.debug("🔧 Created MCPClientProxy for API (no kwargs)")
-            return proxy

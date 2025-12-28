@@ -234,171 +234,50 @@ class FastAPIServerSetupStep(PipelineStep):
     ) -> Any:
         """Create FastAPI application with proper FastMCP lifespan integration."""
         try:
-            import asyncio
-            from contextlib import asynccontextmanager
+            from fastapi import FastAPI
 
-            from fastapi import FastAPI, Response
+            from .lifespan_factory import (
+                create_minimal_lifespan,
+                create_multiple_fastmcp_lifespan,
+                create_single_fastmcp_lifespan,
+            )
 
             agent_name = agent_config.get("name", "mcp-mesh-agent")
             agent_description = agent_config.get(
                 "description", "MCP Mesh Agent with FastAPI integration"
             )
 
-            # Simplified lifespan - heartbeat now handled by daemon thread
-            primary_lifespan = None
+            # Callback to get shutdown context at cleanup time
+            def get_shutdown_context():
+                return getattr(self, "_current_context", {})
 
-            # Helper function to get FastMCP lifespan from wrapper
-            def get_fastmcp_lifespan():
-                if mcp_wrappers:
-                    wrapper_key = next(iter(mcp_wrappers.keys()))
-                    mcp_wrapper = mcp_wrappers[wrapper_key]["wrapper"]
-                    if (
-                        hasattr(mcp_wrapper, "_mcp_app")
-                        and mcp_wrapper._mcp_app
-                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
-                    ):
-                        return mcp_wrapper._mcp_app.lifespan
-                return None
+            # Collect FastMCP lifespans from pre-created wrappers
+            fastmcp_lifespans = []
+            for wrapper_data in (mcp_wrappers or {}).values():
+                mcp_wrapper = wrapper_data["wrapper"]
+                if (
+                    hasattr(mcp_wrapper, "_mcp_app")
+                    and mcp_wrapper._mcp_app
+                    and hasattr(mcp_wrapper._mcp_app, "lifespan")
+                ):
+                    fastmcp_lifespans.append(mcp_wrapper._mcp_app.lifespan)
 
-            if len(fastmcp_servers) == 1:
-                # Single FastMCP server - simple lifespan with graceful shutdown
-                self.logger.debug("Creating simple lifespan for single FastMCP server")
-                fastmcp_lifespan = get_fastmcp_lifespan()
-
-                if fastmcp_lifespan:
-
-                    @asynccontextmanager
-                    async def simple_fastmcp_lifespan(main_app):
-                        """Simple lifespan for single FastMCP server."""
-                        fastmcp_ctx = None
-                        try:
-                            fastmcp_ctx = fastmcp_lifespan(main_app)
-                            await fastmcp_ctx.__aenter__()
-                            self.logger.debug("Started FastMCP lifespan")
-                        except Exception as e:
-                            self.logger.error(f"Failed to start FastMCP lifespan: {e}")
-
-                        try:
-                            yield
-                        finally:
-                            # Graceful shutdown - unregister from registry
-                            await self._graceful_shutdown(main_app)
-
-                            # Clean up FastMCP lifespan
-                            if fastmcp_ctx:
-                                try:
-                                    await fastmcp_ctx.__aexit__(None, None, None)
-                                    self.logger.debug("FastMCP lifespan stopped")
-                                except Exception as e:
-                                    self.logger.warning(
-                                        f"Error closing FastMCP lifespan: {e}"
-                                    )
-
-                    primary_lifespan = simple_fastmcp_lifespan
-                else:
-                    primary_lifespan = None
-
-            elif len(fastmcp_servers) > 1:
-                # Multiple FastMCP servers - combine lifespans
-                self.logger.debug(
-                    "Creating combined lifespan for multiple FastMCP servers"
+            # Select appropriate lifespan factory based on FastMCP server count
+            if len(fastmcp_lifespans) == 1:
+                self.logger.debug("Creating lifespan for single FastMCP server")
+                primary_lifespan = create_single_fastmcp_lifespan(
+                    fastmcp_lifespans[0], get_shutdown_context
                 )
-
-                # Collect FastMCP lifespans from pre-created wrappers
-                fastmcp_lifespans = []
-                for server_key, wrapper_data in mcp_wrappers.items():
-                    mcp_wrapper = wrapper_data["wrapper"]
-                    if (
-                        hasattr(mcp_wrapper, "_mcp_app")
-                        and mcp_wrapper._mcp_app
-                        and hasattr(mcp_wrapper._mcp_app, "lifespan")
-                    ):
-                        fastmcp_lifespans.append(mcp_wrapper._mcp_app.lifespan)
-                        self.logger.debug(
-                            f"Collected lifespan from FastMCP wrapper '{server_key}'"
-                        )
-
-                if fastmcp_lifespans:
-
-                    @asynccontextmanager
-                    async def multiple_fastmcp_lifespan(main_app):
-                        """Combined lifespan for multiple FastMCP servers."""
-                        lifespan_contexts = []
-                        for lifespan in fastmcp_lifespans:
-                            try:
-                                ctx = lifespan(main_app)
-                                await ctx.__aenter__()
-                                lifespan_contexts.append(ctx)
-                            except Exception as e:
-                                self.logger.error(
-                                    f"Failed to start FastMCP lifespan: {e}"
-                                )
-
-                        try:
-                            yield
-                        finally:
-                            # Registry cleanup using simple shutdown
-                            context = getattr(self, "_current_context", {})
-                            registry_url = context.get(
-                                "registry_url", "http://localhost:8001"
-                            )
-                            agent_id = context.get("agent_id", "unknown")
-
-                            try:
-                                from ...shared.simple_shutdown import (
-                                    _simple_shutdown_coordinator,
-                                )
-
-                                _simple_shutdown_coordinator.set_shutdown_context(
-                                    registry_url, agent_id
-                                )
-                                await _simple_shutdown_coordinator.perform_registry_cleanup()
-                            except Exception as e:
-                                self.logger.error(f"❌ Registry cleanup error: {e}")
-
-                            # Clean up all lifespans in reverse order
-                            for ctx in reversed(lifespan_contexts):
-                                try:
-                                    await ctx.__aexit__(None, None, None)
-                                except Exception as e:
-                                    self.logger.warning(
-                                        f"Error closing FastMCP lifespan: {e}"
-                                    )
-
-                    primary_lifespan = multiple_fastmcp_lifespan
-
-            # Add minimal graceful shutdown lifespan if no FastMCP lifespans found
-            if primary_lifespan is None:
+            elif len(fastmcp_lifespans) > 1:
                 self.logger.debug(
-                    "Creating minimal lifespan for graceful shutdown only"
+                    f"Creating lifespan for {len(fastmcp_lifespans)} FastMCP servers"
                 )
-
-                @asynccontextmanager
-                async def graceful_shutdown_only_lifespan(main_app):
-                    """Minimal lifespan for graceful shutdown only."""
-                    try:
-                        yield
-                    finally:
-                        # Registry cleanup using simple shutdown
-                        context = getattr(self, "_current_context", {})
-                        registry_url = context.get(
-                            "registry_url", "http://localhost:8001"
-                        )
-                        agent_id = context.get("agent_id", "unknown")
-
-                        try:
-                            from ...shared.simple_shutdown import (
-                                _simple_shutdown_coordinator,
-                            )
-
-                            _simple_shutdown_coordinator.set_shutdown_context(
-                                registry_url, agent_id
-                            )
-                            await _simple_shutdown_coordinator.perform_registry_cleanup()
-                        except Exception as e:
-                            self.logger.error(f"❌ Registry cleanup error: {e}")
-
-                primary_lifespan = graceful_shutdown_only_lifespan
+                primary_lifespan = create_multiple_fastmcp_lifespan(
+                    fastmcp_lifespans, get_shutdown_context
+                )
+            else:
+                self.logger.debug("Creating minimal lifespan (no FastMCP servers)")
+                primary_lifespan = create_minimal_lifespan(get_shutdown_context)
 
             app = FastAPI(
                 title=f"MCP Mesh Agent: {agent_name}",
@@ -451,7 +330,7 @@ class FastAPIServerSetupStep(PipelineStep):
             if health_check_fn:
                 # Use health check cache if configured
                 from ...engine.decorator_registry import DecoratorRegistry
-                from ...shared.health_check_cache import get_health_status_with_cache
+                from ...shared.health_check_manager import get_health_status_with_cache
 
                 health_status = await get_health_status_with_cache(
                     agent_id=agent_name,
@@ -486,63 +365,8 @@ class FastAPIServerSetupStep(PipelineStep):
 
         await update_health_result()
 
-        # Note: /health endpoint is already registered by immediate uvicorn
-        # It will call DecoratorRegistry.get_health_check_result() to get this data
-
-        @app.get("/ready")
-        @app.head("/ready")
-        async def ready(response: Response):
-            """
-            Readiness check for Kubernetes.
-
-            Returns 200 when the service is ready to serve traffic.
-            Returns 503 when unhealthy - K8s will remove pod from service endpoints.
-            """
-            # Get health check result if available
-            from ...engine.decorator_registry import DecoratorRegistry
-
-            custom_health = DecoratorRegistry.get_health_check_result()
-
-            if custom_health:
-                status = custom_health.get("status", "starting")
-                if status == "healthy":
-                    response.status_code = 200
-                    return {
-                        "ready": True,
-                        "agent": agent_name,
-                        "status": status,
-                        "mcp_wrappers": len(mcp_wrappers),
-                        "timestamp": self._get_timestamp(),
-                    }
-                else:
-                    # Not ready to serve traffic
-                    response.status_code = 503
-                    return {
-                        "ready": False,
-                        "agent": agent_name,
-                        "status": status,
-                        "reason": f"Service is {status}",
-                        "errors": custom_health.get("errors", []),
-                    }
-            else:
-                # No custom health check - assume ready
-                response.status_code = 200
-                return {
-                    "ready": True,
-                    "agent": agent_name,
-                    "mcp_wrappers": len(mcp_wrappers),
-                    "timestamp": self._get_timestamp(),
-                }
-
-        @app.get("/livez")
-        @app.head("/livez")
-        async def livez():
-            """Liveness check for Kubernetes."""
-            return {
-                "alive": True,
-                "agent": agent_name,
-                "timestamp": self._get_timestamp(),
-            }
+        # Note: /health, /ready, /livez endpoints are registered by immediate uvicorn
+        # in decorators.py. They use health_check_manager to get stored health data.
 
         @app.get("/metrics")
         async def metrics():
@@ -772,61 +596,6 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
         """Get current timestamp in ISO format."""
 
         return datetime.now(UTC).isoformat()
-
-    async def _graceful_shutdown(self, main_app: Any) -> None:
-        """
-        Perform graceful shutdown by unregistering agent from registry.
-
-        Args:
-            main_app: FastAPI application instance (unused but required by lifespan signature)
-        """
-        try:
-            # Get pipeline context from the step execution context
-            # Note: We need to access the context from where this was called
-            context = getattr(self, "_current_context", {})
-
-            # Get registry configuration
-            registry_url = context.get("registry_url")
-            agent_id = context.get("agent_id")
-
-            if not registry_url or not agent_id:
-                self.logger.warning(
-                    f"🚨 Cannot perform graceful shutdown: missing registry_url={registry_url} or agent_id={agent_id}"
-                )
-                return
-
-            # Get or create registry client wrapper
-            registry_wrapper = context.get("registry_wrapper")
-            if not registry_wrapper:
-                # Create new registry client for shutdown
-                from ...generated.mcp_mesh_registry_client.api_client import ApiClient
-                from ...generated.mcp_mesh_registry_client.configuration import (
-                    Configuration,
-                )
-                from ...shared.registry_client_wrapper import RegistryClientWrapper
-                from ..registry_connection import RegistryConnectionStep
-
-                config = Configuration(host=registry_url)
-                api_client = ApiClient(configuration=config)
-                registry_wrapper = RegistryClientWrapper(api_client)
-                self.logger.debug(
-                    f"🔧 Created registry client for graceful shutdown: {registry_url}"
-                )
-
-            # Perform graceful unregistration
-            success = await registry_wrapper.unregister_agent(agent_id)
-            if success:
-                self.logger.info(
-                    f"🏁 Graceful shutdown completed for agent '{agent_id}'"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ Graceful shutdown failed for agent '{agent_id}' - continuing shutdown"
-                )
-
-        except Exception as e:
-            # Don't fail the shutdown process due to unregistration errors
-            self.logger.error(f"❌ Graceful shutdown error: {e} - continuing shutdown")
 
     def _store_context_for_shutdown(self, context: dict[str, Any]) -> None:
         """Store context for access during shutdown."""

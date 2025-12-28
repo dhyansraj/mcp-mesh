@@ -41,7 +41,7 @@ class HeartbeatSendStep(PipelineStep):
                 raise ValueError("Health status not available in context")
 
             # Prepare heartbeat for registry
-            self.logger.debug(f"🔍 Preparing heartbeat for agent '{agent_id}'")
+            self.logger.trace(f"🔍 Preparing heartbeat for agent '{agent_id}'")
 
             # Send actual HTTP request to registry
             registry_wrapper = context.get("registry_wrapper")

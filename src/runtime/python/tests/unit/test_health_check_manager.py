@@ -1,5 +1,5 @@
 """
-Unit tests for health check caching functionality.
+Unit tests for health check manager functionality.
 """
 
 import asyncio
@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from _mcp_mesh.shared.health_check_cache import (
+from _mcp_mesh.shared.health_check_manager import (
     clear_health_cache,
     get_cache_stats,
     get_health_status_with_cache,

@@ -33,7 +33,7 @@ class RegistryConnectionStep(PipelineStep):
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
         """Establish registry connection or reuse existing one."""
-        self.logger.debug("Checking registry connection...")
+        self.logger.trace("Checking registry connection...")
 
         result = PipelineResult(message="Registry connection ready")
 
@@ -45,7 +45,7 @@ class RegistryConnectionStep(PipelineStep):
                 # Reuse existing connection for efficiency
                 result.add_context("registry_wrapper", existing_wrapper)
                 result.message = "Reusing existing registry connection"
-                self.logger.debug("🔄 Reusing existing registry connection")
+                self.logger.trace("🔄 Reusing existing registry connection")
                 return result
 
             # Create new connection if none exists
@@ -64,7 +64,7 @@ class RegistryConnectionStep(PipelineStep):
             result.add_context("registry_wrapper", registry_wrapper)
 
             result.message = f"Connected to registry at {registry_url}"
-            self.logger.info(f"🔗 Registry connection established: {registry_url}")
+            self.logger.trace(f"🔗 Registry connection established: {registry_url}")
 
         except Exception as e:
             result.status = PipelineStatus.FAILED

@@ -14,6 +14,11 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from ..shared.logging_config import (
+    format_log_value,
+    format_result_summary,
+    get_trace_prefix,
+)
 from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
 
 logger = logging.getLogger(__name__)
@@ -448,17 +453,17 @@ class DependencyInjector:
 
             @functools.wraps(func)
             async def dependency_wrapper(*args, **kwargs):
+                # Get trace prefix if available
+                tp = get_trace_prefix()
+
+                # Log tool invocation - summary line
+                arg_keys = list(kwargs.keys()) if kwargs else []
                 wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: Function {func.__name__} called"
+                    f"{tp}🔧 Tool '{func.__name__}' called with kwargs={arg_keys}"
                 )
+                # Log full args (will be TRACE later)
                 wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: args={args}, kwargs={kwargs}"
-                )
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: mesh_positions={mesh_positions}"
-                )
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}"
+                    f"{tp}🔧 Tool '{func.__name__}' args: {format_log_value(kwargs)}"
                 )
 
                 # We know mesh_positions is not empty since we checked above
@@ -468,19 +473,13 @@ class DependencyInjector:
                 params = list(sig.parameters.keys())
                 final_kwargs = kwargs.copy()
 
-                wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: params={params}")
-                wrapper_logger.debug(f"🔧 DEPENDENCY_WRAPPER: original kwargs={kwargs}")
-
                 # Inject dependencies as kwargs (using array-based lookup)
                 injected_count = 0
+                injected_deps = []  # Track what was injected for logging
                 for dep_index, param_position in enumerate(mesh_positions):
                     if dep_index < len(dependencies):
                         dep_name = dependencies[dep_index]
                         param_name = params[param_position]
-
-                        wrapper_logger.debug(
-                            f"🔧 DEPENDENCY_WRAPPER: Processing dep {dep_index}: {dep_name} -> {param_name}"
-                        )
 
                         # Only inject if the parameter wasn't explicitly provided
                         if (
@@ -493,34 +492,25 @@ class DependencyInjector:
                                 dependency = dependency_wrapper._mesh_injected_deps[
                                     dep_index
                                 ]
-                            wrapper_logger.debug(
-                                f"🔧 DEPENDENCY_WRAPPER: From wrapper storage[{dep_index}]: {dependency}"
-                            )
 
                             if dependency is None:
                                 # Fallback to global storage with composite key
                                 dep_key = f"{func.__module__}.{func.__qualname__}:dep_{dep_index}"
                                 dependency = self.get_dependency(dep_key)
-                                wrapper_logger.debug(
-                                    f"🔧 DEPENDENCY_WRAPPER: From global storage[{dep_key}]: {dependency}"
-                                )
 
                             final_kwargs[param_name] = dependency
                             injected_count += 1
-                            wrapper_logger.debug(
-                                f"🔧 DEPENDENCY_WRAPPER: Injected {dep_name} from index {dep_index} as {param_name}"
+                            # Track for consolidated logging
+                            proxy_type = (
+                                type(dependency).__name__ if dependency else "None"
                             )
-                        else:
-                            wrapper_logger.debug(
-                                f"🔧 DEPENDENCY_WRAPPER: Skipping {param_name} - already provided"
-                            )
+                            injected_deps.append(f"{dep_name} → {proxy_type}")
 
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: Injected {injected_count} dependencies"
-                )
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: final_kwargs={final_kwargs}"
-                )
+                # Log consolidated dependency injection summary
+                if injected_count > 0:
+                    wrapper_logger.debug(
+                        f"{tp}🔧 Injected {injected_count} dependencies: {', '.join(injected_deps)}"
+                    )
 
                 # ===== INJECT LLM AGENT IF PRESENT (Option A) =====
                 # Check if this function has @mesh.llm metadata attached (on the original function)
@@ -534,7 +524,7 @@ class DependencyInjector:
                         llm_agent = getattr(func, "_mesh_llm_agent", None)
                         final_kwargs[llm_param] = llm_agent
                         wrapper_logger.debug(
-                            f"🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
+                            f"{tp}🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
                         )
 
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
@@ -542,10 +532,6 @@ class DependencyInjector:
                 from ..tracing.execution_tracer import ExecutionTracer
 
                 original_func = func._mesh_original_func
-
-                wrapper_logger.debug(
-                    f"🔧 DI: Executing async function {original_func.__name__} with {injected_count} injected dependencies"
-                )
 
                 # Use ExecutionTracer's async method for clean tracing
                 result = await ExecutionTracer.trace_function_execution_async(
@@ -558,26 +544,32 @@ class DependencyInjector:
                     wrapper_logger,
                 )
 
+                # Log result - summary line
                 wrapper_logger.debug(
-                    f"🔧 DI: Function {original_func.__name__} returned: {type(result)}"
+                    f"{tp}🔧 Tool '{func.__name__}' returned: {format_result_summary(result)}"
                 )
+                # Log full result (will be TRACE later)
+                wrapper_logger.debug(
+                    f"{tp}🔧 Tool '{func.__name__}' result: {format_log_value(result)}"
+                )
+
                 return result
 
         else:
             # Create sync wrapper for sync functions without dependencies
             @functools.wraps(func)
             def dependency_wrapper(*args, **kwargs):
+                # Get trace prefix if available
+                tp = get_trace_prefix()
+
+                # Log tool invocation - summary line
+                arg_keys = list(kwargs.keys()) if kwargs else []
                 wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: Function {func.__name__} called"
+                    f"{tp}🔧 Tool '{func.__name__}' called with kwargs={arg_keys}"
                 )
+                # Log full args (will be TRACE later)
                 wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: args={args}, kwargs={kwargs}"
-                )
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: mesh_positions={mesh_positions}"
-                )
-                wrapper_logger.debug(
-                    f"🔧 DEPENDENCY_WRAPPER: dependencies={dependencies}"
+                    f"{tp}🔧 Tool '{func.__name__}' args: {format_log_value(kwargs)}"
                 )
 
                 # We know mesh_positions is not empty since we checked above
@@ -589,6 +581,7 @@ class DependencyInjector:
 
                 # Inject dependencies as kwargs (using array-based lookup)
                 injected_count = 0
+                injected_deps = []  # Track what was injected for logging
                 for dep_index, param_position in enumerate(mesh_positions):
                     if dep_index < len(dependencies):
                         dep_name = dependencies[dep_index]
@@ -613,6 +606,17 @@ class DependencyInjector:
 
                             final_kwargs[param_name] = dependency
                             injected_count += 1
+                            # Track for consolidated logging
+                            proxy_type = (
+                                type(dependency).__name__ if dependency else "None"
+                            )
+                            injected_deps.append(f"{dep_name} → {proxy_type}")
+
+                # Log consolidated dependency injection summary
+                if injected_count > 0:
+                    wrapper_logger.debug(
+                        f"{tp}🔧 Injected {injected_count} dependencies: {', '.join(injected_deps)}"
+                    )
 
                 # ===== INJECT LLM AGENT IF PRESENT (Option A) =====
                 # Check if this function has @mesh.llm metadata attached (on the original function)
@@ -626,19 +630,15 @@ class DependencyInjector:
                         llm_agent = getattr(func, "_mesh_llm_agent", None)
                         final_kwargs[llm_param] = llm_agent
                         wrapper_logger.debug(
-                            f"🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
+                            f"{tp}🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}"
                         )
 
                 # ===== EXECUTE WITH DEPENDENCY INJECTION AND TRACING =====
                 # Use ExecutionTracer for comprehensive execution logging (v0.4.0 style)
                 from ..tracing.execution_tracer import ExecutionTracer
 
-                wrapper_logger.debug(
-                    f"🔧 DI: Executing sync function {func._mesh_original_func.__name__} with {injected_count} injected dependencies"
-                )
-
                 # Use ExecutionTracer for clean execution tracing
-                return ExecutionTracer.trace_function_execution(
+                result = ExecutionTracer.trace_function_execution(
                     func._mesh_original_func,
                     args,
                     final_kwargs,
@@ -647,6 +647,17 @@ class DependencyInjector:
                     injected_count,
                     wrapper_logger,
                 )
+
+                # Log result - summary line
+                wrapper_logger.debug(
+                    f"{tp}🔧 Tool '{func.__name__}' returned: {format_result_summary(result)}"
+                )
+                # Log full result (will be TRACE later)
+                wrapper_logger.debug(
+                    f"{tp}🔧 Tool '{func.__name__}' result: {format_log_value(result)}"
+                )
+
+                return result
 
         # Store dependency state on wrapper as array (indexed by position)
         dependency_wrapper._mesh_injected_deps = [None] * len(dependencies)

@@ -274,9 +274,9 @@ class TestFastHeartbeatStep:
             # Execute
             result = await fast_heartbeat_step.execute(base_context)
 
-            # Verify logging occurred
+            # Verify logging occurred (verbose logs moved to TRACE level)
             assert result.is_success()
-            mock_logger.debug.assert_called()
+            mock_logger.trace.assert_called()
 
     @pytest.mark.asyncio
     async def test_error_logging_behavior(

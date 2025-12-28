@@ -12,9 +12,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import \
-    DependencyResolutionStep
+from _mcp_mesh.pipeline.mcp_heartbeat.dependency_resolution import (
+    DependencyResolutionStep,
+)
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -656,10 +658,10 @@ class TestRewiring:
         self, step, caplog, clear_global_hash
     ):
         """Test rewiring with no response (skip for resilience)."""
-        import logging
+        from _mcp_mesh.shared.logging_config import TRACE
 
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         await step.process_heartbeat_response_for_rewiring(None)
 
@@ -670,10 +672,10 @@ class TestRewiring:
         self, step, caplog, clear_global_hash
     ):
         """Test rewiring with empty response (skip for resilience)."""
-        import logging
+        from _mcp_mesh.shared.logging_config import TRACE
 
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         await step.process_heartbeat_response_for_rewiring({})
 
@@ -750,8 +752,10 @@ class TestRewiring:
         current_hash = step._hash_dependency_state(current_state)
         dep_module._last_dependency_hash = current_hash
 
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        from _mcp_mesh.shared.logging_config import TRACE
+
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         await step.process_heartbeat_response_for_rewiring(heartbeat_response)
 
@@ -793,7 +797,7 @@ class TestRewiring:
             }
         }
 
-        caplog.set_level(logging.INFO)
+        caplog.set_level(logging.DEBUG)
 
         # Mock DecoratorRegistry to return the same agent_id as in heartbeat response
         # Also need to mock get_mesh_tools for composite key mapping
@@ -971,6 +975,8 @@ class TestLogging:
         mock_registry_wrapper = MagicMock()
         mock_registry_wrapper.parse_tool_dependencies.return_value = {}
 
+        from _mcp_mesh.shared.logging_config import TRACE
+
         context = {
             "heartbeat_response": {"status": "success"},
             "registry_wrapper": mock_registry_wrapper,
@@ -978,8 +984,8 @@ class TestLogging:
 
         mock_rewiring.return_value = None
 
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         result = await step.execute(context)
 

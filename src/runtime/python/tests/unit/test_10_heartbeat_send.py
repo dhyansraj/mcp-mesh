@@ -597,8 +597,8 @@ class TestLogging:
     async def test_debug_logging_preparation(
         self, step, mock_health_status, mock_registry_wrapper, caplog
     ):
-        """Test debug logging for heartbeat preparation."""
-        import logging
+        """Test trace logging for heartbeat preparation."""
+        from _mcp_mesh.shared.logging_config import TRACE
 
         context = {
             "health_status": mock_health_status,
@@ -610,8 +610,8 @@ class TestLogging:
             "status": "success"
         }
 
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         result = await step.execute(context)
 
