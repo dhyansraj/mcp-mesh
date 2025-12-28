@@ -234,9 +234,6 @@ class UnifiedMCPProxy:
         self.collect_performance_metrics = self.kwargs_config.get(
             "performance_metrics", True
         )
-        self.include_telemetry_in_response = self.kwargs_config.get(
-            "include_telemetry_response", True
-        )
 
         # Agent context collection
         self.collect_agent_context = self.kwargs_config.get(
@@ -439,19 +436,6 @@ class UnifiedMCPProxy:
                 # Convert CallToolResult to native Python structures for client simplicity
                 converted_result = self._convert_mcp_result_to_python(result)
 
-                # Add telemetry metadata to converted result if enabled
-                if self.include_telemetry_in_response and isinstance(
-                    converted_result, dict
-                ):
-                    converted_result["_telemetry"] = {
-                        "method": "fastmcp_client",
-                        "duration_ms": duration_ms,
-                        "endpoint": mcp_endpoint,
-                        "tool_name": name,
-                        "telemetry_enabled": self.telemetry_enabled,
-                        "distributed_tracing": self.distributed_tracing_enabled,
-                    }
-
                 # Log success - summary line
                 self.logger.info(
                     f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
@@ -578,6 +562,52 @@ class UnifiedMCPProxy:
         else:
             return {"data": str(structured_content)}
 
+    def _normalize_http_result(self, result: Any) -> Any:
+        """Normalize HTTP fallback result to match FastMCP format.
+
+        Extracts structured content from MCP envelope so callers get consistent
+        response format regardless of transport method (FastMCP vs HTTP fallback).
+        """
+        if not isinstance(result, dict):
+            return result
+
+        # If result has "content" array (MCP envelope format), extract the data
+        if "content" in result and isinstance(result["content"], list):
+            content_list = result["content"]
+
+            if not content_list:
+                return None
+
+            # Single content item - extract and parse
+            if len(content_list) == 1:
+                content_item = content_list[0]
+                if isinstance(content_item, dict) and "text" in content_item:
+                    # Try to parse JSON text content
+                    try:
+                        import json
+
+                        return json.loads(content_item["text"])
+                    except (json.JSONDecodeError, TypeError):
+                        return content_item["text"]
+                return content_item
+
+            # Multiple content items - convert each
+            converted_items = []
+            for item in content_list:
+                if isinstance(item, dict) and "text" in item:
+                    try:
+                        import json
+
+                        converted_items.append(json.loads(item["text"]))
+                    except (json.JSONDecodeError, TypeError):
+                        converted_items.append(item["text"])
+                else:
+                    converted_items.append(item)
+            return {"content": converted_items, "type": "multi_content"}
+
+        # Result is already in clean format
+        return result
+
     async def _fallback_http_call(self, name: str, arguments: dict = None) -> Any:
         """Enhanced fallback HTTP call using httpx directly with performance tracking."""
         import time
@@ -664,39 +694,10 @@ class UnifiedMCPProxy:
                     f"📊 HTTP fallback performance: {duration_ms}ms for tool '{name}'"
                 )
 
-                if isinstance(result, dict) and "content" in result:
-                    self.logger.info(
-                        f"✅ Successfully parsed result with content in {duration_ms}ms"
-                    )
-                    # Add performance metadata to result if enabled
-                    if self.include_telemetry_in_response and isinstance(result, dict):
-                        result["_telemetry"] = {
-                            "method": "http_fallback",
-                            "duration_ms": duration_ms,
-                            "endpoint": self.endpoint,
-                            "tool_name": name,
-                            "telemetry_enabled": self.telemetry_enabled,
-                            "fallback_reason": "fastmcp_unavailable",
-                        }
-                    return result
-                else:
-                    # Wrap in CallToolResult-like structure with performance data
-                    self.logger.info(
-                        f"🔄 Wrapping result in CallToolResult structure ({duration_ms}ms)"
-                    )
-                    wrapped_result = {
-                        "content": [{"type": "text", "text": str(result)}]
-                    }
-                    if self.include_telemetry_in_response:
-                        wrapped_result["_telemetry"] = {
-                            "method": "http_fallback",
-                            "duration_ms": duration_ms,
-                            "endpoint": self.endpoint,
-                            "tool_name": name,
-                            "telemetry_enabled": self.telemetry_enabled,
-                            "fallback_reason": "fastmcp_unavailable",
-                        }
-                    return wrapped_result
+                # Normalize HTTP response to match FastMCP format
+                normalized_result = self._normalize_http_result(result)
+                self.logger.info(f"✅ HTTP fallback successful in {duration_ms}ms")
+                return normalized_result
 
         except ImportError:
             raise RuntimeError("httpx not available for HTTP fallback")
