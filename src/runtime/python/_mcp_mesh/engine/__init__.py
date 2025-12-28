@@ -17,13 +17,8 @@ __all__ = [
     # Dependency injection
     "DependencyInjector",
     "get_global_injector",
-    # MCP client proxies (legacy)
-    "MCPClientProxy",
-    "EnhancedMCPClientProxy",
-    "FullMCPProxy",
-    "EnhancedFullMCPProxy",
+    # MCP client proxies
     "AsyncMCPClient",
-    # Unified MCP proxy (recommended)
     "UnifiedMCPProxy",
     "EnhancedUnifiedMCPProxy",
     # Self-dependency proxy
@@ -59,22 +54,6 @@ def __getattr__(name):
 
         return get_global_injector
     # MCP client proxies
-    elif name == "MCPClientProxy":
-        from .mcp_client_proxy import MCPClientProxy
-
-        return MCPClientProxy
-    elif name == "EnhancedMCPClientProxy":
-        from .mcp_client_proxy import EnhancedMCPClientProxy
-
-        return EnhancedMCPClientProxy
-    elif name == "FullMCPProxy":
-        from .full_mcp_proxy import FullMCPProxy
-
-        return FullMCPProxy
-    elif name == "EnhancedFullMCPProxy":
-        from .full_mcp_proxy import EnhancedFullMCPProxy
-
-        return EnhancedFullMCPProxy
     elif name == "AsyncMCPClient":
         from .async_mcp_client import AsyncMCPClient
 
