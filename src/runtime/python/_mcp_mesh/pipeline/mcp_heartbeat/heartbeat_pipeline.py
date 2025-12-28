@@ -51,7 +51,7 @@ class HeartbeatPipeline(MeshPipeline):
         ]
 
         self.add_steps(steps)
-        self.logger.debug(f"Heartbeat pipeline configured with {len(steps)} steps")
+        self.logger.trace(f"Heartbeat pipeline configured with {len(steps)} steps")
 
     async def execute_heartbeat_cycle(
         self, heartbeat_context: dict[str, Any]
@@ -65,7 +65,7 @@ class HeartbeatPipeline(MeshPipeline):
         Returns:
             PipelineResult with execution status and any context updates
         """
-        self.logger.debug("Starting heartbeat pipeline execution")
+        self.logger.trace("Starting heartbeat pipeline execution")
 
         # Initialize pipeline context with heartbeat-specific data
         self.context.clear()
@@ -76,7 +76,7 @@ class HeartbeatPipeline(MeshPipeline):
             result = await self._execute_with_conditional_logic()
 
             if result.is_success():
-                self.logger.debug("✅ Heartbeat pipeline completed successfully")
+                self.logger.trace("✅ Heartbeat pipeline completed successfully")
             elif result.status == PipelineStatus.PARTIAL:
                 self.logger.warning(
                     f"⚠️ Heartbeat pipeline completed partially: {result.message}"
@@ -149,7 +149,7 @@ class HeartbeatPipeline(MeshPipeline):
 
             # Execute mandatory steps
             for step in mandatory_steps:
-                self.logger.debug(f"Executing mandatory step: {step.name}")
+                self.logger.trace(f"Executing mandatory step: {step.name}")
 
                 step_result = await step.execute(self.context)
                 executed_steps.append(step.name)
@@ -189,7 +189,7 @@ class HeartbeatPipeline(MeshPipeline):
                 # NO_CHANGES - skip for optimization
                 should_execute_remaining = False
                 reason = "optimization (no changes detected)"
-                self.logger.debug(
+                self.logger.trace(
                     f"🚀 Skipping remaining steps for optimization: {reason}"
                 )
             elif FastHeartbeatStatusUtil.should_skip_for_resilience(
@@ -217,7 +217,7 @@ class HeartbeatPipeline(MeshPipeline):
             # Execute or skip conditional steps based on decision
             if should_execute_remaining:
                 for step in conditional_steps:
-                    self.logger.debug(f"Executing conditional step: {step.name}")
+                    self.logger.trace(f"Executing conditional step: {step.name}")
 
                     step_result = await step.execute(self.context)
                     executed_steps.append(step.name)

@@ -34,7 +34,7 @@ class DependencyResolutionStep(PipelineStep):
 
     async def execute(self, context: dict[str, Any]) -> PipelineResult:
         """Process dependency resolution with hash-based change detection."""
-        self.logger.debug("Processing dependency resolution...")
+        self.logger.trace("Processing dependency resolution...")
 
         result = PipelineResult(message="Dependency resolution processed")
 
@@ -68,7 +68,7 @@ class DependencyResolutionStep(PipelineStep):
             result.add_context("dependencies_resolved", dependencies_resolved)
 
             result.message = "Dependency resolution completed (efficient hash-based)"
-            self.logger.debug(
+            self.logger.trace(
                 "🔗 Dependency resolution step completed using hash-based change detection"
             )
 
@@ -147,7 +147,7 @@ class DependencyResolutionStep(PipelineStep):
             if not heartbeat_response:
                 # No response from registry (connection error, timeout, 5xx)
                 # → Skip entirely for resilience (keep existing dependencies)
-                self.logger.debug(
+                self.logger.trace(
                     "No heartbeat response - skipping rewiring for resilience"
                 )
                 return
@@ -164,7 +164,7 @@ class DependencyResolutionStep(PipelineStep):
             # Compare with previous state (use global variable)
             global _last_dependency_hash
             if current_hash == _last_dependency_hash:
-                self.logger.debug(
+                self.logger.trace(
                     f"🔄 Dependency state unchanged (hash: {current_hash}), skipping rewiring"
                 )
                 return
@@ -255,29 +255,27 @@ class DependencyResolutionStep(PipelineStep):
                         # Get current agent ID for self-dependency detection
                         import os
 
-                        from ...engine.self_dependency_proxy import \
-                            SelfDependencyProxy
+                        from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                         # Get current agent ID from DecoratorRegistry (single source of truth)
                         current_agent_id = None
                         try:
-                            from ...engine.decorator_registry import \
-                                DecoratorRegistry
+                            from ...engine.decorator_registry import DecoratorRegistry
 
                             config = DecoratorRegistry.get_resolved_agent_config()
                             current_agent_id = config["agent_id"]
-                            self.logger.debug(
+                            self.logger.trace(
                                 f"🔍 Current agent ID from DecoratorRegistry: '{current_agent_id}'"
                             )
                         except Exception as e:
                             # Fallback to environment variable
                             current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
-                            self.logger.debug(
+                            self.logger.trace(
                                 f"🔍 Current agent ID from environment: '{current_agent_id}' (fallback due to: {e})"
                             )
 
                         target_agent_id = dep_info.get("agent_id")
-                        self.logger.debug(
+                        self.logger.trace(
                             f"🔍 Target agent ID from registry: '{target_agent_id}'"
                         )
 
@@ -288,7 +286,7 @@ class DependencyResolutionStep(PipelineStep):
                             and current_agent_id == target_agent_id
                         )
 
-                        self.logger.debug(
+                        self.logger.trace(
                             f"🔍 Self-dependency check for '{capability}': "
                             f"current='{current_agent_id}' vs target='{target_agent_id}' "
                             f"→ {'SELF' if is_self_dependency else 'CROSS'}-dependency"
@@ -301,7 +299,7 @@ class DependencyResolutionStep(PipelineStep):
                             wrapper_func = None
                             if dep_function_name in mesh_tools:
                                 wrapper_func = mesh_tools[dep_function_name].function
-                                self.logger.debug(
+                                self.logger.trace(
                                     f"🔍 Found wrapper for '{dep_function_name}' in DecoratorRegistry"
                                 )
 
@@ -309,7 +307,7 @@ class DependencyResolutionStep(PipelineStep):
                                 new_proxy = SelfDependencyProxy(
                                     wrapper_func, dep_function_name
                                 )
-                                self.logger.info(
+                                self.logger.debug(
                                     f"🔄 SELF-DEPENDENCY: Using wrapper for '{capability}' "
                                     f"(local call with full DI support)"
                                 )
@@ -337,7 +335,7 @@ class DependencyResolutionStep(PipelineStep):
                                         dep_function_name,
                                         kwargs_config=kwargs_config,
                                     )
-                                    self.logger.debug(
+                                    self.logger.trace(
                                         f"🔧 Created EnhancedUnifiedMCPProxy (fallback): {kwargs_config}"
                                     )
                         else:
@@ -347,7 +345,7 @@ class DependencyResolutionStep(PipelineStep):
                                 dep_function_name,
                                 kwargs_config=kwargs_config,
                             )
-                            self.logger.info(
+                            self.logger.debug(
                                 f"🔄 Updated to EnhancedUnifiedMCPProxy: '{capability}' -> {endpoint}/{dep_function_name}, "
                                 f"timeout={kwargs_config.get('timeout', 30)}s, streaming={kwargs_config.get('streaming', False)}"
                             )
@@ -356,12 +354,12 @@ class DependencyResolutionStep(PipelineStep):
                         dep_key = f"{func_id}:dep_{dep_index}"
                         await injector.register_dependency(dep_key, new_proxy)
                         updated_count += 1
-                        self.logger.debug(
+                        self.logger.trace(
                             f"🔗 Registered dependency '{capability}' at position {dep_index} with key '{dep_key}' (func_id: {func_id})"
                         )
                     else:
                         if status != "available":
-                            self.logger.debug(
+                            self.logger.trace(
                                 f"⚠️ Dependency '{capability}' at position {dep_index} not available: {status}"
                             )
                         else:

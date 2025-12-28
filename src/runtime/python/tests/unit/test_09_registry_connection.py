@@ -421,13 +421,13 @@ class TestLogging:
         self, step, mock_existing_wrapper, caplog
     ):
         """Test execute with existing wrapper logs reuse message."""
-        import logging
+        from _mcp_mesh.shared.logging_config import TRACE
 
         context = {"registry_wrapper": mock_existing_wrapper}
 
-        # Set log level to capture DEBUG messages for the specific logger
-        caplog.set_level(logging.DEBUG)
-        step.logger.setLevel(logging.DEBUG)
+        # Set log level to capture TRACE messages for the specific logger
+        caplog.set_level(TRACE)
+        step.logger.setLevel(TRACE)
 
         result = await step.execute(context)
 

@@ -41,7 +41,7 @@ class FastHeartbeatStep(PipelineStep):
         Returns:
             PipelineResult with fast_heartbeat_status in context
         """
-        self.logger.debug("Starting fast heartbeat check...")
+        self.logger.trace("Starting fast heartbeat check...")
 
         result = PipelineResult(message="Fast heartbeat check completed")
 
@@ -56,7 +56,7 @@ class FastHeartbeatStep(PipelineStep):
             if not registry_wrapper:
                 raise ValueError("registry_wrapper is required in context")
 
-            self.logger.debug(
+            self.logger.trace(
                 f"🚀 Performing fast heartbeat check for agent '{agent_id}'"
             )
 
@@ -72,15 +72,15 @@ class FastHeartbeatStep(PipelineStep):
 
             # Log status and action
             if status == FastHeartbeatStatus.NO_CHANGES:
-                self.logger.debug(
+                self.logger.trace(
                     f"✅ Fast heartbeat: No changes detected for agent '{agent_id}'"
                 )
             elif status == FastHeartbeatStatus.TOPOLOGY_CHANGED:
-                self.logger.debug(
+                self.logger.trace(
                     f"🔄 Fast heartbeat: Topology changed for agent '{agent_id}' - full refresh needed"
                 )
             elif status == FastHeartbeatStatus.AGENT_UNKNOWN:
-                self.logger.debug(
+                self.logger.trace(
                     f"❓ Fast heartbeat: Agent '{agent_id}' unknown - re-registration needed"
                 )
             elif status == FastHeartbeatStatus.REGISTRY_ERROR:

@@ -1,8 +1,8 @@
 """
 API heartbeat pipeline for FastAPI service health monitoring.
 
-Provides structured execution of API service heartbeat operations with proper 
-error handling and logging. Runs periodically to maintain registry communication 
+Provides structured execution of API service heartbeat operations with proper
+error handling and logging. Runs periodically to maintain registry communication
 and service health status for FastAPI applications using @mesh.route decorators.
 """
 
@@ -12,11 +12,11 @@ from typing import Any
 from ...shared.fast_heartbeat_status import FastHeartbeatStatus, FastHeartbeatStatusUtil
 from ..shared.mesh_pipeline import MeshPipeline
 from ..shared.pipeline_types import PipelineStatus
-from .api_registry_connection import APIRegistryConnectionStep
-from .api_health_check import APIHealthCheckStep  
-from .api_fast_heartbeat_check import APIFastHeartbeatStep
-from .api_heartbeat_send import APIHeartbeatSendStep
 from .api_dependency_resolution import APIDependencyResolutionStep
+from .api_fast_heartbeat_check import APIFastHeartbeatStep
+from .api_health_check import APIHealthCheckStep
+from .api_heartbeat_send import APIHeartbeatSendStep
+from .api_registry_connection import APIRegistryConnectionStep
 
 logger = logging.getLogger(__name__)
 
@@ -50,23 +50,21 @@ class APIHeartbeatPipeline(MeshPipeline):
         """Setup the API heartbeat pipeline steps with fast optimization."""
         # API heartbeat steps with fast optimization pattern
         steps = [
-            APIRegistryConnectionStep(),    # Prepare registry communication
-            APIHealthCheckStep(),           # Check FastAPI app health status
-            APIFastHeartbeatStep(),         # Fast heartbeat check (HEAD request)
-            APIHeartbeatSendStep(),         # Conditional heartbeat send (POST request)
+            APIRegistryConnectionStep(),  # Prepare registry communication
+            APIHealthCheckStep(),  # Check FastAPI app health status
+            APIFastHeartbeatStep(),  # Fast heartbeat check (HEAD request)
+            APIHeartbeatSendStep(),  # Conditional heartbeat send (POST request)
             APIDependencyResolutionStep(),  # Conditional dependency resolution
         ]
 
         self.add_steps(steps)
-        self.logger.debug(f"API heartbeat pipeline configured with {len(steps)} steps")
-        
+        self.logger.trace(f"API heartbeat pipeline configured with {len(steps)} steps")
+
         # Log the pipeline strategy
         self.logger.info(
-            f"🌐 API Heartbeat Pipeline initialized: fast optimization for FastAPI apps"
+            "🌐 API Heartbeat Pipeline initialized: fast optimization for FastAPI apps"
         )
-        self.logger.debug(
-            f"📋 Pipeline steps: {[step.name for step in steps]}"
-        )
+        self.logger.trace(f"📋 Pipeline steps: {[step.name for step in steps]}")
 
     async def execute_api_heartbeat_cycle(
         self, heartbeat_context: dict[str, Any]
@@ -75,13 +73,13 @@ class APIHeartbeatPipeline(MeshPipeline):
         Execute a complete API heartbeat cycle with fast optimization and enhanced error handling.
 
         Args:
-            heartbeat_context: Context containing registry_wrapper, service_id, 
+            heartbeat_context: Context containing registry_wrapper, service_id,
                               health_status, fastapi_app, etc.
 
         Returns:
             PipelineResult with execution status and any context updates
         """
-        self.logger.debug("Starting API heartbeat pipeline execution")
+        self.logger.trace("Starting API heartbeat pipeline execution")
 
         # Initialize pipeline context with heartbeat-specific data
         self.context.clear()
@@ -92,7 +90,7 @@ class APIHeartbeatPipeline(MeshPipeline):
             result = await self._execute_with_conditional_logic()
 
             if result.is_success():
-                self.logger.debug("✅ API heartbeat pipeline completed successfully")
+                self.logger.trace("✅ API heartbeat pipeline completed successfully")
             elif result.status == PipelineStatus.PARTIAL:
                 self.logger.warning(
                     f"⚠️ API heartbeat pipeline completed partially: {result.message}"
@@ -113,7 +111,7 @@ class APIHeartbeatPipeline(MeshPipeline):
         except Exception as e:
             # Log detailed error information for debugging
             import traceback
-            
+
             self.logger.error(
                 f"❌ API heartbeat pipeline failed with exception: {e}\n"
                 f"Context keys: {list(self.context.keys())}\n"
@@ -122,7 +120,7 @@ class APIHeartbeatPipeline(MeshPipeline):
 
             # Create failure result with detailed context
             from ..shared.pipeline_types import PipelineResult
-            
+
             failure_result = PipelineResult(
                 status=PipelineStatus.FAILED,
                 message=f"API heartbeat pipeline exception: {str(e)[:200]}...",
@@ -138,7 +136,7 @@ class APIHeartbeatPipeline(MeshPipeline):
 
         Always executes:
         - APIRegistryConnectionStep
-        - APIHealthCheckStep  
+        - APIHealthCheckStep
         - APIFastHeartbeatStep
 
         Conditionally executes based on fast heartbeat status:
@@ -150,7 +148,7 @@ class APIHeartbeatPipeline(MeshPipeline):
             PipelineResult with execution status and context
         """
         from ..shared.pipeline_types import PipelineResult
-        
+
         overall_result = PipelineResult(
             message="API heartbeat pipeline execution completed"
         )
@@ -170,7 +168,7 @@ class APIHeartbeatPipeline(MeshPipeline):
 
             # Execute mandatory steps
             for step in mandatory_steps:
-                self.logger.debug(f"Executing mandatory step: {step.name}")
+                self.logger.trace(f"Executing mandatory step: {step.name}")
 
                 step_result = await step.execute(self.context)
                 executed_steps.append(step.name)
@@ -226,7 +224,9 @@ class APIHeartbeatPipeline(MeshPipeline):
                 # TOPOLOGY_CHANGED, AGENT_UNKNOWN - execute full pipeline
                 should_execute_remaining = True
                 reason = "changes detected or re-registration needed"
-                self.logger.info(f"🔄 API heartbeat: Executing remaining steps: {reason}")
+                self.logger.info(
+                    f"🔄 API heartbeat: Executing remaining steps: {reason}"
+                )
             else:
                 # Unknown status - fallback to full execution
                 self.logger.warning(
@@ -238,7 +238,7 @@ class APIHeartbeatPipeline(MeshPipeline):
             # Execute or skip conditional steps based on decision
             if should_execute_remaining:
                 for step in conditional_steps:
-                    self.logger.debug(f"Executing conditional step: {step.name}")
+                    self.logger.trace(f"Executing conditional step: {step.name}")
 
                     step_result = await step.execute(self.context)
                     executed_steps.append(step.name)
@@ -269,7 +269,7 @@ class APIHeartbeatPipeline(MeshPipeline):
                 # Mark skipped steps
                 for step in conditional_steps:
                     skipped_steps.append(step.name)
-                
+
                 # For skipped heartbeat due to NO_CHANGES, set success context
                 if fast_heartbeat_status == FastHeartbeatStatus.NO_CHANGES:
                     overall_result.add_context("heartbeat_success", True)
@@ -300,7 +300,9 @@ class APIHeartbeatPipeline(MeshPipeline):
         except Exception as e:
             # Handle unexpected exceptions
             overall_result.status = PipelineStatus.FAILED
-            overall_result.message = f"API pipeline execution failed with exception: {e}"
+            overall_result.message = (
+                f"API pipeline execution failed with exception: {e}"
+            )
             overall_result.add_error(str(e))
             for key, value in self.context.items():
                 overall_result.add_context(key, value)

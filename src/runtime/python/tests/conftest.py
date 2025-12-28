@@ -24,6 +24,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+# Configure logging with TRACE level support BEFORE any other mcp_mesh imports
+# This ensures the Logger.trace method is available for all modules
+import _mcp_mesh.shared.logging_config  # noqa: F401 - import for side effects
 from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
 from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
 from _mcp_mesh.shared.support_types import HealthStatus

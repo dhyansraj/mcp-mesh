@@ -207,9 +207,9 @@ class TestRegistryClientWrapperFastHeartbeat:
             # Execute
             result = await registry_wrapper.check_fast_heartbeat("test-agent")
 
-            # Verify logging occurred
+            # Verify logging occurred (verbose logs moved to TRACE level)
             assert result == FastHeartbeatStatus.NO_CHANGES
-            mock_logger.debug.assert_called()
+            mock_logger.trace.assert_called()
 
     @pytest.mark.asyncio
     async def test_check_fast_heartbeat_error_logging(
