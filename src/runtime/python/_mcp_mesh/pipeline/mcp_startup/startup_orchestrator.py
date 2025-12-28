@@ -181,8 +181,16 @@ class DebounceCoordinator:
                     # For API services, ONLY do dependency injection - user controls their FastAPI server
                     # Dependency injection is already complete from pipeline execution
                     # Optionally start heartbeat in background (non-blocking)
-                    self._setup_api_heartbeat_background(
-                        heartbeat_config, pipeline_context
+                    from ..api_heartbeat.api_lifespan_integration import (
+                        api_heartbeat_lifespan_task,
+                    )
+
+                    self._setup_heartbeat_background(
+                        heartbeat_config,
+                        pipeline_context,
+                        api_heartbeat_lifespan_task,
+                        id_field="service_id",
+                        label="API service",
                     )
                     self.logger.info(
                         "✅ API dependency injection complete - user's FastAPI server can now start"
@@ -190,8 +198,14 @@ class DebounceCoordinator:
                     return  # Don't block - let user's uvicorn run
                 elif fastapi_app and binding_config:
                     # For MCP agents - use same daemon thread pattern as API apps
-                    self._setup_mcp_heartbeat_background(
-                        heartbeat_config, pipeline_context
+                    from ..mcp_heartbeat.lifespan_integration import (
+                        heartbeat_lifespan_task,
+                    )
+
+                    self._setup_heartbeat_background(
+                        heartbeat_config,
+                        pipeline_context,
+                        heartbeat_lifespan_task,
                     )
 
                     # Check if server was already reused from immediate uvicorn start
@@ -315,119 +329,65 @@ class DebounceCoordinator:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
 
-    def _setup_api_heartbeat_background(
-        self, heartbeat_config: dict[str, Any], pipeline_context: dict[str, Any]
+    def _setup_heartbeat_background(
+        self,
+        heartbeat_config: dict[str, Any],
+        pipeline_context: dict[str, Any],
+        heartbeat_task_fn: Any,
+        id_field: str = "agent_id",
+        label: str = "MCP agent",
     ) -> None:
-        """Setup API heartbeat to run in background - non-blocking."""
+        """
+        Setup heartbeat to run in background thread.
+
+        Unified implementation for both API services and MCP agents.
+
+        Args:
+            heartbeat_config: Heartbeat configuration dict
+            pipeline_context: Pipeline context to populate into config
+            heartbeat_task_fn: Async function to run (api or mcp heartbeat task)
+            id_field: Config key for ID ("agent_id" or "service_id")
+            label: Label for log messages ("MCP agent" or "API service")
+        """
+        import asyncio
+        import threading
+
         try:
-            # Populate heartbeat context with current pipeline context
             heartbeat_config["context"] = pipeline_context
-            service_id = heartbeat_config.get("service_id", "unknown")
+            entity_id = heartbeat_config.get(id_field, "unknown")
             standalone_mode = heartbeat_config.get("standalone_mode", False)
 
             if standalone_mode:
                 self.logger.info(
-                    f"📝 API service '{service_id}' configured in standalone mode - no heartbeat"
+                    f"{label} '{entity_id}' configured in standalone mode - no heartbeat"
                 )
                 return
 
             self.logger.info(
-                f"🔗 Setting up background API heartbeat for service '{service_id}'"
-            )
-
-            # Import heartbeat functionality
-            import asyncio
-            import threading
-
-            from ..api_heartbeat.api_lifespan_integration import (
-                api_heartbeat_lifespan_task,
+                f"Setting up background heartbeat for {label} '{entity_id}'"
             )
 
             def run_heartbeat():
                 """Run heartbeat in separate thread with its own event loop."""
-                self.logger.debug(
-                    f"Starting background heartbeat thread for {service_id}"
-                )
+                self.logger.debug(f"Starting background heartbeat thread for {entity_id}")
                 try:
-                    # Create new event loop for this thread
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-
-                    # Run heartbeat task
-                    loop.run_until_complete(
-                        api_heartbeat_lifespan_task(heartbeat_config)
-                    )
+                    loop.run_until_complete(heartbeat_task_fn(heartbeat_config))
                 except Exception as e:
-                    self.logger.error(f"❌ Background heartbeat error: {e}")
+                    self.logger.error(f"Background heartbeat error: {e}")
                 finally:
                     loop.close()
 
-            # Start heartbeat in daemon thread (won't prevent process exit)
             heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
             heartbeat_thread.start()
 
             self.logger.info(
-                f"💓 Background API heartbeat thread started for service '{service_id}'"
+                f"Background heartbeat thread started for {label} '{entity_id}'"
             )
 
         except Exception as e:
-            self.logger.warning(f"⚠️ Could not setup API heartbeat: {e}")
-            # Don't fail - heartbeat is optional for API services
-
-    def _setup_mcp_heartbeat_background(
-        self, heartbeat_config: dict[str, Any], pipeline_context: dict[str, Any]
-    ) -> None:
-        """Setup MCP heartbeat to run in background - same pattern as API apps."""
-        try:
-            # Populate heartbeat context with current pipeline context
-            heartbeat_config["context"] = pipeline_context
-            agent_id = heartbeat_config.get("agent_id", "unknown")
-            standalone_mode = heartbeat_config.get("standalone_mode", False)
-
-            if standalone_mode:
-                self.logger.info(
-                    f"📝 MCP agent '{agent_id}' configured in standalone mode - no heartbeat"
-                )
-                return
-
-            self.logger.info(
-                f"🔗 Setting up background MCP heartbeat for agent '{agent_id}'"
-            )
-
-            # Import heartbeat functionality
-            import asyncio
-            import threading
-
-            from ..mcp_heartbeat.lifespan_integration import heartbeat_lifespan_task
-
-            def run_heartbeat():
-                """Run heartbeat in separate thread with its own event loop."""
-                self.logger.debug(
-                    f"Starting background heartbeat thread for {agent_id}"
-                )
-                try:
-                    # Create new event loop for this thread
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                    # Run heartbeat task
-                    loop.run_until_complete(heartbeat_lifespan_task(heartbeat_config))
-                except Exception as e:
-                    self.logger.error(f"❌ Background heartbeat error: {e}")
-                finally:
-                    loop.close()
-
-            # Start heartbeat in daemon thread (won't prevent process exit)
-            heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
-            heartbeat_thread.start()
-
-            self.logger.info(
-                f"💓 Background MCP heartbeat thread started for agent '{agent_id}'"
-            )
-
-        except Exception as e:
-            self.logger.warning(f"⚠️ Could not setup MCP heartbeat: {e}")
-            # Don't fail - heartbeat is optional for MCP agents
+            self.logger.warning(f"Could not setup {label} heartbeat: {e}")
 
     # Graceful shutdown is now handled by FastAPI lifespan in simple_shutdown.py
 
