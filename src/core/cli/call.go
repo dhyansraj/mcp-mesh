@@ -512,7 +512,11 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call agent at %s: %w", mcpURL, err)
+		return nil, fmt.Errorf("failed to call agent at %s: %w\n\n"+
+			"Hint: If you're running meshctl from outside Docker/Kubernetes, the agent\n"+
+			"hostname may not be reachable from your network.\n\n"+
+			"Try using --agent-url with the externally exposed endpoint:\n"+
+			"    meshctl call <tool_name> --agent-url http://localhost:<exposed_port>", mcpURL, err)
 	}
 	defer resp.Body.Close()
 
