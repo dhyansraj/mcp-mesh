@@ -885,8 +885,10 @@ class TestDebugLogging:
 
             result = wrapper("test_value")
 
-            # Check for debug log messages
-            assert "DEPENDENCY_WRAPPER: Function test_func called" in caplog.text
-            assert "DEPENDENCY_WRAPPER: args=('test_value',), kwargs={}" in caplog.text
-            assert "DEPENDENCY_WRAPPER: mesh_positions=[1]" in caplog.text
-            assert "DEPENDENCY_WRAPPER: dependencies=['dep1']" in caplog.text
+            # Check for debug log messages with args/result logging
+            assert "Tool 'test_func' called with kwargs=" in caplog.text
+            assert "Tool 'test_func' args:" in caplog.text
+            assert "Injected 1 dependencies:" in caplog.text
+            assert "dep1" in caplog.text
+            assert "Tool 'test_func' returned:" in caplog.text
+            assert "Tool 'test_func' result:" in caplog.text

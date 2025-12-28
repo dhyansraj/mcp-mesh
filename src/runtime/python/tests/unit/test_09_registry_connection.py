@@ -7,7 +7,7 @@ actual network connections.
 """
 
 import os
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -449,8 +449,10 @@ class TestLogging:
         mock_api_client_class.return_value = MagicMock()
         mock_wrapper_class.return_value = MagicMock()
 
-        # Set log level to capture INFO messages
-        caplog.set_level(logging.INFO)
+        # Set log level to capture TRACE messages (level 5)
+        from _mcp_mesh.shared.logging_config import TRACE
+
+        caplog.set_level(TRACE)
 
         result = await step.execute({})
 

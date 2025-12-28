@@ -64,7 +64,7 @@ class RegistryConnectionStep(PipelineStep):
             result.add_context("registry_wrapper", registry_wrapper)
 
             result.message = f"Connected to registry at {registry_url}"
-            self.logger.info(f"🔗 Registry connection established: {registry_url}")
+            self.logger.trace(f"🔗 Registry connection established: {registry_url}")
 
         except Exception as e:
             result.status = PipelineStatus.FAILED

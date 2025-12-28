@@ -10,6 +10,11 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
+from ..shared.logging_config import (
+    format_log_value,
+    format_result_summary,
+    get_trace_prefix,
+)
 from ..shared.sse_parser import SSEParser
 
 logger = logging.getLogger(__name__)
@@ -399,12 +404,22 @@ class UnifiedMCPProxy:
 
         start_time = time.time()
 
+        # Get trace prefix if available
+        tp = get_trace_prefix()
+
+        # Log cross-agent call - summary line
+        arg_keys = list(arguments.keys()) if arguments else []
+        self.logger.debug(
+            f"{tp}🔄 Cross-agent call: {self.endpoint}/{name} (timeout: {self.timeout}s, args={arg_keys})"
+        )
+        # Log full args (will be TRACE later)
+        self.logger.debug(
+            f"{tp}🔄 Cross-agent call args: {format_log_value(arguments)}"
+        )
+
         try:
             # Use correct FastMCP client endpoint - agents expose MCP on /mcp
             mcp_endpoint = f"{self.endpoint}/mcp"
-            self.logger.debug(f"🔄 Trying FastMCP client with endpoint: {mcp_endpoint}")
-
-            # Create client with automatic trace header injection
             client_instance = self._create_fastmcp_client(mcp_endpoint)
 
             async with client_instance as client:
@@ -437,8 +452,13 @@ class UnifiedMCPProxy:
                         "distributed_tracing": self.distributed_tracing_enabled,
                     }
 
+                # Log success - summary line
                 self.logger.info(
-                    f"✅ FastMCP tool call successful: {name} in {duration_ms}ms"
+                    f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
+                )
+                # Log full result (will be TRACE later)
+                self.logger.debug(
+                    f"{tp}🔄 Cross-agent call result: {format_log_value(converted_result)}"
                 )
                 return converted_result
 

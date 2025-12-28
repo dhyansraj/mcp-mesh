@@ -68,7 +68,7 @@ class HeartbeatOrchestrator:
             self._log_heartbeat_request(heartbeat_context, self._heartbeat_count)
 
             # Execute heartbeat pipeline with timeout protection
-            self.logger.info(
+            self.logger.trace(
                 f"💓 Executing heartbeat #{self._heartbeat_count} for agent '{agent_id}'"
             )
 
@@ -260,7 +260,7 @@ class HeartbeatOrchestrator:
                 fast_heartbeat_status
             ):
                 # Fast heartbeat optimization - no changes detected
-                self.logger.info(
+                self.logger.debug(
                     f"🚀 Heartbeat #{heartbeat_count} optimized for agent '{agent_id}' - no changes detected"
                 )
                 return True
