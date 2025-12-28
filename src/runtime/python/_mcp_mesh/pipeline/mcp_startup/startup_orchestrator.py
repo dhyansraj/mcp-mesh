@@ -120,11 +120,15 @@ class DebounceCoordinator:
 
     def _execute_processing(self) -> None:
         """Execute the processing (called by timer)."""
-        try:
+        # Copy orchestrator reference under lock to prevent race with cleanup()
+        with self._lock:
+            orchestrator = self._orchestrator
 
-            if self._orchestrator is None:
-                self.logger.error("❌ No orchestrator set for processing")
-                return
+        if orchestrator is None:
+            self.logger.error("❌ No orchestrator set for processing")
+            return
+
+        try:
 
             self.logger.info(
                 f"🚀 Debounce delay ({self.delay_seconds}s) complete, processing all decorators"
@@ -160,10 +164,10 @@ class DebounceCoordinator:
                 # Execute appropriate pipeline based on type
                 if pipeline_type == "mcp":
                     # Phase 1: Run async MCP pipeline setup
-                    result = asyncio.run(self._orchestrator.process_once())
+                    result = asyncio.run(orchestrator.process_once())
                 elif pipeline_type == "api":
                     # Phase 1: Run async API pipeline setup
-                    result = asyncio.run(self._orchestrator.process_api_once())
+                    result = asyncio.run(orchestrator.process_api_once())
                 else:
                     raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
 
@@ -268,9 +272,9 @@ class DebounceCoordinator:
                 self.logger.info("🏁 Auto-run disabled - single execution mode")
 
                 if pipeline_type == "mcp":
-                    result = asyncio.run(self._orchestrator.process_once())
+                    result = asyncio.run(orchestrator.process_once())
                 elif pipeline_type == "api":
-                    result = asyncio.run(self._orchestrator.process_api_once())
+                    result = asyncio.run(orchestrator.process_api_once())
                 else:
                     raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
 
