@@ -119,54 +119,34 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 f"⚠️ IMMEDIATE UVICORN: Failed to add trace context middleware: {e}"
             )
 
-        # Add health endpoint that can be updated by pipeline
-        # Store health check result in a shared location that can be updated
-        health_result = {"status": "starting", "message": "Agent is starting"}
+        # Add K8s health endpoints using health_check_manager
+        from _mcp_mesh.shared.health_check_manager import (
+            build_health_response,
+            build_livez_response,
+            build_ready_response,
+        )
 
         @app.get("/health")
         @app.head("/health")
         async def health(response: Response):
             """Health check endpoint that supports custom health checks."""
-            # Check if a custom health check has been configured
-            # The pipeline will update this via DecoratorRegistry
-            custom_health = DecoratorRegistry.get_health_check_result()
-            health_data = custom_health if custom_health else health_result
-
-            # Set HTTP status code based on health status
-            # K8s expects non-200 status for unhealthy services
-            status = health_data.get("status", "starting")
-            if status == "healthy":
-                response.status_code = 200
-            else:
-                # Return 503 for unhealthy, degraded, starting, or unknown
-                response.status_code = 503
-
-            return health_data
+            data, status_code = build_health_response(agent_name="mcp-mesh-agent")
+            response.status_code = status_code
+            return data
 
         @app.get("/ready")
         @app.head("/ready")
         async def ready(response: Response):
             """Kubernetes readiness probe - service ready to serve traffic."""
-            custom_health = DecoratorRegistry.get_health_check_result()
-            health_data = custom_health if custom_health else health_result
-
-            status = health_data.get("status", "starting")
-            if status == "healthy":
-                response.status_code = 200
-                return {"ready": True, "status": status}
-            else:
-                response.status_code = 503
-                return {
-                    "ready": False,
-                    "status": status,
-                    "reason": f"Service is {status}",
-                }
+            data, status_code = build_ready_response(agent_name="mcp-mesh-agent")
+            response.status_code = status_code
+            return data
 
         @app.get("/livez")
         @app.head("/livez")
         async def livez():
             """Kubernetes liveness probe - always returns 200 if app is running."""
-            return {"alive": True, "message": "Application is running"}
+            return build_livez_response(agent_name="mcp-mesh-agent")
 
         @app.get("/immediate-status")
         def immediate_status():

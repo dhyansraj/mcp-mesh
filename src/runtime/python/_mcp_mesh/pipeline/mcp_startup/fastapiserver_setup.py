@@ -236,9 +236,11 @@ class FastAPIServerSetupStep(PipelineStep):
         try:
             from fastapi import FastAPI
 
-            from .lifespan_factory import (create_minimal_lifespan,
-                                           create_multiple_fastmcp_lifespan,
-                                           create_single_fastmcp_lifespan)
+            from .lifespan_factory import (
+                create_minimal_lifespan,
+                create_multiple_fastmcp_lifespan,
+                create_single_fastmcp_lifespan,
+            )
 
             agent_name = agent_config.get("name", "mcp-mesh-agent")
             agent_description = agent_config.get(
@@ -328,8 +330,7 @@ class FastAPIServerSetupStep(PipelineStep):
             if health_check_fn:
                 # Use health check cache if configured
                 from ...engine.decorator_registry import DecoratorRegistry
-                from ...shared.health_check_cache import \
-                    get_health_status_with_cache
+                from ...shared.health_check_manager import get_health_status_with_cache
 
                 health_status = await get_health_status_with_cache(
                     agent_id=agent_name,
@@ -364,63 +365,8 @@ class FastAPIServerSetupStep(PipelineStep):
 
         await update_health_result()
 
-        # Note: /health endpoint is already registered by immediate uvicorn
-        # It will call DecoratorRegistry.get_health_check_result() to get this data
-
-        @app.get("/ready")
-        @app.head("/ready")
-        async def ready(response: Response):
-            """
-            Readiness check for Kubernetes.
-
-            Returns 200 when the service is ready to serve traffic.
-            Returns 503 when unhealthy - K8s will remove pod from service endpoints.
-            """
-            # Get health check result if available
-            from ...engine.decorator_registry import DecoratorRegistry
-
-            custom_health = DecoratorRegistry.get_health_check_result()
-
-            if custom_health:
-                status = custom_health.get("status", "starting")
-                if status == "healthy":
-                    response.status_code = 200
-                    return {
-                        "ready": True,
-                        "agent": agent_name,
-                        "status": status,
-                        "mcp_wrappers": len(mcp_wrappers),
-                        "timestamp": self._get_timestamp(),
-                    }
-                else:
-                    # Not ready to serve traffic
-                    response.status_code = 503
-                    return {
-                        "ready": False,
-                        "agent": agent_name,
-                        "status": status,
-                        "reason": f"Service is {status}",
-                        "errors": custom_health.get("errors", []),
-                    }
-            else:
-                # No custom health check - assume ready
-                response.status_code = 200
-                return {
-                    "ready": True,
-                    "agent": agent_name,
-                    "mcp_wrappers": len(mcp_wrappers),
-                    "timestamp": self._get_timestamp(),
-                }
-
-        @app.get("/livez")
-        @app.head("/livez")
-        async def livez():
-            """Liveness check for Kubernetes."""
-            return {
-                "alive": True,
-                "agent": agent_name,
-                "timestamp": self._get_timestamp(),
-            }
+        # Note: /health, /ready, /livez endpoints are registered by immediate uvicorn
+        # in decorators.py. They use health_check_manager to get stored health data.
 
         @app.get("/metrics")
         async def metrics():
