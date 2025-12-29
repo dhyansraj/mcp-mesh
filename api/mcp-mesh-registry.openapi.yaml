@@ -271,6 +271,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  # Note: /proxy/{target} endpoint is implemented as an operational endpoint
+  # (not in OpenAPI) because it requires wildcard path matching which OpenAPI
+  # path parameters don't support. See server.go setupOperationalEndpoints().
+
 components:
   schemas:
     # New flattened mesh agent schemas

@@ -61,11 +61,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		tracingManager: tracingManager,
 	}
 
+	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
+	server.setupOperationalEndpoints()
+
 	// Setup routes using generated interface
 	server.SetupGeneratedRoutes()
-
-	// Add operational endpoints (not part of OpenAPI spec)
-	server.setupOperationalEndpoints()
 
 	return server
 }
@@ -125,16 +125,21 @@ func (s *Server) SetupGeneratedRoutes() {
 // setupOperationalEndpoints adds operational endpoints not part of the OpenAPI spec
 func (s *Server) setupOperationalEndpoints() {
 	// Note: /health is already defined in OpenAPI spec, so we use different paths
-	
+
+	// Proxy endpoints - need wildcard routes since OpenAPI :target only captures one segment
+	// These override the generated single-segment routes to capture multi-segment paths
+	s.engine.POST("/proxy/*target", s.handleProxyRequest)
+	s.engine.GET("/proxy/*target", s.handleProxyGetRequest)
+
 	// Tracing status endpoint
 	s.engine.GET("/trace/status", s.handleTracingStatus)
-	
-	// Tracing stats endpoint  
+
+	// Tracing stats endpoint
 	s.engine.GET("/trace/stats", s.handleTracingStats)
-	
+
 	// Tracing manager info endpoint
 	s.engine.GET("/trace/info", s.handleTracingInfo)
-	
+
 	// Trace query endpoints
 	s.engine.GET("/trace/list", s.handleTraceList)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
@@ -151,7 +156,7 @@ func (s *Server) handleTracingInfo(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	info := s.tracingManager.GetInfo()
 	c.JSON(200, info)
 }
@@ -165,7 +170,7 @@ func (s *Server) handleTracingStatus(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	status := s.tracingManager.GetInfo()
 	c.JSON(200, status)
 }
@@ -179,7 +184,7 @@ func (s *Server) handleTracingStats(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	stats := s.tracingManager.GetStats()
 	if stats == nil {
 		c.JSON(200, map[string]interface{}{
@@ -189,7 +194,7 @@ func (s *Server) handleTracingStats(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(200, stats)
 }
 
@@ -262,6 +267,26 @@ func (s *Server) handleTraceGet(c *gin.Context) {
 	}
 
 	c.JSON(200, trace)
+}
+
+// handleProxyRequest handles POST /proxy/*target (wildcard path for multi-segment targets)
+func (s *Server) handleProxyRequest(c *gin.Context) {
+	target := c.Param("target")
+	// Gin wildcard captures with leading slash, remove it
+	if len(target) > 0 && target[0] == '/' {
+		target = target[1:]
+	}
+	s.handlers.ProxyMcpRequest(c, target)
+}
+
+// handleProxyGetRequest handles GET /proxy/*target (wildcard path for multi-segment targets)
+func (s *Server) handleProxyGetRequest(c *gin.Context) {
+	target := c.Param("target")
+	// Gin wildcard captures with leading slash, remove it
+	if len(target) > 0 && target[0] == '/' {
+		target = target[1:]
+	}
+	s.handlers.ProxyMcpGetRequest(c, target)
 }
 
 // handleTraceSearch searches traces based on criteria

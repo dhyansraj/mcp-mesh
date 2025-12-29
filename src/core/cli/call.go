@@ -46,13 +46,16 @@ func NewCallCommand() *cobra.Command {
 The command discovers the agent endpoint via the registry and makes the MCP call
 with proper headers. Arguments can be provided as JSON string or via --file flag.
 
+By default, calls are routed through the registry proxy. This allows external access
+to agents running in Docker/Kubernetes without exposing individual agent ports.
+
 Examples:
-  meshctl call hello_mesh_simple                          # Call tool, discover agent via registry
+  meshctl call hello_mesh_simple                          # Call tool via registry proxy (default)
   meshctl call weather-agent:get_weather                  # Specify agent explicitly
   meshctl call calculator:add '{"a": 1, "b": 2}'          # With JSON arguments
   meshctl call analyzer:process --file data.json          # Arguments from file
   meshctl call hello_mesh --registry-url http://remote:8000  # Remote registry
-  meshctl call hello_mesh --registry-scheme https --insecure # HTTPS with self-signed cert
+  meshctl call hello_mesh --use-proxy=false               # Call agent directly (requires direct network access)
   meshctl call hello_mesh --agent-url http://localhost:8080  # Direct agent call (skip registry)
 
 Ingress mode (for Kubernetes clusters with ingress configured):
@@ -80,6 +83,9 @@ Ingress mode (for Kubernetes clusters with ingress configured):
 
 	// Direct agent connection (bypasses registry lookup for agent endpoint)
 	cmd.Flags().String("agent-url", "", "Agent URL to call directly (bypasses registry endpoint lookup)")
+
+	// Proxy mode (routes through registry, useful for external access)
+	cmd.Flags().Bool("use-proxy", true, "Route calls through registry proxy (default: true, disable with --use-proxy=false)")
 
 	// Ingress mode flags (for Kubernetes clusters with ingress)
 	cmd.Flags().String("ingress-domain", "", "Ingress domain (e.g., mcp-mesh.local) - enables ingress mode")
@@ -132,6 +138,7 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	agentURL, _ := cmd.Flags().GetString("agent-url")
 	ingressDomain, _ := cmd.Flags().GetString("ingress-domain")
 	ingressURL, _ := cmd.Flags().GetString("ingress-url")
+	useProxy, _ := cmd.Flags().GetBool("use-proxy")
 
 	// Create HTTP client with TLS config
 	httpClient := createHTTPClient(timeout, insecure)
@@ -163,6 +170,17 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 		agentEndpoint, err = findAgentWithTool(httpClient, finalRegistryURL, agentName, toolName)
 		if err != nil {
 			return fmt.Errorf("failed to find agent: %w", err)
+		}
+
+		// If using proxy mode, route through registry instead of calling agent directly
+		if useProxy {
+			// Extract host:port from agent endpoint
+			// Format: http://hello-world-agent:8080 -> hello-world-agent:8080
+			agentHostPort := strings.TrimPrefix(agentEndpoint, "http://")
+			agentHostPort = strings.TrimPrefix(agentHostPort, "https://")
+
+			// Build proxy URL: {registry}/proxy/{host:port}/mcp
+			agentEndpoint = fmt.Sprintf("%s/proxy/%s", finalRegistryURL, agentHostPort)
 		}
 	}
 
@@ -513,10 +531,11 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call agent at %s: %w\n\n"+
-			"Hint: If you're running meshctl from outside Docker/Kubernetes, the agent\n"+
-			"hostname may not be reachable from your network.\n\n"+
-			"Try using --agent-url with the externally exposed endpoint:\n"+
-			"    meshctl call <tool_name> --agent-url http://localhost:<exposed_port>", mcpURL, err)
+			"Hint: If you're running meshctl from outside Docker/Kubernetes and proxy mode\n"+
+			"is disabled, the agent hostname may not be reachable from your network.\n\n"+
+			"Options:\n"+
+			"  - Use proxy mode (default): meshctl call <tool_name>\n"+
+			"  - Use direct agent URL: meshctl call <tool_name> --use-proxy=false --agent-url http://localhost:<exposed_port>", mcpURL, err)
 	}
 	defer resp.Body.Close()
 
