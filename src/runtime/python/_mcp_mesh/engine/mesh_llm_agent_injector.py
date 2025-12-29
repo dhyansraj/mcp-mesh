@@ -537,6 +537,30 @@ class MeshLlmAgentInjector(BaseInjector):
         is_template = config_dict.get("is_template", False)
         template_path = config_dict.get("template_path")
 
+        # Extract model params (everything except internal config keys)
+        # These are passed through to LiteLLM (e.g., max_tokens, temperature)
+        INTERNAL_CONFIG_KEYS = {
+            "filter",
+            "filter_mode",
+            "provider",
+            "model",
+            "api_key",
+            "max_iterations",
+            "system_prompt",
+            "system_prompt_file",
+            "is_template",
+            "template_path",
+            "context_param",
+            "output_mode",
+        }
+        default_model_params = {
+            k: v for k, v in config_dict.items() if k not in INTERNAL_CONFIG_KEYS
+        }
+        if default_model_params:
+            logger.debug(
+                f"🔧 Extracted default model params for {function_id}: {list(default_model_params.keys())}"
+            )
+
         # Determine vendor for provider handler selection
         # Priority: 1) From registry (mesh delegation), 2) From model name, 3) None
         vendor = llm_agent_data.get("vendor")
@@ -564,6 +588,7 @@ class MeshLlmAgentInjector(BaseInjector):
                 "provider_proxy"
             ),  # Provider proxy for mesh delegation
             vendor=vendor,  # Vendor for provider handler selection (from registry or model name)
+            default_model_params=default_model_params,  # Decorator-level LLM params
         )
 
         logger.debug(
@@ -572,6 +597,11 @@ class MeshLlmAgentInjector(BaseInjector):
             + (
                 f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}"
                 if isinstance(config_dict.get("provider"), dict)
+                else ""
+            )
+            + (
+                f", model_params={list(default_model_params.keys())}"
+                if default_model_params
                 else ""
             )
         )
