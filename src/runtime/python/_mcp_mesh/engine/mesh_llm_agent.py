@@ -67,6 +67,7 @@ class MeshLlmAgent:
         context_value: Optional[Any] = None,
         provider_proxy: Optional[Any] = None,
         vendor: Optional[str] = None,
+        default_model_params: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize MeshLlmAgent proxy.
@@ -80,6 +81,9 @@ class MeshLlmAgent:
             context_value: Optional context for template rendering (MeshContextModel, dict, or None)
             provider_proxy: Optional pre-resolved provider proxy for mesh delegation
             vendor: Optional vendor name for handler selection (e.g., "anthropic", "openai")
+            default_model_params: Optional dict of default LLM parameters from decorator
+                                  (e.g., max_tokens, temperature). These are merged with
+                                  call-time kwargs, with call-time taking precedence.
         """
         self.config = config
         self.provider = config.provider
@@ -92,6 +96,9 @@ class MeshLlmAgent:
         self.system_prompt = config.system_prompt  # Public attribute for tests
         self.output_mode = config.output_mode  # Output mode override (strict/hint/text)
         self._iteration_count = 0
+        self._default_model_params = (
+            default_model_params or {}
+        )  # Decorator-level defaults
 
         # Detect if using mesh delegation (provider is dict)
         self._is_mesh_delegated = isinstance(self.provider, dict)
@@ -583,11 +590,15 @@ IMPORTANT TOOL CALLING RULES:
             try:
                 # Call LLM (either direct LiteLLM or mesh-delegated)
                 try:
+                    # Merge decorator-level defaults with call-time kwargs
+                    # Call-time kwargs take precedence over defaults
+                    effective_kwargs = {**self._default_model_params, **kwargs}
+
                     # Build kwargs with output_mode override if set
                     call_kwargs = (
-                        {**kwargs, "output_mode": self.output_mode}
+                        {**effective_kwargs, "output_mode": self.output_mode}
                         if self.output_mode
-                        else kwargs
+                        else effective_kwargs
                     )
 
                     # Use provider handler to prepare vendor-specific request
