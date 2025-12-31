@@ -39,8 +39,12 @@ func NewListCommand() *cobra.Command {
 Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
+By default, only healthy agents are shown. Use --all to see all agents
+including unhealthy/expired ones.
+
 Examples:
-  meshctl list                                    # Show beautiful table with all agents
+  meshctl list                                    # Show healthy agents only (default)
+  meshctl list --all                              # Show all agents including unhealthy
   meshctl list --json                             # Output in JSON format
   meshctl list --filter hello                     # Filter agents by name pattern
   meshctl list --no-deps                          # Hide dependency status
@@ -66,8 +70,7 @@ Tools listing:
 
 	// New enhanced filtering and display options
 	cmd.Flags().String("since", "", "Show agents active since duration (e.g., 1h, 30m, 24h)")
-	cmd.Flags().Bool("healthy-only", false, "Show only healthy agents")
-	cmd.Flags().String("id", "", "Show detailed information for specific agent ID")
+	cmd.Flags().Bool("all", false, "Show all agents including unhealthy/expired (default: healthy only)")
 
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
@@ -94,12 +97,14 @@ type ListOutput struct {
 
 // RegistryStatus represents registry status information
 type RegistryStatus struct {
-	Status     string    `json:"status"`
-	URL        string    `json:"url,omitempty"`
-	AgentCount int       `json:"agent_count,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Uptime     string    `json:"uptime,omitempty"`
-	StartTime  time.Time `json:"start_time,omitempty"`
+	Status         string    `json:"status"`
+	URL            string    `json:"url,omitempty"`
+	AgentCount     int       `json:"agent_count,omitempty"`
+	HealthyCount   int       `json:"healthy_count,omitempty"`
+	UnhealthyCount int       `json:"unhealthy_count,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	Uptime         string    `json:"uptime,omitempty"`
+	StartTime      time.Time `json:"start_time,omitempty"`
 }
 
 // EnhancedAgent contains comprehensive agent information for display
@@ -221,8 +226,7 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// New enhanced flags
 	sinceFlag, _ := cmd.Flags().GetString("since")
-	healthyOnly, _ := cmd.Flags().GetBool("healthy-only")
-	agentID, _ := cmd.Flags().GetString("id")
+	showAll, _ := cmd.Flags().GetBool("all")
 
 	// Tools listing flag
 	toolsFlag, _ := cmd.Flags().GetString("tools")
@@ -244,7 +248,7 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// Handle tools listing mode
 	if toolsFlagChanged {
-		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, healthyOnly)
+		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, !showAll)
 	}
 
 	// Collect all information
@@ -279,11 +283,6 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = enrichWithProcessInfo(output.Agents, processes)
 	}
 
-	// Handle single agent details view
-	if agentID != "" {
-		return outputAgentDetails(output.Agents, agentID, jsonOutput)
-	}
-
 	// Apply filters
 	if filterPattern != "" {
 		output.Agents = filterEnhancedAgents(output.Agents, filterPattern)
@@ -298,8 +297,8 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = filtered
 	}
 
-	// Apply healthy-only filter
-	if healthyOnly {
+	// Apply healthy-only filter by default (unless --all is specified)
+	if !showAll {
 		output.Agents = filterHealthyAgents(output.Agents)
 	}
 
@@ -333,9 +332,17 @@ func getRegistryStatus(registryURL string) RegistryStatus {
 			}
 		}
 
-		// Get agent count
+		// Get agent count with healthy/unhealthy breakdown
 		if agents, err := getDetailedAgents(registryURL); err == nil {
 			status.AgentCount = len(agents)
+			for _, agent := range agents {
+				agentStatus := strings.ToLower(getString(agent, "status"))
+				if agentStatus == "healthy" || agentStatus == "running" {
+					status.HealthyCount++
+				} else {
+					status.UnhealthyCount++
+				}
+			}
 		}
 	}
 
@@ -979,8 +986,12 @@ func showRegistryStatus(registry RegistryStatus) {
 		fmt.Printf(" (%s)", registry.URL)
 	}
 
-	if registry.Status == "running" && registry.AgentCount > 0 {
-		fmt.Printf(" - %d agents", registry.AgentCount)
+	if registry.Status == "running" {
+		// Show healthy/unhealthy breakdown
+		fmt.Printf(" - %s%d healthy%s", colorGreen, registry.HealthyCount, colorReset)
+		if registry.UnhealthyCount > 0 {
+			fmt.Printf(", %s%d unhealthy/expired%s", colorGray, registry.UnhealthyCount, colorReset)
+		}
 	}
 
 	if registry.Uptime != "" {
@@ -1364,7 +1375,7 @@ func filterHealthyAgents(agents []EnhancedAgent) []EnhancedAgent {
 func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool) error {
 	var targetAgent *EnhancedAgent
 
-	// Find the requested agent
+	// Find the requested agent by ID
 	for _, agent := range agents {
 		if agent.ID == agentID {
 			targetAgent = &agent
@@ -1373,7 +1384,7 @@ func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool)
 	}
 
 	if targetAgent == nil {
-		return fmt.Errorf("agent with ID '%s' not found", agentID)
+		return fmt.Errorf("agent '%s' not found", agentID)
 	}
 
 	if jsonOutput {
@@ -1846,7 +1857,7 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly b
 	}
 
 	// Get detailed tool information from agent
-	return outputToolDetails(matchedTool, matchedAgent, jsonOutput)
+	return outputToolDetails(matchedTool, matchedAgent, registryURL, jsonOutput)
 }
 
 // parseToolSpec parses "agent:tool" or "tool" format
@@ -1945,17 +1956,17 @@ type MCPPropertySchema struct {
 
 // MCPToolInfo represents tool info from tools/list response
 type MCPToolInfo struct {
-	Name        string        `json:"name"`
-	Description string        `json:"description,omitempty"`
-	InputSchema MCPToolSchema `json:"inputSchema"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	InputSchema interface{} `json:"inputSchema"` // Raw JSON schema for accurate display
 }
 
 // outputToolDetails outputs detailed information for a specific tool
-func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, jsonOutput bool) error {
-	// Try to get detailed tool info from agent via MCP tools/list
+func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, registryURL string, jsonOutput bool) error {
+	// Try to get detailed tool info from agent via MCP tools/list (through registry proxy)
 	var mcpTool *MCPToolInfo
 	if agent != nil && agent.Endpoint != "" {
-		mcpTool = getToolDetailsFromAgent(agent.Endpoint, tool.ToolName)
+		mcpTool = getToolDetailsFromAgent(agent.Endpoint, tool.ToolName, registryURL)
 	}
 
 	if jsonOutput {
@@ -1994,41 +2005,29 @@ func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, jsonOutput bool
 		fmt.Printf("Tags: %s\n", tool.Tags)
 	}
 
-	// Print input schema
+	// Print input schema as raw JSON
 	fmt.Printf("\n%sInput Schema:%s\n", colorBlue, colorReset)
-	if mcpTool != nil && len(mcpTool.InputSchema.Properties) > 0 {
-		for propName, prop := range mcpTool.InputSchema.Properties {
-			required := ""
-			for _, req := range mcpTool.InputSchema.Required {
-				if req == propName {
-					required = ", required"
-					break
-				}
-			}
-			fmt.Printf("  %s (%s%s)", propName, prop.Type, required)
-			if prop.Description != "" {
-				fmt.Printf(": %s", prop.Description)
-			}
-			fmt.Println()
+	if mcpTool != nil && mcpTool.InputSchema != nil {
+		schemaJSON, err := json.MarshalIndent(mcpTool.InputSchema, "  ", "  ")
+		if err == nil {
+			fmt.Printf("  %s\n", string(schemaJSON))
+		} else {
+			fmt.Println("  (failed to format schema)")
 		}
 	} else {
-		fmt.Println("  (no parameters required)")
+		fmt.Println("  (no schema available)")
 	}
 
-	// Print example
+	// Print example usage
 	fmt.Printf("\n%sExample:%s\n", colorBlue, colorReset)
-	if mcpTool != nil && len(mcpTool.InputSchema.Properties) > 0 {
-		exampleArgs := buildExampleArgs(mcpTool.InputSchema)
-		fmt.Printf("  meshctl call %s '%s'\n", tool.ToolName, exampleArgs)
-	} else {
-		fmt.Printf("  meshctl call %s\n", tool.ToolName)
-	}
+	fmt.Printf("  meshctl call %s '<json-args>'\n", tool.ToolName)
 
 	return nil
 }
 
 // getToolDetailsFromAgent fetches tool details from the agent via MCP tools/list
-func getToolDetailsFromAgent(endpoint, toolName string) *MCPToolInfo {
+// Routes through registry proxy to reach agents in Docker/K8s networks
+func getToolDetailsFromAgent(endpoint, toolName, registryURL string) *MCPToolInfo {
 	// Build MCP request for tools/list
 	mcpReq := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -2042,8 +2041,11 @@ func getToolDetailsFromAgent(endpoint, toolName string) *MCPToolInfo {
 		return nil
 	}
 
-	// Make request
-	mcpURL := strings.TrimSuffix(endpoint, "/") + "/mcp"
+	// Route through registry proxy (same as meshctl call --use-proxy)
+	agentHostPort := strings.TrimPrefix(endpoint, "http://")
+	agentHostPort = strings.TrimPrefix(agentHostPort, "https://")
+	mcpURL := fmt.Sprintf("%s/proxy/%s/mcp", strings.TrimSuffix(registryURL, "/"), agentHostPort)
+
 	req, err := http.NewRequest("POST", mcpURL, strings.NewReader(string(reqBody)))
 	if err != nil {
 		return nil
