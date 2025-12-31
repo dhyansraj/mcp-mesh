@@ -4,12 +4,12 @@
 
 ## Quick Reference
 
-| Command | Purpose |
-|---------|---------|
-| `meshctl call` | Invoke a tool on any agent |
-| `meshctl list` | Show running agents |
-| `meshctl list --tools` | List all available tools |
-| `meshctl status` | Check mesh health |
+| Command                | Purpose                    |
+| ---------------------- | -------------------------- |
+| `meshctl call`         | Invoke a tool on any agent |
+| `meshctl list`         | Show healthy agents        |
+| `meshctl list --tools` | List all available tools   |
+| `meshctl status`       | Show agent wiring details  |
 
 ## Calling Tools
 
@@ -33,8 +33,11 @@ meshctl call hello_mesh --agent-url http://localhost:8080
 ## Listing Agents and Tools
 
 ```bash
-# Show all running agents
+# Show healthy agents (default)
 meshctl list
+
+# Show all agents including unhealthy/expired
+meshctl list --all
 
 # Wide view with endpoints and tool counts
 meshctl list --wide
@@ -42,23 +45,23 @@ meshctl list --wide
 # Filter by name
 meshctl list --filter hello
 
-# List all tools across all agents
+# List tools from healthy agents
 meshctl list --tools
 
-# Show specific tool's schema
+# Show tool's input schema
 meshctl list --tools=get_current_time
 ```
 
 ## Checking Status
 
 ```bash
-# Basic status
+# Show all healthy agents' wiring
 meshctl status
 
-# Detailed information
-meshctl status --verbose
+# Show specific agent details
+meshctl status hello-world-5395c5e4
 
-# JSON output for scripting
+# JSON output
 meshctl status --json
 ```
 
@@ -74,15 +77,15 @@ meshctl status --registry-url http://remote:8000
 
 ## Docker Compose (from host machine)
 
-Agents in Docker Compose register with container hostnames. To call from your host:
+Calls route through registry proxy by default, reaching agents via container hostnames:
 
 ```bash
-# Use --agent-url with mapped localhost port
-meshctl call greet --agent-url http://localhost:9001
-meshctl call calculator:add '{"a": 1, "b": 2}' --agent-url http://localhost:9002
+# Calls route through registry proxy (default)
+meshctl call greet
+meshctl call calculator:add '{"a": 1, "b": 2}'
 
-# Find mapped ports
-docker compose ps
+# Direct call bypassing proxy
+meshctl call greet --agent-url http://localhost:9001 --use-proxy=false
 ```
 
 ## Kubernetes (with ingress)

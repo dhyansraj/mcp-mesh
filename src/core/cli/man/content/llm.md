@@ -28,16 +28,38 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
 
 ## Parameters
 
-| Parameter         | Type | Description                                       |
-| ----------------- | ---- | ------------------------------------------------- |
-| `provider`        | dict | LLM provider selector (capability + tags)         |
-| `max_iterations`  | int  | Max agentic loop iterations (default: 1)          |
-| `system_prompt`   | str  | Inline prompt or `file://path` to Jinja2 template |
-| `context_param`   | str  | Parameter name receiving context object           |
-| `filter`          | list | Tool filter criteria                              |
-| `filter_mode`     | str  | `"all"`, `"best_match"`, or `"*"`                 |
+| Parameter        | Type | Description                                       |
+| ---------------- | ---- | ------------------------------------------------- |
+| `provider`       | dict | LLM provider selector (capability + tags)         |
+| `max_iterations` | int  | Max agentic loop iterations (default: 1)          |
+| `system_prompt`  | str  | Inline prompt or `file://path` to Jinja2 template |
+| `context_param`  | str  | Parameter name receiving context object           |
+| `filter`         | list | Tool filter criteria                              |
+| `filter_mode`    | str  | `"all"`, `"best_match"`, or `"*"`                 |
+| `<llm_params>`   | any  | LiteLLM params (max_tokens, temperature, etc.)    |
 
 **Note**: Response format is determined by the function's return type annotation, not a parameter. See [Response Formats](#response-formats).
+
+## LLM Model Parameters
+
+Pass any LiteLLM parameter in the decorator as defaults:
+
+```python
+@mesh.llm(
+    provider={"capability": "llm"},
+    max_tokens=16000,
+    temperature=0.7,
+    top_p=0.9,
+)
+def assist(ctx, llm = None):
+    # Uses decorator defaults
+    return llm("Help the user")
+
+    # Override at call time
+    return llm("Help", max_tokens=8000)
+```
+
+Call-time parameters take precedence over decorator defaults.
 
 ## LLM Provider Selection
 
@@ -162,10 +184,10 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
 
 Response format is determined by the **return type annotation** - not a decorator parameter.
 
-| Return Type      | Output         | Description                    |
-| ---------------- | -------------- | ------------------------------ |
-| `-> str`         | Plain text     | LLM returns unstructured text  |
-| `-> PydanticModel` | Structured JSON | LLM returns validated object |
+| Return Type        | Output          | Description                   |
+| ------------------ | --------------- | ----------------------------- |
+| `-> str`           | Plain text      | LLM returns unstructured text |
+| `-> PydanticModel` | Structured JSON | LLM returns validated object  |
 
 ### Text Response
 
