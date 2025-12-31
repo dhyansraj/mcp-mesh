@@ -611,7 +611,7 @@ IMPORTANT TOOL CALLING RULES:
 
                     if self._is_mesh_delegated:
                         # Mesh delegation: extract model_params to send to provider
-                        # Exclude messages/tools (separate params), model/api_key (provider has them),
+                        # Exclude messages/tools (separate params), api_key (provider has it),
                         # and output_mode (only used locally by prepare_request)
                         model_params = {
                             k: v
@@ -620,11 +620,17 @@ IMPORTANT TOOL CALLING RULES:
                             not in [
                                 "messages",
                                 "tools",
-                                "model",
                                 "api_key",
                                 "output_mode",
+                                "model",  # Model handled separately below
                             ]
                         }
+
+                        # Issue #308: Include model override if explicitly set by consumer
+                        # This allows consumer to request a specific model from the provider
+                        # (e.g., use haiku instead of provider's default sonnet)
+                        if self.model:
+                            model_params["model"] = self.model
 
                         logger.debug(
                             f"📤 Delegating to mesh provider with handler-prepared params: "

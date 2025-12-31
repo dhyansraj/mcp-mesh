@@ -11,6 +11,34 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _extract_vendor_from_model(model: str) -> str | None:
+    """
+    Extract vendor name from LiteLLM model string.
+
+    LiteLLM uses vendor/model format (e.g., "anthropic/claude-sonnet-4-5").
+    This extracts the vendor for provider handler selection.
+
+    Args:
+        model: LiteLLM model string
+
+    Returns:
+        Vendor name (e.g., "anthropic", "openai") or None if not extractable
+
+    Examples:
+        "anthropic/claude-sonnet-4-5" -> "anthropic"
+        "openai/gpt-4o" -> "openai"
+        "gpt-4" -> None (no vendor prefix)
+    """
+    if not model:
+        return None
+
+    if "/" in model:
+        vendor = model.split("/")[0].lower().strip()
+        return vendor
+
+    return None
+
+
 def llm_provider(
     model: str,
     capability: str = "llm",
@@ -154,9 +182,39 @@ def llm_provider(
             """
             import litellm
 
+            # Determine effective model (check for consumer override - issue #308)
+            effective_model = model  # Default to provider's model
+            model_params_copy = (
+                dict(request.model_params) if request.model_params else {}
+            )
+
+            if "model" in model_params_copy:
+                override_model = model_params_copy.pop(
+                    "model"
+                )  # Remove to avoid duplication
+
+                if override_model:
+                    # Validate vendor compatibility
+                    override_vendor = _extract_vendor_from_model(override_model)
+
+                    if override_vendor and override_vendor != vendor:
+                        # Vendor mismatch - log warning and fall back to provider's model
+                        logger.warning(
+                            f"⚠️ Model override '{override_model}' ignored - vendor mismatch "
+                            f"(override vendor: '{override_vendor}', provider vendor: '{vendor}'). "
+                            f"Using provider's default model: '{model}'"
+                        )
+                    else:
+                        # Vendor matches or can't be determined - use override
+                        effective_model = override_model
+                        logger.info(
+                            f"🔄 Using model override '{effective_model}' "
+                            f"(requested by consumer)"
+                        )
+
             # Build litellm.completion arguments
             completion_args: dict[str, Any] = {
-                "model": model,
+                "model": effective_model,
                 "messages": request.messages,
                 **litellm_kwargs,
             }
@@ -165,8 +223,8 @@ def llm_provider(
             if request.tools:
                 completion_args["tools"] = request.tools
 
-            if request.model_params:
-                completion_args.update(request.model_params)
+            if model_params_copy:
+                completion_args.update(model_params_copy)
 
             # Call LiteLLM
             try:
@@ -221,7 +279,7 @@ def llm_provider(
 
                 logger.info(
                     f"LLM provider {func.__name__} processed request "
-                    f"(model={model}, messages={len(request.messages)}, "
+                    f"(model={effective_model}, messages={len(request.messages)}, "
                     f"tool_calls={len(message_dict.get('tool_calls', []))})"
                 )
 
