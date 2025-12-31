@@ -12,17 +12,18 @@ import (
 // NewStatusCommand creates the status command
 func NewStatusCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "status [agent-id]",
 		Short: "Show detailed status of MCP Mesh services",
-		Long: `Show detailed status information for all MCP Mesh services.
+		Long: `Show detailed status information for MCP Mesh services.
 
-This includes registry status, agent health, process information, and connectivity status.
+When called without arguments, shows wiring details for all healthy agents.
+When called with an agent ID, shows detailed information for that specific agent.
 
 Examples:
-  meshctl status                                  # Show basic status
-  meshctl status --verbose                        # Show detailed information
+  meshctl status                                  # Show all healthy agents' wiring
+  meshctl status hello-world-5395c5e4             # Show details for specific agent
   meshctl status --json                           # Output in JSON format
-  meshctl status --registry-port 8002             # Connect to registry on custom port
+  meshctl status hello-world-5395c5e4 --json      # Agent details in JSON format
   meshctl status --registry-url http://remote:8000 # Connect to remote registry
   meshctl status --registry-host prod.example.com # Connect to remote host
   meshctl status --registry-scheme https --insecure # HTTPS with self-signed cert`,
@@ -112,6 +113,12 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 	agents, err := getEnhancedAgents(finalRegistryURL)
 	if err != nil {
 		return fmt.Errorf("failed to get agents: %w", err)
+	}
+
+	// If agent ID provided as positional argument, show details for that specific agent
+	if len(args) > 0 {
+		agentID := args[0]
+		return outputAgentDetails(agents, agentID, jsonOutput)
 	}
 
 	// Filter to only healthy agents

@@ -71,7 +71,6 @@ Tools listing:
 	// New enhanced filtering and display options
 	cmd.Flags().String("since", "", "Show agents active since duration (e.g., 1h, 30m, 24h)")
 	cmd.Flags().Bool("all", false, "Show all agents including unhealthy/expired (default: healthy only)")
-	cmd.Flags().String("id", "", "Show detailed information for specific agent ID")
 
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
@@ -228,7 +227,6 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 	// New enhanced flags
 	sinceFlag, _ := cmd.Flags().GetString("since")
 	showAll, _ := cmd.Flags().GetBool("all")
-	agentID, _ := cmd.Flags().GetString("id")
 
 	// Tools listing flag
 	toolsFlag, _ := cmd.Flags().GetString("tools")
@@ -283,11 +281,6 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Processes = processes
 		// Enrich agents with process information
 		output.Agents = enrichWithProcessInfo(output.Agents, processes)
-	}
-
-	// Handle single agent details view
-	if agentID != "" {
-		return outputAgentDetails(output.Agents, agentID, jsonOutput)
 	}
 
 	// Apply filters
@@ -1382,7 +1375,7 @@ func filterHealthyAgents(agents []EnhancedAgent) []EnhancedAgent {
 func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool) error {
 	var targetAgent *EnhancedAgent
 
-	// Find the requested agent
+	// Find the requested agent by ID
 	for _, agent := range agents {
 		if agent.ID == agentID {
 			targetAgent = &agent
@@ -1391,7 +1384,7 @@ func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool)
 	}
 
 	if targetAgent == nil {
-		return fmt.Errorf("agent with ID '%s' not found", agentID)
+		return fmt.Errorf("agent '%s' not found", agentID)
 	}
 
 	if jsonOutput {
