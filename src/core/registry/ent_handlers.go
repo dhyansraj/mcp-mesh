@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -620,4 +621,156 @@ func getHostname() (string, error) {
 		return "unknown", err
 	}
 	return hostname, nil
+}
+
+// ProxyMcpRequest implements POST /proxy/{target}
+// Acts as a reverse proxy for MCP requests to internal agents
+func (h *EntBusinessLogicHandlers) ProxyMcpRequest(c *gin.Context, target string) {
+	h.proxyRequest(c, target, "POST")
+}
+
+// ProxyMcpGetRequest implements GET /proxy/{target}
+// Acts as a reverse proxy for MCP GET requests to internal agents
+func (h *EntBusinessLogicHandlers) ProxyMcpGetRequest(c *gin.Context, target string) {
+	h.proxyRequest(c, target, "GET")
+}
+
+// proxyRequest handles the actual proxying logic for both GET and POST
+func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, method string) {
+	// Parse target: expected format is {host}:{port}/mcp/...
+	// Example: hello-world-agent:8080/mcp/v1/tools/call
+
+	// Find the first / to split host:port from path
+	slashIdx := strings.Index(target, "/")
+	if slashIdx == -1 {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "Invalid target format: missing path. Expected format: {host}:{port}/mcp/{path}",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	hostPort := target[:slashIdx]
+	path := target[slashIdx:] // Includes the leading /
+
+	// Security: Only allow /mcp or /mcp/* paths
+	if path != "/mcp" && !strings.HasPrefix(path, "/mcp/") {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "Only /mcp/* paths are allowed for proxying",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Security: Validate target is a registered agent
+	isRegistered, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to validate agent: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	if !isRegistered {
+		c.JSON(http.StatusForbidden, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Target host '%s' is not a registered agent", hostPort),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Build target URL
+	targetURL := fmt.Sprintf("http://%s%s", hostPort, path)
+
+	// Create the proxied request
+	var reqBody io.Reader
+	if method == "POST" {
+		reqBody = c.Request.Body
+	}
+
+	proxyReq, err := http.NewRequestWithContext(c.Request.Context(), method, targetURL, reqBody)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to create proxy request: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Copy relevant headers
+	proxyReq.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	if accept := c.Request.Header.Get("Accept"); accept != "" {
+		proxyReq.Header.Set("Accept", accept)
+	}
+
+	// Execute the request
+	client := &http.Client{
+		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls
+	}
+
+	resp, err := client.Do(proxyReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to reach target agent: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to read response from agent: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			c.Header(key, value)
+		}
+	}
+
+	// Return the response with the same status code
+	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
+}
+
+// isRegisteredAgentEndpoint checks if the given host:port is a registered agent
+func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, error) {
+	// Parse host and port
+	parts := strings.Split(hostPort, ":")
+	if len(parts) != 2 {
+		return false, nil // Invalid format
+	}
+
+	host := parts[0]
+	// port := parts[1] // We could validate port too
+
+	// Query all agents and check if any matches this endpoint
+	// For now, we'll check by host matching agent name (common in Docker/K8s)
+	params := &AgentQueryParams{}
+	resp, err := h.entService.ListAgents(params)
+	if err != nil {
+		return false, err
+	}
+
+	for _, agent := range resp.Agents {
+		// Check if the host matches agent name or endpoint
+		// In Docker/K8s, hostname typically matches agent name
+		if agent.Name == host {
+			return true, nil
+		}
+
+		// Also check endpoint field if available
+		if agent.Endpoint == hostPort || strings.HasPrefix(agent.Endpoint, "http://"+hostPort) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
