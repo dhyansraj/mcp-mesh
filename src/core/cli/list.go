@@ -39,8 +39,12 @@ func NewListCommand() *cobra.Command {
 Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
+By default, only healthy agents are shown. Use --all to see all agents
+including unhealthy/expired ones.
+
 Examples:
-  meshctl list                                    # Show beautiful table with all agents
+  meshctl list                                    # Show healthy agents only (default)
+  meshctl list --all                              # Show all agents including unhealthy
   meshctl list --json                             # Output in JSON format
   meshctl list --filter hello                     # Filter agents by name pattern
   meshctl list --no-deps                          # Hide dependency status
@@ -66,7 +70,7 @@ Tools listing:
 
 	// New enhanced filtering and display options
 	cmd.Flags().String("since", "", "Show agents active since duration (e.g., 1h, 30m, 24h)")
-	cmd.Flags().Bool("healthy-only", false, "Show only healthy agents")
+	cmd.Flags().Bool("all", false, "Show all agents including unhealthy/expired (default: healthy only)")
 	cmd.Flags().String("id", "", "Show detailed information for specific agent ID")
 
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
@@ -94,12 +98,14 @@ type ListOutput struct {
 
 // RegistryStatus represents registry status information
 type RegistryStatus struct {
-	Status     string    `json:"status"`
-	URL        string    `json:"url,omitempty"`
-	AgentCount int       `json:"agent_count,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Uptime     string    `json:"uptime,omitempty"`
-	StartTime  time.Time `json:"start_time,omitempty"`
+	Status         string    `json:"status"`
+	URL            string    `json:"url,omitempty"`
+	AgentCount     int       `json:"agent_count,omitempty"`
+	HealthyCount   int       `json:"healthy_count,omitempty"`
+	UnhealthyCount int       `json:"unhealthy_count,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	Uptime         string    `json:"uptime,omitempty"`
+	StartTime      time.Time `json:"start_time,omitempty"`
 }
 
 // EnhancedAgent contains comprehensive agent information for display
@@ -221,7 +227,7 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// New enhanced flags
 	sinceFlag, _ := cmd.Flags().GetString("since")
-	healthyOnly, _ := cmd.Flags().GetBool("healthy-only")
+	showAll, _ := cmd.Flags().GetBool("all")
 	agentID, _ := cmd.Flags().GetString("id")
 
 	// Tools listing flag
@@ -244,7 +250,7 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// Handle tools listing mode
 	if toolsFlagChanged {
-		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, healthyOnly)
+		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, !showAll)
 	}
 
 	// Collect all information
@@ -298,8 +304,8 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = filtered
 	}
 
-	// Apply healthy-only filter
-	if healthyOnly {
+	// Apply healthy-only filter by default (unless --all is specified)
+	if !showAll {
 		output.Agents = filterHealthyAgents(output.Agents)
 	}
 
@@ -333,9 +339,17 @@ func getRegistryStatus(registryURL string) RegistryStatus {
 			}
 		}
 
-		// Get agent count
+		// Get agent count with healthy/unhealthy breakdown
 		if agents, err := getDetailedAgents(registryURL); err == nil {
 			status.AgentCount = len(agents)
+			for _, agent := range agents {
+				agentStatus := strings.ToLower(getString(agent, "status"))
+				if agentStatus == "healthy" || agentStatus == "running" {
+					status.HealthyCount++
+				} else {
+					status.UnhealthyCount++
+				}
+			}
 		}
 	}
 
@@ -979,8 +993,12 @@ func showRegistryStatus(registry RegistryStatus) {
 		fmt.Printf(" (%s)", registry.URL)
 	}
 
-	if registry.Status == "running" && registry.AgentCount > 0 {
-		fmt.Printf(" - %d agents", registry.AgentCount)
+	if registry.Status == "running" {
+		// Show healthy/unhealthy breakdown
+		fmt.Printf(" - %s%d healthy%s", colorGreen, registry.HealthyCount, colorReset)
+		if registry.UnhealthyCount > 0 {
+			fmt.Printf(", %s%d unhealthy/expired%s", colorGray, registry.UnhealthyCount, colorReset)
+		}
 	}
 
 	if registry.Uptime != "" {
