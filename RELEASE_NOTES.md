@@ -1,5 +1,60 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.12...v0.7.13)
+
+## v0.7.13 (2026-01-01)
+
+### ✨ New Features
+
+- **LLM response metadata** (#314): Add `_mesh_meta` to LLM results with provider, model, token counts, and latency for cost tracking
+  ```python
+  result = await llm(question)
+  print(result._mesh_meta.model)          # "openai/gpt-4o"
+  print(result._mesh_meta.input_tokens)   # 100
+  print(result._mesh_meta.output_tokens)  # 50
+  print(result._mesh_meta.latency_ms)     # 125.5
+  ```
+
+- **Distributed tracing** (#313): Add `meshctl trace <id>` command and `--trace` flag for call tree visualization
+  ```bash
+  meshctl call smart_analyze '{"query": "test"}' --trace
+  meshctl trace abc123  # View call tree
+  ```
+
+- **Model override in @mesh.llm** (#312): Allow consumers to specify model override with mesh delegation
+  - Request specific model variant from provider (e.g., use haiku instead of default sonnet)
+  - Vendor mismatch validation with automatic fallback
+
+- **meshctl UX improvements** (#309):
+  - `meshctl list` shows healthy agents by default, use `--all` for all
+  - `meshctl status [agent-id]` shows details for specific agent
+  - `meshctl list --tools=<name>` displays full input schema via registry proxy
+
+- **Registry proxy** (#307): Add reverse proxy endpoint for external meshctl access
+  - Call agents from outside Docker/K8s without exposing individual ports
+  - Routes calls through registry by default (`--use-proxy=true`)
+
+- **Decorator-level LLM params** (#305): Pass `max_tokens`, `temperature`, etc. from `@mesh.llm` decorator to provider
+  ```python
+  @mesh.llm(max_tokens=16000, temperature=0.7)
+  def my_tool(llm=None):
+      return llm(messages)  # params now respected
+  ```
+
+### 🐛 Bug Fixes
+
+- **Normalize HTTP fallback response** (#304): Consistent response format between FastMCP and HTTP transport
+- **Connection error hints** (#303): Helpful guidance when `meshctl call` fails from outside Docker/K8s
+- **Code review improvements** (#301): Fix connection pooling, session cleanup, thread safety race condition
+  - ~3000 lines of duplicate/dead code removed
+  - Consolidated MCP proxies, health check logic, and heartbeat setup
+
+### 🗑️ Removed
+
+- **Remove auto-restart/watch-files** (#316): Remove unreliable `--auto-restart` and `--watch-files` flags
+  - Features were unreliable due to subprocess/venv management issues
+  - Users can reliably use Ctrl+C or kill signals to stop and manually restart agents
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.11...v0.7.12)
 
 ## v0.7.12 (2025-12-22)

@@ -61,6 +61,18 @@ def assist(ctx, llm = None):
 
 Call-time parameters take precedence over decorator defaults.
 
+## Response Metadata
+
+LLM results include `_mesh_meta` for cost tracking and debugging:
+
+```python
+result = await llm("Analyze this")
+print(result._mesh_meta.model)          # "openai/gpt-4o"
+print(result._mesh_meta.input_tokens)   # 100
+print(result._mesh_meta.output_tokens)  # 50
+print(result._mesh_meta.latency_ms)     # 125.5
+```
+
 ## LLM Provider Selection
 
 Select LLM provider using capability and tags:
@@ -75,6 +87,21 @@ provider={"capability": "llm", "tags": ["openai"]}
 # Any LLM provider
 provider={"capability": "llm"}
 ```
+
+### Model Override
+
+Override provider's default model at the consumer:
+
+```python
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
+    model="anthropic/claude-haiku",  # Override provider default
+)
+def fast_assist(ctx, llm = None):
+    return llm("Quick response needed")
+```
+
+Vendor mismatch (e.g., requesting OpenAI model from Claude provider) logs a warning and falls back to provider default.
 
 ## Creating LLM Providers
 

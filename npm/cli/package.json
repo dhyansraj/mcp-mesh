@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/cli",
-  "version": "0.7.12",
+  "version": "0.7.13",
   "description": "CLI for MCP Mesh - Enterprise-Grade Distributed Service Mesh for AI Agents",
   "license": "MIT",
   "repository": {
