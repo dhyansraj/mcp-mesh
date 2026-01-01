@@ -7,6 +7,7 @@ Provides automatic agentic loop for LLM-based agents with tool integration.
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -343,6 +344,64 @@ IMPORTANT TOOL CALLING RULES:
         # Otherwise, use literal system prompt from config
         return self.system_prompt or ""
 
+    def _attach_mesh_meta(
+        self,
+        result: Any,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: float,
+    ) -> Any:
+        """
+        Attach _mesh_meta to result object if possible.
+
+        For Pydantic models and regular classes, attaches LlmMeta as _mesh_meta.
+        For primitives (str, int, etc.) and frozen models, silently skips.
+
+        Args:
+            result: The parsed result object
+            model: Model identifier used
+            input_tokens: Total input tokens across all iterations
+            output_tokens: Total output tokens across all iterations
+            latency_ms: Total latency in milliseconds
+
+        Returns:
+            The result object (unchanged, but with _mesh_meta attached if possible)
+        """
+        from mesh.types import LlmMeta
+
+        # Extract provider from model string (e.g., "anthropic/claude-3-5-haiku" -> "anthropic")
+        provider = "unknown"
+        if isinstance(model, str) and "/" in model:
+            provider = model.split("/")[0]
+
+        meta = LlmMeta(
+            provider=provider,
+            model=model or "unknown",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            latency_ms=latency_ms,
+        )
+
+        # Try to attach _mesh_meta to result
+        try:
+            # This works for Pydantic models and most Python objects
+            object.__setattr__(result, "_mesh_meta", meta)
+            logger.debug(
+                f"📊 Attached _mesh_meta: model={model}, "
+                f"tokens={input_tokens}+{output_tokens}={input_tokens + output_tokens}, "
+                f"latency={latency_ms:.1f}ms"
+            )
+        except (TypeError, AttributeError):
+            # Primitives (str, int, etc.) and frozen objects don't support attribute assignment
+            logger.debug(
+                f"📊 Could not attach _mesh_meta to {type(result).__name__} "
+                f"(tokens={input_tokens}+{output_tokens}, latency={latency_ms:.1f}ms)"
+            )
+
+        return result
+
     async def _get_mesh_provider(self) -> Any:
         """
         Get the mesh provider proxy (already resolved during heartbeat).
@@ -463,9 +522,20 @@ IMPORTANT TOOL CALLING RULES:
                     self.message = message
                     self.finish_reason = "stop"
 
+            # Issue #311: Mock usage object for token tracking
+            class MockUsage:
+                def __init__(self, usage_dict):
+                    self.prompt_tokens = usage_dict.get("prompt_tokens", 0)
+                    self.completion_tokens = usage_dict.get("completion_tokens", 0)
+                    self.total_tokens = self.prompt_tokens + self.completion_tokens
+
             class MockResponse:
                 def __init__(self, message_dict):
                     self.choices = [MockChoice(MockMessage(message_dict))]
+                    # Issue #311: Extract usage from _mesh_usage if present
+                    mesh_usage = message_dict.get("_mesh_usage")
+                    self.usage = MockUsage(mesh_usage) if mesh_usage else None
+                    self.model = mesh_usage.get("model") if mesh_usage else None
 
             logger.debug(
                 f"📥 Received response from mesh provider: "
@@ -529,6 +599,12 @@ IMPORTANT TOOL CALLING RULES:
             result = await llm("What is the answer?", context={}, context_mode="replace")
         """
         self._iteration_count = 0
+
+        # Issue #311: Track timing and token usage for _mesh_meta
+        start_time = time.perf_counter()
+        total_input_tokens = 0
+        total_output_tokens = 0
+        effective_model = self.model  # Track actual model used
 
         # Check if litellm is available
         if completion is None:
@@ -662,6 +738,16 @@ IMPORTANT TOOL CALLING RULES:
                         original_error=e,
                     ) from e
 
+                # Issue #311: Extract token usage from response
+                if hasattr(response, "usage") and response.usage:
+                    usage = response.usage
+                    total_input_tokens += getattr(usage, "prompt_tokens", 0) or 0
+                    total_output_tokens += getattr(usage, "completion_tokens", 0) or 0
+
+                # Issue #311: Track effective model (may differ from requested in mesh delegation)
+                if hasattr(response, "model") and response.model:
+                    effective_model = response.model
+
                 # Extract response content
                 assistant_message = response.choices[0].message
 
@@ -692,7 +778,18 @@ IMPORTANT TOOL CALLING RULES:
                     f"📥 Raw LLM response: {assistant_message.content[:500]}..."
                 )
 
-                return self._parse_response(assistant_message.content)
+                # Parse the response
+                result = self._parse_response(assistant_message.content)
+
+                # Issue #311: Calculate latency and attach _mesh_meta
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                return self._attach_mesh_meta(
+                    result=result,
+                    model=effective_model,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    latency_ms=latency_ms,
+                )
 
             except LLMAPIError:
                 # Re-raise LLM API errors as-is

@@ -387,6 +387,50 @@ except ImportError:
 
 
 @dataclass
+class LlmMeta:
+    """
+    Metadata from LLM response for cost tracking and debugging.
+
+    This is attached to results from @mesh.llm calls as `_mesh_meta` attribute,
+    providing access to token counts, latency, and model information.
+
+    Attributes:
+        provider: LLM provider name (e.g., "anthropic", "openai")
+        model: Full model identifier (e.g., "anthropic/claude-3-5-haiku-20241022")
+        input_tokens: Number of tokens in the prompt
+        output_tokens: Number of tokens in the response
+        total_tokens: Total tokens used (input + output)
+        latency_ms: Request latency in milliseconds
+
+    Usage:
+        @mesh.llm(provider="anthropic/claude-3-5-haiku-20241022")
+        async def ask(question: str, llm: MeshLlmAgent) -> Answer:
+            result = await llm(question)
+
+            # Access result normally
+            print(result.answer)
+
+            # Access metadata
+            print(result._mesh_meta.model)          # "anthropic/claude-3-5-haiku-20241022"
+            print(result._mesh_meta.output_tokens)  # 85
+            print(result._mesh_meta.latency_ms)     # 125.5
+
+            return result
+
+    Note:
+        For primitive return types (str, int, etc.) and frozen Pydantic models,
+        _mesh_meta cannot be attached. This is a Python limitation.
+    """
+
+    provider: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    latency_ms: float
+
+
+@dataclass
 class MeshLlmRequest:
     """
     Standard LLM request format for mesh-delegated LLM calls.
@@ -414,9 +458,9 @@ class MeshLlmRequest:
         caller_agent: Optional agent name that initiated the request
     """
 
-    messages: List[Dict[str, Any]]  # Changed from Dict[str, str] to allow tool_calls
-    tools: Optional[List[Dict]] = None
-    model_params: Optional[Dict] = None
-    context: Optional[Dict] = None
+    messages: list[dict[str, Any]]  # Changed from Dict[str, str] to allow tool_calls
+    tools: Optional[list[dict]] = None
+    model_params: Optional[dict] = None
+    context: Optional[dict] = None
     request_id: Optional[str] = None
     caller_agent: Optional[str] = None

@@ -277,6 +277,16 @@ def llm_provider(
                         for tc in message.tool_calls
                     ]
 
+                # Issue #311: Include usage metadata for cost tracking
+                if hasattr(response, "usage") and response.usage:
+                    usage = response.usage
+                    message_dict["_mesh_usage"] = {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                        "completion_tokens": getattr(usage, "completion_tokens", 0)
+                        or 0,
+                        "model": effective_model,
+                    }
+
                 logger.info(
                     f"LLM provider {func.__name__} processed request "
                     f"(model={effective_model}, messages={len(request.messages)}, "

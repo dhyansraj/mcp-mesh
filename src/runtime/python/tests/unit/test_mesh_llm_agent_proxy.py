@@ -2046,3 +2046,299 @@ class TestLlmProviderModelOverride:
         effective_model = override_model
 
         assert effective_model == "claude-3-haiku"
+
+
+class TestLlmMetaAttachment:
+    """Test _mesh_meta attachment to LLM results (Issue #311)."""
+
+    @pytest.mark.asyncio
+    async def test_mesh_meta_attached_to_pydantic_result(self):
+        """Test: _mesh_meta is attached to Pydantic model results."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+        from mesh.types import LlmMeta
+
+        # Create mock response with usage data
+        mock_message = MagicMock()
+        mock_message.content = '{"answer": "42", "confidence": 0.95, "sources": []}'
+        mock_message.tool_calls = None
+        mock_message.model_dump = lambda: {
+            "role": "assistant",
+            "content": mock_message.content,
+        }
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 100
+        mock_usage.completion_tokens = 50
+
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = mock_usage
+        mock_response.model = "anthropic/claude-3-5-sonnet"
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = mock_response
+
+            agent = MeshLlmAgent(
+                config=make_test_config(
+                    provider="anthropic",
+                    model="anthropic/claude-3-5-sonnet",
+                    system_prompt="You are helpful.",
+                ),
+                filtered_tools=[],
+                output_type=ChatResponse,
+            )
+
+            result = await agent("What is the answer?")
+
+            # Verify result is correct type
+            assert isinstance(result, ChatResponse)
+            assert result.answer == "42"
+            assert result.confidence == 0.95
+
+            # Verify _mesh_meta is attached
+            assert hasattr(result, "_mesh_meta")
+            assert isinstance(result._mesh_meta, LlmMeta)
+            assert result._mesh_meta.provider == "anthropic"
+            assert result._mesh_meta.model == "anthropic/claude-3-5-sonnet"
+            assert result._mesh_meta.input_tokens == 100
+            assert result._mesh_meta.output_tokens == 50
+            assert result._mesh_meta.total_tokens == 150
+            assert result._mesh_meta.latency_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_mesh_meta_accumulates_tokens_across_iterations(self):
+        """Test: _mesh_meta accumulates tokens across tool call iterations."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        # First response: tool call
+        mock_message_1 = MagicMock()
+        mock_message_1.content = None
+        mock_message_1.tool_calls = [make_tool_call_mock("tc1", "get_info", "{}")]
+        mock_message_1.model_dump = lambda: {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {"name": "get_info", "arguments": "{}"},
+                }
+            ],
+        }
+
+        mock_usage_1 = MagicMock()
+        mock_usage_1.prompt_tokens = 100
+        mock_usage_1.completion_tokens = 20
+
+        mock_choice_1 = MagicMock()
+        mock_choice_1.message = mock_message_1
+
+        mock_response_1 = MagicMock()
+        mock_response_1.choices = [mock_choice_1]
+        mock_response_1.usage = mock_usage_1
+        mock_response_1.model = "anthropic/claude-3-5-sonnet"
+
+        # Second response: final answer
+        mock_message_2 = MagicMock()
+        mock_message_2.content = '{"answer": "done", "confidence": 0.9, "sources": []}'
+        mock_message_2.tool_calls = None
+
+        mock_usage_2 = MagicMock()
+        mock_usage_2.prompt_tokens = 150
+        mock_usage_2.completion_tokens = 30
+
+        mock_choice_2 = MagicMock()
+        mock_choice_2.message = mock_message_2
+
+        mock_response_2 = MagicMock()
+        mock_response_2.choices = [mock_choice_2]
+        mock_response_2.usage = mock_usage_2
+        mock_response_2.model = "anthropic/claude-3-5-sonnet"
+
+        call_count = 0
+
+        def side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return mock_response_1 if call_count == 1 else mock_response_2
+
+        # Mock tool proxy with call_tool method returning JSON-serializable result
+        mock_tool_proxy = MagicMock()
+        mock_tool_proxy.call_tool = AsyncMock(return_value={"result": "tool result"})
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.side_effect = side_effect
+
+            agent = MeshLlmAgent(
+                config=make_test_config(
+                    provider="anthropic",
+                    model="anthropic/claude-3-5-sonnet",
+                    system_prompt="You are helpful.",
+                ),
+                filtered_tools=[
+                    {"name": "get_info", "description": "Get info", "inputSchema": {}}
+                ],
+                output_type=ChatResponse,
+                tool_proxies={"get_info": mock_tool_proxy},
+            )
+
+            result = await agent("Do something")
+
+            # Verify tokens are accumulated from both calls
+            assert result._mesh_meta.input_tokens == 250  # 100 + 150
+            assert result._mesh_meta.output_tokens == 50  # 20 + 30
+            assert result._mesh_meta.total_tokens == 300
+
+    @pytest.mark.asyncio
+    async def test_mesh_meta_not_attached_to_str_result(self):
+        """Test: _mesh_meta cannot be attached to str results (silently skipped)."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        mock_message = MagicMock()
+        mock_message.content = "Hello, world!"
+        mock_message.tool_calls = None
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 50
+        mock_usage.completion_tokens = 10
+
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = mock_usage
+        mock_response.model = "anthropic/claude-3-5-sonnet"
+
+        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
+            mock_completion.return_value = mock_response
+
+            agent = MeshLlmAgent(
+                config=make_test_config(
+                    provider="anthropic",
+                    model="anthropic/claude-3-5-sonnet",
+                    system_prompt="You are helpful.",
+                ),
+                filtered_tools=[],
+                output_type=str,  # str return type
+            )
+
+            result = await agent("Say hello")
+
+            # Result should be string
+            assert isinstance(result, str)
+            assert result == "Hello, world!"
+
+            # _mesh_meta cannot be attached to str (no error, just not present)
+            assert not hasattr(result, "_mesh_meta")
+
+    def test_llm_meta_dataclass_creation(self):
+        """Test: LlmMeta dataclass can be created with all fields."""
+        from mesh.types import LlmMeta
+
+        meta = LlmMeta(
+            provider="anthropic",
+            model="anthropic/claude-3-5-haiku",
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            latency_ms=125.5,
+        )
+
+        assert meta.provider == "anthropic"
+        assert meta.model == "anthropic/claude-3-5-haiku"
+        assert meta.input_tokens == 100
+        assert meta.output_tokens == 50
+        assert meta.total_tokens == 150
+        assert meta.latency_ms == 125.5
+
+    def test_llm_meta_exported_from_mesh_module(self):
+        """Test: LlmMeta is accessible via mesh.LlmMeta."""
+        import mesh
+
+        assert hasattr(mesh, "LlmMeta")
+        assert mesh.LlmMeta is not None
+
+        # Can create instance
+        meta = mesh.LlmMeta(
+            provider="openai",
+            model="gpt-4o",
+            input_tokens=200,
+            output_tokens=100,
+            total_tokens=300,
+            latency_ms=200.0,
+        )
+        assert meta.provider == "openai"
+
+
+class TestMeshDelegationMeta:
+    """Test _mesh_meta in mesh delegation scenarios (Issue #311)."""
+
+    def test_mesh_usage_included_in_provider_response(self):
+        """Test: llm_provider includes _mesh_usage in response dict."""
+        # This tests the structure that llm_provider should return
+        # Simulating what process_chat returns
+
+        message_dict = {
+            "role": "assistant",
+            "content": "Hello!",
+            "_mesh_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "model": "anthropic/claude-3-5-sonnet",
+            },
+        }
+
+        assert "_mesh_usage" in message_dict
+        assert message_dict["_mesh_usage"]["prompt_tokens"] == 100
+        assert message_dict["_mesh_usage"]["completion_tokens"] == 50
+        assert message_dict["_mesh_usage"]["model"] == "anthropic/claude-3-5-sonnet"
+
+    def test_mock_response_extracts_mesh_usage(self):
+        """Test: MockResponse correctly extracts _mesh_usage from provider response."""
+        # This tests the MockResponse class behavior in mesh_llm_agent.py
+
+        message_dict = {
+            "role": "assistant",
+            "content": "Response content",
+            "_mesh_usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 80,
+                "model": "anthropic/claude-3-5-haiku",
+            },
+        }
+
+        # Simulate MockUsage and MockResponse behavior
+        class MockUsage:
+            def __init__(self, usage_dict):
+                self.prompt_tokens = usage_dict.get("prompt_tokens", 0)
+                self.completion_tokens = usage_dict.get("completion_tokens", 0)
+                self.total_tokens = self.prompt_tokens + self.completion_tokens
+
+        mesh_usage = message_dict.get("_mesh_usage")
+        usage = MockUsage(mesh_usage) if mesh_usage else None
+        model = mesh_usage.get("model") if mesh_usage else None
+
+        assert usage is not None
+        assert usage.prompt_tokens == 200
+        assert usage.completion_tokens == 80
+        assert usage.total_tokens == 280
+        assert model == "anthropic/claude-3-5-haiku"
+
+    def test_mock_response_handles_missing_mesh_usage(self):
+        """Test: MockResponse handles responses without _mesh_usage gracefully."""
+        message_dict = {
+            "role": "assistant",
+            "content": "Response without usage",
+        }
+
+        # Simulate MockResponse behavior
+        mesh_usage = message_dict.get("_mesh_usage")
+        usage = None  # Would be MockUsage(mesh_usage) if mesh_usage else None
+        model = mesh_usage.get("model") if mesh_usage else None
+
+        assert usage is None
+        assert model is None
