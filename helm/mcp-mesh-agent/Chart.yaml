@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-agent
 description: MCP Mesh Agent - Python runtime for MCP agents with mesh capabilities
 type: application
-version: 0.7.12
-appVersion: "0.7.12"
+version: 0.7.13
+appVersion: "0.7.13"
 keywords:
   - mcp
   - mesh

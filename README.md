@@ -1,6 +1,6 @@
 # <img src="logo-cyan.svg" height="32" alt=""> MCP Mesh
 
-[![Release](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml/badge.svg)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml)
+[![Release](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml/badge.svg?event=release)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml)
 [![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://hub.docker.com/u/mcpmesh)
