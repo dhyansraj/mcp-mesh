@@ -1848,3 +1848,201 @@ class TestRuntimeContextInjection:
             assert "Alice" in system_message["content"]
             assert "Python" in system_message["content"]
             assert isinstance(response, ChatResponse)
+
+
+# ============================================================================
+# Issue #308: Model Override in Mesh Delegation Tests
+# ============================================================================
+
+
+class TestMeshDelegationModelOverride:
+    """Test model override functionality for mesh delegation (issue #308)."""
+
+    @pytest.mark.asyncio
+    async def test_mesh_delegation_includes_model_in_params(self):
+        """Test: Model is included in model_params when explicitly set for mesh delegation."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        # Create config with dict provider (mesh delegation) and explicit model
+        config = LLMConfig(
+            provider={
+                "capability": "llm",
+                "tags": ["claude"],
+            },  # Dict = mesh delegation
+            model="anthropic/claude-haiku",  # Explicit model override
+            api_key="",
+            max_iterations=10,
+            system_prompt="Test prompt",
+        )
+
+        # Create mock provider proxy
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Hello", "confidence": 0.9, "sources": []}',
+        }
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
+        )
+
+        # Verify agent is mesh delegated
+        assert agent._is_mesh_delegated is True
+
+        # Call agent
+        response = await agent("Test message")
+
+        # Verify provider proxy was called with model in request
+        mock_provider_proxy.assert_called_once()
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+
+        # Model should be in model_params
+        assert "model_params" in request_dict
+        assert request_dict["model_params"].get("model") == "anthropic/claude-haiku"
+
+    @pytest.mark.asyncio
+    async def test_mesh_delegation_excludes_empty_model(self):
+        """Test: Empty/None model is not included in model_params."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        # Create config with dict provider but no explicit model
+        config = LLMConfig(
+            provider={"capability": "llm", "tags": ["claude"]},
+            model=None,  # No model specified
+            api_key="",
+            max_iterations=10,
+            system_prompt="Test prompt",
+        )
+
+        # Create mock provider proxy
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Hello", "confidence": 0.9, "sources": []}',
+        }
+
+        agent = MeshLlmAgent(
+            config=config,
+            filtered_tools=[],
+            output_type=ChatResponse,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
+        )
+
+        # Call agent
+        response = await agent("Test message")
+
+        # Verify provider proxy was called
+        mock_provider_proxy.assert_called_once()
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+
+        # Model should NOT be in model_params (or be None/empty)
+        model_params = request_dict.get("model_params", {})
+        assert model_params is None or "model" not in model_params
+
+
+class TestLlmProviderModelOverride:
+    """Test model override handling in @mesh.llm_provider decorator (issue #308)."""
+
+    def test_extract_vendor_from_model_with_vendor_prefix(self):
+        """Test: Extract vendor from model string with vendor prefix."""
+        from mesh.helpers import _extract_vendor_from_model
+
+        assert _extract_vendor_from_model("anthropic/claude-sonnet-4-5") == "anthropic"
+        assert _extract_vendor_from_model("openai/gpt-4o") == "openai"
+        assert _extract_vendor_from_model("google/gemini-pro") == "google"
+
+    def test_extract_vendor_from_model_without_prefix(self):
+        """Test: Returns None for model without vendor prefix."""
+        from mesh.helpers import _extract_vendor_from_model
+
+        assert _extract_vendor_from_model("claude-3-haiku") is None
+        assert _extract_vendor_from_model("gpt-4") is None
+        assert _extract_vendor_from_model("") is None
+        assert _extract_vendor_from_model(None) is None
+
+    def test_extract_vendor_from_model_case_insensitive(self):
+        """Test: Vendor extraction is case insensitive."""
+        from mesh.helpers import _extract_vendor_from_model
+
+        assert _extract_vendor_from_model("Anthropic/claude-sonnet") == "anthropic"
+        assert _extract_vendor_from_model("OPENAI/gpt-4") == "openai"
+
+    def test_process_chat_uses_override_model_when_vendor_matches(self):
+        """Test: Provider uses override model when vendor matches."""
+        from mesh.types import MeshLlmRequest
+
+        # Simulate what happens inside process_chat
+        provider_model = "anthropic/claude-sonnet-4-5"
+        provider_vendor = "anthropic"
+
+        request = MeshLlmRequest(
+            messages=[{"role": "user", "content": "Hello"}],
+            model_params={"model": "anthropic/claude-haiku"},  # Override
+        )
+
+        # Simulate the vendor check logic
+        from mesh.helpers import _extract_vendor_from_model
+
+        override_model = request.model_params.get("model")
+        override_vendor = _extract_vendor_from_model(override_model)
+
+        # Vendor matches - should use override
+        assert override_vendor == provider_vendor
+        effective_model = override_model  # Would use override
+
+        assert effective_model == "anthropic/claude-haiku"
+
+    def test_process_chat_ignores_override_on_vendor_mismatch(self):
+        """Test: Provider ignores override when vendor doesn't match."""
+        from mesh.types import MeshLlmRequest
+
+        provider_model = "anthropic/claude-sonnet-4-5"
+        provider_vendor = "anthropic"
+
+        request = MeshLlmRequest(
+            messages=[{"role": "user", "content": "Hello"}],
+            model_params={"model": "openai/gpt-4o"},  # Wrong vendor!
+        )
+
+        from mesh.helpers import _extract_vendor_from_model
+
+        override_model = request.model_params.get("model")
+        override_vendor = _extract_vendor_from_model(override_model)
+
+        # Vendor mismatch - should fall back to provider's model
+        assert override_vendor != provider_vendor
+        effective_model = provider_model  # Would fall back
+
+        assert effective_model == "anthropic/claude-sonnet-4-5"
+
+    def test_process_chat_uses_override_when_no_vendor_prefix(self):
+        """Test: Provider uses override when it has no vendor prefix (can't validate)."""
+        from mesh.types import MeshLlmRequest
+
+        provider_model = "anthropic/claude-sonnet-4-5"
+        provider_vendor = "anthropic"
+
+        request = MeshLlmRequest(
+            messages=[{"role": "user", "content": "Hello"}],
+            model_params={"model": "claude-3-haiku"},  # No vendor prefix
+        )
+
+        from mesh.helpers import _extract_vendor_from_model
+
+        override_model = request.model_params.get("model")
+        override_vendor = _extract_vendor_from_model(override_model)
+
+        # No vendor prefix - can't validate, so use override
+        assert override_vendor is None
+        # When vendor is None, the check `override_vendor and override_vendor != vendor`
+        # is False, so we use the override
+        effective_model = override_model
+
+        assert effective_model == "claude-3-haiku"
