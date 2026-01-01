@@ -173,7 +173,7 @@ async def test_self_dependency(
     description="Test hybrid dependencies: simple + tag-based resolution",
 )
 async def test_dependencies(
-    date_service: Any = None,
+    date_service: mesh.McpMeshAgent | None = None,
     info: mesh.McpMeshAgent | None = None,  # This will get the DISK info service!
 ) -> dict[str, Any]:
     """
@@ -189,7 +189,7 @@ async def test_dependencies(
         "disk_info_service": "not_available",  # This should get DISK info, not general info!
     }
 
-    # Test simple Any type dependency
+    # Test simple string dependency
     if date_service is not None:
         try:
             date = await date_service()  # Direct call

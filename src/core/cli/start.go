@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -52,11 +51,6 @@ Examples:
 	cmd.Flags().String("log-level", "", "Set log level (DEBUG, INFO, WARN, ERROR) (default: INFO)")
 	cmd.Flags().Bool("verbose", false, "Enable verbose output")
 	cmd.Flags().Bool("quiet", false, "Suppress non-error output")
-
-	// Development workflow flags
-	cmd.Flags().Bool("auto-restart", true, "Auto-restart agent on file changes")
-	cmd.Flags().Bool("watch-files", true, "Watch Python files for changes")
-	cmd.Flags().String("watch-pattern", "*.py", "File pattern to watch")
 
 	// Health monitoring flags
 	cmd.Flags().Int("health-check-interval", 0, "Health check interval in seconds (default: 30)")
@@ -429,8 +423,6 @@ func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) e
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
 	// Determine registry URL from flags or config
 	registryURL := determineStartRegistryURL(cmd, config)
-	autoRestart, _ := cmd.Flags().GetBool("auto-restart")
-	watchFiles, _ := cmd.Flags().GetBool("watch-files")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	// Check if registry is running
@@ -471,11 +463,6 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 
 	// Build environment for agents
 	agentEnv := buildAgentEnvironment(cmd, registryURL, config)
-
-	// Start agents with file watching if enabled
-	if watchFiles && autoRestart {
-		return startAgentsWithFileWatching(args, agentEnv, cmd, config)
-	}
 
 	return startAgentsWithEnv(args, agentEnv, cmd, config)
 }
@@ -966,120 +953,6 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	return nil
 }
 
-// Start agents with file watching and auto-restart
-func startAgentsWithFileWatching(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig) error {
-	watchPattern, _ := cmd.Flags().GetString("watch-pattern")
-	quiet, _ := cmd.Flags().GetBool("quiet")
-
-	// Create file watcher
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("failed to create file watcher: %w", err)
-	}
-	defer watcher.Close()
-
-	// Watch directories for all agent files
-	watchedDirs := make(map[string]bool)
-	for _, agentPath := range agentPaths {
-		agentDir := filepath.Dir(agentPath)
-		if !watchedDirs[agentDir] {
-			if err := watcher.Add(agentDir); err != nil {
-				return fmt.Errorf("failed to watch directory %s: %w", agentDir, err)
-			}
-			watchedDirs[agentDir] = true
-		}
-	}
-
-	// Start agents initially
-	agentCmds := make(map[string]*exec.Cmd)
-	for _, agentPath := range agentPaths {
-		cmd, err := startSingleAgent(agentPath, env, cmd)
-		if err != nil {
-			return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
-		}
-		agentCmds[agentPath] = cmd
-	}
-
-	if !quiet {
-		fmt.Println("Press Ctrl+C to stop all services.")
-	}
-
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Watch for file changes
-	for {
-		select {
-		case event := <-watcher.Events:
-			if matched, _ := filepath.Match(watchPattern, filepath.Base(event.Name)); matched {
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					if !quiet {
-						fmt.Printf("File changed: %s, restarting affected agents...\n", event.Name)
-					}
-
-					// Restart agents in the affected directory
-					changedDir := filepath.Dir(event.Name)
-					for agentPath, agentCmd := range agentCmds {
-						if filepath.Dir(agentPath) == changedDir {
-							// Gracefully stop current agent
-							if agentCmd != nil && agentCmd.Process != nil {
-								agentCmd.Process.Signal(os.Interrupt)
-								agentCmd.Wait()
-							}
-
-							// Start new agent instance
-							newCmd, err := startSingleAgent(agentPath, env, cmd)
-							if err != nil {
-								fmt.Printf("Failed to restart agent %s: %v\n", agentPath, err)
-							} else {
-								agentCmds[agentPath] = newCmd
-								if !quiet {
-									fmt.Printf("Agent %s restarted\n", filepath.Base(agentPath))
-								}
-							}
-						}
-					}
-				}
-			}
-		case err := <-watcher.Errors:
-			return fmt.Errorf("file watcher error: %w", err)
-		case <-sigChan:
-			if !quiet {
-				fmt.Println("\nShutting down all services...")
-			}
-
-			shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
-			if shutdownTimeout == 0 {
-				shutdownTimeout = config.ShutdownTimeout
-			}
-
-			// Stop all agents from our local map
-			for _, agentCmd := range agentCmds {
-				if agentCmd != nil && agentCmd.Process != nil {
-					KillProcess(agentCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
-				}
-			}
-
-			// Also stop any processes from the process list (e.g., registry)
-			processes, err := GetRunningProcesses()
-			if err == nil {
-				for _, proc := range processes {
-					if !quiet {
-						fmt.Printf("Stopping %s (PID: %d)\n", proc.Name, proc.PID)
-					}
-					if err := KillProcess(proc.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
-						fmt.Printf("Failed to stop %s: %v\n", proc.Name, err)
-					}
-					RemoveRunningProcess(proc.PID)
-				}
-			}
-
-			return nil
-		}
-	}
-}
-
 // Create agent command with Python environment detection and hybrid config support
 func createAgentCommand(agentPath string, env []string, workingDir, user, group string) (*exec.Cmd, error) {
 	var pythonExec string
@@ -1265,24 +1138,6 @@ func setProcessCredentials(cmd *exec.Cmd, username, groupname string) error {
 	}
 
 	return nil
-}
-
-// Helper functions
-func startSingleAgent(agentPath string, env []string, cmd *cobra.Command) (*exec.Cmd, error) {
-	workingDir, _ := cmd.Flags().GetString("working-dir")
-	user, _ := cmd.Flags().GetString("user")
-	group, _ := cmd.Flags().GetString("group")
-
-	agentCmd, err := createAgentCommand(agentPath, env, workingDir, user, group)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := agentCmd.Start(); err != nil {
-		return nil, err
-	}
-
-	return agentCmd, nil
 }
 
 func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CLIConfig) error {
