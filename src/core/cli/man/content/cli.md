@@ -4,12 +4,13 @@
 
 ## Quick Reference
 
-| Command                | Purpose                    |
-| ---------------------- | -------------------------- |
-| `meshctl call`         | Invoke a tool on any agent |
-| `meshctl list`         | Show healthy agents        |
-| `meshctl list --tools` | List all available tools   |
-| `meshctl status`       | Show agent wiring details  |
+| Command                | Purpose                      |
+| ---------------------- | ---------------------------- |
+| `meshctl call`         | Invoke a tool on any agent   |
+| `meshctl list`         | Show healthy agents          |
+| `meshctl list --tools` | List all available tools     |
+| `meshctl status`       | Show agent wiring details    |
+| `meshctl trace`        | View distributed call traces |
 
 ## Calling Tools
 
@@ -28,6 +29,30 @@ meshctl call analyzer:process --file data.json
 
 # Direct agent call (skip registry)
 meshctl call hello_mesh --agent-url http://localhost:8080
+```
+
+## Distributed Tracing
+
+Track calls across multiple agents with `--trace`:
+
+```bash
+# Call with tracing enabled
+meshctl call smart_analyze '{"query": "test"}' --trace
+# Output includes: Trace ID: abc123...
+
+# View the call tree
+meshctl trace abc123
+
+# Example output:
+# └─ smart_analyze (llm-agent) [120ms] ✓
+#    ├─ get_current_time (time-agent) [5ms] ✓
+#    └─ fetch_data (data-agent) [15ms] ✓
+
+# Show internal wrapper spans
+meshctl trace abc123 --show-internal
+
+# Output as JSON
+meshctl trace abc123 --json
 ```
 
 ## Listing Agents and Tools

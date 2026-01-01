@@ -11,12 +11,13 @@ import (
 
 // TracingManager manages the entire distributed tracing pipeline
 type TracingManager struct {
-	config           *TracingConfig
-	consumer         *StreamConsumer
-	processor        TraceEventProcessor
-	otlpExporter     *OTLPExporter
-	logger           *log.Logger
-	enabled          bool
+	config            *TracingConfig
+	consumer          *StreamConsumer
+	processor         TraceEventProcessor
+	otlpExporter      *OTLPExporter
+	tempoClient       *TempoClient // For querying traces from Tempo in stream-through mode
+	logger            *log.Logger
+	enabled           bool
 	streamThroughMode bool
 }
 
@@ -37,6 +38,8 @@ type TracingConfig struct {
 	// Generic telemetry endpoints (OTLP compatible)
 	TelemetryEndpoint    string        `json:"telemetry_endpoint,omitempty"`
 	TelemetryProtocol    string        `json:"telemetry_protocol,omitempty"`
+	// Tempo query endpoint for fetching traces (HTTP API)
+	TempoQueryURL        string        `json:"tempo_query_url,omitempty"`
 }
 
 // NewTracingManager creates a new tracing manager with the given configuration
@@ -74,6 +77,12 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 			return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 		}
 		manager.otlpExporter = otlpExporter
+
+		// Create Tempo client for trace querying (Issue #310)
+		if config.TempoQueryURL != "" {
+			manager.tempoClient = NewTempoClient(config.TempoQueryURL)
+			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+		}
 
 		// Create stream-through processor
 		manager.processor = NewStreamThroughProcessor(otlpExporter)
@@ -253,11 +262,33 @@ func (tm *TracingManager) GetStats() *TraceStats {
 	return nil
 }
 
-// GetTrace retrieves a specific trace by ID (only available in correlation mode)
+// GetTrace retrieves a specific trace by ID
+// In correlation mode: queries local storage
+// In stream-through mode: queries Tempo API (Issue #310)
 func (tm *TracingManager) GetTrace(traceID string) (*CompletedTrace, bool) {
-	if !tm.enabled || tm.streamThroughMode {
+	if !tm.enabled {
 		return nil, false
 	}
+
+	// Stream-through mode: query Tempo
+	if tm.streamThroughMode {
+		if tm.tempoClient == nil {
+			tm.logger.Println("Cannot query traces: Tempo client not configured (set TEMPO_URL)")
+			return nil, false
+		}
+
+		trace, err := tm.tempoClient.GetTrace(traceID)
+		if err != nil {
+			tm.logger.Printf("Failed to query trace %s from Tempo: %v", traceID, err)
+			return nil, false
+		}
+		if trace == nil {
+			return nil, false
+		}
+		return trace, true
+	}
+
+	// Correlation mode: query local storage
 	if correlator, ok := tm.processor.(*SpanCorrelator); ok {
 		return correlator.GetTrace(traceID)
 	}
@@ -358,6 +389,9 @@ func DefaultTracingConfig() *TracingConfig {
 		telemetryProtocol = "grpc" // Default to gRPC
 	}
 
+	// Tempo query URL for fetching traces (Issue #310)
+	tempoQueryURL := GetTempoURLFromEnv()
+
 	return &TracingConfig{
 		Enabled:             enabled,
 		RedisURL:            redisURL,
@@ -373,6 +407,7 @@ func DefaultTracingConfig() *TracingConfig {
 		EnableStats:         enableStats,
 		TelemetryEndpoint:   telemetryEndpoint,
 		TelemetryProtocol:   telemetryProtocol,
+		TempoQueryURL:       tempoQueryURL,
 	}
 }
 

@@ -27,7 +27,9 @@ class ExecutionTracer:
         self.function_name = function_name
         self.logger = logger_instance
         self.start_time: float | None = None
-        self.trace_context: Any | None = None
+        self.trace_context: Any | None = (
+            None  # Parent's trace context (to restore after execution)
+        )
         self.execution_metadata: dict = {}
 
     def start_execution(
@@ -138,10 +140,33 @@ class ExecutionTracer:
             # Save execution trace to Redis for distributed tracing storage
             publish_trace_with_fallback(self.execution_metadata, self.logger)
 
+            # CRITICAL: Restore parent's trace context so sibling calls have correct parent
+            # Without this, subsequent calls become children of this span instead of siblings
+            self._restore_parent_context()
+
         except Exception as e:
             self.logger.warning(
                 f"Failed to complete execution logging for {self.function_name}: {e}"
             )
+
+    def _restore_parent_context(self) -> None:
+        """Restore the parent's trace context after this span completes.
+
+        This ensures sibling function calls share the same parent instead of
+        becoming nested children of each other.
+        """
+        try:
+            from .context import TraceContext
+
+            if self.trace_context:
+                # Restore to parent's context (the context that existed before this span)
+                TraceContext.set_current(
+                    trace_id=self.trace_context.trace_id,
+                    span_id=self.trace_context.span_id,
+                    parent_span=self.trace_context.parent_span,
+                )
+        except Exception as e:
+            self.logger.debug(f"Failed to restore parent trace context: {e}")
 
     @staticmethod
     def trace_function_execution(
