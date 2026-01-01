@@ -179,11 +179,9 @@ func (pm *ProcessManager) StartAgentProcess(agentFile string, metadata map[strin
 		return nil, fmt.Errorf("process %s already exists", name)
 	}
 
-	// Ensure registry is running if configured
-	if pm.config.AutoRestart {
-		if err := pm.ensureRegistryRunning(); err != nil {
-			pm.logger.Printf("Warning: Could not ensure registry is running: %v", err)
-		}
+	// Ensure registry is running
+	if err := pm.ensureRegistryRunning(); err != nil {
+		pm.logger.Printf("Warning: Could not ensure registry is running: %v", err)
 	}
 
 	// Start the process
@@ -353,7 +351,6 @@ func (pm *ProcessManager) GetProcessStatus(name string) (map[string]interface{},
 		"uptime":            time.Since(info.StartTime).Truncate(time.Second),
 		"restarts":          info.Restarts,
 		"consecutive_fails": info.ConsecutiveFails,
-		"auto_restart":      info.AutoRestart,
 		"command":           info.Command,
 		"working_dir":       info.WorkingDir,
 		"registry_url":      info.RegistryURL,

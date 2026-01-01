@@ -8,7 +8,6 @@ require (
 	entgo.io/ent v0.14.0
 	github.com/AlecAivazis/survey/v2 v2.3.7
 	github.com/Masterminds/semver/v3 v3.4.0
-	github.com/fsnotify/fsnotify v1.9.0
 	github.com/getkin/kin-openapi v0.132.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/lib/pq v1.10.9

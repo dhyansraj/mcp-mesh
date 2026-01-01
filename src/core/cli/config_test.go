@@ -26,12 +26,6 @@ func TestDefaultConfig(t *testing.T) {
 	if config.HealthCheckInterval != 10 {
 		t.Errorf("Expected HealthCheckInterval 10, got %d", config.HealthCheckInterval)
 	}
-	if !config.AutoRestart {
-		t.Error("Expected AutoRestart to be true")
-	}
-	if !config.WatchFiles {
-		t.Error("Expected WatchFiles to be true")
-	}
 	if config.DebugMode {
 		t.Error("Expected DebugMode to be false")
 	}
@@ -48,8 +42,6 @@ func TestEnvironmentVariableLoading(t *testing.T) {
 		"MCP_MESH_DB_PATH":               "/test/path.db",
 		"MCP_MESH_LOG_LEVEL":             "DEBUG",
 		"MCP_MESH_HEALTH_CHECK_INTERVAL": "60",
-		"MCP_MESH_AUTO_RESTART":          "false",
-		"MCP_MESH_WATCH_FILES":           "false",
 		"MCP_MESH_DEBUG_MODE":            "true",
 		"MCP_MESH_STARTUP_TIMEOUT":       "45",
 		"MCP_MESH_SHUTDOWN_TIMEOUT":      "45",
@@ -86,12 +78,6 @@ func TestEnvironmentVariableLoading(t *testing.T) {
 	}
 	if config.HealthCheckInterval != 60 {
 		t.Errorf("Expected HealthCheckInterval 60, got %d", config.HealthCheckInterval)
-	}
-	if config.AutoRestart {
-		t.Error("Expected AutoRestart to be false")
-	}
-	if config.WatchFiles {
-		t.Error("Expected WatchFiles to be false")
 	}
 	if !config.DebugMode {
 		t.Error("Expected DebugMode to be true")

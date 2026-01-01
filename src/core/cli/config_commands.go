@@ -67,8 +67,6 @@ Valid configuration keys:
   db_path                 - Database file path (string)
   log_level               - Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   health_check_interval   - Health check interval in seconds (integer)
-  auto_restart            - Auto restart flag (true, false)
-  watch_files             - Watch files flag (true, false)
   debug_mode              - Debug mode flag (true, false)
   startup_timeout         - Startup timeout in seconds (integer)
   shutdown_timeout        - Shutdown timeout in seconds (integer)
@@ -78,7 +76,7 @@ Valid configuration keys:
 Examples:
   meshctl config set registry_port 9090
   meshctl config set log_level DEBUG
-  meshctl config set auto_restart false`,
+  meshctl config set debug_mode true`,
 		Args: cobra.ExactArgs(2),
 		RunE: runConfigSetCommand,
 	}
@@ -264,12 +262,6 @@ func setConfigValue(config *CLIConfig, key, value string) error {
 			return fmt.Errorf("health check interval must be positive, got %d", interval)
 		}
 		config.HealthCheckInterval = interval
-
-	case "auto_restart":
-		config.AutoRestart = strings.ToLower(value) == "true"
-
-	case "watch_files":
-		config.WatchFiles = strings.ToLower(value) == "true"
 
 	case "debug_mode":
 		config.DebugMode = strings.ToLower(value) == "true"

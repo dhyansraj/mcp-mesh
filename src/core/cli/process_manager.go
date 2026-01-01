@@ -32,7 +32,6 @@ type ProcessInfo struct {
 	Metadata         map[string]interface{} `json:"metadata"`
 	ConsecutiveFails int                    `json:"consecutive_fails"`
 	LastRestart      time.Time              `json:"last_restart"`
-	AutoRestart      bool                   `json:"auto_restart"`
 	FilePath         string                 `json:"file_path,omitempty"` // Added for backward compatibility
 	Process          *os.Process            `json:"-"`
 }
@@ -147,7 +146,6 @@ func (pm *ProcessManager) TrackProcess(name, command, serviceType string, proces
 		Metadata:         metadata,
 		ConsecutiveFails: 0,
 		LastRestart:      time.Time{},
-		AutoRestart:      true,
 		FilePath:         command, // Set filepath for agents
 		Process:          process,
 	}
@@ -327,14 +325,6 @@ func (pm *ProcessManager) checkProcessHealth(name string, info *ProcessInfo) {
 		info.Status = "stopped"
 		info.HealthCheck = "failed"
 		info.ConsecutiveFails++
-
-		// Attempt auto-restart if configured
-		if pm.shouldAutoRestart(info) {
-			pm.logger.Printf("Attempting auto-restart for process: %s", name)
-			if err := pm.restartProcessInternal(name, info); err != nil {
-				pm.logger.Printf("Auto-restart failed for %s: %v", name, err)
-			}
-		}
 		return
 	}
 
@@ -355,24 +345,6 @@ func (pm *ProcessManager) checkProcessHealth(name string, info *ProcessInfo) {
 		info.LastSeen = time.Now()
 		info.ConsecutiveFails = 0
 	}
-}
-
-// shouldAutoRestart determines if a process should be auto-restarted
-func (pm *ProcessManager) shouldAutoRestart(info *ProcessInfo) bool {
-	if !info.AutoRestart || !pm.monitorPolicy.RestartOnFailure {
-		return false
-	}
-
-	if info.Restarts >= pm.monitorPolicy.MaxRestartAttempts {
-		return false
-	}
-
-	// Check cooldown period
-	if time.Since(info.LastRestart) < pm.monitorPolicy.RestartCooldown {
-		return false
-	}
-
-	return true
 }
 
 // checkAgentRegistryHealth checks if an agent is healthy in the registry

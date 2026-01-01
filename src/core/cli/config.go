@@ -32,9 +32,7 @@ type CLIConfig struct {
 	HealthCheckInterval int `json:"health_check_interval"` // default: 10
 
 	// Development settings
-	AutoRestart bool `json:"auto_restart"` // default: true
-	WatchFiles  bool `json:"watch_files"`  // default: true
-	DebugMode   bool `json:"debug_mode"`   // default: false
+	DebugMode bool `json:"debug_mode"` // default: false
 
 	// Timeout settings
 	StartupTimeout  int `json:"startup_timeout"`  // default: 30
@@ -70,8 +68,6 @@ func DefaultConfig() *CLIConfig {
 		DBPath:              "mcp_mesh_registry.db",
 		LogLevel:            "INFO",
 		HealthCheckInterval: 10,
-		AutoRestart:         true,
-		WatchFiles:          true,
 		DebugMode:           false,
 		StartupTimeout:      30,
 		ShutdownTimeout:     30,
@@ -147,14 +143,6 @@ func loadFromEnvironment(config *CLIConfig) {
 	}
 
 	// Development settings
-	if val := os.Getenv("MCP_MESH_AUTO_RESTART"); val != "" {
-		config.AutoRestart = parseBoolEnv(val)
-	}
-
-	if val := os.Getenv("MCP_MESH_WATCH_FILES"); val != "" {
-		config.WatchFiles = parseBoolEnv(val)
-	}
-
 	if val := os.Getenv("MCP_MESH_DEBUG_MODE"); val != "" {
 		config.DebugMode = parseBoolEnv(val)
 	}
@@ -274,8 +262,6 @@ func mergeConfigurations(target *CLIConfig, source *CLIConfig) {
 	}
 	// Boolean fields need special handling since false is a valid value
 	// We check if the source has been explicitly set (different from default)
-	target.AutoRestart = source.AutoRestart
-	target.WatchFiles = source.WatchFiles
 	target.DebugMode = source.DebugMode
 	target.EnableBackground = source.EnableBackground
 
@@ -559,9 +545,7 @@ func (c *CLIConfig) GetConfigurationSummary() map[string]interface{} {
 			"health_check_interval": c.HealthCheckInterval,
 		},
 		"development": map[string]interface{}{
-			"auto_restart": c.AutoRestart,
-			"watch_files":  c.WatchFiles,
-			"debug_mode":   c.DebugMode,
+			"debug_mode": c.DebugMode,
 		},
 		"timeouts": map[string]interface{}{
 			"startup":  c.StartupTimeout,
@@ -613,18 +597,6 @@ func ApplyCliFlags(config *CLIConfig, cmd *cobra.Command) {
 	if cmd.Flags().Changed("health-check-interval") {
 		if val, err := cmd.Flags().GetInt("health-check-interval"); err == nil {
 			config.HealthCheckInterval = val
-		}
-	}
-
-	if cmd.Flags().Changed("auto-restart") {
-		if val, err := cmd.Flags().GetBool("auto-restart"); err == nil {
-			config.AutoRestart = val
-		}
-	}
-
-	if cmd.Flags().Changed("watch-files") {
-		if val, err := cmd.Flags().GetBool("watch-files"); err == nil {
-			config.WatchFiles = val
 		}
 	}
 
@@ -751,8 +723,6 @@ func (c *CLIConfig) Clone() *CLIConfig {
 		DBPath:              c.DBPath,
 		LogLevel:            c.LogLevel,
 		HealthCheckInterval: c.HealthCheckInterval,
-		AutoRestart:         c.AutoRestart,
-		WatchFiles:          c.WatchFiles,
 		DebugMode:           c.DebugMode,
 		StartupTimeout:      c.StartupTimeout,
 		ShutdownTimeout:     c.ShutdownTimeout,
@@ -900,8 +870,6 @@ func (c *CLIConfig) Load() error {
 	c.DBPath = newConfig.DBPath
 	c.LogLevel = newConfig.LogLevel
 	c.HealthCheckInterval = newConfig.HealthCheckInterval
-	c.AutoRestart = newConfig.AutoRestart
-	c.WatchFiles = newConfig.WatchFiles
 	c.DebugMode = newConfig.DebugMode
 	c.StartupTimeout = newConfig.StartupTimeout
 	c.ShutdownTimeout = newConfig.ShutdownTimeout
