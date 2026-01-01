@@ -90,6 +90,8 @@ services:
       - TRACE_EXPORTER_TYPE=otlp
       - TELEMETRY_ENDPOINT=tempo:4317
       - TELEMETRY_PROTOCOL=grpc
+      # Tempo HTTP API for trace querying (Issue #310 - meshctl trace)
+      - TEMPO_URL=http://tempo:3200
     networks:
       - mcp-mesh
     depends_on:

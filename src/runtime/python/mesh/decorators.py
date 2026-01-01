@@ -85,30 +85,88 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 "MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false"
             ).lower() in ("true", "1", "yes")
             if tracing_enabled:
-                from starlette.middleware.base import BaseHTTPMiddleware
-                from starlette.requests import Request
+                # Use pure ASGI middleware for proper SSE header injection (Issue #310)
+                class TraceContextMiddleware:
+                    """Pure ASGI middleware for trace context and header injection.
 
-                class TraceContextMiddleware(BaseHTTPMiddleware):
-                    """Middleware to extract trace headers and set up trace context."""
+                    This middleware:
+                    1. Extracts trace context from incoming request headers
+                    2. Sets up trace context for the request lifecycle
+                    3. Injects trace headers into the response (works with SSE)
+                    """
 
-                    async def dispatch(self, request: Request, call_next):
+                    def __init__(self, app):
+                        self.app = app
+
+                    async def __call__(self, scope, receive, send):
+                        if scope["type"] != "http":
+                            await self.app(scope, receive, send)
+                            return
+
+                        path = scope.get("path", "")
+                        logger.debug(f"[TRACE] Processing request {path}")
+
+                        # Extract and set trace context from request headers
+                        trace_id = None
+                        span_id = None
+                        parent_span = None
+
                         try:
+                            from _mcp_mesh.tracing.context import TraceContext
                             from _mcp_mesh.tracing.trace_context_helper import (
                                 TraceContextHelper,
+                                get_header_case_insensitive,
                             )
 
-                            # Extract and set trace context from headers for distributed tracing
-                            trace_context = await TraceContextHelper.extract_trace_context_from_request(
-                                request
+                            # Extract trace headers from request (case-insensitive)
+                            headers_list = scope.get("headers", [])
+                            incoming_trace_id = get_header_case_insensitive(
+                                headers_list, "x-trace-id"
                             )
+                            incoming_parent_span = get_header_case_insensitive(
+                                headers_list, "x-parent-span"
+                            )
+
+                            # Setup trace context
+                            trace_context = {
+                                "trace_id": (
+                                    incoming_trace_id if incoming_trace_id else None
+                                ),
+                                "parent_span": (
+                                    incoming_parent_span
+                                    if incoming_parent_span
+                                    else None
+                                ),
+                            }
                             TraceContextHelper.setup_request_trace_context(
                                 trace_context, logger
                             )
+
+                            # Get trace IDs to inject into response
+                            current_trace = TraceContext.get_current()
+                            if current_trace:
+                                trace_id = current_trace.trace_id
+                                span_id = current_trace.span_id
+                                parent_span = current_trace.parent_span
                         except Exception as e:
-                            # Never fail request due to tracing issues
                             logger.warning(f"Failed to set trace context: {e}")
 
-                        return await call_next(request)
+                        # Wrap send to inject headers before response starts
+                        async def send_with_trace_headers(message):
+                            if message["type"] == "http.response.start" and trace_id:
+                                # Add trace headers to the response
+                                headers = list(message.get("headers", []))
+                                headers.append((b"x-trace-id", trace_id.encode()))
+                                if span_id:
+                                    headers.append((b"x-span-id", span_id.encode()))
+                                if parent_span:
+                                    headers.append(
+                                        (b"x-parent-span-id", parent_span.encode())
+                                    )
+                                message = {**message, "headers": headers}
+                            await send(message)
+
+                        await self.app(scope, receive, send_with_trace_headers)
 
                 app.add_middleware(TraceContextMiddleware)
                 logger.debug(

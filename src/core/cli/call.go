@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +36,47 @@ type MCPResponse struct {
 type MCPError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// MCPCallResult holds the result and trace information from an MCP call
+type MCPCallResult struct {
+	Result   json.RawMessage
+	TraceID  string // X-Trace-Id header
+	SpanID   string // X-Span-Id header
+}
+
+// TraceContext holds trace IDs for distributed tracing
+type TraceContext struct {
+	TraceID string
+	SpanID  string
+}
+
+// generateTraceID generates a 16-byte hex trace ID (matching Python's format)
+func generateTraceID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based ID if crypto/rand fails (extremely rare)
+		return fmt.Sprintf("%016x%016x", time.Now().UnixNano(), time.Now().UnixNano()^0xDEADBEEF)
+	}
+	return hex.EncodeToString(b)
+}
+
+// generateSpanID generates an 8-byte hex span ID (matching Python's format)
+func generateSpanID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based ID if crypto/rand fails (extremely rare)
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// newTraceContext creates a new trace context for distributed tracing
+func newTraceContext() *TraceContext {
+	return &TraceContext{
+		TraceID: generateTraceID(),
+		SpanID:  generateSpanID(),
+	}
 }
 
 // NewCallCommand creates the call command
@@ -91,6 +134,9 @@ Ingress mode (for Kubernetes clusters with ingress configured):
 	cmd.Flags().String("ingress-domain", "", "Ingress domain (e.g., mcp-mesh.local) - enables ingress mode")
 	cmd.Flags().String("ingress-url", "", "Ingress base URL (e.g., http://192.168.58.2) - required if DNS not configured")
 
+	// Tracing flag (Issue #310)
+	cmd.Flags().Bool("trace", false, "Display trace ID for distributed tracing (use with 'meshctl trace <id>' to view call tree)")
+
 	return cmd
 }
 
@@ -139,6 +185,13 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	ingressDomain, _ := cmd.Flags().GetString("ingress-domain")
 	ingressURL, _ := cmd.Flags().GetString("ingress-url")
 	useProxy, _ := cmd.Flags().GetBool("use-proxy")
+	traceFlag, _ := cmd.Flags().GetBool("trace")
+
+	// Generate trace context if --trace flag is set (Issue #310)
+	var traceCtx *TraceContext
+	if traceFlag {
+		traceCtx = newTraceContext()
+	}
 
 	// Create HTTP client with TLS config
 	httpClient := createHTTPClient(timeout, insecure)
@@ -185,12 +238,12 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Make MCP call
-	var result json.RawMessage
+	var callResult *MCPCallResult
 	if ingressDomain != "" && agentURL == "" {
 		// Ingress mode: need Host header
-		result, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, toolName, toolArgs)
+		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, toolName, toolArgs, traceCtx)
 	} else {
-		result, err = callMCPTool(httpClient, agentEndpoint, toolName, toolArgs)
+		callResult, err = callMCPTool(httpClient, agentEndpoint, toolName, toolArgs, traceCtx)
 	}
 	if err != nil {
 		return fmt.Errorf("MCP call failed: %w", err)
@@ -198,14 +251,21 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 
 	// Output result
 	if raw {
-		fmt.Println(string(result))
+		fmt.Println(string(callResult.Result))
 	} else {
 		var prettyJSON bytes.Buffer
-		if err := json.Indent(&prettyJSON, result, "", "  "); err != nil {
-			fmt.Println(string(result))
+		if err := json.Indent(&prettyJSON, callResult.Result, "", "  "); err != nil {
+			fmt.Println(string(callResult.Result))
 		} else {
 			fmt.Println(prettyJSON.String())
 		}
+	}
+
+	// Display trace information if --trace flag is set (Issue #310)
+	// Use the trace ID we generated and injected into the request
+	if traceFlag && traceCtx != nil {
+		fmt.Fprintf(os.Stderr, "\nTrace ID: %s\n", traceCtx.TraceID)
+		fmt.Fprintf(os.Stderr, "View trace: meshctl trace %s\n", traceCtx.TraceID)
 	}
 
 	return nil
@@ -419,7 +479,7 @@ func isIPAddress(s string) bool {
 }
 
 // callMCPToolWithHost makes an MCP tools/call request with a custom Host header (for ingress)
-func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}) (json.RawMessage, error) {
+func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
 	// Build MCP request
 	mcpReq := MCPRequest{
 		JSONRPC: "2.0",
@@ -445,6 +505,12 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	// Inject trace headers if tracing is enabled (Issue #310)
+	if traceCtx != nil {
+		req.Header.Set("X-Trace-ID", traceCtx.TraceID)
+		req.Header.Set("X-Parent-Span", traceCtx.SpanID)
+	}
 
 	// Set Host header for ingress routing
 	if hostHeader != "" {
@@ -457,6 +523,14 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	}
 	defer resp.Body.Close()
 
+	// Use injected trace IDs (we know them upfront)
+	traceID := ""
+	spanID := ""
+	if traceCtx != nil {
+		traceID = traceCtx.TraceID
+		spanID = traceCtx.SpanID
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -486,7 +560,7 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	var mcpResp MCPResponse
 	if err := json.Unmarshal(jsonData, &mcpResp); err != nil {
 		// Return raw body if not valid JSON-RPC
-		return body, nil
+		return &MCPCallResult{Result: body, TraceID: traceID, SpanID: spanID}, nil
 	}
 
 	if mcpResp.Error != nil {
@@ -494,14 +568,14 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	}
 
 	if mcpResp.Result != nil {
-		return mcpResp.Result, nil
+		return &MCPCallResult{Result: mcpResp.Result, TraceID: traceID, SpanID: spanID}, nil
 	}
 
-	return body, nil
+	return &MCPCallResult{Result: body, TraceID: traceID, SpanID: spanID}, nil
 }
 
 // callMCPTool makes an MCP tools/call request to the agent
-func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}) (json.RawMessage, error) {
+func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
 	// Build MCP request
 	mcpReq := MCPRequest{
 		JSONRPC: "2.0",
@@ -528,6 +602,12 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
+	// Inject trace headers if tracing is enabled (Issue #310)
+	if traceCtx != nil {
+		req.Header.Set("X-Trace-ID", traceCtx.TraceID)
+		req.Header.Set("X-Parent-Span", traceCtx.SpanID)
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call agent at %s: %w\n\n"+
@@ -538,6 +618,14 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 			"  - Use direct agent URL: meshctl call <tool_name> --use-proxy=false --agent-url http://localhost:<exposed_port>", mcpURL, err)
 	}
 	defer resp.Body.Close()
+
+	// Use injected trace IDs (we know them upfront)
+	traceID := ""
+	spanID := ""
+	if traceCtx != nil {
+		traceID = traceCtx.TraceID
+		spanID = traceCtx.SpanID
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -568,7 +656,7 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	var mcpResp MCPResponse
 	if err := json.Unmarshal(jsonData, &mcpResp); err != nil {
 		// Return raw body if not valid JSON-RPC
-		return body, nil
+		return &MCPCallResult{Result: body, TraceID: traceID, SpanID: spanID}, nil
 	}
 
 	if mcpResp.Error != nil {
@@ -576,8 +664,8 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	}
 
 	if mcpResp.Result != nil {
-		return mcpResp.Result, nil
+		return &MCPCallResult{Result: mcpResp.Result, TraceID: traceID, SpanID: spanID}, nil
 	}
 
-	return body, nil
+	return &MCPCallResult{Result: body, TraceID: traceID, SpanID: spanID}, nil
 }

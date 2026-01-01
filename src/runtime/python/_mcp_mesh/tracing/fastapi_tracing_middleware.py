@@ -40,6 +40,9 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
         if not is_tracing_enabled():
             return await call_next(request)
 
+        self.logger.debug(
+            f"[TRACE] Processing request {request.method} {request.url.path}"
+        )
 
         # Setup distributed tracing context from request headers
         try:
@@ -49,7 +52,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
             trace_context = await TraceContextHelper.extract_trace_context_from_request(
                 request
             )
-
 
             # Setup trace context for this request lifecycle
             TraceContextHelper.setup_request_trace_context(trace_context, self.logger)
@@ -61,7 +63,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
         # Extract route information for tracing
         route_name = self._extract_route_name(request)
         start_time = time.time()
-
 
         try:
             # Process the request
@@ -83,7 +84,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
                 status_code=response.status_code,
             )
 
-
             return response
 
         except Exception as e:
@@ -102,7 +102,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
                 success=False,
                 error=str(e),
             )
-
 
             raise  # Re-raise the original exception
 

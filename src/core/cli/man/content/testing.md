@@ -121,17 +121,14 @@ Fix: Ensure body has jsonrpc, id, method, and params fields
 
 ## Testing in Docker Compose
 
-When agents run in Docker Compose, they register with container hostnames (e.g., `agent-one:9001`) which aren't resolvable from your host machine.
-
-Use `--agent-url` with the mapped localhost port:
+Calls route through the registry proxy by default:
 
 ```bash
-# Find mapped ports
-docker compose ps
+meshctl call greet
+meshctl call calculator:add '{"a": 1, "b": 2}'
 
-# Call using localhost with mapped port
-meshctl call greet --agent-url http://localhost:9001
-meshctl call calculator:add '{"a": 1, "b": 2}' --agent-url http://localhost:9002
+# Bypass proxy (requires mapped ports)
+meshctl call greet --use-proxy=false --agent-url http://localhost:9001
 ```
 
 ## Testing in Kubernetes

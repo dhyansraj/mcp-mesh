@@ -704,6 +704,14 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("Accept", accept)
 	}
 
+	// Forward trace headers for distributed tracing (Issue #310)
+	if traceID := c.Request.Header.Get("X-Trace-ID"); traceID != "" {
+		proxyReq.Header.Set("X-Trace-ID", traceID)
+	}
+	if parentSpan := c.Request.Header.Get("X-Parent-Span"); parentSpan != "" {
+		proxyReq.Header.Set("X-Parent-Span", parentSpan)
+	}
+
 	// Execute the request
 	client := &http.Client{
 		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls

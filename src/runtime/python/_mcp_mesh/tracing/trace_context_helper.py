@@ -11,6 +11,23 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def get_header_case_insensitive(headers_list: list, name: str) -> str:
+    """Get header value case-insensitively from ASGI headers list.
+
+    Args:
+        headers_list: List of (key, value) tuples with bytes
+        name: Header name to find (case-insensitive)
+
+    Returns:
+        Header value as string, or empty string if not found
+    """
+    name_lower = name.lower()
+    for key, value in headers_list:
+        if key.decode().lower() == name_lower:
+            return value.decode()
+    return ""
+
+
 class TraceContextHelper:
     """Helper class to handle HTTP request trace context setup and distributed tracing."""
 
@@ -37,16 +54,18 @@ class TraceContextHelper:
             extracted_trace_id = trace_context.get("trace_id")
             if extracted_trace_id and extracted_trace_id.strip():
                 # EXISTING TRACE: This service is being called by another service
-                from .utils import generate_span_id
-
-                current_span_id = generate_span_id()
+                # Pass through the incoming parent_span directly - ExecutionTracer will create
+                # the actual function span as a child of this parent.
+                # This avoids creating an unpublished intermediate middleware span.
                 parent_span_id = trace_context.get("parent_span")
 
-                # Set context that will be used throughout request lifecycle
+                # Set context with incoming parent_span as the current span
+                # When ExecutionTracer runs, it will create a child span with this as parent
                 TraceContext.set_current(
                     trace_id=extracted_trace_id,
-                    span_id=current_span_id,
-                    parent_span=parent_span_id,
+                    span_id=parent_span_id
+                    or "",  # Use parent as current (will be overwritten by ExecutionTracer)
+                    parent_span=None,  # No grandparent needed at this level
                 )
             else:
                 # NEW ROOT TRACE: This service is the entry point (no incoming trace headers)
