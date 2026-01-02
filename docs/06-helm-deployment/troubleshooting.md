@@ -72,7 +72,7 @@ Error: failed to download "oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry"
 
 ```bash
 # Verify chart exists (OCI charts don't require helm repo add)
-helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry --version 0.7.1
+helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry --version 0.7.14
 
 # List available versions
 helm search repo --regexp 'ghcr.io/dhyansraj/mcp-mesh' 2>/dev/null || \
@@ -128,14 +128,14 @@ Error: INSTALLATION FAILED: cannot re-use a name that is still in use
 helm list -A | grep my-release
 
 # Option 1: Upgrade existing release
-helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
+helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.14
 
 # Option 2: Uninstall and reinstall
 helm uninstall my-release -n mcp-mesh
-helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
+helm install my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.14
 
 # Option 3: Use different name
-helm install my-release-2 oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
+helm install my-release-2 oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.14
 ```
 
 ### 📦 Dependency Issues
@@ -534,7 +534,7 @@ helm upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 
 ```bash
 # Check for breaking changes
-helm diff upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.1
+helm diff upgrade my-release oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --version 0.7.14
 
 # Backup current state
 helm get values my-release -n mcp-mesh > backup-values.yaml
