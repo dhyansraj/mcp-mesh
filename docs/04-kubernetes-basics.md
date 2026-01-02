@@ -31,7 +31,7 @@ kubectl create namespace mcp-mesh
 
 # Install registry (no "helm repo add" needed with OCI)
 helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
-  --version 0.7.13 \
+  --version 0.7.14 \
   --namespace mcp-mesh
 
 # Wait for registry
@@ -40,13 +40,13 @@ kubectl wait --for=condition=available deployment/mcp-registry-mcp-mesh-registry
 
 # Install agents
 helm install hello-world oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.13 \
+  --version 0.7.14 \
   --namespace mcp-mesh \
   --set agent.name=hello-world \
   --set agent.script=hello_world.py
 
 helm install system-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.13 \
+  --version 0.7.14 \
   --namespace mcp-mesh \
   --set agent.name=system-agent \
   --set agent.script=system_agent.py
@@ -108,7 +108,7 @@ resources:
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.13 \
+  --version 0.7.14 \
   --namespace mcp-mesh \
   -f my-agent-values.yaml
 ```
@@ -121,7 +121,7 @@ helm list -n mcp-mesh
 
 # Upgrade a release
 helm upgrade hello-world oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.13 \
+  --version 0.7.14 \
   --namespace mcp-mesh \
   --set agent.replicas=3
 

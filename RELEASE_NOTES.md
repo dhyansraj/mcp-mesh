@@ -1,5 +1,33 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.13...v0.7.14)
+
+## v0.7.14 (2026-01-02)
+
+### 🐛 Bug Fixes
+
+- **Fix scaffold --compose --observability tracing config** (#320): Fixed incomplete tracing configuration
+  - Add missing registry tracing env vars (`TRACE_EXPORTER_TYPE`, `TELEMETRY_ENDPOINT`, `TELEMETRY_PROTOCOL`, `TEMPO_URL`)
+  - Generate `tempo.yaml` config file when `--observability` is set
+  - Update Tempo version from 2.3.1 to 2.8.1
+  - Add `tempo-data` volume for trace persistence
+
+- **Fix registry port default docs** (#322): Corrected `--registry-port` help text from 8080 to 8000
+
+### ✨ New Features
+
+- **Add observability to existing compose** (#320): Support running `--observability` on existing docker-compose files
+  - Merge tracing env vars into existing registry and agent services
+  - Preserve user-added environment variables when merging
+
+### 📚 Documentation
+
+- **Capability Selector Syntax** (#322): Add unified documentation for dependency selection
+  - New "Capability Selector Syntax" section in `meshctl man capabilities`
+  - Document AND/OR semantics for tag matching
+  - Add cross-references from `di`, `llm`, `tags`, and `scaffold` man pages
+  - Add `--filter` flag documentation to `meshctl man scaffold`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.12...v0.7.13)
 
 ## v0.7.13 (2026-01-01)
@@ -7,6 +35,7 @@
 ### ✨ New Features
 
 - **LLM response metadata** (#314): Add `_mesh_meta` to LLM results with provider, model, token counts, and latency for cost tracking
+
   ```python
   result = await llm(question)
   print(result._mesh_meta.model)          # "openai/gpt-4o"
@@ -16,6 +45,7 @@
   ```
 
 - **Distributed tracing** (#313): Add `meshctl trace <id>` command and `--trace` flag for call tree visualization
+
   ```bash
   meshctl call smart_analyze '{"query": "test"}' --trace
   meshctl trace abc123  # View call tree
