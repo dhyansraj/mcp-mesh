@@ -375,6 +375,7 @@ var agentTracingEnvVars = map[string]string{
 
 // addTracingEnvVarsToService adds tracing environment variables to an existing service
 // It preserves any existing environment variables the user has added
+// Handles both mapping-style (KEY: value) and list-style (- KEY=value) environment formats
 func addTracingEnvVarsToService(servicesNode *yaml.Node, serviceName string, envVars map[string]string) {
 	if servicesNode.Kind != yaml.MappingNode {
 		return
@@ -397,27 +398,47 @@ func addTracingEnvVarsToService(servicesNode *yaml.Node, serviceName string, env
 				}
 			}
 
-			// If no environment section, create one
+			// If no environment section, create one (default to mapping style)
 			if envNode == nil {
 				envKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "environment"}
 				envNode = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{}}
 				serviceNode.Content = append(serviceNode.Content, envKeyNode, envNode)
 			}
 
-			// Get existing env var names
+			// Get existing env var names (handle both mapping and sequence styles)
 			existingEnvVars := make(map[string]bool)
+
 			if envNode.Kind == yaml.MappingNode {
+				// Mapping style: KEY: value
 				for k := 0; k < len(envNode.Content)-1; k += 2 {
 					existingEnvVars[envNode.Content[k].Value] = true
+				}
+			} else if envNode.Kind == yaml.SequenceNode {
+				// List style: - KEY=value
+				for _, item := range envNode.Content {
+					if item.Kind == yaml.ScalarNode {
+						// Parse KEY=value format
+						if eqIdx := strings.Index(item.Value, "="); eqIdx > 0 {
+							key := item.Value[:eqIdx]
+							existingEnvVars[key] = true
+						}
+					}
 				}
 			}
 
 			// Add new env vars (only if they don't already exist)
 			for key, value := range envVars {
 				if !existingEnvVars[key] {
-					keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
-					valueNode := &yaml.Node{Kind: yaml.ScalarNode, Value: value}
-					envNode.Content = append(envNode.Content, keyNode, valueNode)
+					if envNode.Kind == yaml.MappingNode {
+						// Mapping style: add key and value as separate nodes
+						keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
+						valueNode := &yaml.Node{Kind: yaml.ScalarNode, Value: value}
+						envNode.Content = append(envNode.Content, keyNode, valueNode)
+					} else if envNode.Kind == yaml.SequenceNode {
+						// List style: add as "KEY=value" scalar
+						entryNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key + "=" + value}
+						envNode.Content = append(envNode.Content, entryNode)
+					}
 				}
 			}
 			break
