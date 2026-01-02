@@ -19,7 +19,7 @@ import (
 // MUST match Python CLI configuration behavior exactly
 type CLIConfig struct {
 	// Registry settings
-	RegistryPort int    `json:"registry_port"` // default: 8080
+	RegistryPort int    `json:"registry_port"` // default: 8000
 	RegistryHost string `json:"registry_host"` // default: "localhost"
 
 	// Database settings

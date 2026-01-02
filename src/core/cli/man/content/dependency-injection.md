@@ -35,6 +35,8 @@ async def greet(name: str, date_service: mesh.McpMeshAgent = None) -> str:
 
 ### Dependencies with Filters
 
+Use the capability selector syntax (see `meshctl man capabilities`) to filter by tags or version:
+
 ```python
 @app.tool()
 @mesh.tool(

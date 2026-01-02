@@ -6,6 +6,8 @@
 
 Tags are metadata labels attached to capabilities that enable intelligent service selection. MCP Mesh supports "smart matching" with operators that express preferences and exclusions.
 
+Tags are part of the **Capability Selector** syntax used throughout MCP Mesh. See `meshctl man capabilities` for the complete selector reference.
+
 ## Tag Operators
 
 | Prefix | Meaning   | Example                                 |

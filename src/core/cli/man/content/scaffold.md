@@ -4,19 +4,19 @@
 
 ## Input Modes
 
-| Mode | Usage | Best For |
-|------|-------|----------|
-| Interactive | `meshctl scaffold` | First-time users |
-| CLI flags | `meshctl scaffold --name my-agent --agent-type tool` | Scripting |
-| Config file | `meshctl scaffold --config scaffold.yaml` | Complex agents |
+| Mode        | Usage                                                | Best For         |
+| ----------- | ---------------------------------------------------- | ---------------- |
+| Interactive | `meshctl scaffold`                                   | First-time users |
+| CLI flags   | `meshctl scaffold --name my-agent --agent-type tool` | Scripting        |
+| Config file | `meshctl scaffold --config scaffold.yaml`            | Complex agents   |
 
 ## Agent Types
 
-| Type | Decorator | Description |
-|------|-----------|-------------|
-| `tool` | `@mesh.tool` | Basic capability agent |
-| `llm-agent` | `@mesh.llm` | LLM-powered agent that consumes providers |
-| `llm-provider` | `@mesh.llm_provider` | Zero-code LLM provider |
+| Type           | Decorator            | Description                               |
+| -------------- | -------------------- | ----------------------------------------- |
+| `tool`         | `@mesh.tool`         | Basic capability agent                    |
+| `llm-agent`    | `@mesh.llm`          | LLM-powered agent that consumes providers |
+| `llm-provider` | `@mesh.llm_provider` | Zero-code LLM provider                    |
 
 ## Quick Examples
 
@@ -62,18 +62,29 @@ meshctl scaffold --compose --project-name my-project
 
 ## Key Flags
 
-| Flag | Description |
-|------|-------------|
-| `--name` | Agent name (required for non-interactive) |
-| `--agent-type` | `tool`, `llm-agent`, or `llm-provider` |
-| `--dry-run` | Preview generated code |
-| `--no-interactive` | Disable prompts (for scripting) |
-| `--output` | Output directory (default: `.`) |
-| `--port` | HTTP port (default: 9000) |
-| `--model` | LiteLLM model for llm-provider |
-| `--llm-selector` | LLM provider for llm-agent: `claude`, `openai` |
-| `--compose` | Generate docker-compose.yml |
-| `--observability` | Add Redis/Tempo/Grafana to compose |
+| Flag               | Description                                          |
+| ------------------ | ---------------------------------------------------- |
+| `--name`           | Agent name (required for non-interactive)            |
+| `--agent-type`     | `tool`, `llm-agent`, or `llm-provider`               |
+| `--dry-run`        | Preview generated code                               |
+| `--no-interactive` | Disable prompts (for scripting)                      |
+| `--output`         | Output directory (default: `.`)                      |
+| `--port`           | HTTP port (default: 9000)                            |
+| `--model`          | LiteLLM model for llm-provider                       |
+| `--llm-selector`   | LLM provider for llm-agent: `claude`, `openai`       |
+| `--filter`         | Tool filter for llm-agent (capability selector JSON) |
+| `--compose`        | Generate docker-compose.yml                          |
+| `--observability`  | Add Redis/Tempo/Grafana to compose                   |
+
+The `--filter` flag uses capability selector syntax. See `meshctl man capabilities` for details.
+
+```bash
+# Filter tools by capability
+meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"capability": "calculator"}]'
+
+# Filter tools by tags
+meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"tags": ["tools"]}]'
+```
 
 ## See Also
 
