@@ -6,6 +6,67 @@
 
 Capabilities are named services that agents register with the mesh. When an agent declares a capability, other agents can discover and use it through dependency injection. Multiple agents can provide the same capability with different implementations.
 
+## Capability Selector Syntax
+
+MCP Mesh uses a unified syntax for selecting capabilities throughout the framework. This same pattern appears in `dependencies`, `@mesh.llm` provider/filter, `@mesh.route`, and `meshctl scaffold --filter`.
+
+### Selector Fields
+
+| Field        | Required | Description                                   |
+| ------------ | -------- | --------------------------------------------- |
+| `capability` | Yes\*    | Capability name to match                      |
+| `tags`       | No       | Tag filters with +/- operators                |
+| `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`) |
+
+\*When filtering by tags only (e.g., LLM tool filter), `capability` can be omitted.
+
+### Syntax Forms
+
+**Shorthand** (capability name only):
+
+```python
+dependencies=["date_service", "weather_data"]
+```
+
+**Full form** (with filters):
+
+```python
+dependencies=[
+    {"capability": "date_service"},
+    {"capability": "weather_data", "tags": ["+fast", "-deprecated"]},
+    {"capability": "api_client", "version": ">=2.0.0"},
+]
+```
+
+### Where This Syntax Is Used
+
+| Context                     | Example                                                 |
+| --------------------------- | ------------------------------------------------------- |
+| `@mesh.tool` dependencies   | `dependencies=["svc"]` or `[{"capability": "svc"}]`     |
+| `@mesh.llm` provider        | `provider={"capability": "llm", "tags": ["+claude"]}`   |
+| `@mesh.llm` filter          | `filter=[{"capability": "calc"}, {"tags": ["tools"]}]`  |
+| `@mesh.route` dependencies  | `dependencies=[{"capability": "api", "tags": ["+v2"]}]` |
+| `meshctl scaffold --filter` | `--filter '[{"capability": "x"}]'`                      |
+
+### Tag Operators
+
+| Prefix | Meaning   | Example         |
+| ------ | --------- | --------------- |
+| (none) | Required  | `"api"`         |
+| `+`    | Preferred | `"+fast"`       |
+| `-`    | Excluded  | `"-deprecated"` |
+
+### Selector Logic (AND/OR)
+
+| Syntax                         | Semantics                             |
+| ------------------------------ | ------------------------------------- |
+| `tags: ["a", "b", "c"]`        | a AND b AND c (all required)          |
+| `tags: ["+a", "+b"]`           | Prefer a, prefer b (neither required) |
+| `tags: ["a", "-x"]`            | Must have a, must NOT have x          |
+| `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors)           |
+
+See `meshctl man tags` for detailed tag matching behavior.
+
 ## Declaring Capabilities
 
 ```python

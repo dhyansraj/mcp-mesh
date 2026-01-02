@@ -43,7 +43,7 @@ Examples:
 
 	// Registry configuration flags
 	cmd.Flags().String("registry-host", "", "Registry host address (default: localhost)")
-	cmd.Flags().Int("registry-port", 0, "Registry port number (default: 8080)")
+	cmd.Flags().Int("registry-port", 0, "Registry port number (default: 8000)")
 	cmd.Flags().String("db-path", "", "Database file path (default: ./dev_registry.db)")
 
 	// Logging and debug flags

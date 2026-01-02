@@ -38,6 +38,8 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
 | `filter_mode`    | str  | `"all"`, `"best_match"`, or `"*"`                 |
 | `<llm_params>`   | any  | LiteLLM params (max_tokens, temperature, etc.)    |
 
+**Note**: `provider` and `filter` use the capability selector syntax (`capability`, `tags`, `version`). See `meshctl man capabilities` for details.
+
 **Note**: Response format is determined by the function's return type annotation, not a parameter. See [Response Formats](#response-formats).
 
 ## LLM Model Parameters
