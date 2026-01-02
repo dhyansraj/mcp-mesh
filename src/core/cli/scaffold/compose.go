@@ -208,10 +208,19 @@ func generateFreshCompose(config *ComposeConfig, outputPath string) error {
 		return fmt.Errorf("failed to render template: %w", err)
 	}
 
+	// Generate tempo.yaml if observability is enabled
+	if config.Observability {
+		outputDir := filepath.Dir(outputPath)
+		if err := generateTempoConfig(outputDir); err != nil {
+			return fmt.Errorf("failed to generate tempo.yaml: %w", err)
+		}
+	}
+
 	return nil
 }
 
 // mergeAgentsIntoCompose adds new agents to an existing docker-compose.yml
+// Also adds observability stack if --observability flag is set
 func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingContent []byte) (*GenerateResult, error) {
 	result := &GenerateResult{
 		WasMerged:     true,
@@ -234,6 +243,19 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 	// Get existing service names
 	existingServices := getExistingServiceNames(servicesNode)
 
+	// Add observability stack if requested and not already present
+	if config.Observability {
+		if err := addObservabilityToExisting(&doc, servicesNode, existingServices, config); err != nil {
+			return nil, fmt.Errorf("failed to add observability: %w", err)
+		}
+
+		// Generate tempo.yaml if observability is enabled
+		outputDir := filepath.Dir(outputPath)
+		if err := generateTempoConfig(outputDir); err != nil {
+			return nil, fmt.Errorf("failed to generate tempo.yaml: %w", err)
+		}
+	}
+
 	// Determine which agents to add
 	var agentsToAdd []DetectedAgent
 	for _, agent := range config.Agents {
@@ -245,33 +267,30 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 		}
 	}
 
-	// If no agents to add, just return
-	if len(agentsToAdd) == 0 {
-		return result, nil
-	}
-
-	// Generate YAML for new agent services
-	newServicesYAML, err := generateAgentServicesYAML(agentsToAdd, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate agent services: %w", err)
-	}
-
-	// Parse the new services YAML
-	var newServicesDoc yaml.Node
-	if err := yaml.Unmarshal([]byte(newServicesYAML), &newServicesDoc); err != nil {
-		return nil, fmt.Errorf("failed to parse generated services: %w", err)
-	}
-
-	// Add new service nodes to existing services
-	if newServicesDoc.Kind == yaml.DocumentNode && len(newServicesDoc.Content) > 0 {
-		newServicesMap := newServicesDoc.Content[0]
-		if newServicesMap.Kind == yaml.MappingNode {
-			servicesNode.Content = append(servicesNode.Content, newServicesMap.Content...)
+	// Generate YAML for new agent services (if any)
+	if len(agentsToAdd) > 0 {
+		newServicesYAML, err := generateAgentServicesYAML(agentsToAdd, config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate agent services: %w", err)
 		}
-	}
 
-	// Add volumes for new agents
-	addVolumesForAgents(&doc, agentsToAdd)
+		// Parse the new services YAML
+		var newServicesDoc yaml.Node
+		if err := yaml.Unmarshal([]byte(newServicesYAML), &newServicesDoc); err != nil {
+			return nil, fmt.Errorf("failed to parse generated services: %w", err)
+		}
+
+		// Add new service nodes to existing services
+		if newServicesDoc.Kind == yaml.DocumentNode && len(newServicesDoc.Content) > 0 {
+			newServicesMap := newServicesDoc.Content[0]
+			if newServicesMap.Kind == yaml.MappingNode {
+				servicesNode.Content = append(servicesNode.Content, newServicesMap.Content...)
+			}
+		}
+
+		// Add volumes for new agents
+		addVolumesForAgents(&doc, agentsToAdd)
+	}
 
 	// Write back the merged document
 	var buf bytes.Buffer
@@ -287,6 +306,340 @@ func mergeAgentsIntoCompose(config *ComposeConfig, outputPath string, existingCo
 	}
 
 	return result, nil
+}
+
+// addObservabilityToExisting adds observability services and updates existing services with tracing env vars
+func addObservabilityToExisting(doc *yaml.Node, servicesNode *yaml.Node, existingServices map[string]bool, config *ComposeConfig) error {
+	// Check which observability services need to be added
+	needsRedis := !existingServices["redis"]
+	needsTempo := !existingServices["tempo"]
+	needsGrafana := !existingServices["grafana"]
+
+	// Add missing observability services
+	if needsRedis || needsTempo || needsGrafana {
+		obsServicesYAML := generateObservabilityServicesYAML(config, needsRedis, needsTempo, needsGrafana)
+		if obsServicesYAML != "" {
+			var obsDoc yaml.Node
+			if err := yaml.Unmarshal([]byte(obsServicesYAML), &obsDoc); err != nil {
+				return fmt.Errorf("failed to parse observability services: %w", err)
+			}
+			if obsDoc.Kind == yaml.DocumentNode && len(obsDoc.Content) > 0 {
+				obsMap := obsDoc.Content[0]
+				if obsMap.Kind == yaml.MappingNode {
+					servicesNode.Content = append(servicesNode.Content, obsMap.Content...)
+				}
+			}
+		}
+	}
+
+	// Add tempo-data volume if tempo is being added or exists
+	if needsTempo || existingServices["tempo"] {
+		addTempoVolume(doc)
+	}
+
+	// Update existing registry with tracing env vars
+	if existingServices["registry"] {
+		addTracingEnvVarsToService(servicesNode, "registry", registryTracingEnvVars)
+		addDependencyToService(servicesNode, "registry", "tempo")
+	}
+
+	// Update existing agents with tracing env vars (look for services that aren't infrastructure)
+	infrastructureServices := map[string]bool{
+		"postgres": true, "registry": true, "redis": true,
+		"tempo": true, "grafana": true, "prometheus": true,
+	}
+	for serviceName := range existingServices {
+		if !infrastructureServices[serviceName] {
+			addTracingEnvVarsToService(servicesNode, serviceName, agentTracingEnvVars)
+		}
+	}
+
+	return nil
+}
+
+// Registry tracing environment variables
+var registryTracingEnvVars = map[string]string{
+	"REDIS_URL":                           "redis://redis:6379",
+	"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "true",
+	"TRACE_EXPORTER_TYPE":                 "otlp",
+	"TELEMETRY_ENDPOINT":                  "tempo:4317",
+	"TELEMETRY_PROTOCOL":                  "grpc",
+	"TEMPO_URL":                           "http://tempo:3200",
+}
+
+// Agent tracing environment variables
+var agentTracingEnvVars = map[string]string{
+	"REDIS_URL":                           "redis://redis:6379",
+	"MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "true",
+}
+
+// addTracingEnvVarsToService adds tracing environment variables to an existing service
+// It preserves any existing environment variables the user has added
+// Handles both mapping-style (KEY: value) and list-style (- KEY=value) environment formats
+func addTracingEnvVarsToService(servicesNode *yaml.Node, serviceName string, envVars map[string]string) {
+	if servicesNode.Kind != yaml.MappingNode {
+		return
+	}
+
+	// Find the service
+	for i := 0; i < len(servicesNode.Content)-1; i += 2 {
+		if servicesNode.Content[i].Value == serviceName {
+			serviceNode := servicesNode.Content[i+1]
+			if serviceNode.Kind != yaml.MappingNode {
+				continue
+			}
+
+			// Find or create environment section
+			var envNode *yaml.Node
+			for j := 0; j < len(serviceNode.Content)-1; j += 2 {
+				if serviceNode.Content[j].Value == "environment" {
+					envNode = serviceNode.Content[j+1]
+					break
+				}
+			}
+
+			// If no environment section, create one (default to mapping style)
+			if envNode == nil {
+				envKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "environment"}
+				envNode = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{}}
+				serviceNode.Content = append(serviceNode.Content, envKeyNode, envNode)
+			}
+
+			// Get existing env var names (handle both mapping and sequence styles)
+			existingEnvVars := make(map[string]bool)
+
+			if envNode.Kind == yaml.MappingNode {
+				// Mapping style: KEY: value
+				for k := 0; k < len(envNode.Content)-1; k += 2 {
+					existingEnvVars[envNode.Content[k].Value] = true
+				}
+			} else if envNode.Kind == yaml.SequenceNode {
+				// List style: - KEY=value
+				for _, item := range envNode.Content {
+					if item.Kind == yaml.ScalarNode {
+						// Parse KEY=value format
+						if eqIdx := strings.Index(item.Value, "="); eqIdx > 0 {
+							key := item.Value[:eqIdx]
+							existingEnvVars[key] = true
+						}
+					}
+				}
+			}
+
+			// Add new env vars (only if they don't already exist)
+			for key, value := range envVars {
+				if !existingEnvVars[key] {
+					if envNode.Kind == yaml.MappingNode {
+						// Mapping style: add key and value as separate nodes
+						keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
+						valueNode := &yaml.Node{Kind: yaml.ScalarNode, Value: value}
+						envNode.Content = append(envNode.Content, keyNode, valueNode)
+					} else if envNode.Kind == yaml.SequenceNode {
+						// List style: add as "KEY=value" scalar
+						entryNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key + "=" + value}
+						envNode.Content = append(envNode.Content, entryNode)
+					}
+				}
+			}
+			break
+		}
+	}
+}
+
+// addDependencyToService adds a depends_on entry for the specified dependency
+// Handles both mapping-style (service: condition) and list-style (- service) formats
+func addDependencyToService(servicesNode *yaml.Node, serviceName string, dependency string) {
+	if servicesNode.Kind != yaml.MappingNode {
+		return
+	}
+
+	// Find the service
+	for i := 0; i < len(servicesNode.Content)-1; i += 2 {
+		if servicesNode.Content[i].Value == serviceName {
+			serviceNode := servicesNode.Content[i+1]
+			if serviceNode.Kind != yaml.MappingNode {
+				continue
+			}
+
+			// Find depends_on section
+			var dependsOnNode *yaml.Node
+			for j := 0; j < len(serviceNode.Content)-1; j += 2 {
+				if serviceNode.Content[j].Value == "depends_on" {
+					dependsOnNode = serviceNode.Content[j+1]
+					break
+				}
+			}
+
+			if dependsOnNode == nil {
+				// No depends_on section, create one (default to mapping style for health checks)
+				dependsOnKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "depends_on"}
+				dependsOnNode = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{}}
+				serviceNode.Content = append(serviceNode.Content, dependsOnKeyNode, dependsOnNode)
+			}
+
+			// Handle based on node type
+			if dependsOnNode.Kind == yaml.MappingNode {
+				// Mapping style: check if dependency already exists
+				for k := 0; k < len(dependsOnNode.Content)-1; k += 2 {
+					if dependsOnNode.Content[k].Value == dependency {
+						return // Already exists
+					}
+				}
+				// Add the dependency with condition: service_healthy
+				depKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: dependency}
+				depValueNode := &yaml.Node{
+					Kind: yaml.MappingNode,
+					Content: []*yaml.Node{
+						{Kind: yaml.ScalarNode, Value: "condition"},
+						{Kind: yaml.ScalarNode, Value: "service_healthy"},
+					},
+				}
+				dependsOnNode.Content = append(dependsOnNode.Content, depKeyNode, depValueNode)
+			} else if dependsOnNode.Kind == yaml.SequenceNode {
+				// List style: check if dependency already exists
+				for _, item := range dependsOnNode.Content {
+					if item.Kind == yaml.ScalarNode && item.Value == dependency {
+						return // Already exists
+					}
+				}
+				// Add the dependency as a simple scalar
+				depNode := &yaml.Node{Kind: yaml.ScalarNode, Value: dependency}
+				dependsOnNode.Content = append(dependsOnNode.Content, depNode)
+			}
+			break
+		}
+	}
+}
+
+// addTempoVolume adds the tempo-data volume to the document
+func addTempoVolume(doc *yaml.Node) {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return
+	}
+
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return
+	}
+
+	// Find or create volumes section
+	var volumesNode *yaml.Node
+	for i := 0; i < len(root.Content)-1; i += 2 {
+		if root.Content[i].Value == "volumes" {
+			volumesNode = root.Content[i+1]
+			break
+		}
+	}
+
+	if volumesNode == nil {
+		// Create volumes section before networks
+		volumesKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "volumes"}
+		volumesNode = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{}}
+
+		// Find networks section to insert before it
+		networksIndex := -1
+		for i := 0; i < len(root.Content)-1; i += 2 {
+			if root.Content[i].Value == "networks" {
+				networksIndex = i
+				break
+			}
+		}
+
+		if networksIndex >= 0 {
+			newContent := make([]*yaml.Node, 0, len(root.Content)+2)
+			newContent = append(newContent, root.Content[:networksIndex]...)
+			newContent = append(newContent, volumesKeyNode, volumesNode)
+			newContent = append(newContent, root.Content[networksIndex:]...)
+			root.Content = newContent
+		} else {
+			root.Content = append(root.Content, volumesKeyNode, volumesNode)
+		}
+	}
+
+	// Check if tempo-data already exists
+	if volumesNode.Kind == yaml.MappingNode {
+		for i := 0; i < len(volumesNode.Content)-1; i += 2 {
+			if volumesNode.Content[i].Value == "tempo-data" {
+				return // Already exists
+			}
+		}
+		// Add tempo-data volume
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "tempo-data"}
+		valueNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{}}
+		volumesNode.Content = append(volumesNode.Content, keyNode, valueNode)
+	}
+}
+
+// generateObservabilityServicesYAML generates YAML for observability services
+func generateObservabilityServicesYAML(config *ComposeConfig, needsRedis, needsTempo, needsGrafana bool) string {
+	var sb strings.Builder
+
+	if needsRedis {
+		sb.WriteString(fmt.Sprintf(`redis:
+  image: redis:7-alpine
+  container_name: %s-redis
+  hostname: redis
+  command: redis-server --appendonly yes
+  ports:
+    - "6379:6379"
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+  networks:
+    - %s
+`, config.ProjectName, config.NetworkName))
+	}
+
+	if needsTempo {
+		sb.WriteString(fmt.Sprintf(`tempo:
+  image: grafana/tempo:2.8.1
+  container_name: %s-tempo
+  hostname: tempo
+  command: ["-config.file=/etc/tempo.yaml"]
+  volumes:
+    - ./tempo.yaml:/etc/tempo.yaml:ro
+    - tempo-data:/var/tempo
+  ports:
+    - "3200:3200"
+    - "4317:4317"
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+  networks:
+    - %s
+`, config.ProjectName, config.NetworkName))
+	}
+
+	if needsGrafana {
+		sb.WriteString(fmt.Sprintf(`grafana:
+  image: grafana/grafana:10.2.0
+  container_name: %s-grafana
+  hostname: grafana
+  environment:
+    GF_SECURITY_ADMIN_USER: admin
+    GF_SECURITY_ADMIN_PASSWORD: admin
+    GF_AUTH_ANONYMOUS_ENABLED: "true"
+    GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+  ports:
+    - "3000:3000"
+  depends_on:
+    tempo:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+  networks:
+    - %s
+`, config.ProjectName, config.NetworkName))
+	}
+
+	return sb.String()
 }
 
 // addVolumesForAgents adds named volumes for new agents to the document
@@ -478,6 +831,58 @@ const agentServicesTemplate = `{{- range .Agents }}
     - {{ $.NetworkName }}
 {{- end }}`
 
+// generateTempoConfig creates the tempo.yaml configuration file
+func generateTempoConfig(outputDir string) error {
+	tempoPath := filepath.Join(outputDir, "tempo.yaml")
+
+	// Don't overwrite if it already exists
+	if _, err := os.Stat(tempoPath); err == nil {
+		return nil
+	}
+
+	return os.WriteFile(tempoPath, []byte(tempoConfigTemplate), 0644)
+}
+
+// tempoConfigTemplate is the Tempo configuration for distributed tracing
+const tempoConfigTemplate = `# Tempo configuration for MCP Mesh distributed tracing
+# Generated by: meshctl scaffold --compose --observability
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+  trace_by_id:
+    duration_slo: 5s
+`
+
 // dockerComposeTemplate is the embedded template for docker-compose.yml
 const dockerComposeTemplate = `# MCP Mesh Development Docker Compose
 # Generated by: meshctl scaffold --compose
@@ -530,12 +935,19 @@ services:
       DATABASE_URL: postgresql://mcpmesh:mcpmesh@postgres:5432/mcpmesh?sslmode=disable
 {{- if .Observability }}
       REDIS_URL: redis://redis:6379
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+      TRACE_EXPORTER_TYPE: otlp
+      TELEMETRY_ENDPOINT: tempo:4317
+      TELEMETRY_PROTOCOL: grpc
+      TEMPO_URL: http://tempo:3200
 {{- end }}
     depends_on:
       postgres:
         condition: service_healthy
 {{- if .Observability }}
       redis:
+        condition: service_healthy
+      tempo:
         condition: service_healthy
 {{- end }}
     healthcheck:
@@ -565,12 +977,13 @@ services:
       - {{ .NetworkName }}
 
   tempo:
-    image: grafana/tempo:2.3.1
+    image: grafana/tempo:2.8.1
     container_name: {{ .ProjectName }}-tempo
     hostname: tempo
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
     ports:
       - "3200:3200"
       - "4317:4317"
@@ -654,9 +1067,12 @@ services:
       - {{ $.NetworkName }}
 {{- end }}
 {{- end }}
-{{- if .Agents }}
+{{- if or .Agents .Observability }}
 
 volumes:
+{{- if .Observability }}
+  tempo-data:
+{{- end }}
 {{- range .Agents }}
   {{ .Name }}-packages:
 {{- end }}
