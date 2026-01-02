@@ -447,6 +447,7 @@ func addTracingEnvVarsToService(servicesNode *yaml.Node, serviceName string, env
 }
 
 // addDependencyToService adds a depends_on entry for the specified dependency
+// Handles both mapping-style (service: condition) and list-style (- service) formats
 func addDependencyToService(servicesNode *yaml.Node, serviceName string, dependency string) {
 	if servicesNode.Kind != yaml.MappingNode {
 		return
@@ -470,14 +471,15 @@ func addDependencyToService(servicesNode *yaml.Node, serviceName string, depende
 			}
 
 			if dependsOnNode == nil {
-				// No depends_on section, create one
+				// No depends_on section, create one (default to mapping style for health checks)
 				dependsOnKeyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "depends_on"}
 				dependsOnNode = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{}}
 				serviceNode.Content = append(serviceNode.Content, dependsOnKeyNode, dependsOnNode)
 			}
 
-			// Check if dependency already exists
+			// Handle based on node type
 			if dependsOnNode.Kind == yaml.MappingNode {
+				// Mapping style: check if dependency already exists
 				for k := 0; k < len(dependsOnNode.Content)-1; k += 2 {
 					if dependsOnNode.Content[k].Value == dependency {
 						return // Already exists
@@ -493,6 +495,16 @@ func addDependencyToService(servicesNode *yaml.Node, serviceName string, depende
 					},
 				}
 				dependsOnNode.Content = append(dependsOnNode.Content, depKeyNode, depValueNode)
+			} else if dependsOnNode.Kind == yaml.SequenceNode {
+				// List style: check if dependency already exists
+				for _, item := range dependsOnNode.Content {
+					if item.Kind == yaml.ScalarNode && item.Value == dependency {
+						return // Already exists
+					}
+				}
+				// Add the dependency as a simple scalar
+				depNode := &yaml.Node{Kind: yaml.ScalarNode, Value: dependency}
+				dependsOnNode.Content = append(dependsOnNode.Content, depNode)
 			}
 			break
 		}
