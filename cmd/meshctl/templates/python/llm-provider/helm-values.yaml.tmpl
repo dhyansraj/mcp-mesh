@@ -1,14 +1,17 @@
 # Helm values for deploying {{ .Name }} with mcp-mesh-agent chart
-# Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent --version 0.7.1 -f helm-values.yaml
+# Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
 
 image:
   repository: your-registry/{{ .Name }}
-  tag: latest
+  tag: "v1.0.0"  # Your image version. Override with: --set image.tag=v1.2.3
   pullPolicy: IfNotPresent
 
 agent:
   name: {{ .Name }}
-  port: {{ .Port }}
+  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
+  # http:
+  #   port: 8080
 
 resources:
   limits:
