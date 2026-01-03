@@ -1,0 +1,52 @@
+# Development Dockerfile for observability testing
+# Mounts mcp-mesh source code for easy testing of fixes
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies that mcp-mesh needs
+# These are installed separately so we can mount mcp-mesh source
+RUN pip install --no-cache-dir \
+    "fastapi>=0.104.0" \
+    "uvicorn>=0.24.0" \
+    "httpx>=0.25.0" \
+    "aiohttp>=3.8.0" \
+    "urllib3>=2.1.0" \
+    "pydantic>=2.4.0" \
+    "python-dateutil>=2.8.0" \
+    "click>=8.1.0" \
+    "rich>=13.0.0" \
+    "typer>=0.9.0" \
+    "mcp>=1.9.0" \
+    "fastmcp>=2.8.0" \
+    "litellm>=1.30.0" \
+    "prometheus-client>=0.19.0" \
+    "pyyaml>=6.0" \
+    "jinja2>=3.1.0" \
+    "redis>=4.0.0,<7.0.0" \
+    "cachetools>=5.3.0"
+
+# Create directory for mcp-mesh source mount
+RUN mkdir -p /src/mcp-mesh
+
+# Create app user for security
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app /src
+
+USER appuser
+
+# Set PYTHONPATH to include mounted mcp-mesh source
+ENV PYTHONPATH="/src/mcp-mesh/src/runtime/python:${PYTHONPATH}"
+
+# Default command (to be overridden)
+CMD ["python", "-c", "print('Dev MCP Mesh image ready')"]
