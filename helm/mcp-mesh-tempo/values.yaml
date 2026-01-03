@@ -2,7 +2,7 @@ tempo:
   enabled: true
   image:
     repository: grafana/tempo
-    tag: "2.8.1"
+    tag: "2.9.0"
     pullPolicy: IfNotPresent
 
   resources:
