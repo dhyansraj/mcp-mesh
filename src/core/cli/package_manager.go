@@ -99,6 +99,18 @@ func InstallPackage(pythonExec, packageName string) error {
 	return nil
 }
 
+// findSystemPython finds a Python executable in the system PATH.
+// Used for creating new virtual environments.
+func findSystemPython() (string, error) {
+	candidates := []string{"python3", "python"}
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no Python executable found in PATH")
+}
+
 // CreateVirtualEnvironment creates a new virtual environment
 func CreateVirtualEnvironment(venvPath string) error {
 	fmt.Printf("🔧 Creating virtual environment at %s...\n", venvPath)
