@@ -3,7 +3,7 @@ name: mcp-mesh-grafana
 description: Grafana observability component for MCP Mesh
 type: application
 version: 0.7.14
-appVersion: "11.4.0"
+appVersion: "12.3.1"
 keywords:
   - grafana
   - observability

@@ -594,7 +594,7 @@ func generateObservabilityServicesYAML(config *ComposeConfig, needsRedis, needsT
 
 	if needsTempo {
 		sb.WriteString(fmt.Sprintf(`tempo:
-  image: grafana/tempo:2.8.1
+  image: grafana/tempo:2.9.0
   container_name: %s-tempo
   hostname: tempo
   command: ["-config.file=/etc/tempo.yaml"]
@@ -616,7 +616,7 @@ func generateObservabilityServicesYAML(config *ComposeConfig, needsRedis, needsT
 
 	if needsGrafana {
 		sb.WriteString(fmt.Sprintf(`grafana:
-  image: grafana/grafana:10.2.0
+  image: grafana/grafana:12.3.1
   container_name: %s-grafana
   hostname: grafana
   environment:
@@ -977,7 +977,7 @@ services:
       - {{ .NetworkName }}
 
   tempo:
-    image: grafana/tempo:2.8.1
+    image: grafana/tempo:2.9.0
     container_name: {{ .ProjectName }}-tempo
     hostname: tempo
     command: ["-config.file=/etc/tempo.yaml"]
@@ -996,7 +996,7 @@ services:
       - {{ .NetworkName }}
 
   grafana:
-    image: grafana/grafana:10.2.0
+    image: grafana/grafana:12.3.1
     container_name: {{ .ProjectName }}-grafana
     hostname: grafana
     environment:

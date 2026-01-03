@@ -282,7 +282,7 @@ services:
 
   # Tempo - Distributed tracing backend
   tempo:
-    image: grafana/tempo:2.8.1
+    image: grafana/tempo:2.9.0
     container_name: trace-test-tempo
     hostname: tempo
     command: ["-config.file=/etc/tempo.yaml"]
@@ -313,7 +313,7 @@ services:
 
   # Grafana - Observability and visualization
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:12.3.1
     container_name: trace-test-grafana
     hostname: grafana
     environment:

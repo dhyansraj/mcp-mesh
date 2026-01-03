@@ -2,7 +2,7 @@ grafana:
   enabled: true
   image:
     repository: grafana/grafana
-    tag: "11.4.0"
+    tag: "12.3.1"
     pullPolicy: IfNotPresent
 
   resources:
