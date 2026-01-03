@@ -266,18 +266,21 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 		}
 	}
 
-	// Print success message
+	// Print success message with generated files
 	if ctx.Cmd != nil {
-		ctx.Cmd.Printf("Successfully created agent '%s' in %s\n", ctx.Name, outputDir)
-		ctx.Cmd.Printf("  Language: %s\n", ctx.Language)
-		if ctx.AgentType != "" {
-			ctx.Cmd.Printf("  Agent Type: %s\n", ctx.AgentType)
-		}
-		ctx.Cmd.Printf("  Template: %s\n", ctx.Template)
-		ctx.Cmd.Printf("  Port: %d\n", ctx.Port)
-		if ctx.Model != "" {
-			ctx.Cmd.Printf("  Model: %s\n", ctx.Model)
-		}
+		ctx.Cmd.Printf("\n✅ Created agent '%s' in %s/\n\n", ctx.Name, outputDir)
+		ctx.Cmd.Printf("Generated files:\n")
+		ctx.Cmd.Printf("  %s/\n", ctx.Name)
+		ctx.Cmd.Printf("  ├── main.py             # Agent entry point\n")
+		ctx.Cmd.Printf("  ├── Dockerfile          # Container build\n")
+		ctx.Cmd.Printf("  ├── helm-values.yaml    # K8s deployment values\n")
+		ctx.Cmd.Printf("  ├── requirements.txt    # Python dependencies\n")
+		ctx.Cmd.Printf("  └── README.md\n")
+		ctx.Cmd.Printf("\n")
+		ctx.Cmd.Printf("Next steps:\n")
+		ctx.Cmd.Printf("  meshctl start %s/main.py\n", ctx.Name)
+		ctx.Cmd.Printf("\n")
+		ctx.Cmd.Printf("For Docker/K8s deployment, see: meshctl man deployment\n")
 	}
 
 	return nil
