@@ -1,5 +1,27 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.14...v0.7.15)
+
+## v0.7.15 (2026-01-02)
+
+### 🐛 Bug Fixes
+
+- **Fix trace context propagation causing flat trace hierarchy** (#327): Fixed distributed tracing bug where all downstream calls incorrectly had the external span as parent
+  - Use httpx `event_hooks` to inject trace headers at request time instead of transport construction
+  - Ensures correct parent span is propagated to downstream agents
+  - Added `examples/observability-test/` with 4-agent setup for trace hierarchy testing
+
+- **Remove redundant mcp-mesh from scaffolded requirements.txt** (#325): Removed duplicate dependency from scaffold templates
+  - `mcp-mesh` is already provided by runtime environment (Docker image or local install)
+  - Prevents version conflicts and reduces confusion
+
+### ⬆️ Dependencies
+
+- **Update Grafana to 12.3.1 and Tempo to 2.9.0** (#329): Update observability stack versions
+  - Grafana: 11.4.0 → 12.3.1
+  - Tempo: 2.8.1 → 2.9.0
+  - Updated in scaffold templates, Helm charts, k8s deployments, and docker-compose examples
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.13...v0.7.14)
 
 ## v0.7.14 (2026-01-02)

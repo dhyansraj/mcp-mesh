@@ -19,7 +19,7 @@ The data flows: **Agents → Redis → Registry → Tempo → Grafana**
 ```bash
 # Deploy core with observability enabled (default)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.14 \
+  --version 0.7.15 \
   --namespace mcp-mesh \
   --set redis.enabled=true \
   --set tempo.enabled=true \
