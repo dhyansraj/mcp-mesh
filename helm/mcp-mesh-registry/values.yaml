@@ -7,10 +7,10 @@ replicaCount: 1
 workloadType: "Deployment" # Registry is stateless
 
 image:
-  repository: mcpmesh/registry # Updated for registry
-  pullPolicy: IfNotPresent # For production use
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.7.0"
+  repository: mcpmesh/registry
+  pullPolicy: IfNotPresent
+  # Minor version tag tracks latest patch (0.7 → 0.7.x)
+  tag: "0.7"
 
 imagePullSecrets: []
 nameOverride: ""

@@ -1,5 +1,5 @@
-{{- /* Render deployment if either script is specified OR using custom image with built-in CMD */ -}}
-{{- if or .Values.agent.script .Values.image.repository -}}
+{{- /* Render deployment if either script is specified OR using custom image (not base runtime) */ -}}
+{{- if or .Values.agent.script (ne .Values.image.repository "mcpmesh/python-runtime") -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -200,7 +200,7 @@ spec:
       {{- end }}
 {{- else }}
 ---
-# Warning: agent.script must be specified
+# Warning: No agent configured - using base runtime image without agent code
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -209,9 +209,14 @@ metadata:
     {{- include "mcp-mesh-agent.labels" . | nindent 4 }}
 data:
   message: |
-    WARNING: No agent script specified!
-    Please set agent.script in your values file.
-    Example:
+    WARNING: No agent configured!
+
+    Either set image.repository to your built agent image:
+      helm install my-agent ... --set image.repository=your-registry/my-agent
+
+    Or set agent.script for single-file agents:
       agent:
-        script: "/app/agents/hello_world.py"
+        script: "/app/main.py"
+
+    See: meshctl man deployment
 {{- end }}
