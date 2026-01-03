@@ -80,16 +80,17 @@ class UnifiedMCPProxy:
             return False
 
     def _create_fastmcp_client(self, endpoint: str):
-        """Create FastMCP client with DNS detection for threading conflict avoidance.
+        """Create FastMCP client with dynamic trace header injection.
 
-        This method detects DNS names vs IP addresses and forces HTTP fallback for DNS names
-        to avoid FastMCP client threading conflicts in containerized environments.
+        Uses httpx event_hooks to inject trace headers at REQUEST TIME rather than
+        at transport construction time. This ensures the current trace context is
+        captured when the HTTP request is actually made, fixing the trace hierarchy bug.
 
         Args:
             endpoint: MCP endpoint URL
 
         Returns:
-            FastMCP Client instance with or without trace headers
+            FastMCP Client instance with dynamic trace header injection
         """
         try:
             # Extract hostname from endpoint URL for DNS detection
@@ -101,42 +102,70 @@ class UnifiedMCPProxy:
             # DNS resolution works perfectly with FastMCP - no need to force HTTP fallback
             self.logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
 
+            # Use stream_timeout for read timeout (default 300s for LLM calls)
+            import httpx
             from fastmcp import Client
             from fastmcp.client.transports import StreamableHttpTransport
 
-            # Try to get current trace context for header injection
-            trace_headers = self._get_trace_headers()
-
-            # Use stream_timeout for read timeout (default 300s for LLM calls)
-            # Note: sse_read_timeout is deprecated, use httpx_client_factory instead
-            import httpx
+            # Capture self for use in nested function
+            proxy_instance = self
 
             def create_httpx_client(**kwargs):
+                """Create httpx client with dynamic trace header injection via event hooks."""
+
+                def inject_trace_headers_hook(request: httpx.Request) -> None:
+                    """Inject trace headers at REQUEST TIME for correct context propagation.
+
+                    This hook runs just before each HTTP request is sent, capturing the
+                    current trace context at that moment. This fixes the trace hierarchy
+                    bug where headers were captured at client creation time instead.
+                    """
+                    try:
+                        from ..tracing.context import TraceContext
+                        from ..tracing.utils import is_tracing_enabled
+
+                        if not is_tracing_enabled():
+                            return
+
+                        trace_context = TraceContext.get_current()
+                        if trace_context:
+                            request.headers["X-Trace-ID"] = trace_context.trace_id
+                            request.headers["X-Parent-Span"] = trace_context.span_id
+                            proxy_instance.logger.trace(
+                                f"🔗 TRACE_HOOK: Injecting at request time - "
+                                f"trace_id={trace_context.trace_id[:8]}... "
+                                f"parent_span={trace_context.span_id[:8]}..."
+                            )
+                    except Exception as e:
+                        # Never fail HTTP requests due to tracing issues
+                        proxy_instance.logger.trace(
+                            f"🔗 TRACE_HOOK: Failed to inject headers: {e}"
+                        )
+
                 # Override timeout to use stream_timeout for long-running LLM calls
                 kwargs["timeout"] = httpx.Timeout(
-                    timeout=self.stream_timeout,
+                    timeout=proxy_instance.stream_timeout,
                     connect=30.0,  # 30s for connection
-                    read=self.stream_timeout,  # Long read timeout for SSE streams
+                    read=proxy_instance.stream_timeout,  # Long read timeout for SSE streams
                     write=30.0,  # 30s for writes
                     pool=30.0,  # 30s for pool
                 )
+
+                # Add event hook for dynamic trace header injection
+                existing_hooks = kwargs.get("event_hooks", {})
+                request_hooks = existing_hooks.get("request", [])
+                request_hooks.append(inject_trace_headers_hook)
+                existing_hooks["request"] = request_hooks
+                kwargs["event_hooks"] = existing_hooks
+
                 return httpx.AsyncClient(**kwargs)
 
-            if trace_headers:
-                # Create client with trace headers for distributed tracing
-                transport = StreamableHttpTransport(
-                    url=endpoint,
-                    headers=trace_headers,
-                    httpx_client_factory=create_httpx_client,
-                )
-                return Client(transport)
-            else:
-                # Create standard client when no trace context available
-                transport = StreamableHttpTransport(
-                    url=endpoint,
-                    httpx_client_factory=create_httpx_client,
-                )
-                return Client(transport)
+            # Create client WITHOUT static headers - headers injected via hook at request time
+            transport = StreamableHttpTransport(
+                url=endpoint,
+                httpx_client_factory=create_httpx_client,
+            )
+            return Client(transport)
 
         except ImportError as e:
             # DNS names or FastMCP not available - this will trigger HTTP fallback

@@ -1,0 +1,363 @@
+# Observability Test - 4 Agent Tracing Hierarchy Test
+#
+# This setup tests distributed tracing with the following call flow:
+#
+# meshctl call orchestrator/orchestrate_workflow
+# │
+# ├─► Call A (chain): orchestrator → processor → analyzer → storage
+# │
+# └─► Call B (fan-out): orchestrator → processor, orchestrator → storage
+#
+# Expected trace hierarchy (see README.md for details)
+
+services:
+  # ============== Infrastructure ==============
+
+  redis:
+    image: redis:7-alpine
+    container_name: trace-test-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - trace-test
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  registry:
+    build:
+      context: ../../
+      dockerfile: examples/docker-examples/registry/Dockerfile
+    container_name: trace-test-registry
+    hostname: registry
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - REDIS_URL=redis://redis:6379
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      # OTLP tracing export to Tempo
+      - TRACE_EXPORTER_TYPE=otlp
+      - TELEMETRY_ENDPOINT=tempo:4317
+      - TELEMETRY_PROTOCOL=grpc
+      # Tempo HTTP API for trace querying (meshctl trace)
+      - TEMPO_URL=http://tempo:3200
+    networks:
+      - trace-test
+    depends_on:
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============== Agents ==============
+
+  orchestrator:
+    build:
+      context: ../../
+      dockerfile: examples/observability-test/Dockerfile.dev
+    container_name: trace-test-orchestrator
+    hostname: orchestrator
+    ports:
+      - "8081:8080"
+    volumes:
+      # Mount agent code
+      - ./agents/orchestrator.py:/app/agent.py:ro
+      # Mount mcp-mesh source for development
+      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      # MCP Mesh Configuration
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=orchestrator
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=orchestrator
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=orchestrator
+      - MCP_MESH_NAMESPACE=default
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      # Distributed Tracing - CRITICAL
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_TELEMETRY_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - trace-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  processor:
+    build:
+      context: ../../
+      dockerfile: examples/observability-test/Dockerfile.dev
+    container_name: trace-test-processor
+    hostname: processor
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./agents/processor.py:/app/agent.py:ro
+      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=processor
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=processor
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=processor
+      - MCP_MESH_NAMESPACE=default
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_TELEMETRY_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - trace-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  analyzer:
+    build:
+      context: ../../
+      dockerfile: examples/observability-test/Dockerfile.dev
+    container_name: trace-test-analyzer
+    hostname: analyzer
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./agents/analyzer.py:/app/agent.py:ro
+      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=analyzer
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=analyzer
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=analyzer
+      - MCP_MESH_NAMESPACE=default
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_TELEMETRY_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - trace-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  storage:
+    build:
+      context: ../../
+      dockerfile: examples/observability-test/Dockerfile.dev
+    container_name: trace-test-storage
+    hostname: storage
+    ports:
+      - "8084:8080"
+    volumes:
+      - ./agents/storage.py:/app/agent.py:ro
+      - ../../src/runtime/python:/src/mcp-mesh/src/runtime/python:ro
+    working_dir: /app
+    command: ["python", "agent.py"]
+    environment:
+      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      - MCP_MESH_REGISTRY_HOST=registry
+      - MCP_MESH_REGISTRY_PORT=8000
+      - HOST=0.0.0.0
+      - MCP_MESH_HTTP_HOST=storage
+      - MCP_MESH_HTTP_PORT=8080
+      - POD_IP=storage
+      - MCP_MESH_HTTP_ENABLED=true
+      - MCP_MESH_AGENT_NAME=storage
+      - MCP_MESH_NAMESPACE=default
+      - MCP_MESH_ENABLED=true
+      - MCP_MESH_AUTO_RUN=true
+      - MCP_MESH_AUTO_RUN_INTERVAL=5
+      - MCP_MESH_HEALTH_INTERVAL=5
+      - MCP_MESH_LOG_LEVEL=DEBUG
+      - MCP_MESH_DEBUG_MODE=true
+      - MCP_MESH_DYNAMIC_UPDATES=true
+      - MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+      - MCP_MESH_TELEMETRY_ENABLED=true
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - trace-test
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ============== Observability ==============
+
+  # Tempo - Distributed tracing backend
+  tempo:
+    image: grafana/tempo:2.8.1
+    container_name: trace-test-tempo
+    hostname: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ../../observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200" # Tempo HTTP API
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+    networks:
+      - trace-test
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3200/ready",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # Grafana - Observability and visualization
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: trace-test-grafana
+    hostname: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+    volumes:
+      - ../../observability/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ../../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - trace-test
+    depends_on:
+      tempo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/api/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  trace-test:
+    driver: bridge
+
+volumes:
+  tempo_data:
+  grafana_data:
