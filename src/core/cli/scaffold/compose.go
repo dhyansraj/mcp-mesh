@@ -338,9 +338,9 @@ func addObservabilityToExisting(doc *yaml.Node, servicesNode *yaml.Node, existin
 		}
 	}
 
-	// Add tempo-data volume if tempo is being added or exists
+	// Add observability volumes if tempo is being added or exists
 	if needsTempo || existingServices["tempo"] {
-		addTempoVolume(doc)
+		addObservabilityVolumes(doc)
 	}
 
 	// Update existing registry with tracing env vars
@@ -517,8 +517,8 @@ func addDependencyToService(servicesNode *yaml.Node, serviceName string, depende
 	}
 }
 
-// addTempoVolume adds the tempo-data and grafana-data volumes to the document
-func addTempoVolume(doc *yaml.Node) {
+// addObservabilityVolumes adds the tempo-data and grafana-data volumes to the document
+func addObservabilityVolumes(doc *yaml.Node) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return
 	}
