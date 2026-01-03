@@ -1,8 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.14...v0.7.15)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.14...v0.7.16)
 
-## v0.7.15 (2026-01-02)
+## v0.7.16 (2026-01-02)
 
 ### 🐛 Bug Fixes
 
