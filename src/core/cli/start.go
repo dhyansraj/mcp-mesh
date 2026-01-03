@@ -80,6 +80,9 @@ Examples:
 	cmd.Flags().String("cert-file", "", "TLS certificate file")
 	cmd.Flags().String("key-file", "", "TLS private key file")
 
+	// Validation flags
+	cmd.Flags().Bool("skip-checks", false, "Skip prerequisite validation (Python version, mcp-mesh package)")
+
 	return cmd
 }
 
@@ -389,12 +392,18 @@ func startConnectOnlyMode(cmd *cobra.Command, args []string, registryURL string,
 		return fmt.Errorf("agent file required in connect-only mode")
 	}
 
+	quiet, _ := cmd.Flags().GetBool("quiet")
+
+	// Validate prerequisites before spawning any agents
+	if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
+		return err
+	}
+
 	// Validate registry connection
 	if !IsRegistryRunning(registryURL) {
 		return fmt.Errorf("cannot connect to registry at %s", registryURL)
 	}
 
-	quiet, _ := cmd.Flags().GetBool("quiet")
 	if !quiet {
 		fmt.Printf("Connecting to external registry at %s\n", registryURL)
 	}
@@ -421,9 +430,15 @@ func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) e
 
 // Standard mode
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
+	quiet, _ := cmd.Flags().GetBool("quiet")
+
+	// Validate prerequisites before spawning any agents
+	if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
+		return err
+	}
+
 	// Determine registry URL from flags or config
 	registryURL := determineStartRegistryURL(cmd, config)
-	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	// Check if registry is running
 	if !IsRegistryRunning(registryURL) {
@@ -475,6 +490,141 @@ func isLocalhostRegistry(host string) bool {
 	default:
 		return false
 	}
+}
+
+// PrerequisiteError represents a failed prerequisite check with remediation info
+type PrerequisiteError struct {
+	Check       string
+	Message     string
+	Remediation string
+}
+
+func (e *PrerequisiteError) Error() string {
+	return e.Message
+}
+
+// runPrerequisiteValidation handles the --skip-checks flag and displays errors.
+// Extracted to avoid duplication between startStandardMode and startConnectOnlyMode.
+func runPrerequisiteValidation(cmd *cobra.Command, agentPaths []string, quiet bool) error {
+	skipChecks, _ := cmd.Flags().GetBool("skip-checks")
+
+	if skipChecks {
+		if !quiet {
+			fmt.Println("⚠️  Skipping prerequisite checks (--skip-checks)")
+		}
+		return nil
+	}
+
+	if err := validateAgentPrerequisites(agentPaths, quiet); err != nil {
+		if prereqErr, ok := err.(*PrerequisiteError); ok {
+			fmt.Printf("\n❌ Prerequisite check failed: %s\n\n", prereqErr.Check)
+			fmt.Printf("%s\n\n", prereqErr.Message)
+			fmt.Printf("%s\n", prereqErr.Remediation)
+			fmt.Printf("\nTip: Use --skip-checks to bypass prerequisite validation (not recommended).\n")
+			return fmt.Errorf("prerequisite check failed")
+		}
+		return err
+	}
+	return nil
+}
+
+// validateAgentPrerequisites performs upfront validation of all prerequisites
+// before spawning any agents. Returns nil if all checks pass.
+func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
+	if !quiet {
+		fmt.Println("Validating prerequisites...")
+	}
+
+	// 1. Check Python environment (strictly requires .venv in current directory)
+	pythonEnv, err := DetectPythonEnvironment()
+	if err != nil {
+		cwd, _ := os.Getwd()
+		return &PrerequisiteError{
+			Check:   "Python environment",
+			Message: fmt.Sprintf("Python environment check failed: %v", err),
+			Remediation: fmt.Sprintf(`MCP Mesh requires a .venv directory in your current working directory.
+
+Current directory: %s
+
+To fix this issue:
+  1. Navigate to your project directory (where your agents are)
+  2. Create a virtual environment: python3.11 -m venv .venv
+  3. Activate it: source .venv/bin/activate
+  4. Install mcp-mesh: pip install mcp-mesh
+  5. Run meshctl start from this directory
+
+Run 'meshctl man prerequisite' for detailed setup instructions.`, cwd),
+		}
+	}
+
+	// Note: Python version >= 3.11 is already validated by DetectPythonEnvironment()
+
+	// 2. Check for mcp-mesh package
+	if !checkMcpMeshPackage(pythonEnv.PythonExecutable) {
+		return &PrerequisiteError{
+			Check:   "mcp-mesh package",
+			Message: "mcp-mesh package not found in Python environment.",
+			Remediation: fmt.Sprintf(`To fix this issue:
+  1. Activate your virtual environment (if using one)
+  2. Install the mcp-mesh package:
+     %s -m pip install mcp-mesh
+
+Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.PythonExecutable),
+		}
+	}
+
+	// 3. Validate agent file paths exist
+	for _, agentPath := range agentPaths {
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			return &PrerequisiteError{
+				Check:   "Agent file",
+				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
+				Remediation: fmt.Sprintf(`To fix this issue:
+  1. Verify the agent file exists at the specified path
+  2. Use an absolute path or ensure the relative path is correct from your current directory
+  3. Check file permissions`,
+				),
+			}
+		}
+
+		if !fileExists(absPath) {
+			return &PrerequisiteError{
+				Check:   "Agent file",
+				Message: fmt.Sprintf("Agent file not found: %s", absPath),
+				Remediation: fmt.Sprintf(`To fix this issue:
+  1. Verify the agent file exists: ls -la %s
+  2. Check if you're in the correct directory
+  3. Create the agent file or use 'meshctl scaffold' to generate one`, absPath),
+			}
+		}
+	}
+
+	if !quiet {
+		fmt.Printf("✅ All prerequisites validated successfully\n")
+		fmt.Printf("   Python: %s (%s)\n", pythonEnv.Version, pythonEnv.PythonExecutable)
+		if pythonEnv.IsVirtualEnv {
+			fmt.Printf("   Virtual environment: %s\n", pythonEnv.VenvPath)
+		}
+	}
+
+	return nil
+}
+
+// checkMcpMeshPackage checks if mcp-mesh package is installed.
+// This checks for the user-facing "mcp-mesh" pip package (imports as mcp_mesh or mesh).
+// Note: checkMcpMeshRuntime in python_env.go checks for mcp_mesh_runtime (the internal runtime)
+// and mcp (the base MCP package). Both are needed but serve different purposes.
+func checkMcpMeshPackage(pythonExec string) bool {
+	// Check for mcp_mesh (the actual package)
+	cmd := exec.Command(pythonExec, "-c", "import mcp_mesh")
+	if cmd.Run() == nil {
+		return true
+	}
+
+	// Also check for the mesh module (alternative import)
+	cmd = exec.Command(pythonExec, "-c", "import mesh")
+	return cmd.Run() == nil
 }
 
 // determineStartRegistryURL resolves the registry URL for start command based on flags and config

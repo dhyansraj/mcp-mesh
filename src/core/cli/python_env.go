@@ -18,28 +18,24 @@ type PythonEnvironment struct {
 	VenvPath          string
 }
 
-// DetectPythonEnvironment finds the best Python environment to use
+// DetectPythonEnvironment finds the Python environment to use.
+// Strictly requires .venv in current directory - no fallback to system Python.
 func DetectPythonEnvironment() (*PythonEnvironment, error) {
 	env := &PythonEnvironment{}
 
-	// 1. Check for .venv in current directory first (highest priority)
-	if venvPython := detectVirtualEnv(); venvPython != "" {
-		env.PythonExecutable = venvPython
-		env.IsVirtualEnv = true
-		env.VenvPath = ".venv"
-		fmt.Printf("🐍 Using virtual environment: %s\n", venvPython)
-	} else {
-		// 2. Fall back to system Python
-		systemPython, err := findSystemPython()
-		if err != nil {
-			return nil, fmt.Errorf("Python not found: %w", err)
-		}
-		env.PythonExecutable = systemPython
-		env.IsVirtualEnv = false
-		fmt.Printf("🐍 Using system Python: %s\n", systemPython)
+	// Strictly require .venv in current directory - no fallback
+	venvPython := detectVirtualEnv()
+	if venvPython == "" {
+		cwd, _ := os.Getwd()
+		return nil, fmt.Errorf("virtual environment not found at %s/.venv", cwd)
 	}
 
-	// 3. Verify Python version (require >= 3.7)
+	env.PythonExecutable = venvPython
+	env.IsVirtualEnv = true
+	env.VenvPath = ".venv"
+	fmt.Printf("🐍 Using virtual environment: %s\n", venvPython)
+
+	// Verify Python version (require >= 3.11)
 	version, err := getPythonVersion(env.PythonExecutable)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Python version: %w", err)
@@ -47,10 +43,10 @@ func DetectPythonEnvironment() (*PythonEnvironment, error) {
 	env.Version = version
 
 	if !isValidPythonVersion(version) {
-		return nil, fmt.Errorf("Python %s detected. MCP Mesh requires Python 3.7+", version)
+		return nil, fmt.Errorf("Python %s detected. MCP Mesh requires Python 3.11+", version)
 	}
 
-	// 4. Check for mcp-mesh-runtime availability
+	// Check for mcp-mesh-runtime availability
 	env.HasMcpMeshRuntime = checkMcpMeshRuntime(env.PythonExecutable)
 
 	return env, nil
@@ -80,24 +76,6 @@ func detectVirtualEnv() string {
 	return ""
 }
 
-func findSystemPython() (string, error) {
-	// Try common Python executable names in order of preference
-	candidates := []string{"python3", "python"}
-
-	for _, candidate := range candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
-			// LookPath already returns absolute path, but ensure it
-			absPath, err := filepath.Abs(path)
-			if err != nil {
-				return path, nil // fallback to original path
-			}
-			return absPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("no Python executable found in PATH")
-}
-
 func getPythonVersion(pythonExec string) (string, error) {
 	cmd := exec.Command(pythonExec, "--version")
 	output, err := cmd.Output()
@@ -111,7 +89,7 @@ func getPythonVersion(pythonExec string) (string, error) {
 }
 
 func isValidPythonVersion(version string) bool {
-	// Simple version check - require 3.7+
+	// Version check - require 3.11+ (per pyproject.toml requires-python = ">=3.11")
 	parts := strings.Split(version, ".")
 	if len(parts) < 2 {
 		return false
@@ -127,7 +105,7 @@ func isValidPythonVersion(version string) bool {
 		return false
 	}
 
-	return major == 3 && minor >= 7
+	return major == 3 && minor >= 11
 }
 
 func checkMcpMeshRuntime(pythonExec string) bool {
