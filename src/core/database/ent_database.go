@@ -134,12 +134,14 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 	}
 
 	// Create Ent client with the configured driver
+	// SQL query logging is only enabled in TRACE mode (MCP_MESH_LOG_LEVEL=TRACE)
+	// --debug flag sets DEBUG level which is useful for users without SQL spam
 	var client *ent.Client
 	if enableDebugLogging {
-		// Enable SQL query logging only in debug mode
+		// Enable SQL query logging in TRACE mode
 		client = ent.NewClient(ent.Driver(drv), ent.Debug())
 	} else {
-		// Disable SQL query logging in production
+		// Disable SQL query logging (default)
 		client = ent.NewClient(ent.Driver(drv))
 	}
 

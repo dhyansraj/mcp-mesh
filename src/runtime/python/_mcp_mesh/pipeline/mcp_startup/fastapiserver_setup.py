@@ -553,6 +553,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                 port=bind_port,
                 log_level="info",
                 access_log=False,  # Reduce noise
+                ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )
 
             # Create and start server

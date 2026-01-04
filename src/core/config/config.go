@@ -106,6 +106,7 @@ func (c *Config) Validate() error {
 
 	// Validate log level (case insensitive)
 	validLogLevels := map[string]bool{
+		"TRACE":    true, // Most verbose - includes SQL queries
 		"DEBUG":    true,
 		"INFO":     true,
 		"WARNING":  true,
@@ -114,7 +115,7 @@ func (c *Config) Validate() error {
 	}
 	upperLogLevel := strings.ToUpper(c.LogLevel)
 	if !validLogLevels[upperLogLevel] {
-		return fmt.Errorf("invalid log level: %s (valid: DEBUG, INFO, WARNING, ERROR, CRITICAL)", c.LogLevel)
+		return fmt.Errorf("invalid log level: %s (valid: TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)", c.LogLevel)
 	}
 
 	// If debug mode is enabled, force log level to DEBUG
@@ -143,12 +144,18 @@ func (c *Config) IsDevelopment() bool {
 
 // IsDebugMode determines if debug mode is enabled
 func (c *Config) IsDebugMode() bool {
-	return c.DebugMode || strings.ToUpper(c.LogLevel) == "DEBUG"
+	return c.DebugMode || strings.ToUpper(c.LogLevel) == "DEBUG" || c.IsTraceMode()
+}
+
+// IsTraceMode determines if trace mode is enabled (most verbose, includes SQL logging)
+func (c *Config) IsTraceMode() bool {
+	return strings.ToUpper(c.LogLevel) == "TRACE"
 }
 
 // ShouldLogAtLevel checks if messages at the given level should be logged
 func (c *Config) ShouldLogAtLevel(level string) bool {
 	levelPriority := map[string]int{
+		"TRACE":    -1, // Most verbose - includes SQL queries
 		"DEBUG":    0,
 		"INFO":     1,
 		"WARNING":  2,

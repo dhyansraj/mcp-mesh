@@ -319,6 +319,7 @@ class DebounceCoordinator:
                 port=bind_port,
                 log_level="info",
                 access_log=False,  # Reduce noise
+                ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )
 
         except KeyboardInterrupt:
