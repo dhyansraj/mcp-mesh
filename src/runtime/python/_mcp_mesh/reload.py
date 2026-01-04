@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -120,11 +121,10 @@ def run_with_reload(script_path: str) -> None:
     logger.info("🔃 Agent will restart automatically when files change")
 
     process = None
-    running = True
+    stop_event = threading.Event()
 
     def signal_handler(signum, frame):
-        nonlocal running
-        running = False
+        stop_event.set()
         logger.info("🛑 Stopping agent...")
         terminate_process(process)
 
@@ -150,9 +150,9 @@ def run_with_reload(script_path: str) -> None:
             *watch_paths,
             watch_filter=lambda ct, p: should_watch_file(p),
             debounce=int(DEBOUNCE_DELAY * 1000),  # Convert to milliseconds
-            stop_event=None,
+            stop_event=stop_event,
         ):
-            if not running:
+            if stop_event.is_set():
                 break
 
             # Check if process crashed
