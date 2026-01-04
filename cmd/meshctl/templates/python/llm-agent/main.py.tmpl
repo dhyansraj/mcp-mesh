@@ -14,17 +14,8 @@ from pydantic import BaseModel, Field
 # FastMCP server instance
 app = FastMCP("{{ toPascalCase .Name }} Service")
 
-# ===== SYSTEM PROMPT =====
-{{ if .SystemPromptInline }}
-SYSTEM_PROMPT = """{{ .SystemPrompt }}"""
-{{ else if not .SystemPromptIsFile }}
-# Default system prompt - customize this for your use case
-SYSTEM_PROMPT = """You are {{ toPascalCase .Name }}, an AI assistant.
-
-{{ if .Description }}{{ .Description }}{{ else }}Process the input and provide a helpful response.{{ end }}
-
-Analyze the provided context and respond appropriately."""
-{{ end }}
+# System prompt is loaded from: prompts/{{ .Name }}.jinja2
+# Customize the prompt file to change the LLM behavior.
 
 # ===== CONTEXT MODEL =====
 
@@ -59,9 +50,8 @@ class {{ toPascalCase .Name }}Response(BaseModel):
     filter_mode="{{ .FilterMode }}",
     provider={"capability": "llm", "tags": {{ toJSON .ProviderTags }}},
     max_iterations={{ .MaxIterations }},
-    system_prompt={{ if .SystemPromptIsFile }}"{{ .SystemPrompt }}"{{ else }}SYSTEM_PROMPT{{ end }},
+    system_prompt={{ if .SystemPromptIsFile }}"{{ .SystemPrompt }}"{{ else }}"file://prompts/{{ .Name }}.jinja2"{{ end }},
     context_param="{{ .ContextParam }}",
-    response_format="{{ .ResponseFormat }}",
 )
 @mesh.tool(
     capability="{{ toSnakeCase .Name }}",

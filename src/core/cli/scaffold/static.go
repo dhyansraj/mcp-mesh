@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -131,7 +132,6 @@ class {{ toPascalCase .ToolName }}Response(BaseModel):
     max_iterations={{ default 1 .MaxIterations }},
     system_prompt={{ if .SystemPromptIsFile }}"{{ .SystemPrompt }}"{{ else }}"""{{ default "You are an AI assistant. Process the input and provide a helpful response." .SystemPrompt }}"""{{ end }},
     context_param="{{ default "ctx" .ContextParam }}",
-    response_format="{{ default "text" .ResponseFormat }}",
 )
 @mesh.tool(
     capability="{{ .ToolName }}",
@@ -270,12 +270,7 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 	if ctx.Cmd != nil {
 		ctx.Cmd.Printf("\n✅ Created agent '%s' in %s/\n\n", ctx.Name, outputDir)
 		ctx.Cmd.Printf("Generated files:\n")
-		ctx.Cmd.Printf("  %s/\n", ctx.Name)
-		ctx.Cmd.Printf("  ├── main.py             # Agent entry point\n")
-		ctx.Cmd.Printf("  ├── Dockerfile          # Container build\n")
-		ctx.Cmd.Printf("  ├── helm-values.yaml    # K8s deployment values\n")
-		ctx.Cmd.Printf("  ├── requirements.txt    # Python dependencies\n")
-		ctx.Cmd.Printf("  └── README.md\n")
+		printGeneratedFiles(ctx.Cmd, outputDir, ctx.Name)
 		ctx.Cmd.Printf("\n")
 		ctx.Cmd.Printf("Next steps:\n")
 		ctx.Cmd.Printf("  meshctl start %s/main.py\n", ctx.Name)
@@ -632,7 +627,62 @@ func IsValidTemplate(template string) bool {
 	return false
 }
 
-// init registers the static provider with the default registry
+// printGeneratedFiles walks the output directory and prints a tree of generated files
+func printGeneratedFiles(cmd *cobra.Command, outputDir, agentName string) {
+	cmd.Printf("  %s/\n", agentName)
+
+	var files []string
+	var dirs []string
+
+	// Walk directory to collect files and subdirectories
+	filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || path == outputDir {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(outputDir, path)
+
+		if info.IsDir() {
+			dirs = append(dirs, relPath)
+		} else {
+			files = append(files, relPath)
+		}
+		return nil
+	})
+
+	// Sort for consistent output
+	sort.Strings(files)
+	sort.Strings(dirs)
+
+	// Print directories first (with their files)
+	printedDirs := make(map[string]bool)
+	for i, file := range files {
+		dir := filepath.Dir(file)
+		isLast := i == len(files)-1
+		prefix := "├──"
+		if isLast {
+			prefix = "└──"
+		}
+
+		// If file is in a subdirectory, print the directory first
+		if dir != "." && !printedDirs[dir] {
+			cmd.Printf("  ├── %s/\n", dir)
+			printedDirs[dir] = true
+		}
+
+		// Print file with appropriate indentation
+		if dir != "." {
+			subPrefix := "│   ├──"
+			if isLast || (i < len(files)-1 && filepath.Dir(files[i+1]) != dir) {
+				subPrefix = "│   └──"
+			}
+			cmd.Printf("  %s %s\n", subPrefix, filepath.Base(file))
+		} else {
+			cmd.Printf("  %s %s\n", prefix, file)
+		}
+	}
+}
+
 func init() {
 	DefaultRegistry.Register(NewStaticProvider())
 }
