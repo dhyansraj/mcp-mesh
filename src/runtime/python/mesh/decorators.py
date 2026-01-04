@@ -242,6 +242,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                     log_level="info",
                     timeout_graceful_shutdown=30,  # Allow time for registry cleanup
                     access_log=False,  # Reduce noise
+                    ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
                 )
             except Exception as e:
                 logger.error(f"❌ IMMEDIATE UVICORN: Server failed: {e}")
