@@ -46,7 +46,7 @@ mcp-mesh-hello-world.mcp-mesh.svc.cluster.local # Hello World Agent (port 8080)
 mcp-mesh-system-agent.mcp-mesh.svc.cluster.local # System Agent (port 8080)
 
 # Short forms (within same namespace):
-mcp-mesh-registry:8000      # Registry
+mcp-core-mcp-mesh-registry:8000      # Registry
 mcp-mesh-hello-world:8080   # Hello World Agent
 mcp-mesh-system-agent:8080  # System Agent
 
@@ -448,7 +448,7 @@ spec:
 | `NAMESPACE`              | Pod namespace (auto-detected)    | from fieldRef     | mcp-mesh                      |
 | `MCP_MESH_REGISTRY_HOST` | Registry service name            | mcp-mesh-registry | mcp-mesh-registry             |
 | `MCP_MESH_REGISTRY_PORT` | Registry service port            | 8000              | 8000                          |
-| `MCP_MESH_REGISTRY_URL`  | Complete registry URL            | auto-constructed  | http://mcp-mesh-registry:8000 |
+| `MCP_MESH_REGISTRY_URL`  | Complete registry URL            | auto-constructed  | http://mcp-core-mcp-mesh-registry:8000 |
 | `MCP_MESH_AGENT_NAME`    | Agent logical name               | manual            | hello-world, system-agent     |
 | `HOST`                   | HTTP binding address             | 0.0.0.0           | 0.0.0.0                       |
 
@@ -836,7 +836,7 @@ spec:
 
 ### Issue 3: Registry Connection Failures
 
-**Symptoms**: Agents can't connect to "http://mcp-mesh-registry:8000"
+**Symptoms**: Agents can't connect to "http://mcp-core-mcp-mesh-registry:8000"
 
 **Cause**: Registry service not ready or wrong configuration
 
@@ -852,7 +852,7 @@ metadata:
 data:
   REGISTRY_HOST: "mcp-mesh-registry" # ← Must match service name
   REGISTRY_PORT: "8000" # ← Must match service port
-  MCP_MESH_REGISTRY_URL: "http://mcp-mesh-registry:8000"
+  MCP_MESH_REGISTRY_URL: "http://mcp-core-mcp-mesh-registry:8000"
 
 # Add init container to wait for registry
 spec:

@@ -86,6 +86,34 @@ meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"capability"
 meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"tags": ["tools"]}]'
 ```
 
+## Hybrid Development Workflow
+
+Run agents locally with `meshctl start` while using Docker for infrastructure and tracing:
+
+```bash
+# 1. Create registry + observability stack (no agents needed)
+meshctl scaffold --compose --observability
+docker compose up -d
+
+# 2. Create .env file for local agents
+cat > .env << 'EOF'
+MCP_MESH_REGISTRY_URL=http://localhost:8000
+MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+TRACE_EXPORTER_TYPE=otlp
+TELEMETRY_ENDPOINT=localhost:4317
+EOF
+
+# 3. Run agents locally with file watching
+meshctl start agent.py --watch --env-file .env
+```
+
+Benefits:
+- Fast local development (edit code, auto-reload with `--watch`)
+- Full observability (traces in Grafana at http://localhost:3000)
+- Shared registry (all agents discover each other)
+
+See `meshctl man environment` for all configuration options.
+
 ## See Also
 
 - `meshctl man decorators` - Decorator reference

@@ -348,7 +348,7 @@ networks:
 
 ```bash
 # Not localhost when in containers
-export MCP_MESH_REGISTRY_URL=http://mcp-mesh-registry:8000
+export MCP_MESH_REGISTRY_URL=http://mcp-core-mcp-mesh-registry:8000
 ```
 
 ### 9. Windows-Specific Issues

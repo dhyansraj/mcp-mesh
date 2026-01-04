@@ -15,17 +15,13 @@
 ## Calling Tools
 
 ```bash
-# Call a tool (auto-discovers agent via registry)
+# Call a tool (auto-discovers agent via registry) - recommended
 meshctl call hello_mesh_simple
+meshctl call add '{"a": 1, "b": 2}'               # With arguments
+meshctl call process --file data.json             # Arguments from file
 
-# Specify agent explicitly
-meshctl call weather-agent:get_weather
-
-# Pass arguments as JSON
-meshctl call calculator:add '{"a": 1, "b": 2}'
-
-# Arguments from file
-meshctl call analyzer:process --file data.json
+# Target specific agent (use full agent ID from 'meshctl list')
+meshctl call weather-agent-7f3a2b:get_weather     # agent-ID:tool format
 
 # Direct agent call (skip registry)
 meshctl call hello_mesh --agent-url http://localhost:8080
@@ -107,7 +103,7 @@ Calls route through registry proxy by default, reaching agents via container hos
 ```bash
 # Calls route through registry proxy (default)
 meshctl call greet
-meshctl call calculator:add '{"a": 1, "b": 2}'
+meshctl call add '{"a": 1, "b": 2}'
 
 # Direct call bypassing proxy
 meshctl call greet --agent-url http://localhost:9001 --use-proxy=false

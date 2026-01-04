@@ -91,7 +91,7 @@ meshctl list --wide
 meshctl list --filter weather
 
 # Show only healthy agents
-meshctl list --healthy-only
+meshctl list
 ```
 
 **Example output:**
@@ -259,7 +259,7 @@ meshctl start \
   --log-level INFO
 
 # Monitor the services
-meshctl list --healthy-only
+meshctl list
 meshctl status --verbose
 ```
 

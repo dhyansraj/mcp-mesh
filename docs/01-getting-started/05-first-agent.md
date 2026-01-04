@@ -432,7 +432,7 @@ curl -s -X POST http://localhost:9091/mcp \
 
 ```bash
 # Quick check - shows agent count and dependency resolution
-meshctl list --healthy-only
+meshctl list
 
 # Detailed view - shows capabilities, dependencies, endpoints
 meshctl status
@@ -530,7 +530,7 @@ python -c "import mesh, fastmcp; print('Dependencies OK')"
 
 ```bash
 # Quick check - see if all dependencies are resolved (e.g., "4/4")
-meshctl list --healthy-only
+meshctl list
 
 # Detailed view - shows capabilities, resolved dependencies, and endpoints
 meshctl status

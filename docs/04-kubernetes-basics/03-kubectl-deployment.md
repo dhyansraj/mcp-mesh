@@ -37,7 +37,7 @@ RUN useradd -m -u 1000 mcp && chown -R mcp:mcp /app
 USER mcp
 
 # Agent configuration
-ENV MCP_MESH_REGISTRY_URL=http://mcp-mesh-registry:8000
+ENV MCP_MESH_REGISTRY_URL=http://mcp-core-mcp-mesh-registry:8000
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8081

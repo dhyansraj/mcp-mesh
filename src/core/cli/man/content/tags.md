@@ -8,7 +8,9 @@ Tags are metadata labels attached to capabilities that enable intelligent servic
 
 Tags are part of the **Capability Selector** syntax used throughout MCP Mesh. See `meshctl man capabilities` for the complete selector reference.
 
-## Tag Operators
+## Tag Operators (Consumer Side)
+
+Use these operators when **selecting** capabilities (dependencies, providers, filters):
 
 | Prefix | Meaning   | Example                                 |
 | ------ | --------- | --------------------------------------- |
@@ -16,7 +18,9 @@ Tags are part of the **Capability Selector** syntax used throughout MCP Mesh. Se
 | `+`    | Preferred | `"+fast"` - bonus if present            |
 | `-`    | Excluded  | `"-deprecated"` - hard failure if found |
 
-## Declaring Tags
+**Note:** Operators are for consumers only. When declaring tags on your tool, use plain strings without +/- prefixes.
+
+## Declaring Tags (Provider Side)
 
 ```python
 @mesh.tool(
@@ -92,25 +96,27 @@ Result:
 | Provider    | `openai`, `claude`, `local`    |
 | Environment | `production`, `staging`, `dev` |
 
-## LLM Provider Selection
+## Priority Scoring with Preferences
 
-Common pattern for selecting LLM providers:
+Stack multiple `+` tags to create priority ordering. The provider matching the most preferred tags wins.
 
 ```python
+# Prefer Claude > GPT > any other LLM
 @mesh.llm(
-    provider={"capability": "llm", "tags": ["+claude"]},
+    provider={"capability": "llm", "tags": ["+claude", "+anthropic", "+gpt"]},
 )
 def my_llm_tool(): ...
 ```
 
-Or for multiple provider fallback:
+| Provider | Its Tags | Matches | Score |
+|----------|----------|---------|-------|
+| Claude | `["llm", "claude", "anthropic"]` | +claude, +anthropic | **+2** |
+| GPT | `["llm", "gpt", "openai"]` | +gpt | **+1** |
+| Llama | `["llm", "llama"]` | (none) | **+0** |
 
-```python
-@mesh.llm(
-    provider={"capability": "llm", "tags": ["+claude", "+gpt4"]},
-)
-def my_llm_tool(): ...
-```
+Result: Claude (+2) > GPT (+1) > Llama (+0)
+
+This works for any capability selection (dependencies, providers, tool filters).
 
 ## Tool Filtering in @mesh.llm
 

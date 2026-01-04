@@ -119,7 +119,7 @@ data:
   REGISTRY_PORT: "8000"
 
   # Complete registry URL (primary variable used by runtime)
-  MCP_MESH_REGISTRY_URL: "http://mcp-mesh-registry:8000"
+  MCP_MESH_REGISTRY_URL: "http://mcp-core-mcp-mesh-registry:8000"
 
   # Environment variables - direct key-value pairs for envFrom
   MCP_MESH_HTTP_ENABLED: "true"

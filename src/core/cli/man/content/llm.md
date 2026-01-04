@@ -136,32 +136,16 @@ openai/gpt-3.5-turbo
 
 ## Tool Filtering
 
-Control which mesh tools the LLM can access:
-
-### By Tags
+Control which mesh tools the LLM can access using `filter` and `filter_mode`:
 
 ```python
-filter=[{"tags": ["executor", "tools"]}]
+filter=[{"tags": ["tools"]}],      # By tags
+filter=[{"capability": "calc"}],   # By capability
+filter_mode="*",                   # All tools (wildcard)
+# Omit filter for no tools (LLM only)
 ```
 
-### By Capability
-
-```python
-filter=[{"capability": "calculator"}, {"capability": "search"}]
-```
-
-### Wildcard (All Tools)
-
-```python
-filter_mode="*"
-```
-
-### No Tools (LLM Only)
-
-```python
-# Omit filter parameter
-@mesh.llm(provider=..., max_iterations=1)
-```
+For tag operators (+/-), matching algorithm, and advanced patterns, see `meshctl man tags`.
 
 ## System Prompts
 
