@@ -1,12 +1,33 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.14...v0.7.16)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.15...v0.7.16)
 
-## v0.7.16 (2026-01-02)
+## v0.7.16 (2026-01-03)
+
+### ✨ New Features
+
+- **Add pre-flight validation to meshctl start** (#338): Validates environment before running agents
+  - Requires `.venv` in current directory (no fallback to system Python)
+  - Validates Python version >= 3.11
+  - Added `--skip-checks` flag to bypass validation
+
+- **Improve scaffold output** (#341): Better feedback after scaffolding
+  - Display file tree of generated files
+  - Show clear next steps for running the agent
 
 ### 🐛 Bug Fixes
 
-- **Fix trace context propagation causing flat trace hierarchy** (#327): Fixed distributed tracing bug where all downstream calls incorrectly had the external span as parent
+- **Fix scaffold --observability missing Grafana provisioning** (#335): Added missing Grafana datasource/dashboard provisioning
+- **Fix invalid agent.port in scaffold helm-values.yaml** (#339): Changed to `agent.http.port` with correct default
+- **Fix Helm chart image tags to use minor version** (#340): Use `0.7` instead of `0.7.x` to track latest patch automatically
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.14...v0.7.15)
+
+## v0.7.15 (2026-01-02)
+
+### 🐛 Bug Fixes
+
+- **Fix trace context propagation causing flat trace hierarchy** (#326): Fixed distributed tracing bug where all downstream calls incorrectly had the external span as parent
   - Use httpx `event_hooks` to inject trace headers at request time instead of transport construction
   - Ensures correct parent span is propagated to downstream agents
   - Added `examples/observability-test/` with 4-agent setup for trace hierarchy testing
