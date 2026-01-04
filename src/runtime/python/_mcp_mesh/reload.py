@@ -43,9 +43,10 @@ def should_watch_file(path: str) -> bool:
 
     Excludes common non-source directories like __pycache__, .git, .venv, etc.
     """
-    path_lower = path.lower()
+    path_obj = Path(path)
+    path_parts = {p.lower() for p in path_obj.parts}
 
-    # Skip common non-source directories
+    # Skip common non-source directories (case-insensitive, exact component match)
     skip_patterns = [
         "__pycache__",
         ".git",
@@ -59,12 +60,12 @@ def should_watch_file(path: str) -> bool:
     ]
 
     for pattern in skip_patterns:
-        if pattern in path:
+        if pattern.lower() in path_parts:
             return False
 
     # Only watch specific file types
     watch_extensions = [".py", ".jinja2", ".j2", ".yaml", ".yml"]
-    return any(path_lower.endswith(ext) for ext in watch_extensions)
+    return path_obj.suffix.lower() in watch_extensions
 
 
 def terminate_process(process: subprocess.Popen, timeout: int = 5) -> None:
