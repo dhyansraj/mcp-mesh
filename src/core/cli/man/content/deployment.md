@@ -133,12 +133,12 @@ For production Kubernetes deployment, use the official Helm charts from the MCP 
 # Install core infrastructure (registry + database + observability)
 # No "helm repo add" needed - uses OCI registry directly
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.17 \
+  --version 0.7.18 \
   -n mcp-mesh --create-namespace
 
 # Deploy agent using scaffold-generated helm-values.yaml
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.17 \
+  --version 0.7.18 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -191,7 +191,7 @@ docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --pu
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.17 \
+  --version 0.7.18 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
@@ -203,14 +203,14 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 ```bash
 # Core without observability
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.17 \
+  --version 0.7.18 \
   -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.17 \
+  --version 0.7.18 \
   -n mcp-mesh --create-namespace \
   --set postgres.enabled=false
 ```
