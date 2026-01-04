@@ -657,6 +657,7 @@ func (c *CLIConfig) Validate() error {
 
 	// Log level validation
 	validLogLevels := map[string]bool{
+		"TRACE": true, // Most verbose - includes SQL queries
 		"DEBUG": true,
 		"INFO":  true,
 		"WARN":  true,
@@ -664,7 +665,7 @@ func (c *CLIConfig) Validate() error {
 		"FATAL": true,
 	}
 	if !validLogLevels[strings.ToUpper(c.LogLevel)] {
-		return fmt.Errorf("invalid log level: %s (must be DEBUG, INFO, WARN, ERROR, or FATAL)", c.LogLevel)
+		return fmt.Errorf("invalid log level: %s (must be TRACE, DEBUG, INFO, WARN, ERROR, or FATAL)", c.LogLevel)
 	}
 
 	// Health check interval validation

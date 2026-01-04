@@ -39,7 +39,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  HOST                     - Host to bind to (default: localhost)\n")
 		fmt.Fprintf(os.Stderr, "  PORT                     - Port to bind to (default: 8000)\n")
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Database connection URL (default: mcp_mesh_registry.db)\n")
-		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: INFO)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: INFO)\n")
+		fmt.Fprintf(os.Stderr, "                             TRACE enables SQL query logging, DEBUG is for general debugging\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_DEBUG_MODE      - Enable debug mode (true/false, 1/0, yes/no) - forces DEBUG level\n")
 		fmt.Fprintf(os.Stderr, "  HEALTH_CHECK_INTERVAL    - Health check interval in seconds (default: 10)\n")
 		fmt.Fprintf(os.Stderr, "  DEFAULT_TIMEOUT_THRESHOLD - Agent heartbeat timeout in seconds (default: 20)\n")
@@ -94,7 +95,7 @@ func main() {
 
 	// Initialize database with Ent
 	appLogger.Info("🗄️  Initializing database: %s", cfg.GetDatabaseURL())
-	db, err := database.InitializeEnt(cfg.Database, cfg.IsDebugMode())
+	db, err := database.InitializeEnt(cfg.Database, cfg.IsTraceMode())
 	if err != nil {
 		appLogger.Error("❌ Failed to initialize database: %v", err)
 		os.Exit(1)

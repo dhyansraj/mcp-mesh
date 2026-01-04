@@ -249,7 +249,7 @@ func setConfigValue(config *CLIConfig, key, value string) error {
 
 	case "log_level":
 		if !ValidateLogLevel(strings.ToUpper(value)) {
-			return fmt.Errorf("invalid log level: %s (must be DEBUG, INFO, WARNING, ERROR, or CRITICAL)", value)
+			return fmt.Errorf("invalid log level: %s (must be TRACE, DEBUG, INFO, WARNING, ERROR, or CRITICAL)", value)
 		}
 		config.LogLevel = strings.ToUpper(value)
 

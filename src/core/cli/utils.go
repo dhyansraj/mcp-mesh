@@ -302,7 +302,7 @@ func AbsolutePath(path string) (string, error) {
 
 // ValidateLogLevel checks if a log level is valid
 func ValidateLogLevel(level string) bool {
-	validLevels := []string{"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+	validLevels := []string{"TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 	for _, valid := range validLevels {
 		if level == valid {
 			return true

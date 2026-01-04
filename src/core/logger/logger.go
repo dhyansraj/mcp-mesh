@@ -91,5 +91,9 @@ func (l *Logger) GetStartupBanner() string {
 		debugStatus = "enabled"
 	}
 
-	return fmt.Sprintf("Log Level: %s | Debug Mode: %s", l.LogLevel(), debugStatus)
+	banner := fmt.Sprintf("Log Level: %s | Debug Mode: %s", l.LogLevel(), debugStatus)
+	if l.config.IsTraceMode() {
+		banner += " | SQL Logging: enabled"
+	}
+	return banner
 }
