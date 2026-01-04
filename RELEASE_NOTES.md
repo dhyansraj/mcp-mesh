@@ -1,5 +1,28 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.17...v0.7.18)
+
+## v0.7.18 (2026-01-04)
+
+### 🐛 Bug Fixes
+
+- **Fix trace context propagation** (#326): Fixed flat trace hierarchy in distributed tracing
+- **Fix registry URL in Helm values** (#357): Use correct `mcp-core-mcp-mesh-registry:8000` service name
+- **Fix scaffold --compose --observability without agents** (#353): Generate infrastructure-only stack
+- **Add missing watchfiles dependency** (#351): Added to pyproject.toml
+
+### 📚 Documentation
+
+- **Reorganize man pages** (#354): Improved `meshctl man llm`, `tags`, and `scaffold` documentation
+- **Clarify meshctl call syntax** (#355): Use `[agent-ID:]tool_name` with realistic examples
+- **Remove deprecated --healthy-only flag** (#352): Cleaned up stale documentation
+
+### 🧹 Cleanup
+
+- **Remove legacy examples/k8s directory** (#358): Replaced by Helm charts and scaffold
+- **Consolidate logo files**: Moved to `docs/assets/images/`
+- **Remove unused scripts**: Deleted `run-tests.sh`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.16...v0.7.17)
 
 ## v0.7.17 (2026-01-03)
