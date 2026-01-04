@@ -194,7 +194,7 @@ MCP_MESH_HTTP_PORT=8080
 meshctl list
 
 # List only healthy agents
-meshctl list --healthy-only
+meshctl list
 
 # Check mesh status
 meshctl status
@@ -215,7 +215,7 @@ meshctl start --debug main.py
 
 ```bash
 # Quick check - shows agent count and dependency resolution
-meshctl list --healthy-only
+meshctl list
 
 # Detailed view - shows capabilities, dependencies, endpoints
 meshctl status
@@ -299,7 +299,7 @@ meshctl start-registry
 
 ```bash
 # Quick check - see if all dependencies are resolved (e.g., "4/4")
-meshctl list --healthy-only
+meshctl list
 
 # Detailed view - shows capabilities, resolved dependencies, and endpoints
 meshctl status

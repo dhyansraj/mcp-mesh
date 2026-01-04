@@ -428,9 +428,9 @@ agent:
 
 # Registry configuration for agents
 registry:
-  host: "mcp-mesh-registry"
+  host: "mcp-core-mcp-mesh-registry"
   port: "8000"
-  url: "http://mcp-mesh-registry:8000"
+  url: "http://mcp-core-mcp-mesh-registry:8000"
 
 # Mesh configuration
 mesh:

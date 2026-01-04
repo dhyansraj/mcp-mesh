@@ -5,8 +5,8 @@
 ## Quick Way: meshctl call
 
 ```bash
-meshctl call hello_mesh_simple                    # Call tool by name
-meshctl call calculator:add '{"a": 1, "b": 2}'    # With arguments
+meshctl call hello_mesh_simple                    # Call tool by name (recommended)
+meshctl call add '{"a": 1, "b": 2}'               # With arguments
 meshctl list --tools                              # List all available tools
 ```
 
@@ -125,7 +125,7 @@ Calls route through the registry proxy by default:
 
 ```bash
 meshctl call greet
-meshctl call calculator:add '{"a": 1, "b": 2}'
+meshctl call add '{"a": 1, "b": 2}'
 
 # Bypass proxy (requires mapped ports)
 meshctl call greet --use-proxy=false --agent-url http://localhost:9001

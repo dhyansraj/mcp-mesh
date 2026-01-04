@@ -479,14 +479,18 @@ func runComposeGeneration(cmd *cobra.Command) error {
 	}
 
 	if len(agents) == 0 {
-		return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold --name <agent-name>'", output)
+		if !observability {
+			return fmt.Errorf("no agents found in %s; create agents first with 'meshctl scaffold --name <agent-name>'", output)
+		}
+		cmd.Println("No agents found, generating registry + observability stack only...")
+		cmd.Println()
+	} else {
+		cmd.Printf("Found %d agent(s):\n", len(agents))
+		for _, agent := range agents {
+			cmd.Printf("  - %s (port %d) in %s/\n", agent.Name, agent.Port, agent.Dir)
+		}
+		cmd.Println()
 	}
-
-	cmd.Printf("Found %d agent(s):\n", len(agents))
-	for _, agent := range agents {
-		cmd.Printf("  - %s (port %d) in %s/\n", agent.Name, agent.Port, agent.Dir)
-	}
-	cmd.Println()
 
 	// Build compose configuration
 	config := &scaffold.ComposeConfig{

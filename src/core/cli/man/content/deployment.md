@@ -167,7 +167,7 @@ agent:
 
 mesh:
   enabled: true
-  registryUrl: http://mcp-mesh-registry:8000
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
 
 resources:
   limits:
@@ -181,16 +181,12 @@ resources:
 ### Deployment Workflow
 
 ```bash
-# 1. Scaffold your agent
+# 1. Scaffold your agent (creates Dockerfile + helm-values.yaml)
 meshctl scaffold --name my-agent --agent-type tool
 
-# 2. Build and push Docker image
+# 2. Build and push Docker image (works on all platforms)
 cd my-agent
-docker build -t your-registry/my-agent:v1.0.0 .
-docker push your-registry/my-agent:v1.0.0
-
-# Note: On Apple Silicon (M1/M2/M3), build for amd64:
-# docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --push .
 
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm

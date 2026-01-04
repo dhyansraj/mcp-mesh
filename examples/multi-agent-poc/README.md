@@ -43,7 +43,7 @@ This starts all 6 services:
 
 ```bash
 # Check healthy agents
-meshctl list --registry-port 8003 --healthy-only
+meshctl list --registry-port 8003
 
 # Expected output:
 # AGENT ID                        NAME                      TYPE        STATUS    VERSION   HOST           PORT
@@ -153,7 +153,7 @@ Expected behavior:
 docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml start claude-provider
 
 # Wait for it to register (5-10 seconds)
-meshctl list --registry-port 8003 --healthy-only
+meshctl list --registry-port 8003
 ```
 
 5. **Next Request Uses Claude Again** (automatic recovery):

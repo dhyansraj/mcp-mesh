@@ -1,0 +1,571 @@
+#+TITLE: Week 1 Articles - Case Study & MCP vs REST
+#+AUTHOR: MCP Mesh Team
+#+DATE: 2024-12
+#+OPTIONS: toc:2 num:t
+
+* Overview
+
+Week 1 launches the series with two complementary articles:
+- Part 0: The hook — show it working
+- Article 1: The controversy — why MCP beats REST
+
+Publish both in the same week. Part 0 establishes credibility, Article 1 starts the debate.
+
+* Part 0: Case Study
+:PROPERTIES:
+:EXPORT_TITLE: How Our AI Hiring Platform Gets Smarter Without Code Changes
+:EXPORT_TAGS: ai, mcp, microservices, architecture, kubernetes
+:END:
+
+** Meta
+
+- *Goal*: Hook readers with the "app gets smarter" story, demonstrate @mesh.llm power
+- *Tone*: Practical, show-don't-tell, enterprise-focused
+- *Length*: ~1500 words
+- *CTA*: "Want to know how? Article 1 explains the protocol choice"
+
+** Article Draft
+
+*** Introduction
+
+Last month, our AI hiring platform could only process PDF resumes.
+
+This week, it handles PDFs, Word documents, and scanned images with OCR.
+
+We didn't change a single line of code in our resume processing agent. We just deployed new extractors to the cluster — and the LLM-powered agent started using them automatically.
+
+This is what building on MCP Mesh feels like.
+
+*** The Platform
+
+We built a multi-agent hiring platform on Kubernetes:
+
+#+begin_src
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         MCP Mesh Registry                               │
+│                  (Discovery + Topology + Health)                        │
+└─────────────────────────────────────────────────────────────────────────┘
+       ▲              ▲                ▲              ▲              ▲
+       │              │                │              │              │
+  ┌────┴────┐   ┌─────┴─────┐   ┌──────┴──────┐  ┌────┴────┐   ┌─────┴─────┐
+  │  Resume │   │    Job    │   │  Interview  │  │ Scoring │   │    LLM    │
+  │  Agent  │   │  Matcher  │   │    Agent    │  │  Agent  │   │ Providers │
+  │ (LLM)   │   │           │   │   (LLM)     │  │  (LLM)  │   │           │
+  └────┬────┘   └───────────┘   └─────────────┘  └─────────┘   └───────────┘
+       │
+       │ dynamically discovers extractors
+       ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                   Extractor Tools                           │
+  │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐     │
+  │  │   PDF   │   │   DOC   │   │  Image  │   │ Future  │     │
+  │  │Extractor│   │Extractor│   │  (OCR)  │   │   ...   │     │
+  │  └─────────┘   └─────────┘   └─────────┘   └─────────┘     │
+  │       tags: [extractor, pdf]  [extractor, doc]  [extractor, ocr]      │
+  └─────────────────────────────────────────────────────────────┘
+#+end_src
+
+The key insight: agents powered by =@mesh.llm= don't have hardcoded dependencies. They discover tools at runtime — and intelligently choose which ones to use.
+
+*** The Resume Agent
+
+Here's the core of our resume processing:
+
+#+begin_src python
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
+    filter=[{"tags": ["extractor"]}],  # Discover all extractors
+    system_prompt="""You process uploaded resumes.
+
+    Available tools let you extract text from different file formats.
+    Choose the appropriate extractor based on the file type.
+    Then analyze the extracted text and return structured candidate data.""",
+    max_iterations=3,
+)
+@mesh.tool(
+    capability="process_resume",
+    tags=["resume", "ai"],
+)
+async def process_resume(
+    file_path: str,
+    file_type: str,
+    llm: MeshLlmAgent = None
+) -> CandidateProfile:
+    return await llm(f"Process this {file_type} resume: {file_path}")
+#+end_src
+
+The magic is in =filter=[{"tags": ["extractor"]}]=. The LLM sees every tool tagged with "extractor" — and decides which one to call based on the file type.
+
+*** Day 1: PDF Only
+
+When we launched, we had one extractor:
+
+#+begin_src python
+# pdf_extractor.py
+@mesh.tool(
+    capability="extract_pdf",
+    tags=["extractor", "pdf"],
+    description="Extract text content from PDF files"
+)
+async def extract_pdf(file_path: str) -> ExtractedText:
+    # PDF extraction logic
+    return ExtractedText(content=text, metadata={...})
+#+end_src
+
+The Resume Agent's LLM sees: =Available tools: [extract_pdf]=
+
+User uploads =resume.pdf= → LLM reasons: "This is a PDF, I'll use extract_pdf" → Extracts text → Returns structured profile.
+
+*** Day 30: Adding Word Support
+
+Product wants Word document support. We write a new extractor:
+
+#+begin_src python
+# doc_extractor.py
+@mesh.tool(
+    capability="extract_doc",
+    tags=["extractor", "doc", "docx"],
+    description="Extract text content from Word documents (.doc, .docx)"
+)
+async def extract_doc(file_path: str) -> ExtractedText:
+    # Word extraction logic
+    return ExtractedText(content=text, metadata={...})
+#+end_src
+
+Deploy to Kubernetes:
+
+#+begin_src bash
+helm install doc-extractor oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.12 \
+  -n mcp-mesh \
+  -f doc-extractor/helm-values.yaml
+#+end_src
+
+*Within 10 seconds*, the Resume Agent's LLM sees: =Available tools: [extract_pdf, extract_doc]=
+
+User uploads =resume.docx= → LLM reasons: "This is a Word document, I'll use extract_doc" → Works.
+
+*No code change to the Resume Agent. No restart. No config update.*
+
+*** Day 60: Image OCR for Scanned Resumes
+
+HR reports that some candidates upload scanned PDFs or photos of their resumes. We add OCR:
+
+#+begin_src python
+# image_extractor.py
+@mesh.tool(
+    capability="extract_image_ocr",
+    tags=["extractor", "image", "ocr", "scan"],
+    description="Extract text from images or scanned documents using OCR"
+)
+async def extract_image_ocr(file_path: str) -> ExtractedText:
+    # OCR logic (Tesseract, Cloud Vision, etc.)
+    return ExtractedText(content=text, confidence=0.92, metadata={...})
+#+end_src
+
+#+begin_src bash
+helm install image-extractor oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.12 \
+  -n mcp-mesh \
+  -f image-extractor/helm-values.yaml
+#+end_src
+
+The Resume Agent's LLM now sees: =Available tools: [extract_pdf, extract_doc, extract_image_ocr]=
+
+User uploads =resume_scan.jpg= → LLM reasons: "This is an image, I'll use extract_image_ocr" → Works.
+
+But here's where it gets interesting. User uploads a PDF that's actually a scanned image (no selectable text). The LLM:
+
+1. Tries =extract_pdf= → Gets empty/garbled text
+2. Reasons: "The PDF extraction returned garbage. This might be a scanned document."
+3. Calls =extract_image_ocr= on the same file → Gets clean text
+4. Returns structured profile
+
+*The agent got smarter. It learned a new recovery strategy without anyone writing that logic.*
+
+We didn't tell the Resume Agent about OCR. We didn't update its prompts. We just deployed an extractor with good tags and a clear description — and the LLM figured out when to use it.
+
+*** Why This Works
+
+Traditional microservices require explicit wiring:
+
+#+begin_src python
+# Traditional approach - hardcoded routing
+def process_resume(file_path: str, file_type: str):
+    if file_type == "pdf":
+        text = call_pdf_service(file_path)
+    elif file_type in ["doc", "docx"]:
+        text = call_doc_service(file_path)
+    elif file_type in ["jpg", "png"]:
+        text = call_ocr_service(file_path)
+    else:
+        raise UnsupportedFormatError(file_type)
+    # ...
+#+end_src
+
+Every new format requires code changes, redeployment, and testing.
+
+MCP Mesh with =@mesh.llm= inverts this:
+
+1. *Tools self-describe* — Each extractor has tags and descriptions
+2. *LLM discovers tools* — =filter=[{"tags": ["extractor"]}]= broadcasts intent
+3. *LLM reasons about tools* — Chooses based on context, not hardcoded rules
+4. *Mesh handles routing* — Tool calls go to the right agent automatically
+
+The Resume Agent's code stays frozen. The platform's capabilities expand with each helm install.
+
+*** The Enterprise Reality
+
+This isn't a toy demo. It's running in production:
+
+| Aspect | Traditional | MCP Mesh |
+|--------|-------------|----------|
+| Adding new file format | Code change + deploy + test | helm install |
+| Config files for routing | Per-service | 0 |
+| Recovery logic for edge cases | Manual if/else | LLM figures it out |
+| Time to add capability | Hours/days | Minutes |
+
+*Infrastructure*
+
+#+begin_src bash
+# One-time cluster setup
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.12 \
+  -n mcp-mesh --create-namespace
+
+# Deploys: Registry + PostgreSQL + Redis + Tempo + Grafana
+#+end_src
+
+Same agent code runs locally (=meshctl start=), in Docker Compose, and in Kubernetes. Only the infrastructure changes.
+
+*** What the LLM Sees
+
+When the Resume Agent's LLM runs, it receives a tool list like:
+
+#+begin_src json
+{
+  "tools": [
+    {
+      "name": "extract_pdf",
+      "description": "Extract text content from PDF files",
+      "tags": ["extractor", "pdf"],
+      "input_schema": {"file_path": "string"}
+    },
+    {
+      "name": "extract_doc",
+      "description": "Extract text content from Word documents (.doc, .docx)",
+      "tags": ["extractor", "doc", "docx"],
+      "input_schema": {"file_path": "string"}
+    },
+    {
+      "name": "extract_image_ocr",
+      "description": "Extract text from images or scanned documents using OCR",
+      "tags": ["extractor", "image", "ocr", "scan"],
+      "input_schema": {"file_path": "string"}
+    }
+  ]
+}
+#+end_src
+
+The LLM reads descriptions, understands capabilities, and makes intelligent choices. Add a new tool? It appears in this list within seconds.
+
+*** LLM Failover (Bonus)
+
+We run two LLM providers:
+
+#+begin_src bash
+helm install claude-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -f claude-provider/helm-values.yaml -n mcp-mesh
+
+helm install openai-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -f openai-provider/helm-values.yaml -n mcp-mesh
+#+end_src
+
+The Resume Agent's =provider={"capability": "llm", "tags": ["+claude"]}= prefers Claude.
+
+When Claude's API goes down:
+1. Mesh detects unhealthy (missed heartbeats)
+2. Topology updates
+3. Next request routes to OpenAI
+4. When Claude recovers, traffic returns
+
+Zero failover code. It's how the mesh works.
+
+*** What's Next
+
+This article showed *what* we built — an AI platform that genuinely gets smarter as you add capabilities.
+
+The next article explains *why* we chose MCP over REST as the foundation — and why that choice matters more than you might think.
+
+👉 [Next: MCP vs REST — Why MCP is the better microservice protocol]
+
+*** Resources
+
+- [[https://github.com/dhyansraj/mcp-mesh][MCP Mesh on GitHub]]
+- [[https://dhyansraj.github.io/mcp-mesh/][Documentation]]
+- [[https://youtu.be/EkExIyK7ees][Video: LLM agents using new tools without code changes]]
+
+
+* Article 1: MCP vs REST
+:PROPERTIES:
+:EXPORT_TITLE: MCP vs REST: Why MCP is the Better Microservice Protocol
+:EXPORT_TAGS: rest, mcp, api, microservices, controversial
+:END:
+
+** Meta
+
+- *Goal*: Make the case that MCP is superior to REST for service-to-service communication
+- *Tone*: Opinionated but backed by specifics
+- *Length*: ~1800 words
+- *Expected reactions*: "REST is battle-tested", "This is just RPC", "OpenAPI solves this"
+- *CTA*: "Next article: Capabilities, not endpoints"
+
+** Article Draft
+
+*** Introduction
+
+REST has been the default for microservices for 15 years. It's battle-tested, widely understood, and works.
+
+But it was designed for a different era — before AI agents, before services needed to discover each other dynamically, before every API needed a separate OpenAPI spec to be usable.
+
+In the [[*Part 0: Case Study][previous article]], we showed a Resume Agent that automatically started using a new OCR extractor — without code changes, config updates, or restarts. That's not magic. It's what happens when you build on a protocol designed for AI systems.
+
+MCP (Model Context Protocol) was designed for AI-to-tool communication. It turns out the features that make it great for that also make it better for service-to-service communication.
+
+Here's why.
+
+*** The Schema Problem
+
+*REST*
+
+#+begin_src
+GET /users/{id}
+POST /users
+PUT /users/{id}
+DELETE /users/{id}
+#+end_src
+
+What's the request body for POST? What does the response look like? You don't know until you:
+- Read the OpenAPI spec (if one exists)
+- Read the documentation (if it's accurate)
+- Make a request and see what happens
+
+REST endpoints are opaque. The URL tells you nothing about the data contract.
+
+*MCP*
+
+#+begin_src python
+@mesh.tool(capability="user_get")
+async def get_user(user_id: str) -> User:
+    ...
+
+@mesh.tool(capability="user_create")
+async def create_user(user: UserCreate) -> User:
+    ...
+#+end_src
+
+The schema is the code. Input types, output types, everything is introspectable at runtime. When an agent calls =user_get=, it knows exactly what parameters are required and what it will receive back.
+
+No separate spec file. No drift between docs and implementation. The contract is the function signature.
+
+*** The Discovery Problem
+
+*REST*
+
+Services need to know where other services live:
+
+#+begin_src yaml
+# config.yaml
+services:
+  user-service: http://user-service:8080
+  order-service: http://order-service:8080
+  payment-service: http://payment-service:8080
+#+end_src
+
+Add a new service? Update every config. Change a port? Update every config. Move to a new host? Update every config.
+
+Or add Consul/Eureka/etcd and manage that infrastructure too.
+
+*MCP Mesh*
+
+Services declare capabilities, not locations:
+
+#+begin_src python
+@mesh.tool(
+    capability="process_payment",
+    dependencies=[{"capability": "user_balance"}]
+)
+async def process_payment(
+    amount: float,
+    user_balance: McpMeshAgent = None  # Injected by mesh
+):
+    balance = await user_balance(user_id=user_id)
+    ...
+#+end_src
+
+The payment processor doesn't know or care where =user_balance= lives. It declares the dependency. The mesh resolves it at runtime.
+
+Add a new capability? The mesh knows about it within seconds. For regular tools (=@mesh.tool=), you add dependencies explicitly. For LLM-powered agents (=@mesh.llm=), the LLM discovers and uses new tools automatically — like the Resume Agent that started using OCR without anyone updating its code.
+
+*** The Transport Problem
+
+*REST*
+
+HTTP only. Want streaming? Add WebSockets (different protocol). Want bidirectional? Add gRPC (different protocol). Want server-sent events? Different implementation again.
+
+Every transport is a different integration.
+
+*MCP*
+
+Transport-agnostic by design:
+- =stdio= — For local tools and testing
+- =SSE= — For streaming over HTTP
+- =HTTP= — For request/response
+- Custom transports as needed
+
+Same code, different transport. Your agent doesn't change when you switch from local development (stdio) to production (SSE).
+
+*** The Versioning Problem
+
+*REST*
+
+#+begin_src
+/api/v1/users
+/api/v2/users
+/api/v3/users  # The old endpoints still exist, forever
+#+end_src
+
+URL versioning. Or header versioning. Or query param versioning. Every team does it differently. Deprecation is a nightmare.
+
+*MCP Mesh*
+
+#+begin_src python
+@mesh.tool(
+    capability="user_get",
+    version="2.0.0",
+    tags=["stable"]
+)
+#+end_src
+
+Version is metadata, not URL pollution. Consumers can specify constraints:
+
+#+begin_src python
+dependencies=[
+    {"capability": "user_get", "version": ">=2.0.0"}
+]
+#+end_src
+
+The mesh handles routing to compatible versions. Old versions can be gracefully deprecated without URL archaeology.
+
+*** The "It's Just RPC" Objection
+
+Yes, MCP is RPC-style. So is gRPC. The question is: what else do you get?
+
+| Feature | REST | gRPC | MCP |
+|---------|------|------|-----|
+| Schema in protocol | No (needs OpenAPI) | Yes (protobuf) | Yes (native) |
+| Runtime introspection | No | Limited | Yes |
+| Built for AI tools | No | No | Yes |
+| Streaming | Separate (WebSocket) | Yes | Yes |
+| Discovery protocol | No | No | Yes (with Mesh) |
+| Capability-based routing | No | No | Yes (with Mesh) |
+| LLM can choose tools | No | No | Yes (tools self-describe) |
+
+gRPC solves the schema problem but not discovery. REST solves neither. MCP Mesh solves both — and gives LLMs the ability to reason about which tools to use.
+
+*** The "OpenAPI Already Exists" Objection
+
+OpenAPI is excellent — for documentation and code generation.
+
+But:
+1. It's a separate artifact from your code (drift happens)
+2. It's not runtime-introspectable by default
+3. It doesn't help with discovery
+4. It doesn't help with dependency injection
+
+MCP puts the schema in the protocol. There's no separate spec to maintain because the spec *is* the implementation.
+
+*** The "REST is Battle-Tested" Objection
+
+Fair point. REST has 20 years of production hardening.
+
+But consider:
+- MCP is built on HTTP (same transport infrastructure)
+- MCP Mesh is built on FastMCP (production-ready MCP implementation)
+- The protocol is simpler than REST (fewer ways to misuse it)
+
+You're not throwing away your infrastructure. You're using a better protocol on top of it.
+
+*** When REST is Still Right
+
+I'm not saying REST is dead. Use REST when:
+
+- You're building a public API for third parties (REST is universal)
+- You need maximum compatibility with existing tools
+- Your services are truly independent (no discovery needed)
+- You have strong OpenAPI discipline already
+
+But if you're building:
+- AI agent systems where LLMs need to discover and use tools
+- Internal microservices that need discovery
+- Services that call each other frequently
+- Systems where adding a new capability should be trivial (helm install, done)
+
+MCP Mesh is worth considering.
+
+*** The Paradigm Shift
+
+REST treats services as dumb endpoints. You call them, they respond.
+
+MCP treats services as capabilities. They describe what they do, what they need, and what they return. The mesh connects them.
+
+This isn't just a protocol change. It's a different way of thinking about distributed systems:
+
+| REST Mindset | MCP Mesh Mindset |
+|--------------|------------------|
+| "Where is the user service?" | "Who provides user_get capability?" |
+| "What's the endpoint URL?" | "What capability do I need?" |
+| "Add URL to config" | "Declare dependency, mesh resolves" |
+| "Write retry logic" | "Mesh handles failover" |
+| "Document the API" | "Schema is the code" |
+| "Write if/else for each service" | "LLM reads tool descriptions, chooses" |
+
+*** What's Next
+
+This article argued *why* MCP is better than REST for service-to-service communication.
+
+The next article goes deeper into *capabilities* — the core abstraction that makes MCP Mesh work. You'll see how loose coupling actually happens when services find each other by what they do, not where they live.
+
+👉 [Next: Capabilities, not endpoints — loose coupling done right]
+
+*** Resources
+
+- [[https://modelcontextprotocol.io/][MCP Protocol Specification]]
+- [[https://github.com/dhyansraj/mcp-mesh][MCP Mesh on GitHub]]
+- [[https://dhyansraj.github.io/mcp-mesh/][MCP Mesh Documentation]]
+- [[https://youtu.be/EkExIyK7ees][Video: LLM agents using new tools without code changes]]
+
+
+* Revision Notes
+
+** Part 0 (Case Study)
+- [ ] Verify @mesh.llm filter syntax matches current SDK
+- [ ] Confirm helm chart version (0.7.12) is latest
+- [ ] Add actual CandidateProfile Pydantic model example
+- [ ] Consider adding "What about @mesh.tool?" sidebar explaining the difference
+- [ ] Test the "scanned PDF" recovery scenario claim with actual LLM
+- [ ] Add link to video demo if available
+
+** Article 1 (MCP vs REST)
+- [ ] Add concrete latency comparison if available
+- [ ] Include response to "security" objection (TLS, auth)
+- [ ] Add example of schema introspection at runtime
+- [ ] Consider adding "when MCP fails" section for balance
+- [ ] Reference the case study examples where relevant
+
+** Publishing Checklist
+- [ ] Cross-link between articles
+- [ ] Add dev.to specific formatting ({% tag %} syntax)
+- [ ] Create cover images
+- [ ] Schedule for same week (Part 0 first, Article 1 two days later)
+- [ ] Ensure code examples are syntax-highlighted properly

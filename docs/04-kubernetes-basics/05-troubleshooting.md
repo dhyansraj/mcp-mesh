@@ -188,7 +188,7 @@ kubectl describe pod <pod-name> -n mcp-mesh | grep -A10 "Last State"
 
    # Add missing variables
    kubectl set env deployment/<deployment-name> \
-     MCP_MESH_REGISTRY_URL=http://mcp-mesh-registry:8000 \
+     MCP_MESH_REGISTRY_URL=http://mcp-core-mcp-mesh-registry:8000 \
      -n mcp-mesh
    ```
 
@@ -242,7 +242,7 @@ kubectl exec -it <pod-name> -n mcp-mesh -- nslookup mcp-mesh-registry
 kubectl get endpoints mcp-mesh-registry -n mcp-mesh
 
 # Test connectivity
-kubectl exec -it <pod-name> -n mcp-mesh -- wget -O- http://mcp-mesh-registry:8000/health
+kubectl exec -it <pod-name> -n mcp-mesh -- wget -O- http://mcp-core-mcp-mesh-registry:8000/health
 ```
 
 **Solutions:**

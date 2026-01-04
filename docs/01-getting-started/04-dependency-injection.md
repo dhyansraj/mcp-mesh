@@ -371,7 +371,7 @@ curl -s -X POST http://localhost:9090/mcp \
 
 ```bash
 # Quick check - see if all dependencies are resolved (e.g., "4/4")
-meshctl list --healthy-only
+meshctl list
 
 # Detailed view - shows capabilities, resolved dependencies, and endpoints
 meshctl status

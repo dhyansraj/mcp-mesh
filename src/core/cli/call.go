@@ -82,7 +82,7 @@ func newTraceContext() *TraceContext {
 // NewCallCommand creates the call command
 func NewCallCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "call [agent:]tool_name [arguments]",
+		Use:   "call [agent-ID:]tool_name [arguments]",
 		Short: "Call an MCP tool on an agent",
 		Long: `Call an MCP tool on a registered agent.
 
@@ -93,13 +93,19 @@ By default, calls are routed through the registry proxy. This allows external ac
 to agents running in Docker/Kubernetes without exposing individual agent ports.
 
 Examples:
-  meshctl call hello_mesh_simple                          # Call tool via registry proxy (default)
-  meshctl call weather-agent:get_weather                  # Specify agent explicitly
-  meshctl call calculator:add '{"a": 1, "b": 2}'          # With JSON arguments
-  meshctl call analyzer:process --file data.json          # Arguments from file
-  meshctl call hello_mesh --registry-url http://remote:8000  # Remote registry
-  meshctl call hello_mesh --use-proxy=false               # Call agent directly (requires direct network access)
-  meshctl call hello_mesh --agent-url http://localhost:8080  # Direct agent call (skip registry)
+  # Most common - auto-discover agent by tool name
+  meshctl call get_weather                                # Tool name only (recommended)
+  meshctl call add '{"a": 1, "b": 2}'                     # With JSON arguments
+  meshctl call process --file data.json                   # Arguments from file
+
+  # Target specific agent (use full agent ID from 'meshctl list')
+  meshctl call weather-agent-7f3a2b:get_weather           # Full agent ID with UID suffix
+  meshctl call calc-agent-9x8c4d:add '{"a": 1, "b": 2}'   # Agent ID from meshctl list
+
+  # Other options
+  meshctl call get_weather --registry-url http://remote:8000  # Remote registry
+  meshctl call get_weather --use-proxy=false              # Call agent directly (requires direct network access)
+  meshctl call get_weather --agent-url http://localhost:8080  # Direct agent call (skip registry)
 
 Ingress mode (for Kubernetes clusters with ingress configured):
   meshctl call hello_mesh_simple --ingress-domain mcp-mesh.local                    # With DNS configured
