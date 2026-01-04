@@ -43,8 +43,19 @@ def should_watch_file(path: str) -> bool:
     - YAML config files (.yaml, .yml)
 
     Excludes common non-source directories like __pycache__, .git, .venv, etc.
+    Also excludes hidden files and editor temporary files.
     """
     path_obj = Path(path)
+    filename = path_obj.name
+
+    # Skip hidden files and editor temp files (e.g., .!12345!main.py from sed -i)
+    if filename.startswith("."):
+        return False
+
+    # Skip common editor backup/temp files
+    if filename.endswith("~") or filename.endswith(".swp") or filename.endswith(".tmp"):
+        return False
+
     path_parts = {p.lower() for p in path_obj.parts}
 
     # Skip common non-source directories (case-insensitive, exact component match)
@@ -69,9 +80,9 @@ def should_watch_file(path: str) -> bool:
     return path_obj.suffix.lower() in watch_extensions
 
 
-def terminate_process(process: subprocess.Popen, timeout: int = 5) -> None:
+def terminate_process(process: subprocess.Popen, timeout: int = 3) -> None:
     """
-    Gracefully terminate a process, force kill if needed.
+    Gracefully terminate a process and all its children, force kill if needed.
 
     Args:
         process: The subprocess to terminate
@@ -80,15 +91,26 @@ def terminate_process(process: subprocess.Popen, timeout: int = 5) -> None:
     if process is None or process.poll() is not None:
         return
 
-    # Try graceful termination first
-    process.terminate()
+    pid = process.pid
+
+    # Try graceful termination first - send to process group to include children
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        # Process group doesn't exist or we can't signal it, try direct
+        process.terminate()
+
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         logger.warning(
-            f"Process {process.pid} didn't terminate gracefully, force killing..."
+            f"Process {pid} didn't terminate gracefully, force killing..."
         )
-        process.kill()
+        # Force kill the entire process group
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            process.kill()
         process.wait()
 
 
@@ -132,12 +154,13 @@ def run_with_reload(script_path: str) -> None:
     signal.signal(signal.SIGTERM, signal_handler)
 
     def start_agent() -> subprocess.Popen:
-        """Start the agent subprocess."""
+        """Start the agent subprocess in a new process group."""
         return subprocess.Popen(
             [python_exec, script_path],
             stdout=sys.stdout,
             stderr=sys.stderr,
             stdin=sys.stdin,
+            start_new_session=True,  # Create new process group for clean shutdown
         )
 
     # Start initial process
