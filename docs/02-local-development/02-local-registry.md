@@ -77,9 +77,8 @@ docker-compose up --build
 # - Multiple Python agents
 # - Proper networking and service discovery
 
-# For local K8s testing:
-cd examples/k8s
-kubectl apply -k base/
+# For K8s deployment, use Helm charts:
+# See: meshctl man deployment
 ```
 
 ### Step 4: Inspect Registry State

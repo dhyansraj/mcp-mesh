@@ -59,7 +59,6 @@ ignore: |
   k8s/base/registry/rbac.yaml
   k8s/base/registry/pvc.yaml
   k8s/base/agents/mcpagent-sample.yaml
-  examples/k8s/base/agents/*-deployment.yaml
 
   # Node modules and build artifacts
   node_modules/**
