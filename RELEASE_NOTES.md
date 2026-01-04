@@ -1,5 +1,30 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.16...v0.7.17)
+
+## v0.7.17 (2026-01-03)
+
+### ✨ New Features
+
+- **Add file watch mode for meshctl start** (#347): Auto-restart agents on file changes
+  - Add `--watch/-w` flag for development workflows
+  - Uses `watchfiles` library for reliable file monitoring
+  - Each agent watches its own directory independently
+  - Supports both `meshctl start` and direct Python execution
+
+- **Add TRACE log level for SQL query logging** (#347): Separate SQL logging from DEBUG mode
+  - `--debug` no longer shows Ent SQL queries
+  - Use `MCP_MESH_LOG_LEVEL=TRACE` for SQL debugging
+
+### 🐛 Bug Fixes
+
+- **Fix scaffold llm-agent template issues** (#348):
+  - Remove `response_format` parameter (causes LiteLLM TypeError)
+  - Use `file://prompts/<name>.jinja2` for system_prompt (makes context_param work)
+  - Dynamic file listing shows all generated files including prompts/ directory
+
+- **Fix websockets deprecation warnings** (#347): Add `ws="websockets-sansio"` to uvicorn configs
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.15...v0.7.16)
 
 ## v0.7.16 (2026-01-03)
