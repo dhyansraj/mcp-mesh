@@ -1,2 +1,0 @@
-# ServiceAccount for registry
-# Note: Leader election RBAC has been removed as it's not implemented in the registry code

@@ -19,7 +19,7 @@ We'll cover DNS-based discovery, headless services, service mesh integration, an
 
 ## 🎯 Service Naming Patterns in MCP Mesh
 
-Based on the actual Kubernetes examples in `examples/k8s/base/agents/`, MCP Mesh follows these service naming conventions:
+MCP Mesh follows these service naming conventions:
 
 | Component         | Service Name            | Label Value             | Port |
 | ----------------- | ----------------------- | ----------------------- | ---- |
@@ -98,7 +98,7 @@ spec:
 Configure agents using the actual K8s example pattern:
 
 ```yaml
-# Key service discovery configuration from examples/k8s/base/agents/
+# Key service discovery configuration (from Helm mcp-mesh-agent chart)
 env:
   # Kubernetes service discovery - auto-detect from labels
   - name: SERVICE_NAME
@@ -442,22 +442,22 @@ spec:
 
 ## Configuration Options
 
-| Environment Variable     | Description                      | Default           | Example                       |
-| ------------------------ | -------------------------------- | ----------------- | ----------------------------- |
-| `SERVICE_NAME`           | K8s service name (auto-detected) | from labels       | mcp-mesh-hello-world          |
-| `NAMESPACE`              | Pod namespace (auto-detected)    | from fieldRef     | mcp-mesh                      |
-| `MCP_MESH_REGISTRY_HOST` | Registry service name            | mcp-mesh-registry | mcp-mesh-registry             |
-| `MCP_MESH_REGISTRY_PORT` | Registry service port            | 8000              | 8000                          |
+| Environment Variable     | Description                      | Default           | Example                                |
+| ------------------------ | -------------------------------- | ----------------- | -------------------------------------- |
+| `SERVICE_NAME`           | K8s service name (auto-detected) | from labels       | mcp-mesh-hello-world                   |
+| `NAMESPACE`              | Pod namespace (auto-detected)    | from fieldRef     | mcp-mesh                               |
+| `MCP_MESH_REGISTRY_HOST` | Registry service name            | mcp-mesh-registry | mcp-mesh-registry                      |
+| `MCP_MESH_REGISTRY_PORT` | Registry service port            | 8000              | 8000                                   |
 | `MCP_MESH_REGISTRY_URL`  | Complete registry URL            | auto-constructed  | http://mcp-core-mcp-mesh-registry:8000 |
-| `MCP_MESH_AGENT_NAME`    | Agent logical name               | manual            | hello-world, system-agent     |
-| `HOST`                   | HTTP binding address             | 0.0.0.0           | 0.0.0.0                       |
+| `MCP_MESH_AGENT_NAME`    | Agent logical name               | manual            | hello-world, system-agent              |
+| `HOST`                   | HTTP binding address             | 0.0.0.0           | 0.0.0.0                                |
 
 ## Examples
 
 ### Example 1: Service Name-Based Discovery (Real K8s Pattern)
 
 ```python
-# real_k8s_discovery.py - Based on actual examples/k8s/base/agents/
+# real_k8s_discovery.py - K8s service discovery pattern
 import os
 import requests
 import socket

@@ -10,7 +10,6 @@ repos:
             helm/.*/templates/.*\.yaml|
             k8s/base/registry/(rbac|pvc)\.yaml|
             k8s/base/agents/mcpagent-sample\.yaml|
-            examples/k8s/base/agents/.*-deployment\.yaml|
             mkdocs\.yml
           )$
       - id: check-toml
