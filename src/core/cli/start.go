@@ -48,7 +48,7 @@ Examples:
 
 	// Logging and debug flags
 	cmd.Flags().Bool("debug", false, "Enable debug mode")
-	cmd.Flags().String("log-level", "", "Set log level (DEBUG, INFO, WARN, ERROR) (default: INFO)")
+	cmd.Flags().String("log-level", "", "Set log level (TRACE, DEBUG, INFO, WARN, ERROR) (default: INFO). TRACE enables SQL logging.")
 	cmd.Flags().Bool("verbose", false, "Enable verbose output")
 	cmd.Flags().Bool("quiet", false, "Suppress non-error output")
 
@@ -82,6 +82,9 @@ Examples:
 
 	// Validation flags
 	cmd.Flags().Bool("skip-checks", false, "Skip prerequisite validation (Python version, mcp-mesh package)")
+
+	// Development flags
+	cmd.Flags().BoolP("watch", "w", false, "Watch files and restart on changes")
 
 	return cmd
 }
@@ -269,7 +272,7 @@ func applyAllStartFlags(cmd *cobra.Command, config *CLIConfig) error {
 		logLevel, _ := cmd.Flags().GetString("log-level")
 		if logLevel != "" {
 			if !ValidateLogLevel(logLevel) {
-				return fmt.Errorf("invalid log level: %s (must be DEBUG, INFO, WARNING, ERROR, or CRITICAL)", logLevel)
+				return fmt.Errorf("invalid log level: %s (must be TRACE, DEBUG, INFO, WARNING, ERROR, or CRITICAL)", logLevel)
 			}
 			config.LogLevel = logLevel
 		}
@@ -1042,6 +1045,11 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	group, _ := cmd.Flags().GetString("group")
 	detach, _ := cmd.Flags().GetBool("detach")
 	quiet, _ := cmd.Flags().GetBool("quiet")
+	watch, _ := cmd.Flags().GetBool("watch")
+
+	if watch && !quiet {
+		fmt.Println("🔄 Watch mode enabled - agents will restart on file changes")
+	}
 
 	for _, agentPath := range agentPaths {
 		// Convert to absolute path
@@ -1055,7 +1063,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 
 		// Create agent command with enhanced environment
-		agentCmd, err := createAgentCommand(absPath, env, workingDir, user, group)
+		agentCmd, err := createAgentCommand(absPath, env, workingDir, user, group, watch)
 		if err != nil {
 			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
 		}
@@ -1104,7 +1112,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 }
 
 // Create agent command with Python environment detection and hybrid config support
-func createAgentCommand(agentPath string, env []string, workingDir, user, group string) (*exec.Cmd, error) {
+func createAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
 	var pythonExec string
 	var scriptPath string
 	var finalWorkingDir string
@@ -1182,9 +1190,16 @@ func createAgentCommand(agentPath string, env []string, workingDir, user, group 
 		finalWorkingDir = absWorkingDir
 	}
 
-	// Create command to run the Python script directly
-	// The mcp_mesh_runtime will be auto-imported via site-packages
-	cmd := exec.Command(pythonExec, scriptPath)
+	// Create command to run the Python script
+	// When watch mode is enabled, use the reload runner for auto-restart on file changes
+	var cmd *exec.Cmd
+	if watch {
+		// Use reload runner: python -m _mcp_mesh.reload_runner <script>
+		cmd = exec.Command(pythonExec, "-m", "_mcp_mesh.reload_runner", scriptPath)
+	} else {
+		// The mcp_mesh_runtime will be auto-imported via site-packages
+		cmd = exec.Command(pythonExec, scriptPath)
+	}
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
