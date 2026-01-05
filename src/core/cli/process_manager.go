@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -67,7 +66,7 @@ type MonitoringPolicy struct {
 type ProcessManager struct {
 	processes        map[string]*ProcessInfo
 	mutex            sync.RWMutex
-	logger           *log.Logger
+	logger           *CLILogger
 	stateFile        string
 	monitoringTicker *time.Ticker
 	monitorPolicy    *MonitoringPolicy
@@ -85,7 +84,7 @@ func NewProcessManager(config *CLIConfig) *ProcessManager {
 
 	pm := &ProcessManager{
 		processes:    make(map[string]*ProcessInfo),
-		logger:       log.New(os.Stdout, "[ProcessManager] ", log.LstdFlags),
+		logger:       NewCLILogger("PROCMGR"),
 		stateFile:    stateFile,
 		shutdownChan: make(chan struct{}),
 		config:       config,
