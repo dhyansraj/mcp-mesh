@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"sync"
@@ -14,7 +13,7 @@ import (
 type SignalHandler struct {
 	shutdownCallbacks []func() error
 	mutex             sync.RWMutex
-	logger            *log.Logger
+	logger            *CLILogger
 	shutdownTimeout   time.Duration
 	shutdownChan      chan struct{}
 	shutdownOnce      sync.Once
@@ -23,7 +22,7 @@ type SignalHandler struct {
 // ProcessCleanupManager handles cleanup operations during shutdown
 type ProcessCleanupManager struct {
 	processManager *ProcessManager
-	logger         *log.Logger
+	logger         *CLILogger
 	cleanupTimeout time.Duration
 }
 
@@ -31,7 +30,7 @@ type ProcessCleanupManager struct {
 func NewSignalHandler() *SignalHandler {
 	return &SignalHandler{
 		shutdownCallbacks: make([]func() error, 0),
-		logger:            log.New(os.Stdout, "[SignalHandler] ", log.LstdFlags),
+		logger:            NewCLILogger("SIGNAL"),
 		shutdownTimeout:   5 * time.Second, // Optimized for FastAPI agents that terminate quickly
 		shutdownChan:      make(chan struct{}),
 	}
@@ -41,7 +40,7 @@ func NewSignalHandler() *SignalHandler {
 func NewProcessCleanupManager(pm *ProcessManager) *ProcessCleanupManager {
 	return &ProcessCleanupManager{
 		processManager: pm,
-		logger:         log.New(os.Stdout, "[ProcessCleanup] ", log.LstdFlags),
+		logger:         NewCLILogger("CLEANUP"),
 		cleanupTimeout: 5 * time.Second, // Optimized for FastAPI agents that terminate quickly
 	}
 }
@@ -346,13 +345,13 @@ func SetupGracefulShutdown(pm *ProcessManager) *SignalHandler {
 
 // ProcessTree represents a hierarchical view of processes
 type ProcessTree struct {
-	logger *log.Logger
+	logger *CLILogger
 }
 
 // NewProcessTree creates a new process tree manager
 func NewProcessTree() *ProcessTree {
 	return &ProcessTree{
-		logger: log.New(os.Stdout, "[ProcessTree] ", log.LstdFlags),
+		logger: NewCLILogger("PROCTREE"),
 	}
 }
 

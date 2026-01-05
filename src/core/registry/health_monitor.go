@@ -57,7 +57,7 @@ func (h *AgentHealthMonitor) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				h.logger.Debug("🔍 Health monitor timer triggered - checking agent health")
+				h.logger.Trace("🔍 Health monitor timer triggered - checking agent health")
 				h.checkUnhealthyAgents()
 			case <-h.stopChan:
 				h.logger.Info("🛑 Agent health monitor stopped")
@@ -89,7 +89,7 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	now := time.Now().UTC()
 	threshold := now.Add(-h.heartbeatTimeout)
 
-	h.logger.Debug("Health monitor check started (threshold: %v)", h.heartbeatTimeout)
+	h.logger.Trace("Health monitor check started (threshold: %v)", h.heartbeatTimeout)
 
 	// First, get all agents to see what we're working with
 	allAgents, err := h.entService.entDB.Client.Agent.Query().All(ctx)
@@ -98,16 +98,16 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 		return
 	}
 
-	h.logger.Debug("Health monitor: checking %d total agents (now: %v, threshold: %v, heartbeat_timeout: %v)", len(allAgents), now, threshold, h.heartbeatTimeout)
+	h.logger.Trace("Health monitor: checking %d total agents (now: %v, threshold: %v, heartbeat_timeout: %v)", len(allAgents), now, threshold, h.heartbeatTimeout)
 	for _, agent := range allAgents {
 		timeSinceUpdate := now.Sub(agent.UpdatedAt)
 		isStale := agent.UpdatedAt.Before(threshold)
-		h.logger.Debug("Agent %s: last_update=%v (%v ago), status=%s, is_stale=%v, threshold_comparison=%v", agent.ID, agent.UpdatedAt, timeSinceUpdate, agent.Status, isStale, agent.UpdatedAt.Unix() < threshold.Unix())
+		h.logger.Trace("Agent %s: last_update=%v (%v ago), status=%s, is_stale=%v, threshold_comparison=%v", agent.ID, agent.UpdatedAt, timeSinceUpdate, agent.Status, isStale, agent.UpdatedAt.Unix() < threshold.Unix())
 	}
 
 	// Use efficient batch update to mark stale agents as unhealthy
 	// This will trigger status change hooks for each agent that actually changes status
-	h.logger.Debug("Health monitor: batch updating agents with UpdatedAt < %v AND Status != %s", threshold, agent.StatusUnhealthy)
+	h.logger.Trace("Health monitor: batch updating agents with UpdatedAt < %v AND Status != %s", threshold, agent.StatusUnhealthy)
 
 	// Get agents that need to be marked unhealthy first, to preserve their timestamps
 	agentsToUpdate, err := h.entService.entDB.Client.Agent.
@@ -142,10 +142,10 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 		agentsUpdated += affected
 	}
 
-	h.logger.Info("Health monitor: marked %d agents as unhealthy - events created by status change hooks", agentsUpdated)
+	h.logger.Info("Health monitor: marked %d agents as unhealthy", agentsUpdated)
 
 	duration := time.Since(startTime)
-	h.logger.Debug("Health monitor check completed - processed %d unhealthy agents (took %v)", agentsUpdated, duration)
+	h.logger.Trace("Health monitor check completed - processed %d unhealthy agents (took %v)", agentsUpdated, duration)
 }
 
 
