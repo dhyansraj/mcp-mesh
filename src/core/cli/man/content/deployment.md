@@ -60,6 +60,24 @@ MCP_MESH_HTTP_PORT=8082 python agent2.py &
 MCP_MESH_HTTP_PORT=8083 python agent3.py &
 ```
 
+### Development Workflow
+
+For fast iterative development:
+
+```bash
+# Watch mode: auto-restart on file changes
+meshctl start my_agent.py --watch --debug
+
+# Or run in background
+meshctl start my_agent.py --detach
+
+# Stop when done
+meshctl stop my_agent      # Stop specific agent
+meshctl stop               # Stop all
+```
+
+See `meshctl start --help` and `meshctl stop --help` for options.
+
 ## Docker Deployment
 
 ### Generate Dockerfile (Recommended)

@@ -59,7 +59,8 @@ Examples:
 
 	// Background service flags
 	cmd.Flags().BoolP("detach", "d", false, "Run in detached mode (detach)")
-	cmd.Flags().String("pid-file", "./mcp_mesh_dev.pid", "PID file for detached service")
+	cmd.Flags().String("pid-file", "", "Deprecated: PID files are now per-agent in ~/.mcp-mesh/pids/")
+	cmd.Flags().MarkDeprecated("pid-file", "PID files are now managed per-agent in ~/.mcp-mesh/pids/")
 
 	// Advanced configuration flags
 	cmd.Flags().String("config-file", "", "Custom configuration file path")
@@ -420,15 +421,12 @@ func startConnectOnlyMode(cmd *cobra.Command, args []string, registryURL string,
 
 // Background mode
 func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
-	pidFile, _ := cmd.Flags().GetString("pid-file")
-
-	// Check if already running
-	if isProcessRunning(pidFile) {
-		return fmt.Errorf("detach service already running (PID file: %s)", pidFile)
-	}
+	// Note: We no longer check a single global PID file here.
+	// Per-agent PID files are written by startAgentsWithEnv when agents start.
+	// This allows running multiple 'meshctl start --detach' commands for different agents.
 
 	// Fork to detach
-	return forkToBackground(cmd, args, pidFile, config)
+	return forkToBackground(cmd, args, config)
 }
 
 // Standard mode
@@ -694,6 +692,14 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		// Start in detach
 		if err := registryCmd.Start(); err != nil {
 			return fmt.Errorf("failed to start registry in detach: %w", err)
+		}
+
+		// Write PID file for registry
+		pm, err := NewPIDManager()
+		if err == nil {
+			if err := pm.WritePID("registry", registryCmd.Process.Pid); err != nil {
+				fmt.Printf("Warning: failed to write PID file for registry: %v\n", err)
+			}
 		}
 
 		// Record the process
@@ -1073,10 +1079,20 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
 			}
 
+			agentName := filepath.Base(agentPath)
+
+			// Write PID file for this agent
+			pm, err := NewPIDManager()
+			if err == nil {
+				if err := pm.WritePID(agentName, agentCmd.Process.Pid); err != nil && !quiet {
+					fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+				}
+			}
+
 			// Record agent process
 			agentProc := ProcessInfo{
 				PID:       agentCmd.Process.Pid,
-				Name:      filepath.Base(agentPath),
+				Name:      agentName,
 				Type:      "agent",
 				Command:   agentCmd.String(),
 				StartTime: time.Now(),
@@ -1088,7 +1104,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 			}
 
 			if !quiet {
-				fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), agentCmd.Process.Pid)
+				fmt.Printf("Agent %s started (PID: %d)\n", agentName, agentCmd.Process.Pid)
 			}
 		} else {
 			// For foreground mode, we'll start the process later
@@ -1315,6 +1331,12 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 		fmt.Println("Agents are running. Press Ctrl+C to stop all services.")
 	}
 
+	// Initialize PID manager for tracking
+	pm, pmErr := NewPIDManager()
+
+	// Track agent names for cleanup
+	var agentNames []string
+
 	// Start all agents
 	for i, agentCmd := range agentCmds {
 		// Start the command
@@ -1322,10 +1344,28 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 			return fmt.Errorf("failed to start agent: %w", err)
 		}
 
+		// Extract agent name from command args (look for .py file)
+		agentName := fmt.Sprintf("agent-%d", i)
+		for _, arg := range agentCmd.Args {
+			if strings.HasSuffix(arg, ".py") {
+				agentName = filepath.Base(arg)
+				agentName = strings.TrimSuffix(agentName, ".py")
+				break
+			}
+		}
+		agentNames = append(agentNames, agentName)
+
+		// Write PID file for this agent
+		if pmErr == nil {
+			if err := pm.WritePID(agentName, agentCmd.Process.Pid); err != nil && !quiet {
+				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+			}
+		}
+
 		// Record the process
 		agentProc := ProcessInfo{
 			PID:       agentCmd.Process.Pid,
-			Name:      fmt.Sprintf("agent-%d", i),
+			Name:      agentName,
 			Type:      "agent",
 			Command:   agentCmd.String(),
 			StartTime: time.Now(),
@@ -1336,12 +1376,16 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 		}
 
 		// Run in goroutine to wait for completion
-		go func(c *exec.Cmd) {
+		go func(c *exec.Cmd, name string) {
 			if err := c.Wait(); err != nil && !quiet {
 				fmt.Printf("Agent exited with error: %v\n", err)
 			}
 			RemoveRunningProcess(c.Process.Pid)
-		}(agentCmd)
+			// Clean up PID file when agent exits
+			if pmErr == nil {
+				pm.RemovePID(name)
+			}
+		}(agentCmd, agentName)
 	}
 
 	// Wait for signal
@@ -1369,40 +1413,26 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 		}
 	}
 
+	// Clean up all PID files for tracked agents
+	if pmErr == nil {
+		for _, name := range agentNames {
+			pm.RemovePID(name)
+		}
+	}
+
 	return nil
 }
 
-// Background service helpers
-func isProcessRunning(pidFile string) bool {
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return false
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return false
-	}
-
-	// Check if process is still running
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	// Send signal 0 to check if process exists
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
-}
-
-func forkToBackground(cobraCmd *cobra.Command, args []string, pidFile string, config *CLIConfig) error {
+func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig) error {
 	// Create a new command to run in detach
 	cmdArgs := []string{os.Args[0], "start"}
 	cmdArgs = append(cmdArgs, args...)
 
 	// Add all the flags to the detach command
 	cobraCmd.Flags().Visit(func(flag *pflag.Flag) {
-		if flag.Name != "detach" { // Don't pass detach flag to avoid infinite loop
+		// Don't pass detach flag to avoid infinite loop
+		// Don't pass deprecated pid-file flag
+		if flag.Name != "detach" && flag.Name != "pid-file" {
 			cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
 		}
 	})
@@ -1415,14 +1445,32 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, pidFile string, co
 		return fmt.Errorf("failed to start detach process: %w", err)
 	}
 
-	// Write PID file
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
+	// Note: We no longer write a global PID file here.
+	// Per-agent PID files are written by startAgentsWithEnv when agents start.
+	// Use 'meshctl stop' to stop agents by name.
 
 	quiet, _ := cobraCmd.Flags().GetBool("quiet")
 	if !quiet {
-		fmt.Printf("Started in detach (PID: %d, PID file: %s)\n", cmd.Process.Pid, pidFile)
+		// Extract agent names from args for display
+		var agentNames []string
+		for _, arg := range args {
+			if strings.HasSuffix(arg, ".py") {
+				name := filepath.Base(arg)
+				name = strings.TrimSuffix(name, ".py")
+				agentNames = append(agentNames, name)
+			}
+		}
+
+		if len(agentNames) == 1 {
+			fmt.Printf("Started '%s' in detach\n", agentNames[0])
+			fmt.Printf("Use 'meshctl stop %s' to stop or 'meshctl list' to see running agents\n", agentNames[0])
+		} else if len(agentNames) > 1 {
+			fmt.Printf("Starting %d agents in detach: %s\n", len(agentNames), strings.Join(agentNames, ", "))
+			fmt.Printf("Use 'meshctl stop' to stop all or 'meshctl stop <name>' for specific agent\n")
+		} else {
+			fmt.Printf("Started in detach\n")
+			fmt.Printf("Use 'meshctl stop' to stop agents or 'meshctl list' to see running agents\n")
+		}
 	}
 
 	return nil
