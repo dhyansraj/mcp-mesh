@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"net/url"
 	"os"
@@ -186,12 +187,9 @@ func loadEnvironmentFile(envFile string) error {
 	}
 	defer file.Close()
 
-	// Read and parse .env format
-	var lines []string
-	fmt.Fscanf(file, "%s", &lines)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -200,7 +198,7 @@ func loadEnvironmentFile(envFile string) error {
 		}
 	}
 
-	return nil
+	return scanner.Err()
 }
 
 // Set environment variable from KEY=VALUE format
