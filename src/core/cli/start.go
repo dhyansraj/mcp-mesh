@@ -1075,6 +1075,10 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	watch, _ := cmd.Flags().GetBool("watch")
 
+	// Check if stdout is redirected (not a terminal) - indicates background/forked mode
+	// In this case, we create per-agent log files even though detach=false
+	isBackgroundMode := !isTerminal(os.Stdout)
+
 	if watch && !quiet {
 		fmt.Println("🔄 Watch mode enabled - agents will restart on file changes")
 	}
@@ -1096,7 +1100,10 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
 		}
 
-		if detach {
+		// Create per-agent log files if:
+		// 1. Running in direct detach mode (-d flag), OR
+		// 2. Running in background mode (stdout redirected, not a terminal)
+		if detach || isBackgroundMode {
 			agentName := filepath.Base(agentPath)
 
 			// Set up log file for detached agent
@@ -1154,12 +1161,9 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 	}
 
-	if detach {
-		if !quiet {
-			fmt.Printf("All agents started in detach\n")
-			fmt.Printf("Logs: ~/.mcp-mesh/logs/<agent>.log\n")
-			fmt.Printf("Use 'meshctl logs <agent>' to view logs\n")
-		}
+	if detach || isBackgroundMode {
+		// In detach or background mode, agents are already started with their own log files
+		// Just return (the parent forkToBackground will handle user messages)
 		return nil
 	}
 
@@ -1562,4 +1566,17 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	}
 
 	return nil
+}
+
+// isTerminal checks if the given file is a terminal (TTY)
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	// Check if the file mode indicates it's a character device (terminal)
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
