@@ -1,5 +1,42 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.18...v0.7.19)
+
+## v0.7.19 (2026-01-05)
+
+### ✨ New Features
+
+- **meshctl stop command** (#367): Stop detached agents and registry
+  - `meshctl stop [name]` to stop specific agent or all processes
+  - Per-agent PID files in `~/.mcp-mesh/pids/` (replaces single global PID)
+  - Parallel agent shutdown with configurable timeout (default 10s)
+  - Flags: `--registry`, `--agents`, `--keep-registry`, `--force`, `--timeout`, `--quiet`
+  - Deprecates `--pid-file` flag (now managed automatically)
+
+- **meshctl logs command** (#368): View agent logs in detached mode
+  - Log files stored in `~/.mcp-mesh/logs/` with automatic rotation (5 files per agent)
+  - Filtering: `-f` (follow), `-p` (previous), `--tail`, `--since`, `--until`
+  - Standardized log format across Go/Python: `2026-01-05 14:24:38 INFO message`
+
+- **meshctl stop --clean flag** (#372): Complete cleanup after stopping
+  - Deletes registry database, log files, and PID files
+  - Enables fresh start for development/testing
+
+- **Observability documentation** (#370): New `meshctl man observability` page
+  - CLI tracing with `meshctl call --trace` and `meshctl trace <id>`
+  - Grafana/Tempo setup for Docker Compose and Kubernetes
+
+### 🐛 Bug Fixes
+
+- **Fix --env-file flag** (#369): Fixed completely non-functional `--env-file` flag in `meshctl start`
+  - Env vars are now properly loaded and passed to agents
+
+### 🔧 Improvements
+
+- **Full LLM request/response logging** (#370): Enable debug logging at provider level
+- **Remove default log truncation** (#370): `format_log_value()` no longer truncates by default
+- **Better trace error messages** (#370): Helpful hints when trace not found
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.17...v0.7.18)
 
 ## v0.7.18 (2026-01-04)
