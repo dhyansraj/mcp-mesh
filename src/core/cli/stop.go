@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -25,7 +26,8 @@ Examples:
   meshctl stop my-agent           # Stop specific agent
   meshctl stop --registry         # Stop only registry
   meshctl stop --agents           # Stop all agents, keep registry
-  meshctl stop --keep-registry    # Stop all agents, keep registry (alias)`,
+  meshctl stop --keep-registry    # Stop all agents, keep registry (alias)
+  meshctl stop --clean            # Stop all + delete db, logs, pids`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runStopCommand,
 	}
@@ -36,6 +38,7 @@ Examples:
 	cmd.Flags().Int("timeout", 10, "Shutdown timeout in seconds per process")
 	cmd.Flags().Bool("force", false, "Force kill without graceful shutdown")
 	cmd.Flags().Bool("quiet", false, "Suppress output messages")
+	cmd.Flags().Bool("clean", false, "Delete database, logs, and PID files after stopping all processes")
 
 	return cmd
 }
@@ -47,6 +50,7 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	timeout, _ := cmd.Flags().GetInt("timeout")
 	force, _ := cmd.Flags().GetBool("force")
 	quiet, _ := cmd.Flags().GetBool("quiet")
+	clean, _ := cmd.Flags().GetBool("clean")
 
 	// --keep-registry is alias for --agents
 	if keepRegistry {
@@ -56,6 +60,11 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	// Validate flag combinations
 	if registryOnly && agentsOnly {
 		return fmt.Errorf("cannot use --registry and --agents together")
+	}
+
+	// --clean only works when stopping all (no args, not with --registry or --agents)
+	if clean && (len(args) == 1 || registryOnly || agentsOnly) {
+		return fmt.Errorf("--clean can only be used when stopping all processes (no agent name, --registry, or --agents)")
 	}
 
 	// Create PID manager
@@ -91,7 +100,18 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Default: stop all (agents + registry)
-	return stopAll(pm, shutdownTimeout, force, quiet)
+	if err := stopAll(pm, shutdownTimeout, force, quiet); err != nil {
+		return err
+	}
+
+	// Clean up files if --clean flag is set
+	if clean {
+		if err := cleanupAllFiles(pm, quiet); err != nil {
+			return fmt.Errorf("cleanup failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // stopSpecificAgent stops a single agent by name
@@ -375,6 +395,67 @@ func stopProcess(pid int, timeout time.Duration, force bool) error {
 			return nil // Process already dead
 		}
 		return fmt.Errorf("failed to kill process after timeout: %w", err)
+	}
+
+	return nil
+}
+
+// cleanupAllFiles deletes database, log files, and PID files
+func cleanupAllFiles(pm *PIDManager, quiet bool) error {
+	if !quiet {
+		fmt.Println("\nCleaning up...")
+	}
+
+	var deletedDB, deletedLogs, deletedPIDs int
+
+	// Delete the registry database file (only the known mcp_mesh_registry.db)
+	const registryDBFile = "mcp_mesh_registry.db"
+	if err := os.Remove(registryDBFile); err == nil {
+		deletedDB++
+		if !quiet {
+			fmt.Printf("  Deleted: %s\n", registryDBFile)
+		}
+	}
+
+	// Delete log files
+	lm, err := NewLogManager()
+	if err == nil {
+		logsDir := lm.GetLogsDir()
+		entries, _ := os.ReadDir(logsDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				logPath := filepath.Join(logsDir, entry.Name())
+				if err := os.Remove(logPath); err == nil {
+					deletedLogs++
+				}
+			}
+		}
+		if deletedLogs > 0 && !quiet {
+			fmt.Printf("  Deleted: %d log file(s)\n", deletedLogs)
+		}
+	}
+
+	// Delete PID files
+	pidsDir := pm.GetPIDsDir()
+	entries, _ := os.ReadDir(pidsDir)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			pidPath := filepath.Join(pidsDir, entry.Name())
+			if err := os.Remove(pidPath); err == nil {
+				deletedPIDs++
+			}
+		}
+	}
+	if deletedPIDs > 0 && !quiet {
+		fmt.Printf("  Deleted: %d PID file(s)\n", deletedPIDs)
+	}
+
+	if !quiet {
+		if deletedDB == 0 && deletedLogs == 0 && deletedPIDs == 0 {
+			fmt.Println("  Nothing to clean")
+		} else {
+			fmt.Println("✅ Cleanup complete")
+		}
 	}
 
 	return nil
