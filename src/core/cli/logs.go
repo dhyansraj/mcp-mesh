@@ -14,6 +14,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Pre-compiled regex patterns for timestamp parsing (compiled once at init)
+var timestampPatterns = []struct {
+	regex  *regexp.Regexp
+	format string
+}{
+	{regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`), "2006-01-02 15:04:05"},
+	{regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`), "2006-01-02T15:04:05"},
+	{regexp.MustCompile(`^(\d{2}:\d{2}:\d{2})`), "15:04:05"},
+}
+
 // NewLogsCommand creates the logs command
 func NewLogsCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -144,7 +154,13 @@ func listAgentLogs(lm *LogManager) error {
 }
 
 func readLog(file *os.File, tailLines int, sinceTime, untilTime *time.Time) error {
-	// If we need to filter by time or tail, read all lines first
+	// Optimization: if no time filters and only tailing, use ring buffer approach
+	// to avoid storing entire file in memory
+	if sinceTime == nil && untilTime == nil && tailLines > 0 {
+		return readLogTailOnly(file, tailLines)
+	}
+
+	// Full read with time filtering
 	var lines []string
 	scanner := bufio.NewScanner(file)
 
@@ -196,6 +212,43 @@ func readLog(file *os.File, tailLines int, sinceTime, untilTime *time.Time) erro
 	// Print lines
 	for i := startIdx; i < len(lines); i++ {
 		fmt.Println(lines[i])
+	}
+
+	return nil
+}
+
+// readLogTailOnly efficiently reads only the last N lines using a ring buffer
+func readLogTailOnly(file *os.File, tailLines int) error {
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	// Ring buffer for last N lines
+	ring := make([]string, tailLines)
+	idx := 0
+	count := 0
+
+	for scanner.Scan() {
+		ring[idx] = scanner.Text()
+		idx = (idx + 1) % tailLines
+		count++
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading log: %w", err)
+	}
+
+	// Print lines in order
+	if count < tailLines {
+		// Less than tailLines total, print from start
+		for i := 0; i < count; i++ {
+			fmt.Println(ring[i])
+		}
+	} else {
+		// Print from idx (oldest) to end, then start to idx-1 (newest)
+		for i := 0; i < tailLines; i++ {
+			fmt.Println(ring[(idx+i)%tailLines])
+		}
 	}
 
 	return nil
@@ -348,17 +401,8 @@ func parseDuration(s string) (time.Duration, error) {
 // parseLogTimestamp extracts timestamp from a log line
 // Expected format: "2025-01-05 10:23:45 INFO ..."
 func parseLogTimestamp(line string) *time.Time {
-	// Try to match common timestamp formats at the start of the line
-	patterns := []struct {
-		regex  *regexp.Regexp
-		format string
-	}{
-		{regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`), "2006-01-02 15:04:05"},
-		{regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`), "2006-01-02T15:04:05"},
-		{regexp.MustCompile(`^(\d{2}:\d{2}:\d{2})`), "15:04:05"},
-	}
-
-	for _, p := range patterns {
+	// Use pre-compiled patterns for better performance
+	for _, p := range timestampPatterns {
 		if matches := p.regex.FindStringSubmatch(line); matches != nil {
 			// Parse in local timezone since log timestamps don't include timezone
 			if t, err := time.ParseInLocation(p.format, matches[1], time.Local); err == nil {

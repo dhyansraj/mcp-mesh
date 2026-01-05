@@ -1079,6 +1079,16 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	// In this case, we create per-agent log files even though detach=false
 	isBackgroundMode := !isTerminal(os.Stdout)
 
+	// Initialize log manager once if we'll need it (avoid creating per-agent)
+	var lm *LogManager
+	if detach || isBackgroundMode {
+		var err error
+		lm, err = NewLogManager()
+		if err != nil {
+			return fmt.Errorf("failed to initialize log manager: %w", err)
+		}
+	}
+
 	if watch && !quiet {
 		fmt.Println("🔄 Watch mode enabled - agents will restart on file changes")
 	}
@@ -1105,12 +1115,6 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		// 2. Running in background mode (stdout redirected, not a terminal)
 		if detach || isBackgroundMode {
 			agentName := filepath.Base(agentPath)
-
-			// Set up log file for detached agent
-			lm, err := NewLogManager()
-			if err != nil {
-				return fmt.Errorf("failed to initialize log manager: %w", err)
-			}
 
 			// Rotate existing logs
 			if err := lm.RotateLogs(agentName); err != nil && !quiet {
