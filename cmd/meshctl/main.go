@@ -33,6 +33,7 @@ func main() {
 
 	// Add all subcommands
 	rootCmd.AddCommand(cli.NewStartCommand())
+	rootCmd.AddCommand(cli.NewStopCommand()) // Issue #364
 	rootCmd.AddCommand(cli.NewListCommand())
 	rootCmd.AddCommand(cli.NewCallCommand())
 	rootCmd.AddCommand(cli.NewStatusCommand())
