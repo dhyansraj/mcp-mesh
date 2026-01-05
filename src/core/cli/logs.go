@@ -152,6 +152,9 @@ func readLog(file *os.File, tailLines int, sinceTime, untilTime *time.Time) erro
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
+	// Track last known timestamp for continuation lines (like JSON)
+	var lastKnownTime *time.Time
+
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -159,10 +162,19 @@ func readLog(file *os.File, tailLines int, sinceTime, untilTime *time.Time) erro
 		if sinceTime != nil || untilTime != nil {
 			lineTime := parseLogTimestamp(line)
 			if lineTime != nil {
-				if sinceTime != nil && lineTime.Before(*sinceTime) {
+				// Update last known time for this and subsequent lines
+				lastKnownTime = lineTime
+			}
+			// Use last known time for lines without timestamps (continuation lines)
+			effectiveTime := lineTime
+			if effectiveTime == nil {
+				effectiveTime = lastKnownTime
+			}
+			if effectiveTime != nil {
+				if sinceTime != nil && effectiveTime.Before(*sinceTime) {
 					continue
 				}
-				if untilTime != nil && lineTime.After(*untilTime) {
+				if untilTime != nil && effectiveTime.After(*untilTime) {
 					continue
 				}
 			}
@@ -215,6 +227,9 @@ func followLog(file *os.File, logPath string, tailLines int, sinceTime, untilTim
 
 	reader := bufio.NewReader(file)
 
+	// Track last known timestamp for continuation lines
+	var lastKnownTime *time.Time
+
 	// Watch for changes
 	for {
 		select {
@@ -235,10 +250,17 @@ func followLog(file *os.File, logPath string, tailLines int, sinceTime, untilTim
 					if sinceTime != nil || untilTime != nil {
 						lineTime := parseLogTimestamp(line)
 						if lineTime != nil {
-							if sinceTime != nil && lineTime.Before(*sinceTime) {
+							lastKnownTime = lineTime
+						}
+						effectiveTime := lineTime
+						if effectiveTime == nil {
+							effectiveTime = lastKnownTime
+						}
+						if effectiveTime != nil {
+							if sinceTime != nil && effectiveTime.Before(*sinceTime) {
 								continue
 							}
-							if untilTime != nil && lineTime.After(*untilTime) {
+							if untilTime != nil && effectiveTime.After(*untilTime) {
 								continue
 							}
 						}
@@ -275,7 +297,8 @@ func parseTimeSpec(spec string) (time.Time, error) {
 	}
 
 	for _, format := range formats {
-		if t, err := time.Parse(format, spec); err == nil {
+		// Parse in local timezone to match log timestamps
+		if t, err := time.ParseInLocation(format, spec, time.Local); err == nil {
 			// If only time was parsed, use today's date
 			if format == "15:04:05" || format == "15:04" {
 				now := time.Now()
@@ -337,7 +360,8 @@ func parseLogTimestamp(line string) *time.Time {
 
 	for _, p := range patterns {
 		if matches := p.regex.FindStringSubmatch(line); matches != nil {
-			if t, err := time.Parse(p.format, matches[1]); err == nil {
+			// Parse in local timezone since log timestamps don't include timezone
+			if t, err := time.ParseInLocation(p.format, matches[1], time.Local); err == nil {
 				// If only time was parsed, use today's date
 				if p.format == "15:04:05" {
 					now := time.Now()
