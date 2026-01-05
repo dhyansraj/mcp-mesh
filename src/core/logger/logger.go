@@ -36,6 +36,13 @@ func (l *Logger) formatLog(level string, format string, args ...interface{}) str
 	return fmt.Sprintf("%s %-8s %s\n", timestamp, level, message)
 }
 
+// Trace logs trace messages (most verbose, only if trace mode is enabled)
+func (l *Logger) Trace(format string, args ...interface{}) {
+	if l.config.ShouldLogAtLevel("TRACE") {
+		fmt.Fprint(l.out, l.formatLog("TRACE", format, args...))
+	}
+}
+
 // Debug logs debug messages (only if debug mode is enabled)
 func (l *Logger) Debug(format string, args ...interface{}) {
 	if l.config.ShouldLogAtLevel("DEBUG") {
