@@ -116,7 +116,12 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	if trace == nil {
-		return fmt.Errorf("trace '%s' not found", traceID)
+		return fmt.Errorf("trace '%s' not found\n\n"+
+			"Possible reasons:\n"+
+			"  - Trace ID may be incorrect or expired\n"+
+			"  - Distributed tracing may not be enabled\n"+
+			"  - Observability stack (Tempo) may not be deployed\n\n"+
+			"Run 'meshctl man observability' for setup instructions.", traceID)
 	}
 
 	// Output result
@@ -136,7 +141,10 @@ func queryTrace(client *http.Client, registryURL, traceID string) (*CompletedTra
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to registry: %w", err)
+		return nil, fmt.Errorf("failed to connect to registry: %w\n\n"+
+			"Hint: Ensure the registry and observability stack are running.\n"+
+			"      Run 'meshctl scaffold --compose --observability' to generate docker-compose with Tempo.\n"+
+			"      See 'meshctl man observability' for details.", err)
 	}
 	defer resp.Body.Close()
 

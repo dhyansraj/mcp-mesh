@@ -109,6 +109,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "CLI Commands",
 		Description: "meshctl call, list, status for development and testing",
 	},
+	"observability": {
+		Name:        "observability",
+		Aliases:     []string{"tracing", "monitoring", "tempo", "grafana"},
+		Title:       "Observability",
+		Description: "Distributed tracing, Grafana dashboards, and monitoring setup",
+	},
 	"prerequisites": {
 		Name:        "prerequisites",
 		Aliases:     []string{"prereq", "setup", "install"},
@@ -157,8 +163,8 @@ func ListGuides() []*Guide {
 	order := []string{
 		"prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
-		"proxies", "fastapi", "environment", "deployment", "testing",
-		"scaffold", "cli",
+		"proxies", "fastapi", "environment", "deployment", "observability",
+		"testing", "scaffold", "cli",
 	}
 	for _, name := range order {
 		if guide, ok := guideRegistry[name]; ok {
