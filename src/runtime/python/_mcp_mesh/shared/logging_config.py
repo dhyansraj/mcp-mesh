@@ -92,7 +92,12 @@ def configure_logging():
     # Configure with safe stream handler for background threads
     handler = SafeStreamHandler(sys.stdout)
     handler.setLevel(TRACE)  # Handler allows all levels including TRACE
-    handler.setFormatter(logging.Formatter("%(levelname)-8s %(message)s"))
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
 
     root_logger.addHandler(handler)
 

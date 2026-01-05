@@ -149,6 +149,12 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Handle detach mode FIRST - before other modes
+	// This ensures log redirection is set up before any other processing
+	if detach {
+		return startBackgroundMode(cmd, args, config)
+	}
+
 	// Handle registry-only mode
 	if registryOnly {
 		return startRegistryOnlyMode(cmd, config)
@@ -160,11 +166,6 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--registry-url required with --connect-only")
 		}
 		return startConnectOnlyMode(cmd, args, registryURL, config)
-	}
-
-	// Handle detach mode
-	if detach {
-		return startBackgroundMode(cmd, args, config)
 	}
 
 	// If no agents provided, start registry only
@@ -689,8 +690,29 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 	}
 
 	if detach {
+		// Set up log file for detached registry
+		lm, err := NewLogManager()
+		if err != nil {
+			return fmt.Errorf("failed to initialize log manager: %w", err)
+		}
+
+		// Rotate existing logs
+		quiet, _ := cmd.Flags().GetBool("quiet")
+		if err := lm.RotateLogs("registry"); err != nil && !quiet {
+			fmt.Printf("Warning: failed to rotate logs for registry: %v\n", err)
+		}
+
+		// Create log file and redirect output
+		logFile, err := lm.CreateLogFile("registry")
+		if err != nil {
+			return fmt.Errorf("failed to create log file for registry: %w", err)
+		}
+		registryCmd.Stdout = logFile
+		registryCmd.Stderr = logFile
+
 		// Start in detach
 		if err := registryCmd.Start(); err != nil {
+			logFile.Close()
 			return fmt.Errorf("failed to start registry in detach: %w", err)
 		}
 
@@ -715,10 +737,10 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 			fmt.Printf("Warning: failed to record process: %v\n", err)
 		}
 
-		quiet, _ := cmd.Flags().GetBool("quiet")
 		if !quiet {
 			fmt.Printf("Registry started in detach (PID: %d)\n", registryCmd.Process.Pid)
 			fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/registry.log\n")
 		}
 		return nil
 	}
@@ -1075,11 +1097,31 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 
 		if detach {
-			if err := agentCmd.Start(); err != nil {
-				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
+			agentName := filepath.Base(agentPath)
+
+			// Set up log file for detached agent
+			lm, err := NewLogManager()
+			if err != nil {
+				return fmt.Errorf("failed to initialize log manager: %w", err)
 			}
 
-			agentName := filepath.Base(agentPath)
+			// Rotate existing logs
+			if err := lm.RotateLogs(agentName); err != nil && !quiet {
+				fmt.Printf("Warning: failed to rotate logs for %s: %v\n", agentName, err)
+			}
+
+			// Create log file and redirect output
+			logFile, err := lm.CreateLogFile(agentName)
+			if err != nil {
+				return fmt.Errorf("failed to create log file for %s: %w", agentName, err)
+			}
+			agentCmd.Stdout = logFile
+			agentCmd.Stderr = logFile
+
+			if err := agentCmd.Start(); err != nil {
+				logFile.Close()
+				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
+			}
 
 			// Write PID file for this agent
 			pm, err := NewPIDManager()
@@ -1115,6 +1157,8 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	if detach {
 		if !quiet {
 			fmt.Printf("All agents started in detach\n")
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/<agent>.log\n")
+			fmt.Printf("Use 'meshctl logs <agent>' to view logs\n")
 		}
 		return nil
 	}
@@ -1440,8 +1484,42 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = os.Environ()
 
+	// Determine log name (agent name or "registry")
+	registryOnly, _ := cobraCmd.Flags().GetBool("registry-only")
+	var logName string
+	if registryOnly || len(args) == 0 {
+		logName = "registry"
+	} else if len(args) == 1 && strings.HasSuffix(args[0], ".py") {
+		logName = filepath.Base(args[0])
+		logName = strings.TrimSuffix(logName, ".py")
+	} else {
+		// Multiple agents - use first agent name for primary log
+		logName = "meshctl"
+	}
+
+	// Set up log file for detached process
+	lm, err := NewLogManager()
+	if err != nil {
+		return fmt.Errorf("failed to initialize log manager: %w", err)
+	}
+
+	// Rotate existing logs
+	quiet, _ := cobraCmd.Flags().GetBool("quiet")
+	if err := lm.RotateLogs(logName); err != nil && !quiet {
+		fmt.Printf("Warning: failed to rotate logs for %s: %v\n", logName, err)
+	}
+
+	// Create log file and redirect output
+	logFile, err := lm.CreateLogFile(logName)
+	if err != nil {
+		return fmt.Errorf("failed to create log file for %s: %w", logName, err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
 	// Start the process
 	if err := cmd.Start(); err != nil {
+		logFile.Close()
 		return fmt.Errorf("failed to start detach process: %w", err)
 	}
 
@@ -1449,7 +1527,6 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	// Per-agent PID files are written by startAgentsWithEnv when agents start.
 	// Use 'meshctl stop' to stop agents by name.
 
-	quiet, _ := cobraCmd.Flags().GetBool("quiet")
 	if !quiet {
 		// Extract agent names from args for display
 		var agentNames []string
@@ -1463,13 +1540,15 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 
 		if len(agentNames) == 1 {
 			fmt.Printf("Started '%s' in detach\n", agentNames[0])
-			fmt.Printf("Use 'meshctl stop %s' to stop or 'meshctl list' to see running agents\n", agentNames[0])
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/%s.log\n", agentNames[0])
+			fmt.Printf("Use 'meshctl logs %s' to view or 'meshctl stop %s' to stop\n", agentNames[0], agentNames[0])
 		} else if len(agentNames) > 1 {
 			fmt.Printf("Starting %d agents in detach: %s\n", len(agentNames), strings.Join(agentNames, ", "))
-			fmt.Printf("Use 'meshctl stop' to stop all or 'meshctl stop <name>' for specific agent\n")
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/<agent>.log\n")
+			fmt.Printf("Use 'meshctl logs <agent>' to view or 'meshctl stop' to stop all\n")
 		} else {
 			fmt.Printf("Started in detach\n")
-			fmt.Printf("Use 'meshctl stop' to stop agents or 'meshctl list' to see running agents\n")
+			fmt.Printf("Use 'meshctl logs <agent>' to view logs or 'meshctl stop' to stop\n")
 		}
 	}
 
