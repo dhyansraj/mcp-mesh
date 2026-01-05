@@ -8,6 +8,8 @@ mesh decorators to simplify common patterns like zero-code LLM providers.
 import logging
 from typing import Any, Dict, List, Optional
 
+from _mcp_mesh.shared.logging_config import format_log_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -228,7 +230,16 @@ def llm_provider(
 
             # Call LiteLLM
             try:
+                # Log full request
+                logger.debug(
+                    f"📤 LLM provider request: {format_log_value(completion_args)}"
+                )
+
                 response = litellm.completion(**completion_args)
+
+                # Log full response
+                logger.debug(f"📥 LLM provider response: {format_log_value(response)}")
+
                 message = response.choices[0].message
 
                 # Build message dict with all necessary fields for agentic loop

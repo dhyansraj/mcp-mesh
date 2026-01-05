@@ -169,15 +169,16 @@ def get_trace_prefix() -> str:
     return ""
 
 
-def format_log_value(value, max_len: int = 1000) -> str:
-    """Format a value for logging with truncation.
+def format_log_value(value, max_len: int = 0) -> str:
+    """Format a value for logging.
 
-    Provides a readable representation of values with size info and truncation
-    for large payloads. Suitable for DEBUG level logging.
+    Provides a readable representation of values with size info.
+    By default, no truncation is applied (max_len=0) to enable full
+    request/response logging at DEBUG/TRACE levels.
 
     Args:
         value: Any value to format
-        max_len: Maximum length before truncation (default 1000)
+        max_len: Maximum length before truncation (0 = no truncation)
 
     Returns:
         Formatted string representation
@@ -190,18 +191,18 @@ def format_log_value(value, max_len: int = 1000) -> str:
     try:
         if isinstance(value, dict):
             content = str(value)
-            if len(content) > max_len:
+            if max_len > 0 and len(content) > max_len:
                 return f"{type_name}({len(value)} keys): {content[:max_len]}..."
             return content
 
         elif isinstance(value, (list, tuple)):
             content = str(value)
-            if len(content) > max_len:
+            if max_len > 0 and len(content) > max_len:
                 return f"{type_name}({len(value)} items): {content[:max_len]}..."
             return content
 
         elif isinstance(value, str):
-            if len(value) > max_len:
+            if max_len > 0 and len(value) > max_len:
                 return f'"{value[:max_len]}..." ({len(value)} chars)'
             return f'"{value}"'
 
@@ -211,13 +212,13 @@ def format_log_value(value, max_len: int = 1000) -> str:
         elif hasattr(value, "__dict__"):
             # Object with attributes - show class name and key attributes
             content = str(value)
-            if len(content) > max_len:
+            if max_len > 0 and len(content) > max_len:
                 return f"{type_name}: {content[:max_len]}..."
             return f"{type_name}: {content}"
 
         else:
             content = str(value)
-            if len(content) > max_len:
+            if max_len > 0 and len(content) > max_len:
                 return f"{type_name}: {content[:max_len]}..."
             return content
 
