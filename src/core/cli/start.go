@@ -1477,7 +1477,16 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		// Don't pass detach flag to avoid infinite loop
 		// Don't pass deprecated pid-file flag
 		if flag.Name != "detach" && flag.Name != "pid-file" {
-			cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
+			// Handle boolean flags differently - don't pass "true" as a value
+			// as it gets interpreted as a positional argument
+			if flag.Value.Type() == "bool" {
+				if flag.Value.String() == "true" {
+					cmdArgs = append(cmdArgs, "--"+flag.Name)
+				}
+				// If false, don't pass the flag at all
+			} else {
+				cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
+			}
 		}
 	})
 
