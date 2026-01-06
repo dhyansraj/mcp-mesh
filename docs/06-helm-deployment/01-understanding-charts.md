@@ -469,7 +469,7 @@ version: 1.0.0
 appVersion: "1.0.0"
 dependencies:
   - name: mcp-mesh-agent
-    version: "0.7.19"
+    version: "0.7.20"
     repository: "https://charts.mcp-mesh.io"
 ```
 
