@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1112,7 +1114,8 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		// 1. Running in direct detach mode (-d flag), OR
 		// 2. Running in background mode (stdout redirected, not a terminal)
 		if detach || isBackgroundMode {
-			agentName := filepath.Base(agentPath)
+			// Extract agent name from @mesh.agent decorator, fall back to filename
+			agentName := extractAgentName(absPath)
 
 			// Rotate existing logs
 			if err := lm.RotateLogs(agentName); err != nil && !quiet {
@@ -1543,12 +1546,12 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	// Use 'meshctl stop' to stop agents by name.
 
 	if !quiet {
-		// Extract agent names from args for display
+		// Extract agent names from args for display (use decorator name if available)
 		var agentNames []string
 		for _, arg := range args {
 			if strings.HasSuffix(arg, ".py") {
-				name := filepath.Base(arg)
-				name = strings.TrimSuffix(name, ".py")
+				absPath, _ := filepath.Abs(arg)
+				name := extractAgentName(absPath)
 				agentNames = append(agentNames, name)
 			}
 		}
@@ -1581,4 +1584,91 @@ func isTerminal(f *os.File) bool {
 	}
 	// Check if the file mode indicates it's a character device (terminal)
 	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// agentNameCache caches extracted agent names to avoid repeated Python calls
+// Uses sync.Map for thread-safe concurrent access when starting multiple agents
+var agentNameCache sync.Map
+
+// extractAgentName extracts the agent name from @mesh.agent(name="...") decorator
+// using Python's AST module. Falls back to the script filename if extraction fails.
+// Results are cached to avoid spawning multiple Python processes for the same file.
+func extractAgentName(scriptPath string) string {
+	// Check cache first (thread-safe)
+	if cached, ok := agentNameCache.Load(scriptPath); ok {
+		return cached.(string)
+	}
+
+	// Fallback: use filename without .py extension
+	fallback := filepath.Base(scriptPath)
+	fallback = strings.TrimSuffix(fallback, ".py")
+
+	// Python script to extract agent name using AST
+	// Handles all valid Python decorator syntaxes:
+	//   @mesh.agent(name="hello")
+	//   @mesh.agent(name='hello')
+	//   @mesh.agent(\n    name="hello"\n)
+	//   @mesh.agent(auto_run=True, name="hello")
+	// Specifically matches mesh.agent (not other .agent decorators)
+	pythonScript := `
+import ast,sys
+try:
+    with open(sys.argv[1]) as f:
+        for n in ast.walk(ast.parse(f.read())):
+            if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute):
+                # Check for mesh.agent specifically
+                if n.func.attr=='agent' and isinstance(n.func.value,ast.Name) and n.func.value.id=='mesh':
+                    for k in n.keywords:
+                        if k.arg=='name' and isinstance(k.value,ast.Constant):
+                            print(k.value.value)
+                            sys.exit(0)
+except:
+    pass
+`
+	// Find a Python executable - try .venv first, then system Python
+	pythonExec := findPythonForAST()
+	if pythonExec == "" {
+		agentNameCache.Store(scriptPath, fallback)
+		return fallback
+	}
+
+	// Run Python script to extract agent name
+	cmd := exec.Command(pythonExec, "-c", pythonScript, scriptPath)
+	output, err := cmd.Output()
+	if err != nil {
+		agentNameCache.Store(scriptPath, fallback)
+		return fallback
+	}
+
+	agentName := strings.TrimSpace(string(output))
+	if agentName == "" {
+		agentNameCache.Store(scriptPath, fallback)
+		return fallback
+	}
+
+	agentNameCache.Store(scriptPath, agentName)
+	return agentName
+}
+
+// findPythonForAST finds a Python executable for AST parsing.
+// Tries .venv first, then falls back to system Python.
+func findPythonForAST() string {
+	// Try .venv in current directory first (cross-platform)
+	venvPython := filepath.Join(".venv", "bin", "python")
+	if runtime.GOOS == "windows" {
+		venvPython = filepath.Join(".venv", "Scripts", "python.exe")
+	}
+	if _, err := os.Stat(venvPython); err == nil {
+		return venvPython
+	}
+
+	// Fall back to system Python
+	candidates := []string{"python3", "python"}
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+
+	return ""
 }
