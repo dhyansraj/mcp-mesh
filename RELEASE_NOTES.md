@@ -1,5 +1,18 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.19...v0.7.20)
+
+## v0.7.20 (2026-01-05)
+
+### 🐛 Bug Fixes
+
+- **Fix log/PID naming for scaffolded agents** (#376): Extract agent name from `@mesh.agent` decorator
+  - Scaffolded agents (which use `main.py`) now correctly use decorator name for logs
+  - Log files named by agent: `hello-world.log` instead of `main.log`
+  - Uses Python AST for reliable parsing of all decorator syntax variations
+  - Thread-safe caching with `sync.Map` for concurrent agent starts
+  - Cross-platform support (Windows `.venv\Scripts\python.exe`)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.18...v0.7.19)
 
 ## v0.7.19 (2026-01-05)
