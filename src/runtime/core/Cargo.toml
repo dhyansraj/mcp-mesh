@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["python"]
 python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
-ffi = []  # Future C FFI support
+ffi = []  # C FFI support for multi-language SDKs
 
 [dependencies]
 # Python bindings (optional, enabled by default)
@@ -40,6 +40,9 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1"
+
+[build-dependencies]
+cbindgen = "0.27"  # C header generation for FFI
 
 [profile.release]
 lto = true

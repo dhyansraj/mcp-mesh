@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mcpmesh.io/schemas/agent-spec.schema.json",
+  "title": "AgentSpec",
+  "description": "Specification for starting an MCP Mesh agent via FFI",
+  "type": "object",
+  "required": ["name", "registry_url", "http_port"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Agent name (used to generate agent_id)"
+    },
+    "registry_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "MCP Mesh registry URL"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Agent version"
+    },
+    "http_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "Port agent listens on"
+    },
+    "http_host": {
+      "type": "string",
+      "default": "0.0.0.0",
+      "description": "Host agent binds to"
+    },
+    "namespace": {
+      "type": "string",
+      "default": "default",
+      "description": "Mesh namespace for agent isolation"
+    },
+    "heartbeat_interval": {
+      "type": "integer",
+      "default": 5,
+      "minimum": 1,
+      "description": "Seconds between heartbeats"
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ToolSpec" },
+      "description": "Tools/capabilities this agent provides"
+    },
+    "llm_agents": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/LlmAgentSpec" },
+      "description": "LLM agent configurations for tool orchestration"
+    }
+  },
+  "definitions": {
+    "ToolSpec": {
+      "type": "object",
+      "required": ["function_name", "capability"],
+      "properties": {
+        "function_name": {
+          "type": "string",
+          "description": "Name of the function implementing this tool"
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability name for discovery"
+        },
+        "version": {
+          "type": "string",
+          "default": "1.0.0",
+          "description": "Tool version for compatibility matching"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the tool"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tags for filtering and discovery"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DependencySpec" },
+          "description": "Other capabilities this tool depends on"
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema for tool input parameters"
+        },
+        "llm_filter": {
+          "type": "object",
+          "description": "Filter specification for LLM tool discovery"
+        },
+        "llm_provider": {
+          "type": "object",
+          "description": "LLM provider specification for this tool"
+        }
+      }
+    },
+    "DependencySpec": {
+      "type": "object",
+      "required": ["capability"],
+      "properties": {
+        "capability": {
+          "type": "string",
+          "description": "Required capability name"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required tags (prefix with + for must-have, - for must-not-have)"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version constraint (semver)"
+        }
+      }
+    },
+    "LlmAgentSpec": {
+      "type": "object",
+      "required": ["function_id", "provider"],
+      "properties": {
+        "function_id": {
+          "type": "string",
+          "description": "Unique identifier for the LLM function"
+        },
+        "provider": {
+          "type": "object",
+          "description": "LLM provider specification",
+          "properties": {
+            "capability": { "type": "string" },
+            "tags": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "filter": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Tool filter specification"
+        },
+        "filter_mode": {
+          "type": "string",
+          "enum": ["all", "any"],
+          "default": "all",
+          "description": "How to combine filter conditions"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "Maximum tool call iterations"
+        }
+      }
+    }
+  }
+}

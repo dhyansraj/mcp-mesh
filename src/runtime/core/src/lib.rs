@@ -28,7 +28,7 @@
 //! # Features
 //!
 //! - `python` (default): Enable Python bindings via PyO3
-//! - `ffi`: Enable C FFI bindings (future)
+//! - `ffi`: Enable C FFI bindings for multi-language SDK support
 
 pub mod events;
 pub mod handle;
@@ -36,6 +36,9 @@ pub mod heartbeat;
 pub mod registry;
 pub mod runtime;
 pub mod spec;
+
+// C FFI bindings module
+pub mod ffi;
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

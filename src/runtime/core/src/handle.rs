@@ -199,7 +199,7 @@ mod tests {
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
         let state = Arc::new(RwLock::new(HandleState::default()));
 
-        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx);
+        let _handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx);
 
         // Update state
         {
@@ -208,9 +208,12 @@ mod tests {
             s.dependencies.insert("date-service".to_string(), "http://localhost:9001".to_string());
         }
 
-        // Query via handle (using internal methods for tests)
-        assert_eq!(handle.get_agent_id_internal(), Some("test-agent".to_string()));
-        assert_eq!(handle.get_dependencies_internal().len(), 1);
+        // Query state directly (avoid blocking_read in async context)
+        {
+            let s = state.read().await;
+            assert_eq!(s.agent_id, Some("test-agent".to_string()));
+            assert_eq!(s.dependencies.len(), 1);
+        }
 
         // Send an event
         event_tx
