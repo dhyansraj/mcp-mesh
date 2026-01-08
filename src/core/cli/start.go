@@ -1603,6 +1603,23 @@ func extractAgentName(scriptPath string) string {
 	fallback := filepath.Base(scriptPath)
 	fallback = strings.TrimSuffix(fallback, ".py")
 
+	// If filename is "main", use parent directory name instead (#382)
+	// This helps pure FastAPI apps with @mesh.route that don't have @mesh.agent
+	if fallback == "main" {
+		dir := filepath.Dir(scriptPath)
+		parentName := filepath.Base(dir)
+		// Handle edge case: if dir is "." use actual current directory name
+		if parentName == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				parentName = filepath.Base(cwd)
+			}
+		}
+		// Only use parentName if it's meaningful
+		if parentName != "" && parentName != "." {
+			fallback = parentName
+		}
+	}
+
 	// Python script to extract agent name using AST
 	// Handles all valid Python decorator syntaxes:
 	//   @mesh.agent(name="hello")

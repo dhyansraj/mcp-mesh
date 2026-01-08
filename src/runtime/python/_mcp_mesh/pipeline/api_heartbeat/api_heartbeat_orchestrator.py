@@ -58,19 +58,19 @@ class APIHeartbeatOrchestrator:
             self._log_api_heartbeat_request(heartbeat_context, self._heartbeat_count)
 
             # Execute API heartbeat pipeline with timeout protection
-            self.logger.info(f"💓 Executing API heartbeat #{self._heartbeat_count} for service '{service_id}'")
+            self.logger.trace(f"💓 Executing API heartbeat #{self._heartbeat_count} for service '{service_id}'")
 
             # Add timeout to prevent hanging heartbeats (30 seconds max)
             import asyncio
 
             try:
-                self.logger.debug("Starting API heartbeat pipeline execution")
+                self.logger.trace("Starting API heartbeat pipeline execution")
                 result = await asyncio.wait_for(
                     self.pipeline.execute_api_heartbeat_cycle(heartbeat_context),
                     timeout=30.0,
                 )
                 if result.is_success():
-                    self.logger.debug("✅ API heartbeat pipeline completed successfully")
+                    self.logger.trace("✅ API heartbeat pipeline completed successfully")
                 else:
                     self.logger.error(f"❌ API heartbeat pipeline failed: {result.message}")
             except TimeoutError:
@@ -120,10 +120,6 @@ class APIHeartbeatOrchestrator:
         
         # Get API service metadata from startup context
         api_service_metadata = startup_context.get("api_service_metadata", {})
-        self.logger.debug(f"🔍 Startup context has api_service_metadata: {len(api_service_metadata) > 0}")
-        if api_service_metadata:
-            capabilities = api_service_metadata.get("capabilities", [])
-            self.logger.debug(f"🔍 API service has {len(capabilities)} route capabilities")
         
         # Build heartbeat-specific context
         heartbeat_context = {
@@ -182,7 +178,7 @@ class APIHeartbeatOrchestrator:
             }
 
         # Log heartbeat details
-        self.logger.debug(
+        self.logger.trace(
             f"🔍 API Heartbeat #{heartbeat_count} for '{service_id}': "
             f"app={app_info}, display={display_config}"
         )
@@ -197,29 +193,29 @@ class APIHeartbeatOrchestrator:
             heartbeat_response = result.context.get("heartbeat_response")
             heartbeat_success = result.context.get("heartbeat_success", False)
             
-            self.logger.debug(f"API heartbeat result - success: {heartbeat_success}")
+            self.logger.trace(f"API heartbeat result - success: {heartbeat_success}")
 
             # Check if heartbeat was skipped due to optimization
             heartbeat_skipped = result.context.get("heartbeat_skipped", False)
             skip_reason = result.context.get("skip_reason")
             
             if heartbeat_success and heartbeat_response:
-                # Log response details for debugging
+                # Log response details for tracing
                 try:
                     response_json = json.dumps(
                         heartbeat_response, indent=2, default=str
                     )
-                    self.logger.debug(
+                    self.logger.trace(
                         f"🔍 API heartbeat response #{heartbeat_count}:\n{response_json}"
                     )
                 except Exception as e:
-                    self.logger.debug(
+                    self.logger.trace(
                         f"🔍 API heartbeat response #{heartbeat_count}: {heartbeat_response} "
                         f"(json serialization failed: {e})"
                     )
 
-                self.logger.info(
-                    f"💚 API heartbeat #{heartbeat_count} sent successfully for service '{service_id}'"
+                self.logger.debug(
+                    f"🚀 API heartbeat #{heartbeat_count} sent for service '{service_id}'"
                 )
                 return True
             elif heartbeat_success and heartbeat_skipped:
