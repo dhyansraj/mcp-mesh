@@ -3,6 +3,8 @@ FastAPI lifespan integration for API heartbeat pipeline.
 
 Handles the execution of API heartbeat pipeline as a background task
 during FastAPI application lifespan for @mesh.route decorator services.
+
+Prefers Rust-backed heartbeat when available, falls back to Python pipeline.
 """
 
 import asyncio
@@ -14,31 +16,69 @@ logger = logging.getLogger(__name__)
 
 async def api_heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
     """
-    API heartbeat task that runs in FastAPI lifespan using pipeline architecture.
+    API heartbeat task that runs in FastAPI lifespan.
+
+    Prefers Rust-backed heartbeat for better performance and consistency with MCP agents.
+    Falls back to Python pipeline if Rust core is not available.
 
     Args:
-        heartbeat_config: Configuration containing service_id, interval, 
+        heartbeat_config: Configuration containing service_id, interval,
                          and context for API heartbeat execution
     """
-    service_id = heartbeat_config["service_id"]
-    interval = heartbeat_config["interval"]  # Already validated by get_config_value in setup
-    context = heartbeat_config["context"]
+    service_id = heartbeat_config.get("service_id", "unknown-api-service")
     standalone_mode = heartbeat_config.get("standalone_mode", False)
 
     # Check if running in standalone mode
     if standalone_mode:
         logger.info(
-            f"💓 Starting API heartbeat pipeline in standalone mode for service '{service_id}' "
+            f"💓 API heartbeat in standalone mode for service '{service_id}' "
             f"(no registry communication)"
         )
-        return  # For now, skip heartbeat in standalone mode
+        return
+
+    # Try Rust-backed heartbeat first
+    try:
+        from .rust_api_heartbeat import rust_api_heartbeat_task
+
+        logger.info(f"💓 Using Rust-backed heartbeat for API service '{service_id}'")
+        await rust_api_heartbeat_task(heartbeat_config)
+        return
+    except ImportError:
+        logger.info(
+            f"💓 Rust core not available, using Python heartbeat for API service '{service_id}'"
+        )
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Rust heartbeat failed for API service '{service_id}': {e}, "
+            f"falling back to Python"
+        )
+
+    # Fall back to Python pipeline
+    await _python_api_heartbeat_task(heartbeat_config)
+
+
+async def _python_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
+    """
+    Python-based API heartbeat task using pipeline architecture.
+
+    This is the fallback when Rust core is not available.
+
+    Args:
+        heartbeat_config: Configuration containing service_id, interval,
+                         and context for API heartbeat execution
+    """
+    service_id = heartbeat_config["service_id"]
+    interval = heartbeat_config[
+        "interval"
+    ]  # Already validated by get_config_value in setup
+    context = heartbeat_config["context"]
 
     # Create API heartbeat orchestrator for pipeline execution
     from .api_heartbeat_orchestrator import APIHeartbeatOrchestrator
 
     api_heartbeat_orchestrator = APIHeartbeatOrchestrator()
 
-    logger.info(f"💓 Starting API heartbeat pipeline task for service '{service_id}'")
+    logger.info(f"💓 Starting Python API heartbeat pipeline for service '{service_id}'")
 
     try:
         while True:
@@ -66,7 +106,9 @@ async def api_heartbeat_lifespan_task(heartbeat_config: dict[str, Any]) -> None:
             await asyncio.sleep(interval)
 
     except asyncio.CancelledError:
-        logger.info(f"🛑 API heartbeat pipeline task cancelled for service '{service_id}'")
+        logger.info(
+            f"🛑 Python API heartbeat task cancelled for service '{service_id}'"
+        )
         raise
 
 
@@ -100,11 +142,13 @@ def create_api_lifespan_handler(heartbeat_config: dict[str, Any]) -> Any:
             # Cleanup: cancel heartbeat task
             logger.info(f"🛑 Shutting down FastAPI lifespan for service '{service_id}'")
             heartbeat_task.cancel()
-            
+
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
-                logger.info(f"✅ API heartbeat task cancelled for service '{service_id}'")
+                logger.info(
+                    f"✅ API heartbeat task cancelled for service '{service_id}'"
+                )
 
     return api_lifespan
 
@@ -120,11 +164,11 @@ def integrate_api_heartbeat_with_fastapi(
         heartbeat_config: Configuration for heartbeat execution
     """
     service_id = heartbeat_config.get("service_id", "unknown")
-    
+
     try:
         # Check if FastAPI app already has a lifespan handler
         existing_lifespan = getattr(fastapi_app, "router.lifespan_context", None)
-        
+
         if existing_lifespan is not None:
             logger.warning(
                 f"⚠️ FastAPI app already has lifespan handler - "
