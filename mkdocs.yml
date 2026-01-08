@@ -196,6 +196,8 @@ nav:
 
   - Observability: 07-observability.md
 
+  - FAQ: faq.md
+
   - Reference:
       - Architecture & Design: architecture-and-design.md
       - Mesh Decorators: mesh-decorators.md
