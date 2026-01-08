@@ -98,6 +98,9 @@ fn start_agent(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
 
         // Spawn background thread with tokio runtime
         thread::spawn(move || {
+            // Initialize Python in this thread to allow PyO3 object creation
+            pyo3::prepare_freethreaded_python();
+
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(async {
                 match runtime::AgentRuntime::new(

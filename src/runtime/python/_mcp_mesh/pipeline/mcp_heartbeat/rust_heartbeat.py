@@ -82,9 +82,25 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
 
     tools = []
     mesh_tools = DecoratorRegistry.get_mesh_tools()
+    mesh_llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+
+    # Import FastMCP schema extractor for input schema extraction
+    from ...utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
+
+    # Get FastMCP server info from context (set by fastmcp-server-discovery step)
+    # Convert to dict format expected by extract_from_fastmcp_servers
+    fastmcp_server_info = context.get("fastmcp_server_info", [])
+    fastmcp_servers = {}
+    for server_info in fastmcp_server_info:
+        server_name = server_info.get("server_name", "unknown")
+        fastmcp_servers[server_name] = server_info
+    logger.debug(
+        f"FastMCP servers for schema extraction: {list(fastmcp_servers.keys())}"
+    )
 
     for tool_name, decorated_func in mesh_tools.items():
         tool_metadata = decorated_func.metadata or {}
+        current_function = decorated_func.function
 
         # Build dependency specs
         deps = []
@@ -96,16 +112,79 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             )
             deps.append(dep_spec)
 
-        # Get input schema as JSON string
+        # Extract input schema from FastMCP tool (like heartbeat_preparation.py)
+        # This is critical for LLM tool filtering - registry requires inputSchema
         input_schema = tool_metadata.get("input_schema")
+        if input_schema is None:
+            # Primary method: Extract from FastMCP server tool managers
+            input_schema = FastMCPSchemaExtractor.extract_from_fastmcp_servers(
+                current_function, fastmcp_servers
+            )
+            if input_schema:
+                logger.debug(
+                    f"📋 Extracted inputSchema for {tool_name} from FastMCP servers: {list(input_schema.get('properties', {}).keys())}"
+                )
+            else:
+                # Fallback: Try direct _fastmcp_tool attribute
+                input_schema = FastMCPSchemaExtractor.extract_input_schema(
+                    current_function
+                )
+                if input_schema:
+                    logger.debug(
+                        f"📋 Extracted inputSchema for {tool_name} from _fastmcp_tool: {list(input_schema.get('properties', {}).keys())}"
+                    )
+                else:
+                    logger.warning(f"⚠️ No inputSchema found for {tool_name}")
         input_schema_json = json.dumps(input_schema) if input_schema else None
 
-        # Get LLM filter/provider as JSON strings
-        llm_filter = tool_metadata.get("llm_filter")
-        llm_filter_json = json.dumps(llm_filter) if llm_filter else None
+        # Get LLM filter/provider from mesh_llm_agents by matching function name
+        # (The @mesh.llm decorator stores these, not @mesh.tool)
+        llm_filter_json = None
+        llm_provider_json = None
 
-        llm_provider = tool_metadata.get("llm_provider")
-        llm_provider_json = json.dumps(llm_provider) if llm_provider else None
+        func_name = decorated_func.function.__name__
+        for llm_agent_id, llm_metadata in mesh_llm_agents.items():
+            if llm_metadata.function.__name__ == func_name:
+                # Found matching LLM agent - extract filter config
+                raw_filter = llm_metadata.config.get("filter")
+                filter_mode = llm_metadata.config.get("filter_mode", "all")
+
+                # Normalize filter to array format
+                if raw_filter is None:
+                    normalized_filter = []
+                elif isinstance(raw_filter, list):
+                    normalized_filter = raw_filter
+                elif isinstance(raw_filter, dict):
+                    normalized_filter = [raw_filter]
+                elif isinstance(raw_filter, str):
+                    normalized_filter = [raw_filter] if raw_filter else []
+                else:
+                    normalized_filter = []
+
+                if normalized_filter:
+                    llm_filter_data = {
+                        "filter": normalized_filter,
+                        "filter_mode": filter_mode,
+                    }
+                    llm_filter_json = json.dumps(llm_filter_data)
+                    logger.debug(
+                        f"🤖 Extracted llm_filter for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}"
+                    )
+
+                # Extract llm_provider (v0.6.1: LLM Mesh Delegation)
+                provider = llm_metadata.config.get("provider")
+                if isinstance(provider, dict):
+                    llm_provider_data = {
+                        "capability": provider.get("capability", "llm"),
+                        "tags": provider.get("tags", []),
+                        "version": provider.get("version", ""),
+                        "namespace": provider.get("namespace", "default"),
+                    }
+                    llm_provider_json = json.dumps(llm_provider_data)
+                    logger.debug(
+                        f"🔌 Extracted llm_provider for {func_name}: {llm_provider_data}"
+                    )
+                break
 
         tool_spec = core.ToolSpec(
             function_name=tool_name,
@@ -119,10 +198,12 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             llm_provider=llm_provider_json,
         )
         tools.append(tool_spec)
+        logger.info(
+            f"📤 Tool '{tool_name}': llm_filter={llm_filter_json}, llm_provider={llm_provider_json}"
+        )
 
     # Build LLM agent specs
     llm_agents = []
-    mesh_llm_agents = DecoratorRegistry.get_mesh_llm_agents()
 
     for func_id, llm_metadata in mesh_llm_agents.items():
         # LLMAgentMetadata is a dataclass with .config dict
@@ -213,6 +294,12 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
         await _handle_llm_tools_update(
             function_id=event.function_id,
             tools=event.tools,
+            context=context,
+        )
+
+    elif event_type == "llm_provider_available":
+        await _handle_llm_provider_update(
+            provider_info=event.provider_info,
             context=context,
         )
 
@@ -340,18 +427,18 @@ async def _handle_llm_tools_update(
     """
     Handle LLM tools update event.
 
-    Updates the LLM tools registry for the given function.
+    Updates the LLM tools registry for the given function via the DI system.
     """
     logger.info(f"LLM tools update for {function_id}: {len(tools)} tools")
 
-    # Import LLM tools registry
-    from ...engine.decorator_registry import DecoratorRegistry
+    # Import injector
+    from ...engine.dependency_injector import get_global_injector
 
-    # Convert tools to the expected format
+    # Convert tools to the expected format (using "name" for OpenAPI contract)
     tool_list = []
     for tool in tools:
         tool_info = {
-            "function_name": tool.function_name,
+            "name": tool.function_name,  # OpenAPI contract uses "name" not "function_name"
             "capability": tool.capability,
             "endpoint": tool.endpoint,
             "agent_id": tool.agent_id,
@@ -361,9 +448,54 @@ async def _handle_llm_tools_update(
         }
         tool_list.append(tool_info)
 
-    # Store in DecoratorRegistry for LLM functions to access
-    DecoratorRegistry.store_llm_tools(function_id, tool_list)
-    logger.debug(f"Stored {len(tool_list)} LLM tools for {function_id}")
+    # Update LLM tools via the dependency injector
+    injector = get_global_injector()
+    llm_tools = {function_id: tool_list}
+    injector.update_llm_tools(llm_tools)
+    logger.debug(f"Updated {len(tool_list)} LLM tools for {function_id}")
+
+
+async def _handle_llm_provider_update(
+    provider_info: Any,
+    context: dict[str, Any],
+) -> None:
+    """
+    Handle LLM provider resolution event.
+
+    Updates the LLM provider for the given function via the DI system.
+    """
+    function_id = provider_info.function_id
+    logger.info(
+        f"LLM provider resolved for {function_id}: "
+        f"{provider_info.function_name} at {provider_info.endpoint}"
+    )
+
+    # Import injector
+    from ...engine.dependency_injector import get_global_injector
+    from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+
+    # Create proxy for the LLM provider
+    proxy = EnhancedUnifiedMCPProxy(
+        provider_info.endpoint,
+        provider_info.function_name,
+    )
+
+    # Register as the LLM provider for this function
+    injector = get_global_injector()
+    provider_key = f"{function_id}:llm_provider"
+    await injector.register_dependency(provider_key, proxy)
+
+    # Also store provider metadata for the mesh agent to use (using "name" for OpenAPI contract)
+    llm_providers = {
+        function_id: {
+            "agent_id": provider_info.agent_id,
+            "endpoint": provider_info.endpoint,
+            "name": provider_info.function_name,  # OpenAPI contract uses "name"
+            "model": provider_info.model,
+        }
+    }
+    injector.process_llm_providers(llm_providers)
+    logger.debug(f"Registered LLM provider for {function_id}")
 
 
 async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:

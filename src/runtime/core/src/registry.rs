@@ -92,9 +92,12 @@ pub struct ResolvedDependency {
 /// Tool information for LLM agents.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmToolInfo {
+    /// Registry returns "name" field for function name
+    #[serde(rename = "name")]
     pub function_name: String,
     pub capability: String,
     pub endpoint: String,
+    #[serde(default)]
     pub agent_id: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: Option<serde_json::Value>,
@@ -105,8 +108,19 @@ pub struct LlmToolInfo {
 pub struct ResolvedLlmProvider {
     pub agent_id: String,
     pub endpoint: String,
+    /// Registry returns "name" field for function name
+    #[serde(rename = "name")]
     pub function_name: String,
+    #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub vendor: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Full heartbeat response from registry.
@@ -192,9 +206,9 @@ impl HeartbeatRequest {
                         version: d.version.clone(),
                     })
                     .collect(),
-                input_schema: t.input_schema.as_ref().map(|s| serde_json::to_value(s).unwrap_or_default()),
-                llm_filter: t.llm_filter.as_ref().map(|f| serde_json::to_value(f).unwrap_or_default()),
-                llm_provider: t.llm_provider.as_ref().map(|p| serde_json::to_value(p).unwrap_or_default()),
+                input_schema: t.input_schema.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                llm_filter: t.llm_filter.as_ref().and_then(|f| serde_json::from_str(f).ok()),
+                llm_provider: t.llm_provider.as_ref().and_then(|p| serde_json::from_str(p).ok()),
             })
             .collect();
 
@@ -267,6 +281,11 @@ impl RegistryClient {
         let url = format!("{}/heartbeat", self.base_url);
 
         debug!("Sending full heartbeat for agent '{}'", request.agent_id);
+
+        // Log the actual JSON being sent for debugging
+        if let Ok(json_str) = serde_json::to_string_pretty(request) {
+            info!("Heartbeat request JSON:\n{}", json_str);
+        }
         trace!("Heartbeat request: {:?}", request);
 
         let response = self
@@ -280,15 +299,26 @@ impl RegistryClient {
 
         if status.is_success() {
             let body = response.text().await?;
-            trace!("Heartbeat response body: {}", body);
+            info!("Heartbeat response body:\n{}", body);
 
             let parsed: HeartbeatResponse = serde_json::from_str(&body)?;
 
+            // Log detailed tool info
+            for (func_id, tools) in &parsed.llm_tools {
+                info!(
+                    "LLM tools for '{}': {} tools - {:?}",
+                    func_id,
+                    tools.len(),
+                    tools.iter().map(|t| &t.function_name).collect::<Vec<_>>()
+                );
+            }
+
             info!(
-                "Heartbeat successful for agent '{}': {} dependencies, {} LLM tools",
+                "Heartbeat successful for agent '{}': {} dependencies, {} LLM tools, {} LLM providers",
                 request.agent_id,
                 parsed.dependencies_resolved.len(),
-                parsed.llm_tools.len()
+                parsed.llm_tools.len(),
+                parsed.llm_providers.len()
             );
 
             Ok(parsed)

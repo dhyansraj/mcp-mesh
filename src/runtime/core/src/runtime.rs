@@ -13,11 +13,21 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::sleep;
 use tracing::{info, trace, warn};
 
-use crate::events::{LlmToolInfo, MeshEvent};
+use crate::events::{LlmProviderInfo, LlmToolInfo, MeshEvent};
 use crate::handle::HandleState;
 use crate::heartbeat::{HeartbeatAction, HeartbeatConfig, HeartbeatStateMachine};
 use crate::registry::{HeartbeatRequest, HeartbeatResponse, RegistryClient};
 use crate::spec::AgentSpec;
+
+/// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread)
+#[derive(Debug, Clone)]
+struct TrackedProvider {
+    function_id: String,
+    agent_id: String,
+    endpoint: String,
+    function_name: String,
+    model: Option<String>,
+}
 
 /// Configuration for the agent runtime.
 #[derive(Debug, Clone)]
@@ -44,6 +54,8 @@ struct TopologyState {
     dependencies: HashMap<String, (String, String, String)>,
     /// LLM tools (function_id -> tools)
     llm_tools: HashMap<String, Vec<LlmToolInfo>>,
+    /// LLM providers (function_id -> provider info) - using internal struct to avoid GIL issues
+    llm_providers: HashMap<String, TrackedProvider>,
 }
 
 /// The agent runtime that runs in the background.
@@ -229,6 +241,10 @@ impl AgentRuntime {
 
         // Process LLM tools changes
         self.process_llm_tools_changes(&response.llm_tools).await;
+
+        // Process LLM provider changes
+        self.process_llm_providers_changes(&response.llm_providers)
+            .await;
     }
 
     /// Process dependency resolution changes and emit events.
@@ -375,6 +391,57 @@ impl AgentRuntime {
                 self.topology
                     .llm_tools
                     .insert(function_id.clone(), tool_infos);
+            }
+        }
+    }
+
+    /// Process LLM provider changes and emit events.
+    async fn process_llm_providers_changes(
+        &mut self,
+        llm_providers: &HashMap<String, crate::registry::ResolvedLlmProvider>,
+    ) {
+        for (function_id, provider) in llm_providers {
+            // Use internal tracking struct to avoid GIL issues
+            let tracked = TrackedProvider {
+                function_id: function_id.clone(),
+                agent_id: provider.agent_id.clone(),
+                endpoint: provider.endpoint.clone(),
+                function_name: provider.function_name.clone(),
+                model: provider.model.clone(),
+            };
+
+            // Check if changed
+            let changed = match self.topology.llm_providers.get(function_id) {
+                Some(old_provider) => {
+                    old_provider.endpoint != tracked.endpoint
+                        || old_provider.function_name != tracked.function_name
+                }
+                None => true,
+            };
+
+            if changed {
+                info!(
+                    "LLM provider resolved for function '{}': {} at {}",
+                    function_id, tracked.function_name, tracked.endpoint
+                );
+
+                // Store the tracking info first (no PyO3 involvement)
+                self.topology
+                    .llm_providers
+                    .insert(function_id.clone(), tracked.clone());
+
+                // Create LlmProviderInfo and send event
+                let provider_info = LlmProviderInfo {
+                    function_id: function_id.clone(),
+                    agent_id: provider.agent_id.clone(),
+                    endpoint: provider.endpoint.clone(),
+                    function_name: provider.function_name.clone(),
+                    model: provider.model.clone(),
+                };
+                let _ = self
+                    .event_tx
+                    .send(MeshEvent::llm_provider_available(provider_info))
+                    .await;
             }
         }
     }

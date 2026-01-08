@@ -52,6 +52,27 @@ impl Default for HealthStatus {
     }
 }
 
+/// Provider specification for LLM provider resolution event.
+/// Note: Not using #[pyclass] to avoid GIL issues in tokio thread.
+/// The fields are accessed directly in Python via MeshEvent.provider_info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmProviderInfo {
+    /// Function ID of the LLM function that requested this provider
+    pub function_id: String,
+
+    /// Agent ID providing this capability
+    pub agent_id: String,
+
+    /// Endpoint URL to call
+    pub endpoint: String,
+
+    /// Function name to call
+    pub function_name: String,
+
+    /// Model name (optional)
+    pub model: Option<String>,
+}
+
 /// Tool specification for LLM tools update event.
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +144,11 @@ pub struct MeshEvent {
     #[pyo3(get)]
     pub tools: Option<Vec<LlmToolInfo>>,
 
+    // Fields for LLM provider events
+    /// Provider info (for llm_provider_available) - not exposed via #[pyo3(get)]
+    /// because LlmProviderInfo is not a pyclass. Use get_provider_info() method instead.
+    pub provider_info: Option<LlmProviderInfo>,
+
     // Fields for error/status events
     /// Error message (for error events)
     #[pyo3(get)]
@@ -142,6 +168,28 @@ impl MeshEvent {
     fn __repr__(&self) -> String {
         format!("MeshEvent(event_type={:?})", self.event_type)
     }
+
+    /// Get provider_info as a Python object with attributes.
+    /// Returns None if no provider info, otherwise returns an object with
+    /// function_id, agent_id, endpoint, function_name, and model attributes.
+    #[getter]
+    fn provider_info(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        match &self.provider_info {
+            Some(info) => {
+                // Create a simple namespace-like object
+                let provider_class = py.import("types")?.getattr("SimpleNamespace")?;
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("function_id", &info.function_id)?;
+                kwargs.set_item("agent_id", &info.agent_id)?;
+                kwargs.set_item("endpoint", &info.endpoint)?;
+                kwargs.set_item("function_name", &info.function_name)?;
+                kwargs.set_item("model", &info.model)?;
+                let obj = provider_class.call((), Some(&kwargs))?;
+                Ok(Some(obj.into()))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 impl MeshEvent {
@@ -155,6 +203,7 @@ impl MeshEvent {
             function_name: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -172,6 +221,7 @@ impl MeshEvent {
             function_name: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             status: None,
             reason: None,
         }
@@ -192,6 +242,7 @@ impl MeshEvent {
             agent_id: Some(agent_id),
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -208,6 +259,7 @@ impl MeshEvent {
             agent_id: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -229,6 +281,7 @@ impl MeshEvent {
             agent_id: Some(agent_id),
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -245,6 +298,7 @@ impl MeshEvent {
             endpoint: None,
             function_name: None,
             agent_id: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -261,6 +315,7 @@ impl MeshEvent {
             agent_id: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -278,6 +333,7 @@ impl MeshEvent {
             agent_id: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             reason: None,
         }
@@ -293,6 +349,7 @@ impl MeshEvent {
             agent_id: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
             reason: None,
@@ -310,6 +367,7 @@ impl MeshEvent {
             agent_id: None,
             function_id: None,
             tools: None,
+            provider_info: None,
             error: None,
             status: None,
         }
@@ -319,6 +377,24 @@ impl MeshEvent {
     pub fn shutdown() -> Self {
         Self {
             event_type: "shutdown".to_string(),
+            capability: None,
+            endpoint: None,
+            function_name: None,
+            agent_id: None,
+            function_id: None,
+            tools: None,
+            provider_info: None,
+            error: None,
+            status: None,
+            reason: None,
+        }
+    }
+
+    /// Create an "llm_provider_available" event
+    pub fn llm_provider_available(provider_info: LlmProviderInfo) -> Self {
+        Self {
+            event_type: "llm_provider_available".to_string(),
+            provider_info: Some(provider_info),
             capability: None,
             endpoint: None,
             function_name: None,
