@@ -2,36 +2,31 @@
 //!
 //! These types define the configuration passed from language SDKs to the Rust core.
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Specification for a dependency required by a tool.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencySpec {
     /// Capability name to depend on
-    #[pyo3(get, set)]
     pub capability: String,
 
     /// Tags for filtering (e.g., ["+fast", "-deprecated"])
-    #[pyo3(get, set)]
     pub tags: Vec<String>,
 
     /// Version constraint (e.g., ">=2.0.0")
-    #[pyo3(get, set)]
     pub version: Option<String>,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl DependencySpec {
     #[new]
     #[pyo3(signature = (capability, tags=None, version=None))]
-    pub fn new(capability: String, tags: Option<Vec<String>>, version: Option<String>) -> Self {
-        Self {
-            capability,
-            tags: tags.unwrap_or_default(),
-            version,
-        }
+    pub fn py_new(capability: String, tags: Option<Vec<String>>, version: Option<String>) -> Self {
+        Self::new(capability, tags, version)
     }
 
     fn __repr__(&self) -> String {
@@ -39,51 +34,53 @@ impl DependencySpec {
     }
 }
 
+impl DependencySpec {
+    /// Create a new DependencySpec (language-agnostic)
+    pub fn new(capability: String, tags: Option<Vec<String>>, version: Option<String>) -> Self {
+        Self {
+            capability,
+            tags: tags.unwrap_or_default(),
+            version,
+        }
+    }
+}
+
 /// Specification for a tool/capability provided by the agent.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSpec {
     /// Function name in the code
-    #[pyo3(get, set)]
     pub function_name: String,
 
     /// Capability name for discovery
-    #[pyo3(get, set)]
     pub capability: String,
 
     /// Version of this capability
-    #[pyo3(get, set)]
     pub version: String,
 
     /// Tags for filtering
-    #[pyo3(get, set)]
     pub tags: Vec<String>,
 
     /// Human-readable description
-    #[pyo3(get, set)]
     pub description: String,
 
     /// Dependencies required by this tool
-    #[pyo3(get, set)]
     pub dependencies: Vec<DependencySpec>,
 
     /// JSON Schema for input parameters (MCP format) - serialized JSON string
-    #[pyo3(get, set)]
     pub input_schema: Option<String>,
 
     /// LLM filter specification (for @mesh.llm decorated functions) - serialized JSON string
-    #[pyo3(get, set)]
     pub llm_filter: Option<String>,
 
     /// LLM provider specification (for @mesh.llm_provider) - serialized JSON string
-    #[pyo3(get, set)]
     pub llm_provider: Option<String>,
 
     /// Additional kwargs from decorator - serialized JSON string
-    #[pyo3(get, set)]
     pub kwargs: Option<String>,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl ToolSpec {
     #[new]
@@ -99,6 +96,43 @@ impl ToolSpec {
         llm_provider=None,
         kwargs=None
     ))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn py_new(
+        function_name: String,
+        capability: String,
+        version: String,
+        description: String,
+        tags: Option<Vec<String>>,
+        dependencies: Option<Vec<DependencySpec>>,
+        input_schema: Option<String>,
+        llm_filter: Option<String>,
+        llm_provider: Option<String>,
+        kwargs: Option<String>,
+    ) -> Self {
+        Self::new(
+            function_name,
+            capability,
+            version,
+            description,
+            tags,
+            dependencies,
+            input_schema,
+            llm_filter,
+            llm_provider,
+            kwargs,
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ToolSpec(function_name={:?}, capability={:?})",
+            self.function_name, self.capability
+        )
+    }
+}
+
+impl ToolSpec {
+    /// Create a new ToolSpec (language-agnostic)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         function_name: String,
@@ -125,44 +159,50 @@ impl ToolSpec {
             kwargs,
         }
     }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "ToolSpec(function_name={:?}, capability={:?})",
-            self.function_name, self.capability
-        )
-    }
 }
 
 /// Specification for an LLM agent function.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmAgentSpec {
     /// Unique identifier for this LLM function
-    #[pyo3(get, set)]
     pub function_id: String,
 
     /// Provider selector (capability + tags) - serialized JSON string
-    #[pyo3(get, set)]
     pub provider: String,
 
     /// Tool filter specification - serialized JSON string
-    #[pyo3(get, set)]
     pub filter: Option<String>,
 
     /// Filter mode: "all", "best_match", or "*"
-    #[pyo3(get, set)]
     pub filter_mode: String,
 
     /// Maximum agentic loop iterations
-    #[pyo3(get, set)]
     pub max_iterations: u32,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl LlmAgentSpec {
     #[new]
     #[pyo3(signature = (function_id, provider, filter=None, filter_mode="all".to_string(), max_iterations=1))]
+    pub fn py_new(
+        function_id: String,
+        provider: String,
+        filter: Option<String>,
+        filter_mode: String,
+        max_iterations: u32,
+    ) -> Self {
+        Self::new(function_id, provider, filter, filter_mode, max_iterations)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("LlmAgentSpec(function_id={:?})", self.function_id)
+    }
+}
+
+impl LlmAgentSpec {
+    /// Create a new LlmAgentSpec (language-agnostic)
     pub fn new(
         function_id: String,
         provider: String,
@@ -178,59 +218,46 @@ impl LlmAgentSpec {
             max_iterations,
         }
     }
-
-    fn __repr__(&self) -> String {
-        format!("LlmAgentSpec(function_id={:?})", self.function_id)
-    }
 }
 
 /// Complete specification for an MCP Mesh agent.
 ///
 /// This is the primary configuration passed from language SDKs to start the agent runtime.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpec {
     /// Unique agent name/identifier
-    #[pyo3(get, set)]
     pub name: String,
 
     /// Agent version (semver)
-    #[pyo3(get, set)]
     pub version: String,
 
     /// Human-readable description
-    #[pyo3(get, set)]
     pub description: String,
 
     /// Registry URL (e.g., "http://localhost:8100")
-    #[pyo3(get, set)]
     pub registry_url: String,
 
     /// HTTP port for this agent (0 = auto-assign)
-    #[pyo3(get, set)]
     pub http_port: u16,
 
     /// HTTP host announced to registry
-    #[pyo3(get, set)]
     pub http_host: String,
 
     /// Namespace for isolation
-    #[pyo3(get, set)]
     pub namespace: String,
 
     /// Tools/capabilities provided by this agent
-    #[pyo3(get, set)]
     pub tools: Vec<ToolSpec>,
 
     /// LLM agent specifications
-    #[pyo3(get, set)]
     pub llm_agents: Vec<LlmAgentSpec>,
 
     /// Heartbeat interval in seconds
-    #[pyo3(get, set)]
     pub heartbeat_interval: u64,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl AgentSpec {
     #[new]
@@ -246,6 +273,45 @@ impl AgentSpec {
         llm_agents=None,
         heartbeat_interval=5
     ))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn py_new(
+        name: String,
+        registry_url: String,
+        version: String,
+        description: String,
+        http_port: u16,
+        http_host: String,
+        namespace: String,
+        tools: Option<Vec<ToolSpec>>,
+        llm_agents: Option<Vec<LlmAgentSpec>>,
+        heartbeat_interval: u64,
+    ) -> Self {
+        Self::new(
+            name,
+            registry_url,
+            version,
+            description,
+            http_port,
+            http_host,
+            namespace,
+            tools,
+            llm_agents,
+            heartbeat_interval,
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AgentSpec(name={:?}, tools={}, llm_agents={})",
+            self.name,
+            self.tools.len(),
+            self.llm_agents.len()
+        )
+    }
+}
+
+impl AgentSpec {
+    /// Create a new AgentSpec (language-agnostic)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
@@ -289,15 +355,6 @@ impl AgentSpec {
         deps.sort();
         deps.dedup();
         deps
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "AgentSpec(name={:?}, tools={}, llm_agents={})",
-            self.name,
-            self.tools.len(),
-            self.llm_agents.len()
-        )
     }
 }
 

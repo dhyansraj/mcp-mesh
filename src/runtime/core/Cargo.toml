@@ -10,10 +10,15 @@ authors = ["MCP Mesh Team"]
 name = "mcp_mesh_core"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["python"]
+python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
+ffi = []  # Future C FFI support
+
 [dependencies]
-# Python bindings
-pyo3 = { version = "0.27", features = ["extension-module"] }
-pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
+# Python bindings (optional, enabled by default)
+pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
+pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"], optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

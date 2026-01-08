@@ -3,11 +3,78 @@
 //! Events are pushed from the Rust runtime to language SDKs via an async channel.
 //! Language SDKs consume these events and update their internal state (e.g., dependency proxies).
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Type of mesh event.
+///
+/// This enum provides type-safe event identification.
+/// Serializes to snake_case strings for backwards compatibility with language SDKs.
+#[cfg_attr(feature = "python", pyclass(eq, eq_int))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EventType {
+    /// Agent successfully registered with the mesh registry
+    AgentRegistered,
+    /// Agent registration failed
+    RegistrationFailed,
+    /// A dependency became available
+    DependencyAvailable,
+    /// A dependency became unavailable
+    DependencyUnavailable,
+    /// A dependency's endpoint or function changed
+    DependencyChanged,
+    /// LLM tools list was updated
+    LlmToolsUpdated,
+    /// Health check is due (SDK should run health checks)
+    HealthCheckDue,
+    /// Agent health status changed
+    HealthStatusChanged,
+    /// Connected to registry
+    RegistryConnected,
+    /// Disconnected from registry
+    RegistryDisconnected,
+    /// Agent runtime is shutting down
+    #[default]
+    Shutdown,
+    /// LLM provider became available
+    LlmProviderAvailable,
+}
+
+#[cfg_attr(feature = "python", pymethods)]
+impl EventType {
+    fn __repr__(&self) -> String {
+        format!("EventType.{:?}", self)
+    }
+
+    fn __str__(&self) -> String {
+        self.as_str().to_string()
+    }
+}
+
+impl EventType {
+    /// Convert to the string representation used in serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventType::AgentRegistered => "agent_registered",
+            EventType::RegistrationFailed => "registration_failed",
+            EventType::DependencyAvailable => "dependency_available",
+            EventType::DependencyUnavailable => "dependency_unavailable",
+            EventType::DependencyChanged => "dependency_changed",
+            EventType::LlmToolsUpdated => "llm_tools_updated",
+            EventType::HealthCheckDue => "health_check_due",
+            EventType::HealthStatusChanged => "health_status_changed",
+            EventType::RegistryConnected => "registry_connected",
+            EventType::RegistryDisconnected => "registry_disconnected",
+            EventType::Shutdown => "shutdown",
+            EventType::LlmProviderAvailable => "llm_provider_available",
+        }
+    }
+}
+
 /// Health status of an agent.
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python", pyclass(eq, eq_int))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {
     /// Agent is fully operational
@@ -18,7 +85,7 @@ pub enum HealthStatus {
     Unhealthy,
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl HealthStatus {
     fn __repr__(&self) -> String {
         match self {
@@ -74,30 +141,26 @@ pub struct LlmProviderInfo {
 }
 
 /// Tool specification for LLM tools update event.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmToolInfo {
     /// Function name of the tool
-    #[pyo3(get)]
     pub function_name: String,
 
     /// Capability name
-    #[pyo3(get)]
     pub capability: String,
 
     /// Endpoint URL to call
-    #[pyo3(get)]
     pub endpoint: String,
 
     /// Agent ID providing this tool
-    #[pyo3(get)]
     pub agent_id: String,
 
     /// Input schema (serialized JSON string)
-    #[pyo3(get)]
     pub input_schema: Option<String>,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl LlmToolInfo {
     fn __repr__(&self) -> String {
@@ -111,69 +174,112 @@ impl LlmToolInfo {
 /// Events emitted by the Rust core to language SDKs.
 ///
 /// Language SDKs consume these events to update their internal state.
-#[pyclass]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Note: Using manual getters instead of get_all because provider_info needs custom handling.
+#[cfg_attr(feature = "python", pyclass)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MeshEvent {
     /// Event type identifier
-    #[pyo3(get)]
-    pub event_type: String,
+    pub event_type: EventType,
 
     // Fields for dependency events
     /// Capability name (for dependency events)
-    #[pyo3(get)]
     pub capability: Option<String>,
 
     /// Endpoint URL (for dependency_available)
-    #[pyo3(get)]
     pub endpoint: Option<String>,
 
     /// Function name to call (for dependency_available)
-    #[pyo3(get)]
     pub function_name: Option<String>,
 
     /// Agent ID (for dependency events)
-    #[pyo3(get)]
     pub agent_id: Option<String>,
 
     // Fields for LLM tools events
     /// Function ID of the LLM agent (for llm_tools_updated)
-    #[pyo3(get)]
     pub function_id: Option<String>,
 
     /// List of available tools (for llm_tools_updated)
-    #[pyo3(get)]
     pub tools: Option<Vec<LlmToolInfo>>,
 
     // Fields for LLM provider events
-    /// Provider info (for llm_provider_available) - not exposed via #[pyo3(get)]
-    /// because LlmProviderInfo is not a pyclass. Use get_provider_info() method instead.
+    /// Provider info (for llm_provider_available) - accessed via get_provider_info() in Python
     pub provider_info: Option<LlmProviderInfo>,
 
     // Fields for error/status events
     /// Error message (for error events)
-    #[pyo3(get)]
     pub error: Option<String>,
 
     /// Health status (for health events)
-    #[pyo3(get)]
     pub status: Option<HealthStatus>,
 
     /// Reason for event (for disconnect events)
-    #[pyo3(get)]
     pub reason: Option<String>,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl MeshEvent {
     fn __repr__(&self) -> String {
         format!("MeshEvent(event_type={:?})", self.event_type)
     }
 
+    // Manual getters for Python (can't use get_all due to provider_info needing custom handling)
+    #[getter]
+    fn event_type(&self) -> String {
+        // Return string representation for backwards compatibility with Python SDK
+        self.event_type.as_str().to_string()
+    }
+
+    #[getter]
+    fn capability(&self) -> Option<String> {
+        self.capability.clone()
+    }
+
+    #[getter]
+    fn endpoint(&self) -> Option<String> {
+        self.endpoint.clone()
+    }
+
+    #[getter]
+    fn function_name(&self) -> Option<String> {
+        self.function_name.clone()
+    }
+
+    #[getter]
+    fn agent_id(&self) -> Option<String> {
+        self.agent_id.clone()
+    }
+
+    #[getter]
+    fn function_id(&self) -> Option<String> {
+        self.function_id.clone()
+    }
+
+    #[getter]
+    fn tools(&self) -> Option<Vec<LlmToolInfo>> {
+        self.tools.clone()
+    }
+
+    #[getter]
+    fn error(&self) -> Option<String> {
+        self.error.clone()
+    }
+
+    #[getter]
+    fn status(&self) -> Option<HealthStatus> {
+        self.status
+    }
+
+    #[getter]
+    fn reason(&self) -> Option<String> {
+        self.reason.clone()
+    }
+
     /// Get provider_info as a Python object with attributes.
     /// Returns None if no provider info, otherwise returns an object with
     /// function_id, agent_id, endpoint, function_name, and model attributes.
     #[getter]
-    fn provider_info(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn provider_info(&self, py: Python<'_>) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
         match &self.provider_info {
             Some(info) => {
                 // Create a simple namespace-like object
@@ -196,34 +302,18 @@ impl MeshEvent {
     /// Create an "agent_registered" event
     pub fn agent_registered(agent_id: String) -> Self {
         Self {
-            event_type: "agent_registered".to_string(),
+            event_type: EventType::AgentRegistered,
             agent_id: Some(agent_id),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
     /// Create a "registration_failed" event
     pub fn registration_failed(error: String) -> Self {
         Self {
-            event_type: "registration_failed".to_string(),
+            event_type: EventType::RegistrationFailed,
             error: Some(error),
-            agent_id: None,
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
@@ -235,34 +325,21 @@ impl MeshEvent {
         agent_id: String,
     ) -> Self {
         Self {
-            event_type: "dependency_available".to_string(),
+            event_type: EventType::DependencyAvailable,
             capability: Some(capability),
             endpoint: Some(endpoint),
             function_name: Some(function_name),
             agent_id: Some(agent_id),
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
     /// Create a "dependency_unavailable" event
     pub fn dependency_unavailable(capability: String) -> Self {
         Self {
-            event_type: "dependency_unavailable".to_string(),
+            event_type: EventType::DependencyUnavailable,
             capability: Some(capability),
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
@@ -274,136 +351,73 @@ impl MeshEvent {
         agent_id: String,
     ) -> Self {
         Self {
-            event_type: "dependency_changed".to_string(),
+            event_type: EventType::DependencyChanged,
             capability: Some(capability),
             endpoint: Some(endpoint),
             function_name: Some(function_name),
             agent_id: Some(agent_id),
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
     /// Create an "llm_tools_updated" event
     pub fn llm_tools_updated(function_id: String, tools: Vec<LlmToolInfo>) -> Self {
         Self {
-            event_type: "llm_tools_updated".to_string(),
+            event_type: EventType::LlmToolsUpdated,
             function_id: Some(function_id),
             tools: Some(tools),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
     /// Create a "health_check_due" event
     pub fn health_check_due() -> Self {
         Self {
-            event_type: "health_check_due".to_string(),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            event_type: EventType::HealthCheckDue,
+            ..Default::default()
         }
     }
 
     /// Create a "health_status_changed" event
     pub fn health_status_changed(status: HealthStatus) -> Self {
         Self {
-            event_type: "health_status_changed".to_string(),
+            event_type: EventType::HealthStatusChanged,
             status: Some(status),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            reason: None,
+            ..Default::default()
         }
     }
 
     /// Create a "registry_connected" event
     pub fn registry_connected() -> Self {
         Self {
-            event_type: "registry_connected".to_string(),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            event_type: EventType::RegistryConnected,
+            ..Default::default()
         }
     }
 
     /// Create a "registry_disconnected" event
     pub fn registry_disconnected(reason: String) -> Self {
         Self {
-            event_type: "registry_disconnected".to_string(),
+            event_type: EventType::RegistryDisconnected,
             reason: Some(reason),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
+            ..Default::default()
         }
     }
 
     /// Create a "shutdown" event
     pub fn shutdown() -> Self {
         Self {
-            event_type: "shutdown".to_string(),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            provider_info: None,
-            error: None,
-            status: None,
-            reason: None,
+            event_type: EventType::Shutdown,
+            ..Default::default()
         }
     }
 
     /// Create an "llm_provider_available" event
     pub fn llm_provider_available(provider_info: LlmProviderInfo) -> Self {
         Self {
-            event_type: "llm_provider_available".to_string(),
+            event_type: EventType::LlmProviderAvailable,
             provider_info: Some(provider_info),
-            capability: None,
-            endpoint: None,
-            function_name: None,
-            agent_id: None,
-            function_id: None,
-            tools: None,
-            error: None,
-            status: None,
-            reason: None,
+            ..Default::default()
         }
     }
 }
@@ -421,9 +435,32 @@ mod tests {
             "date-service-abc123".to_string(),
         );
 
-        assert_eq!(event.event_type, "dependency_available");
+        assert_eq!(event.event_type, EventType::DependencyAvailable);
+        assert_eq!(event.event_type.as_str(), "dependency_available");
         assert_eq!(event.capability, Some("date-service".to_string()));
         assert_eq!(event.endpoint, Some("http://localhost:9001".to_string()));
+    }
+
+    #[test]
+    fn test_event_type_serialization() {
+        // Test that EventType serializes to snake_case strings
+        let json = serde_json::to_string(&EventType::DependencyAvailable).unwrap();
+        assert_eq!(json, "\"dependency_available\"");
+
+        let json = serde_json::to_string(&EventType::LlmToolsUpdated).unwrap();
+        assert_eq!(json, "\"llm_tools_updated\"");
+
+        // Test deserialization
+        let event_type: EventType = serde_json::from_str("\"agent_registered\"").unwrap();
+        assert_eq!(event_type, EventType::AgentRegistered);
+    }
+
+    #[test]
+    fn test_event_type_as_str() {
+        assert_eq!(EventType::AgentRegistered.as_str(), "agent_registered");
+        assert_eq!(EventType::DependencyChanged.as_str(), "dependency_changed");
+        assert_eq!(EventType::LlmProviderAvailable.as_str(), "llm_provider_available");
+        assert_eq!(EventType::Shutdown.as_str(), "shutdown");
     }
 
     #[test]

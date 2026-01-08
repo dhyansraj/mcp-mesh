@@ -5,6 +5,7 @@
 //! - Current state queries
 //! - Shutdown control
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ impl Default for HandleState {
 ///
 /// This is the primary interface for language SDKs to interact with the Rust core.
 /// It provides async event streaming and state queries.
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct AgentHandle {
     /// Event receiver (from runtime)
     event_rx: Arc<Mutex<mpsc::Receiver<MeshEvent>>>,
@@ -74,6 +75,8 @@ impl AgentHandle {
     }
 }
 
+/// Python-specific methods for AgentHandle
+#[cfg(feature = "python")]
 #[pymethods]
 impl AgentHandle {
     /// Wait for and return the next mesh event.
@@ -107,29 +110,24 @@ impl AgentHandle {
     /// Returns a dict mapping capability names to endpoint URLs.
     /// This is a snapshot of the current state.
     fn get_dependencies(&self) -> PyResult<HashMap<String, String>> {
-        // Use blocking read since this is called from sync Python
-        let state = self.state.blocking_read();
-        Ok(state.dependencies.clone())
+        Ok(self.get_dependencies_internal())
     }
 
     /// Get current agent health status.
     fn get_status(&self) -> PyResult<HealthStatus> {
-        let state = self.state.blocking_read();
-        Ok(state.health_status)
+        Ok(self.get_status_internal())
     }
 
     /// Get the agent ID assigned by the registry.
     ///
     /// Returns None if not yet registered.
     fn get_agent_id(&self) -> PyResult<Option<String>> {
-        let state = self.state.blocking_read();
-        Ok(state.agent_id.clone())
+        Ok(self.get_agent_id_internal())
     }
 
     /// Check if shutdown has been requested.
     fn is_shutdown_requested(&self) -> PyResult<bool> {
-        let state = self.state.blocking_read();
-        Ok(state.shutdown_requested)
+        Ok(self.is_shutdown_requested_internal())
     }
 
     /// Request graceful shutdown of the agent runtime.
@@ -137,15 +135,7 @@ impl AgentHandle {
     /// This signals the runtime to stop heartbeats and clean up.
     /// The next call to `next_event()` will return a shutdown event.
     fn shutdown(&self) -> PyResult<()> {
-        // Set shutdown flag
-        {
-            let mut state = self.state.blocking_write();
-            state.shutdown_requested = true;
-        }
-
-        // Send shutdown signal (non-blocking, ignore if full)
-        let _ = self.shutdown_tx.try_send(());
-
+        self.shutdown_internal();
         Ok(())
     }
 
@@ -157,6 +147,45 @@ impl AgentHandle {
             state.dependencies.len(),
             state.health_status
         )
+    }
+}
+
+/// Language-agnostic methods for AgentHandle (used by both Python and FFI)
+impl AgentHandle {
+    /// Get current dependency endpoints.
+    pub fn get_dependencies_internal(&self) -> HashMap<String, String> {
+        let state = self.state.blocking_read();
+        state.dependencies.clone()
+    }
+
+    /// Get current agent health status.
+    pub fn get_status_internal(&self) -> HealthStatus {
+        let state = self.state.blocking_read();
+        state.health_status
+    }
+
+    /// Get the agent ID assigned by the registry.
+    pub fn get_agent_id_internal(&self) -> Option<String> {
+        let state = self.state.blocking_read();
+        state.agent_id.clone()
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_shutdown_requested_internal(&self) -> bool {
+        let state = self.state.blocking_read();
+        state.shutdown_requested
+    }
+
+    /// Request graceful shutdown of the agent runtime.
+    pub fn shutdown_internal(&self) {
+        // Set shutdown flag
+        {
+            let mut state = self.state.blocking_write();
+            state.shutdown_requested = true;
+        }
+
+        // Send shutdown signal (non-blocking, ignore if full)
+        let _ = self.shutdown_tx.try_send(());
     }
 }
 
@@ -179,9 +208,9 @@ mod tests {
             s.dependencies.insert("date-service".to_string(), "http://localhost:9001".to_string());
         }
 
-        // Query via handle
-        assert_eq!(handle.get_agent_id().unwrap(), Some("test-agent".to_string()));
-        assert_eq!(handle.get_dependencies().unwrap().len(), 1);
+        // Query via handle (using internal methods for tests)
+        assert_eq!(handle.get_agent_id_internal(), Some("test-agent".to_string()));
+        assert_eq!(handle.get_dependencies_internal().len(), 1);
 
         // Send an event
         event_tx
@@ -205,11 +234,11 @@ mod tests {
 
         let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx);
 
-        // Request shutdown
-        handle.shutdown().unwrap();
+        // Request shutdown (using internal method for tests)
+        handle.shutdown_internal();
 
         // Check flag is set
-        assert!(handle.is_shutdown_requested().unwrap());
+        assert!(handle.is_shutdown_requested_internal());
 
         // Check signal was sent
         assert!(shutdown_rx.try_recv().is_ok());

@@ -167,6 +167,17 @@ pub struct DependencyRegistration {
     pub version: Option<String>,
 }
 
+/// LLM agent registration for heartbeat request.
+#[derive(Debug, Clone, Serialize)]
+pub struct LlmAgentRegistration {
+    pub function_id: String,
+    pub provider: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<serde_json::Value>,
+    pub filter_mode: String,
+    pub max_iterations: u32,
+}
+
 /// Full heartbeat request body.
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatRequest {
@@ -179,6 +190,8 @@ pub struct HeartbeatRequest {
     pub namespace: String,
     pub status: String,
     pub tools: Vec<ToolRegistration>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub llm_agents: Vec<LlmAgentRegistration>,
 }
 
 impl HeartbeatRequest {
@@ -212,6 +225,19 @@ impl HeartbeatRequest {
             })
             .collect();
 
+        // Build LLM agent registrations
+        let llm_agents: Vec<LlmAgentRegistration> = spec
+            .llm_agents
+            .iter()
+            .map(|a| LlmAgentRegistration {
+                function_id: a.function_id.clone(),
+                provider: serde_json::from_str(&a.provider).unwrap_or(serde_json::Value::Null),
+                filter: a.filter.as_ref().and_then(|f| serde_json::from_str(f).ok()),
+                filter_mode: a.filter_mode.clone(),
+                max_iterations: a.max_iterations,
+            })
+            .collect();
+
         Self {
             agent_id: spec.agent_id(),
             name: Some(spec.name.clone()),
@@ -221,6 +247,7 @@ impl HeartbeatRequest {
             namespace: spec.namespace.clone(),
             status: health_status.as_api_str().to_string(),
             tools,
+            llm_agents,
         }
     }
 }

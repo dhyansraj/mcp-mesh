@@ -9,7 +9,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Python SDK                     Rust Core
+//! Language SDK                   Rust Core
 //! ───────────────────────────────────────────
 //! Decorators          →
 //! Metadata collection →          AgentSpec
@@ -24,6 +24,11 @@
 //! Event listener      ←         EventStream
 //! DI updates          ←         MeshEvent
 //! ```
+//!
+//! # Features
+//!
+//! - `python` (default): Enable Python bindings via PyO3
+//! - `ffi`: Enable C FFI bindings (future)
 
 pub mod events;
 pub mod handle;
@@ -32,22 +37,30 @@ pub mod registry;
 pub mod runtime;
 pub mod spec;
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use events::{HealthStatus, LlmToolInfo, MeshEvent};
+use events::{EventType, HealthStatus, LlmToolInfo, MeshEvent};
 use handle::{AgentHandle, HandleState};
 use runtime::RuntimeConfig;
 use spec::{AgentSpec, DependencySpec, LlmAgentSpec, ToolSpec};
 
 /// Initialize logging with tracing.
-fn init_logging() {
+///
+/// Uses RUST_LOG environment variable for configuration.
+/// Falls back to info level for mcp_mesh_core if not set.
+pub fn init_logging() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("mcp_mesh_core=debug".parse().unwrap()))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("mcp_mesh_core=info".parse().unwrap()),
+        )
         .try_init();
 }
 
@@ -64,14 +77,18 @@ fn init_logging() {
 ///
 /// # Returns
 /// Handle to the running agent runtime
-///
-/// # Raises
-/// * `RuntimeError` - If agent startup fails
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (spec))]
-fn start_agent(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
+fn start_agent_py(_py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
     init_logging();
+    start_agent_internal(spec).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+}
 
+/// Internal agent start function (language-agnostic).
+///
+/// This is the core implementation used by both Python bindings and FFI.
+pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
     info!("Starting agent '{}' with Rust core", spec.name);
 
     // Create runtime config from spec
@@ -99,7 +116,11 @@ fn start_agent(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
         // Spawn background thread with tokio runtime
         thread::spawn(move || {
             // Initialize Python in this thread to allow PyO3 object creation
-            pyo3::prepare_freethreaded_python();
+            #[cfg(feature = "python")]
+            {
+                // Ensure Python is attached to this thread for PyO3 operations
+                pyo3::Python::attach(|_| {});
+            }
 
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(async {
@@ -130,6 +151,7 @@ fn start_agent(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
 }
 
 /// MCP Mesh Core Python module.
+#[cfg(feature = "python")]
 #[pymodule]
 fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logging on module import
@@ -143,10 +165,11 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AgentHandle>()?;
     m.add_class::<MeshEvent>()?;
     m.add_class::<LlmToolInfo>()?;
+    m.add_class::<EventType>()?;
     m.add_class::<HealthStatus>()?;
 
-    // Register functions
-    m.add_function(wrap_pyfunction!(start_agent, m)?)?;
+    // Register functions - use the Python wrapper
+    m.add_function(wrap_pyfunction!(start_agent_py, m)?)?;
 
     Ok(())
 }

@@ -248,6 +248,8 @@ impl AgentRuntime {
     }
 
     /// Process dependency resolution changes and emit events.
+    ///
+    /// This method batches state updates to minimize lock contention.
     async fn process_dependency_changes(
         &mut self,
         resolved: &HashMap<String, Vec<crate::registry::ResolvedDependency>>,
@@ -271,25 +273,16 @@ impl AgentRuntime {
             }
         }
 
+        // Collect all changes first (before acquiring any locks)
+        let mut removed_caps: Vec<String> = Vec::new();
+        let mut added_or_changed: Vec<(String, String, String, String, bool)> = Vec::new(); // (cap, endpoint, func_name, agent_id, is_new)
+
         // Find removed dependencies
         let old_caps: Vec<String> = self.topology.dependencies.keys().cloned().collect();
         for cap in old_caps {
             if !new_deps.contains_key(&cap) {
                 info!("Dependency '{}' removed", cap);
-
-                // Update shared state
-                {
-                    let mut state = self.shared_state.write().await;
-                    state.dependencies.remove(&cap);
-                }
-
-                // Emit event
-                let _ = self
-                    .event_tx
-                    .send(MeshEvent::dependency_unavailable(cap.clone()))
-                    .await;
-
-                self.topology.dependencies.remove(&cap);
+                removed_caps.push(cap);
             }
         }
 
@@ -313,36 +306,78 @@ impl AgentRuntime {
                         cap, endpoint, func_name
                     );
                 }
-
-                // Update shared state
-                {
-                    let mut state = self.shared_state.write().await;
-                    state.dependencies.insert(cap.clone(), endpoint.clone());
-                }
-
-                // Emit event
-                let event = if is_new {
-                    MeshEvent::dependency_available(
-                        cap.clone(),
-                        endpoint.clone(),
-                        func_name.clone(),
-                        agent_id.clone(),
-                    )
-                } else {
-                    MeshEvent::dependency_changed(
-                        cap.clone(),
-                        endpoint.clone(),
-                        func_name.clone(),
-                        agent_id.clone(),
-                    )
-                };
-                let _ = self.event_tx.send(event).await;
-
-                self.topology
-                    .dependencies
-                    .insert(cap.clone(), (endpoint.clone(), func_name.clone(), agent_id.clone()));
+                added_or_changed.push((
+                    cap.clone(),
+                    endpoint.clone(),
+                    func_name.clone(),
+                    agent_id.clone(),
+                    is_new,
+                ));
             }
         }
+
+        // Batch update shared state (single lock acquisition)
+        if !removed_caps.is_empty() || !added_or_changed.is_empty() {
+            let mut state = self.shared_state.write().await;
+            for cap in &removed_caps {
+                state.dependencies.remove(cap);
+            }
+            for (cap, endpoint, _, _, _) in &added_or_changed {
+                state.dependencies.insert(cap.clone(), endpoint.clone());
+            }
+        }
+
+        // Update local topology and emit events (no lock needed)
+        for cap in removed_caps {
+            let _ = self
+                .event_tx
+                .send(MeshEvent::dependency_unavailable(cap.clone()))
+                .await;
+            self.topology.dependencies.remove(&cap);
+        }
+
+        for (cap, endpoint, func_name, agent_id, is_new) in added_or_changed {
+            let event = if is_new {
+                MeshEvent::dependency_available(
+                    cap.clone(),
+                    endpoint.clone(),
+                    func_name.clone(),
+                    agent_id.clone(),
+                )
+            } else {
+                MeshEvent::dependency_changed(
+                    cap.clone(),
+                    endpoint.clone(),
+                    func_name.clone(),
+                    agent_id.clone(),
+                )
+            };
+            let _ = self.event_tx.send(event).await;
+
+            self.topology
+                .dependencies
+                .insert(cap, (endpoint, func_name, agent_id));
+        }
+    }
+
+    /// Check if two LlmToolInfo lists are equivalent.
+    fn tools_are_equal(old: &[LlmToolInfo], new: &[LlmToolInfo]) -> bool {
+        if old.len() != new.len() {
+            return false;
+        }
+
+        // Check each tool - order matters for simplicity, but we compare all fields
+        for (old_tool, new_tool) in old.iter().zip(new.iter()) {
+            if old_tool.function_name != new_tool.function_name
+                || old_tool.capability != new_tool.capability
+                || old_tool.endpoint != new_tool.endpoint
+                || old_tool.agent_id != new_tool.agent_id
+                || old_tool.input_schema != new_tool.input_schema
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Process LLM tools changes and emit events.
@@ -366,9 +401,9 @@ impl AgentRuntime {
                 })
                 .collect();
 
-            // Check if changed
+            // Check if changed - compare all fields, not just length
             let changed = match self.topology.llm_tools.get(function_id) {
-                Some(old_tools) => old_tools.len() != tool_infos.len(), // Simple check, could be more thorough
+                Some(old_tools) => !Self::tools_are_equal(old_tools, &tool_infos),
                 None => true,
             };
 
@@ -445,40 +480,6 @@ impl AgentRuntime {
             }
         }
     }
-}
-
-/// Start an agent runtime in a background task.
-///
-/// Returns the event receiver and shared state handle.
-pub fn spawn_runtime(
-    spec: AgentSpec,
-    config: RuntimeConfig,
-) -> Result<
-    (
-        mpsc::Receiver<MeshEvent>,
-        Arc<RwLock<HandleState>>,
-        mpsc::Sender<()>,
-    ),
-    crate::registry::RegistryError,
-> {
-    let (event_tx, event_rx) = mpsc::channel(config.event_buffer_size);
-    let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
-    let shared_state = Arc::new(RwLock::new(HandleState::default()));
-
-    let runtime = AgentRuntime::new(
-        spec,
-        config,
-        event_tx,
-        shared_state.clone(),
-        shutdown_rx,
-    )?;
-
-    // Spawn the runtime in a background task
-    tokio::spawn(async move {
-        runtime.run().await;
-    });
-
-    Ok((event_rx, shared_state, shutdown_tx))
 }
 
 #[cfg(test)]
