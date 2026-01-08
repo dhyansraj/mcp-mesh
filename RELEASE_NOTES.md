@@ -1,5 +1,29 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.20...v0.7.21)
+
+## v0.7.21 (2026-01-07)
+
+### 🐛 Bug Fixes
+
+- **Reduce API heartbeat pipeline logging verbosity** (#379): Downgrade routine logs from INFO/DEBUG to TRACE
+  - API heartbeat pipeline now consistent with MCP pipeline logging
+  - DEBUG mode shows only one summary line per heartbeat
+  - INFO mode shows every 10th heartbeat, topology changes, and errors
+
+- **Use parent directory name for main.py log files** (#382): Better log file naming for scaffolded agents
+  - When filename is `main`, uses parent directory name for logs
+  - `my-api/main.py` → `my-api.log` instead of `main.log`
+  - Helps pure FastAPI apps with `@mesh.route` that don't have `@mesh.agent`
+
+### 📚 Documentation
+
+- **Add FAQ section** (#380, #381): New FAQ page in documentation
+  - How to use `@mesh.tool` for background tasks (Redis consumers, cron jobs)
+  - How to organize `@mesh.tool` functions across multiple files
+  - Logging levels and heartbeat verbosity
+  - Log file naming conventions
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.19...v0.7.20)
 
 ## v0.7.20 (2026-01-05)
