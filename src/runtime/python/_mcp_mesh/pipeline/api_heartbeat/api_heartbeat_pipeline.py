@@ -208,7 +208,7 @@ class APIHeartbeatPipeline(MeshPipeline):
                 # NO_CHANGES - skip for optimization
                 should_execute_remaining = False
                 reason = "optimization (no changes detected)"
-                self.logger.info(
+                self.logger.trace(
                     f"🚀 API heartbeat: Skipping remaining steps for optimization: {reason}"
                 )
             elif FastHeartbeatStatusUtil.should_skip_for_resilience(

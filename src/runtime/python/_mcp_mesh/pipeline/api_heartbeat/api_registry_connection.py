@@ -39,14 +39,14 @@ class APIRegistryConnectionStep(PipelineStep):
         Returns:
             PipelineResult with registry_wrapper in context
         """
-        self.logger.info("🔗 [DEBUG] Preparing API registry connection for heartbeat")
+        self.logger.trace("🔗 Preparing API registry connection for heartbeat")
 
         try:
             # Check if registry_wrapper already exists in context
             registry_wrapper = context.get("registry_wrapper")
             
             if registry_wrapper is not None:
-                self.logger.debug("✅ Registry wrapper already available in context")
+                self.logger.trace("✅ Registry wrapper already available in context")
                 return PipelineResult(
                     message="Registry connection already established",
                     context={"registry_wrapper": registry_wrapper}
@@ -69,7 +69,7 @@ class APIRegistryConnectionStep(PipelineStep):
                 rule=ValidationRule.URL_RULE,
             )
 
-            self.logger.debug(f"🔍 Using registry URL: {registry_url}")
+            self.logger.trace(f"🔍 Using registry URL: {registry_url}")
 
             # Create registry client wrapper
             from ...generated.mcp_mesh_registry_client.api_client import ApiClient
@@ -80,7 +80,7 @@ class APIRegistryConnectionStep(PipelineStep):
             api_client = ApiClient(configuration=config)
             registry_wrapper = RegistryClientWrapper(api_client)
 
-            self.logger.info(f"🔗 API registry connection prepared: {registry_url}")
+            self.logger.trace(f"🔗 API registry connection prepared: {registry_url}")
 
             return PipelineResult(
                 message=f"Registry connection prepared for {registry_url}",

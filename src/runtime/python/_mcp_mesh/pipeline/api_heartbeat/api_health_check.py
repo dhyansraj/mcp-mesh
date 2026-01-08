@@ -38,7 +38,7 @@ class APIHealthCheckStep(PipelineStep):
         Returns:
             PipelineResult with health_status in context
         """
-        self.logger.info("🏥 [DEBUG] Checking FastAPI application health status")
+        self.logger.trace("🏥 Checking FastAPI application health status")
 
         try:
             # Get FastAPI app from context
@@ -66,7 +66,7 @@ class APIHealthCheckStep(PipelineStep):
             routes_with_mesh = self._count_mesh_routes(fastapi_app)
             total_routes = len(getattr(fastapi_app, "routes", []))
 
-            self.logger.debug(
+            self.logger.trace(
                 f"🔍 FastAPI app health: {app_title} v{app_version}, "
                 f"{routes_with_mesh}/{total_routes} routes with mesh injection"
             )
@@ -91,7 +91,7 @@ class APIHealthCheckStep(PipelineStep):
                 }
             }
 
-            self.logger.info(
+            self.logger.trace(
                 f"🏥 API health check passed: {app_title} v{app_version} "
                 f"({routes_with_mesh} mesh routes)"
             )

@@ -73,7 +73,7 @@ class APIFastHeartbeatStep(PipelineStep):
 
             # Log status and action with API-specific messaging
             if status == FastHeartbeatStatus.NO_CHANGES:
-                self.logger.info(
+                self.logger.trace(
                     f"✅ API fast heartbeat: No changes detected for service '{service_id}'"
                 )
             elif status == FastHeartbeatStatus.TOPOLOGY_CHANGED:
