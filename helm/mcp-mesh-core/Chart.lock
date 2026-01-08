@@ -1,18 +1,18 @@
 dependencies:
 - name: mcp-mesh-postgres
   repository: file://../mcp-mesh-postgres
-  version: 0.7.20
+  version: 0.7.21
 - name: mcp-mesh-redis
   repository: file://../mcp-mesh-redis
-  version: 0.7.20
+  version: 0.7.21
 - name: mcp-mesh-registry
   repository: file://../mcp-mesh-registry
-  version: 0.7.20
+  version: 0.7.21
 - name: mcp-mesh-grafana
   repository: file://../mcp-mesh-grafana
-  version: 0.7.20
+  version: 0.7.21
 - name: mcp-mesh-tempo
   repository: file://../mcp-mesh-tempo
-  version: 0.7.20
+  version: 0.7.21
 digest: sha256:ea586eae084429c3d4db4d93c4170cc4deb7d01c652b9402e7d71e774040d2e1
 generated: "2026-01-03T23:30:00.000000-05:00"
