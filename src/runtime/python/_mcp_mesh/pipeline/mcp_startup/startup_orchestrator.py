@@ -197,15 +197,21 @@ class DebounceCoordinator:
                     )
                     return  # Don't block - let user's uvicorn run
                 elif fastapi_app and binding_config:
-                    # For MCP agents - use same daemon thread pattern as API apps
-                    from ..mcp_heartbeat.lifespan_integration import (
-                        heartbeat_lifespan_task,
-                    )
+                    # For MCP agents - use heartbeat task function from config
+                    # HeartbeatLoopStep sets this to rust_heartbeat_task if available
+                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
+                    if heartbeat_task_fn is None:
+                        # Fallback to Python implementation if not specified
+                        from ..mcp_heartbeat.lifespan_integration import (
+                            heartbeat_lifespan_task,
+                        )
+
+                        heartbeat_task_fn = heartbeat_lifespan_task
 
                     self._setup_heartbeat_background(
                         heartbeat_config,
                         pipeline_context,
-                        heartbeat_lifespan_task,
+                        heartbeat_task_fn,
                     )
 
                     # Check if server was already reused from immediate uvicorn start
@@ -370,7 +376,9 @@ class DebounceCoordinator:
 
             def run_heartbeat():
                 """Run heartbeat in separate thread with its own event loop."""
-                self.logger.debug(f"Starting background heartbeat thread for {entity_id}")
+                self.logger.debug(
+                    f"Starting background heartbeat thread for {entity_id}"
+                )
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)

@@ -245,3 +245,4 @@ helm/*/charts/*.tgz
 helm/mcp-mesh-grafana/files/
 helm/mcp-mesh-tempo/files/
 *.DS_Store
+rust-core-implementation.org
