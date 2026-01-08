@@ -100,6 +100,8 @@ impl AgentRuntime {
             }
 
             if self.state_machine.is_shutting_down() {
+                // Gracefully unregister from registry before stopping
+                self.unregister_from_registry().await;
                 break;
             }
 
@@ -145,6 +147,28 @@ impl AgentRuntime {
         // Send shutdown event
         let _ = self.event_tx.send(MeshEvent::shutdown()).await;
         info!("Agent runtime for '{}' stopped", self.spec.name);
+    }
+
+    /// Unregister the agent from the registry during shutdown.
+    ///
+    /// This ensures immediate topology update for dependent agents
+    /// instead of waiting for the heartbeat timeout.
+    async fn unregister_from_registry(&self) {
+        let agent_id = self.spec.agent_id();
+        info!("Unregistering agent '{}' from registry", agent_id);
+
+        match self.registry_client.unregister_agent(&agent_id).await {
+            Ok(()) => {
+                info!("Agent '{}' unregistered successfully", agent_id);
+            }
+            Err(e) => {
+                // Log but don't fail shutdown - network issues shouldn't block shutdown
+                warn!(
+                    "Failed to unregister agent '{}' (continuing shutdown): {}",
+                    agent_id, e
+                );
+            }
+        }
     }
 
     /// Send a fast heartbeat check (HEAD request).

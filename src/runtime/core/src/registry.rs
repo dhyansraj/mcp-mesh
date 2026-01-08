@@ -310,6 +310,49 @@ impl RegistryClient {
         let request = HeartbeatRequest::from_spec(spec, health_status);
         self.send_heartbeat(&request).await
     }
+
+    /// Unregister an agent from the registry (DELETE request).
+    ///
+    /// Called during graceful shutdown to immediately remove the agent
+    /// from the registry. This triggers topology change events for
+    /// dependent agents.
+    pub async fn unregister_agent(&self, agent_id: &str) -> Result<(), RegistryError> {
+        let url = format!("{}/agents/{}", self.base_url, agent_id);
+
+        info!("Unregistering agent '{}' from registry", agent_id);
+
+        match self.client.delete(&url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() || status.as_u16() == 404 {
+                    // 200/204 = success, 404 = already gone (both are fine)
+                    info!(
+                        "Agent '{}' unregistered successfully (HTTP {})",
+                        agent_id,
+                        status.as_u16()
+                    );
+                    Ok(())
+                } else {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!(
+                        "Failed to unregister agent '{}': HTTP {} - {}",
+                        agent_id,
+                        status.as_u16(),
+                        body
+                    );
+                    Err(RegistryError::RegistryError {
+                        status: status.as_u16(),
+                        message: body,
+                    })
+                }
+            }
+            Err(e) => {
+                warn!("Network error unregistering agent '{}': {}", agent_id, e);
+                // Don't fail shutdown due to network error
+                Err(RegistryError::Network(e))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

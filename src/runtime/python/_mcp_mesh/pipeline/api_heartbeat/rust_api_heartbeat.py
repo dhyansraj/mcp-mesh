@@ -342,14 +342,14 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
     try:
         core = _get_rust_core()
-    except ImportError:
-        logger.warning(
-            "Rust core not available for API service, falling back to Python heartbeat"
+    except ImportError as e:
+        logger.error(
+            f"Rust core not available for API service '{service_id}': {e}. "
+            "The mcp_mesh_core module must be built and installed."
         )
-        from .api_lifespan_integration import _python_api_heartbeat_task
-
-        await _python_api_heartbeat_task(heartbeat_config)
-        return
+        raise RuntimeError(
+            f"Rust core (mcp_mesh_core) is required but not available: {e}"
+        ) from e
 
     logger.info(f"Starting Rust-backed heartbeat for API service '{service_id}'")
 
@@ -377,8 +377,13 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                 pass
 
             try:
-                # Wait for next event from Rust core
-                event = await handle.next_event()
+                # Wait for next event from Rust core with timeout
+                # Timeout allows periodic shutdown checks
+                try:
+                    event = await asyncio.wait_for(handle.next_event(), timeout=1.0)
+                except TimeoutError:
+                    # No event in 1 second, loop back to check shutdown signal
+                    continue
 
                 if event.event_type == "shutdown":
                     logger.info(f"Rust core shutdown for API service '{service_id}'")
@@ -395,8 +400,5 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         logger.info(f"Rust API heartbeat task cancelled for service '{service_id}'")
         raise
     except Exception as e:
-        logger.error(f"Rust API heartbeat failed: {e}, falling back to Python")
-        # Fallback to Python heartbeat
-        from .api_lifespan_integration import _python_api_heartbeat_task
-
-        await _python_api_heartbeat_task(heartbeat_config)
+        logger.error(f"Rust API heartbeat failed for service '{service_id}': {e}")
+        raise

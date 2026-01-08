@@ -197,16 +197,14 @@ class DebounceCoordinator:
                     )
                     return  # Don't block - let user's uvicorn run
                 elif fastapi_app and binding_config:
-                    # For MCP agents - use heartbeat task function from config
-                    # HeartbeatLoopStep sets this to rust_heartbeat_task if available
+                    # For MCP agents - use Rust-backed heartbeat task from config
+                    # HeartbeatLoopStep sets this to rust_heartbeat_task
                     heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
                     if heartbeat_task_fn is None:
-                        # Fallback to Python implementation if not specified
-                        from ..mcp_heartbeat.lifespan_integration import (
-                            heartbeat_lifespan_task,
-                        )
+                        # Rust heartbeat is required - no Python fallback
+                        from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
-                        heartbeat_task_fn = heartbeat_lifespan_task
+                        heartbeat_task_fn = rust_heartbeat_task
 
                     self._setup_heartbeat_background(
                         heartbeat_config,

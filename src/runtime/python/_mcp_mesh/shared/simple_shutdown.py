@@ -2,9 +2,9 @@
 Simple shutdown coordination for MCP Mesh agents.
 
 Provides clean shutdown via FastAPI lifespan events and basic signal handling.
+The Rust core handles actual deregistration from the registry.
 """
 
-import asyncio
 import logging
 import signal
 from contextlib import asynccontextmanager
@@ -14,7 +14,12 @@ logger = logging.getLogger(__name__)
 
 
 class SimpleShutdownCoordinator:
-    """Lightweight shutdown coordination using FastAPI lifespan."""
+    """Lightweight shutdown coordination using FastAPI lifespan.
+
+    The Rust core handles registry deregistration automatically when
+    handle.shutdown() is called. This coordinator just manages the
+    shutdown signal flow between Python and Rust.
+    """
 
     def __init__(self):
         self._shutdown_requested = False
@@ -23,7 +28,7 @@ class SimpleShutdownCoordinator:
         self._shutdown_complete = False  # Flag to prevent race conditions
 
     def set_shutdown_context(self, registry_url: str, agent_id: str) -> None:
-        """Set context for shutdown cleanup."""
+        """Set context for shutdown (used for logging)."""
         self._registry_url = registry_url
         self._agent_id = agent_id
         logger.debug(
@@ -54,61 +59,17 @@ class SimpleShutdownCoordinator:
         self._shutdown_complete = True
         logger.debug("🏁 Shutdown marked as complete")
 
-    async def perform_registry_cleanup(self) -> None:
-        """Perform registry cleanup by calling DELETE /agents/{agent_id}."""
-        # Try to get the actual agent_id from DecoratorRegistry if available
-        actual_agent_id = self._agent_id
-        try:
-            from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-
-            agent_config = DecoratorRegistry.get_resolved_agent_config()
-            if agent_config and "agent_id" in agent_config:
-                resolved_agent_id = agent_config["agent_id"]
-                if resolved_agent_id and resolved_agent_id != "unknown":
-                    actual_agent_id = resolved_agent_id
-                    logger.debug(
-                        f"🔧 Using resolved agent_id from DecoratorRegistry: {actual_agent_id}"
-                    )
-        except Exception as e:
-            logger.debug(f"Could not get agent_id from DecoratorRegistry: {e}")
-
-        if (
-            not self._registry_url
-            or not actual_agent_id
-            or actual_agent_id == "unknown"
-        ):
-            logger.warning(
-                f"⚠️ Missing registry URL or agent ID for cleanup: registry_url={self._registry_url}, agent_id={actual_agent_id}"
-            )
-            return
-
-        try:
-            from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import (
-                ApiClient,
-            )
-            from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import (
-                Configuration,
-            )
-            from _mcp_mesh.shared.registry_client_wrapper import RegistryClientWrapper
-
-            config = Configuration(host=self._registry_url)
-            api_client = ApiClient(configuration=config)
-            registry_wrapper = RegistryClientWrapper(api_client)
-
-            success = await registry_wrapper.unregister_agent(actual_agent_id)
-            if success:
-                logger.info(f"✅ Agent '{actual_agent_id}' unregistered from registry")
-                self.mark_shutdown_complete()
-            else:
-                logger.warning(f"⚠️ Failed to unregister agent '{actual_agent_id}'")
-                self.mark_shutdown_complete()  # Mark complete even on failure to prevent loops
-
-        except Exception as e:
-            logger.error(f"❌ Registry cleanup error: {e}")
-            self.mark_shutdown_complete()  # Mark complete even on error to prevent loops
+    def request_shutdown(self) -> None:
+        """Request shutdown (called when lifespan exits)."""
+        self._shutdown_requested = True
+        logger.info(f"🔄 Shutdown requested for agent '{self._agent_id}'")
 
     def create_shutdown_lifespan(self, original_lifespan=None):
-        """Create lifespan function that includes registry cleanup."""
+        """Create lifespan function that signals shutdown on exit.
+
+        The Rust core will handle actual deregistration when it receives
+        the shutdown signal via handle.shutdown().
+        """
 
         @asynccontextmanager
         async def shutdown_lifespan(app):
@@ -120,10 +81,14 @@ class SimpleShutdownCoordinator:
             else:
                 yield
 
-            # Shutdown phase
-            logger.info("🔄 FastAPI shutdown initiated, performing registry cleanup...")
-            await self.perform_registry_cleanup()
-            logger.info("🏁 Registry cleanup completed")
+            # Shutdown phase - just signal, Rust handles deregistration
+            logger.info(
+                f"🔄 FastAPI shutdown initiated for agent '{self._agent_id}', "
+                "Rust core will handle deregistration"
+            )
+            self.request_shutdown()
+            self.mark_shutdown_complete()
+            logger.info("🏁 Shutdown signaled")
 
         return shutdown_lifespan
 
@@ -164,12 +129,15 @@ def start_blocking_loop_with_shutdown_support(thread) -> None:
     """
     Keep main thread alive while uvicorn in the thread handles requests.
 
-    Install signal handlers in main thread for proper registry cleanup since
+    Install signal handlers in main thread for proper shutdown signaling since
     signals to threads can be unreliable for FastAPI lifespan shutdown.
-    """
-    logger.info("🔒 MAIN THREAD: Installing signal handlers for registry cleanup")
 
-    # Install signal handlers for proper registry cleanup
+    Note: The Rust core handles registry deregistration automatically when
+    handle.shutdown() is called from the heartbeat task.
+    """
+    logger.info("🔒 MAIN THREAD: Installing signal handlers")
+
+    # Install signal handlers
     _simple_shutdown_coordinator.install_signal_handlers()
 
     logger.info(
@@ -184,34 +152,21 @@ def start_blocking_loop_with_shutdown_support(thread) -> None:
             # Check if shutdown was requested via signal
             if _simple_shutdown_coordinator.is_shutdown_requested():
                 logger.info(
-                    "🔄 MAIN THREAD: Shutdown requested, performing registry cleanup..."
+                    "🔄 MAIN THREAD: Shutdown requested, signaling heartbeat to stop..."
                 )
-
-                # Perform registry cleanup in main thread
-                import asyncio
-
-                try:
-                    # Run cleanup in main thread
-                    asyncio.run(_simple_shutdown_coordinator.perform_registry_cleanup())
-                except Exception as e:
-                    logger.error(f"❌ Registry cleanup error: {e}")
-
-                logger.info("🏁 MAIN THREAD: Registry cleanup completed, exiting")
+                # Mark shutdown complete so heartbeat task will call handle.shutdown()
+                # which triggers Rust core to deregister from registry
+                _simple_shutdown_coordinator.mark_shutdown_complete()
+                logger.info(
+                    "🏁 MAIN THREAD: Shutdown signaled, Rust core will handle deregistration"
+                )
                 break
 
     except KeyboardInterrupt:
+        logger.info("🔄 MAIN THREAD: KeyboardInterrupt received, signaling shutdown...")
+        _simple_shutdown_coordinator.mark_shutdown_complete()
         logger.info(
-            "🔄 MAIN THREAD: KeyboardInterrupt received, performing registry cleanup..."
+            "🏁 MAIN THREAD: Shutdown signaled, Rust core will handle deregistration"
         )
-
-        # Perform registry cleanup on Ctrl+C
-        import asyncio
-
-        try:
-            asyncio.run(_simple_shutdown_coordinator.perform_registry_cleanup())
-        except Exception as e:
-            logger.error(f"❌ Registry cleanup error: {e}")
-
-        logger.info("🏁 MAIN THREAD: Registry cleanup completed")
 
     logger.info("🏁 MAIN THREAD: Uvicorn thread completed")

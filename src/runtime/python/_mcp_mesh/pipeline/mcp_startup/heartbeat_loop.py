@@ -4,7 +4,6 @@ import os
 from typing import Any
 
 from ...shared.config_resolver import ValidationRule, get_config_value
-from ...shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
