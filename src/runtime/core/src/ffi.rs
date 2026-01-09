@@ -145,18 +145,22 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
         ..Default::default()
     };
 
-    // Spawn the agent runtime in a background task
+    // Create AgentRuntime synchronously to propagate initialization errors
     let spec_clone = spec.clone();
     let shared_state_clone = shared_state.clone();
-    runtime.spawn(async move {
-        match AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx) {
-            Ok(agent_runtime) => {
-                agent_runtime.run().await;
-            }
-            Err(e) => {
-                error!("FFI: Failed to create agent runtime: {}", e);
-            }
+    let agent_runtime = match runtime.block_on(async {
+        AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx)
+    }) {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("Failed to create agent runtime: {}", e));
+            return ptr::null_mut();
         }
+    };
+
+    // Spawn the run loop in a background task (runtime created successfully)
+    runtime.spawn(async move {
+        agent_runtime.run().await;
     });
 
     // Create the handle
