@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -120,7 +120,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -169,11 +169,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/runtime/core/target
+          key: ${{ runner.os }}-cargo-py-${{ matrix.python-version }}-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-py-${{ matrix.python-version }}-
+
+      - name: Build and install mcp_mesh_core
+        run: |
+          pip install maturin
+          cd ../core
+          maturin build --release
+          pip install target/wheels/*.whl
 
       - name: Install dependencies
         run: |
