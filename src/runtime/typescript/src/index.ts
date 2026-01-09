@@ -32,16 +32,25 @@
 // Main API
 export { mesh, MeshAgent } from "./agent.js";
 
+// Proxy utilities (for advanced use)
+export { createProxy, normalizeDependency } from "./proxy.js";
+
 // Types
 export type {
   AgentConfig,
   ResolvedAgentConfig,
   MeshToolDef,
   ToolMeta,
+  DependencySpec,
+  NormalizedDependency,
+  ResolvedDependency,
+  DependencyKwargs,
+  McpMeshAgent,
   JsAgentHandle,
   JsMeshEvent,
   JsAgentSpec,
   JsToolSpec,
+  JsDependencySpec,
 } from "./types.js";
 
 // Default export for convenience

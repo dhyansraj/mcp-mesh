@@ -257,10 +257,11 @@ impl AgentRuntime {
         let mut new_deps = HashMap::new();
 
         // The registry returns dependencies keyed by the function that NEEDS them,
-        // but each provider has the actual capability name we need to emit
+        // but each provider has the actual capability name we need to emit.
+        // A function can depend on MULTIPLE capabilities (e.g., math_greeting needs add AND multiply).
         for (_requesting_func, providers) in resolved {
-            // Take the first available/healthy provider
-            if let Some(provider) = providers.iter().find(|p| p.status == "available" || p.status == "healthy") {
+            // Process ALL available/healthy providers, not just the first one
+            for provider in providers.iter().filter(|p| p.status == "available" || p.status == "healthy") {
                 // Use the actual capability from the provider, not the key
                 new_deps.insert(
                     provider.capability.clone(),

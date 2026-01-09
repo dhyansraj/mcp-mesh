@@ -5,6 +5,7 @@
  * - Registration with mesh registry via Rust core
  * - Heartbeat management
  * - Tool/capability discovery
+ * - Dependency injection for tool functions
  * - Graceful shutdown
  */
 
@@ -16,6 +17,7 @@ import {
   type JsAgentSpec,
   type JsAgentHandle,
   type JsToolSpec,
+  type JsDependencySpec,
 } from "@mcpmesh/core";
 
 import type {
@@ -23,8 +25,11 @@ import type {
   ResolvedAgentConfig,
   MeshToolDef,
   ToolMeta,
+  McpMeshAgent,
+  NormalizedDependency,
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix } from "./config.js";
+import { createProxy, normalizeDependency } from "./proxy.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -52,6 +57,7 @@ function scheduleAutoStart(): void {
  * - Automatic registration with the mesh registry
  * - Heartbeat management via Rust core
  * - Tool/capability discovery
+ * - Dependency injection for tool functions
  */
 export class MeshAgent {
   private server: FastMCP;
@@ -60,6 +66,12 @@ export class MeshAgent {
   private tools: Map<string, ToolMeta> = new Map();
   private handle: JsAgentHandle | null = null;
   private started = false;
+
+  /**
+   * Resolved dependencies: capability -> proxy
+   * Updated when dependency_available/unavailable events arrive.
+   */
+  private resolvedDeps: Map<string, McpMeshAgent> = new Map();
 
   constructor(server: FastMCP, config: AgentConfig) {
     this.server = server;
@@ -79,30 +91,48 @@ export class MeshAgent {
    * Add a tool to the agent.
    *
    * This registers the tool with both fastmcp (for MCP protocol) and
-   * the mesh (for capability discovery).
+   * the mesh (for capability discovery). If the tool has dependencies,
+   * they will be injected positionally at runtime.
    */
   addTool<T extends z.ZodType>(def: MeshToolDef<T>): this {
-    // Register with fastmcp
-    // Wrap execute to ensure it returns a Promise
+    const toolName = def.name;
     const execute = def.execute;
+
+    // Normalize dependencies
+    const normalizedDeps: NormalizedDependency[] = (def.dependencies ?? []).map(
+      normalizeDependency
+    );
+
+    // Create wrapper that injects dependencies positionally
+    const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
+      // Build positional deps array
+      const depsArray: (McpMeshAgent | null)[] = normalizedDeps.map(
+        (dep) => this.resolvedDeps.get(dep.capability) ?? null
+      );
+
+      // Call original with args + positional deps
+      const result = await execute(args, ...depsArray);
+      return result;
+    };
+
+    // Register with fastmcp
     this.server.addTool({
-      name: def.name,
+      name: toolName,
       description: def.description,
       parameters: def.parameters,
-      execute: async (args) => {
-        const result = await execute(args);
-        return result;
-      },
+      execute: wrappedExecute,
     });
 
     // Store mesh metadata with JSON Schema for LLM tool resolution
     const inputSchema = this.convertZodToJsonSchema(def.parameters);
-    this.tools.set(def.name, {
-      capability: def.capability ?? def.name,
+    this.tools.set(toolName, {
+      capability: def.capability ?? toolName,
       version: def.version ?? "1.0.0",
       tags: def.tags ?? [],
       description: def.description ?? "",
       inputSchema: JSON.stringify(inputSchema),
+      dependencies: normalizedDeps,
+      dependencyKwargs: def.dependencyKwargs,
     });
 
     return this;
@@ -131,6 +161,7 @@ export class MeshAgent {
       transportType: "httpStream",
       httpStream: {
         port: this.config.port,
+        host: "0.0.0.0", // Listen on all interfaces so external IPs work
         stateless: true,
       },
     });
@@ -187,7 +218,14 @@ export class MeshAgent {
         version: meta.version,
         tags: meta.tags,
         description: meta.description,
-        dependencies: [],
+        // Pass dependencies to Rust core for registry resolution
+        dependencies: meta.dependencies.map(
+          (dep): JsDependencySpec => ({
+            capability: dep.capability,
+            tags: dep.tags,
+            version: dep.version,
+          })
+        ),
         inputSchema: meta.inputSchema,
       })
     );
@@ -207,7 +245,11 @@ export class MeshAgent {
     // Start the agent via Rust core
     this.handle = startAgent(spec);
 
-    console.log(`Registered ${tools.length} capabilities with registry`);
+    // Count total dependencies
+    const totalDeps = tools.reduce((sum, t) => sum + t.dependencies.length, 0);
+    console.log(
+      `Registered ${tools.length} capabilities with registry (${totalDeps} dependencies)`
+    );
 
     // Start event loop (runs in background)
     this.runEventLoop();
@@ -233,13 +275,26 @@ export class MeshAgent {
             break;
 
           case "dependency_available":
-            console.log(
-              `Dependency available: ${event.capability} at ${event.endpoint}`
+            this.handleDependencyAvailable(
+              event.capability!,
+              event.endpoint!,
+              event.functionName!,
+              event.agentId!
             );
             break;
 
           case "dependency_unavailable":
-            console.log(`Dependency unavailable: ${event.capability}`);
+            this.handleDependencyUnavailable(event.capability!);
+            break;
+
+          case "dependency_changed":
+            // Handle as available with new endpoint
+            this.handleDependencyAvailable(
+              event.capability!,
+              event.endpoint!,
+              event.functionName!,
+              event.agentId!
+            );
             break;
 
           case "registry_connected":
@@ -263,6 +318,57 @@ export class MeshAgent {
         break;
       }
     }
+  }
+
+  /**
+   * Handle dependency_available event.
+   * Creates or updates proxy for the capability.
+   */
+  private handleDependencyAvailable(
+    capability: string,
+    endpoint: string,
+    functionName: string,
+    agentId: string
+  ): void {
+    // Find kwargs for this dependency (from any tool that uses it)
+    let kwargs = undefined;
+    for (const meta of this.tools.values()) {
+      if (meta.dependencyKwargs?.[capability]) {
+        kwargs = meta.dependencyKwargs[capability];
+        break;
+      }
+    }
+
+    // Create proxy
+    const proxy = createProxy(endpoint, capability, functionName, kwargs);
+    this.resolvedDeps.set(capability, proxy);
+
+    console.log(
+      `Dependency available: ${capability} at ${endpoint} (agent: ${agentId})`
+    );
+  }
+
+  /**
+   * Handle dependency_unavailable event.
+   * Removes proxy for the capability.
+   */
+  private handleDependencyUnavailable(capability: string): void {
+    this.resolvedDeps.delete(capability);
+    console.log(`Dependency unavailable: ${capability}`);
+  }
+
+  /**
+   * Get a resolved dependency proxy by capability name.
+   */
+  getDependency(capability: string): McpMeshAgent | null {
+    return this.resolvedDeps.get(capability) ?? null;
+  }
+
+  /**
+   * Get all resolved dependencies.
+   */
+  getAllDependencies(): Map<string, McpMeshAgent> {
+    return new Map(this.resolvedDeps);
   }
 
   /**

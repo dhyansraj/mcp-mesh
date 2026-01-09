@@ -1,0 +1,20 @@
+{
+  "name": "greeter-example",
+  "version": "1.0.0",
+  "description": "MCP Mesh Greeter Agent - Dependency Injection Example",
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/core": "file:../../../src/runtime/core/typescript",
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "fastmcp": "^3.26.8",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4",
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3"
+  }
+}
