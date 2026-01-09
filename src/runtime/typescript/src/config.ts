@@ -1,34 +1,16 @@
 /**
  * Configuration utilities for MCP Mesh agents.
  *
- * Handles environment variable resolution with proper priority:
- * ENV > config > defaults
+ * All configuration resolution is delegated to Rust core for consistency
+ * across all language SDKs. Priority: ENV > config > defaults
  */
 
 import { randomBytes } from "crypto";
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
-import { resolveExternalHost } from "./host-resolver.js";
-
-/**
- * Get environment variable as string, or return default.
- */
-export function getEnvString(key: string, defaultValue: string): string {
-  return process.env[key] ?? defaultValue;
-}
-
-/**
- * Get environment variable as integer, or return default.
- */
-export function getEnvInt(key: string, defaultValue: number): number {
-  const value = process.env[key];
-  if (value) {
-    const parsed = parseInt(value, 10);
-    if (!isNaN(parsed)) {
-      return parsed;
-    }
-  }
-  return defaultValue;
-}
+import {
+  resolveConfig as rustResolveConfig,
+  resolveConfigInt,
+} from "@mcpmesh/core";
 
 /**
  * Generate a short UUID suffix (8 hex chars) for agent IDs.
@@ -38,9 +20,12 @@ export function generateAgentIdSuffix(): string {
 }
 
 /**
- * Resolve configuration with environment variable precedence.
+ * Resolve configuration with environment variable precedence via Rust core.
  *
- * Priority: ENV > config > defaults
+ * All resolution is delegated to Rust core to ensure consistent behavior
+ * across Python and TypeScript SDKs.
+ *
+ * Priority (handled by Rust): ENV > config > defaults
  *
  * Environment variables:
  * - MCP_MESH_AGENT_NAME: Override agent name
@@ -51,21 +36,20 @@ export function generateAgentIdSuffix(): string {
  * - MCP_MESH_HEALTH_INTERVAL: Override heartbeat interval
  */
 export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
-  const resolvedName = getEnvString("MCP_MESH_AGENT_NAME", config.name);
-  const resolvedPort = getEnvInt("MCP_MESH_HTTP_PORT", config.port);
-  const resolvedHost = resolveExternalHost(config.host);
-  const resolvedNamespace = getEnvString(
-    "MCP_MESH_NAMESPACE",
-    config.namespace ?? "default"
+  // All config resolution via Rust core - ensures consistent ENV > param > default
+  const resolvedName = rustResolveConfig("agent_name", config.name);
+  const resolvedPort = resolveConfigInt("http_port", config.port) ?? config.port;
+  const resolvedHost = rustResolveConfig("http_host", config.host ?? null);
+  const resolvedNamespace = rustResolveConfig(
+    "namespace",
+    config.namespace ?? null
   );
-  const resolvedRegistryUrl = getEnvString(
-    "MCP_MESH_REGISTRY_URL",
-    config.registryUrl ?? "http://localhost:8000"
+  const resolvedRegistryUrl = rustResolveConfig(
+    "registry_url",
+    config.registryUrl ?? null
   );
-  const resolvedHeartbeatInterval = getEnvInt(
-    "MCP_MESH_HEALTH_INTERVAL",
-    config.heartbeatInterval ?? 5
-  );
+  const resolvedHeartbeatInterval =
+    resolveConfigInt("health_interval", config.heartbeatInterval ?? null) ?? 5;
 
   return {
     name: resolvedName,

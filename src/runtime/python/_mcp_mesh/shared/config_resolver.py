@@ -1,17 +1,32 @@
 """
 Configuration value resolver with validation rules.
 
-Provides centralized environment variable handling with consistent validation
-and graceful error handling with fallback to defaults.
+Delegates config resolution to Rust core for MCP Mesh config keys to ensure
+consistent behavior across all language SDKs. Non-mesh config uses Python fallback.
+
+Resolution priority (handled by Rust core): ENV > override > default
 """
 
 import logging
-import os
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 from urllib.parse import urlparse
 
+import mcp_mesh_core
+
 logger = logging.getLogger(__name__)
+
+# Map env var names to Rust config key names
+_ENV_TO_RUST_KEY: dict[str, str] = {
+    "MCP_MESH_REGISTRY_URL": "registry_url",
+    "MCP_MESH_HTTP_HOST": "http_host",
+    "MCP_MESH_HTTP_PORT": "http_port",
+    "MCP_MESH_NAMESPACE": "namespace",
+    "MCP_MESH_AGENT_NAME": "agent_name",
+    "MCP_MESH_HEALTH_INTERVAL": "health_interval",
+    "MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "distributed_tracing_enabled",
+    "REDIS_URL": "redis_url",
+}
 
 
 class ValidationRule(Enum):
@@ -41,6 +56,9 @@ def get_config_value(
     Resolve configuration value with precedence: ENV > override > default
     Then validate against the specified rule.
 
+    For MCP Mesh config keys (MCP_MESH_*, REDIS_URL), resolution is delegated
+    to Rust core for consistency across all language SDKs.
+
     Args:
         env_var: Environment variable name
         override: Programmatic override value
@@ -53,87 +71,75 @@ def get_config_value(
     Raises:
         ConfigResolutionError: If validation fails and no valid default
     """
-    # Step 1: Determine raw value following precedence order
-    raw_value = None
-    source = "default"
+    # Check if this is a known mesh config key - delegate to Rust core
+    rust_key = _ENV_TO_RUST_KEY.get(env_var)
+    if rust_key is not None:
+        raw_value = _resolve_via_rust(rust_key, override, default, rule)
+    else:
+        # Non-mesh config - use Python fallback
+        raw_value = _resolve_via_python(env_var, override, default)
 
-    # Check environment variable first (highest precedence)
+    # Validate and convert the value
+    try:
+        return _validate_value(raw_value, rule, env_var)
+    except ConfigResolutionError as e:
+        logger.error(f"Config validation failed for {env_var}: {e}")
+        # Try fallback to default if validation failed
+        if default is not None and raw_value != default:
+            try:
+                return _validate_value(default, rule, env_var)
+            except ConfigResolutionError:
+                pass
+        return None
+
+
+def _resolve_via_rust(
+    rust_key: str, override: Any, default: Any, rule: ValidationRule
+) -> Any:
+    """Resolve config value via Rust core."""
+    # Convert override to string for Rust (it expects Option<String>)
+    param_str = str(override) if override is not None else None
+
+    # Use appropriate Rust function based on validation rule
+    if rule == ValidationRule.TRUTHY_RULE:
+        # Boolean resolution
+        param_bool = None
+        if override is not None:
+            if isinstance(override, bool):
+                param_bool = override
+            elif isinstance(override, str):
+                param_bool = override.lower() in ("true", "1", "yes", "on")
+            else:
+                param_bool = bool(override)
+        return mcp_mesh_core.resolve_config_bool_py(rust_key, param_bool)
+
+    elif rule in (ValidationRule.PORT_RULE, ValidationRule.NONZERO_RULE):
+        # Integer resolution
+        param_int = None
+        if override is not None:
+            try:
+                param_int = int(override)
+            except (ValueError, TypeError):
+                pass
+        result = mcp_mesh_core.resolve_config_int_py(rust_key, param_int)
+        return result if result is not None else default
+
+    else:
+        # String resolution (default)
+        return mcp_mesh_core.resolve_config_py(rust_key, param_str)
+
+
+def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:
+    """Resolve config value via Python os.environ (fallback for non-mesh config)."""
+    import os
+
     env_value = os.environ.get(env_var)
     if env_value is not None:
-        raw_value = env_value
-        source = "environment"
-    # Check override value second
+        return env_value
     elif override is not None:
-        raw_value = override
-        source = "override"
-    # Use default value last
+        return override
     else:
-        raw_value = default
-        source = "default"
-
-    # Step 2: Validate and convert the value
-    try:
-        validated_value = _validate_value(raw_value, rule, env_var)
-        return validated_value
-
-    except ConfigResolutionError as e:
-        # If validation fails, log error and try to fall back following precedence order
-        logger.error(f"Config validation failed for {env_var}: {e}")
-
-        # Try fallback in precedence order: env > override > default
-        if source == "environment" and override is not None:
-            # Environment failed, try override
-            try:
-                logger.warning(
-                    f"Falling back to override value for {env_var}: {override}"
-                )
-                validated_override = _validate_value(override, rule, env_var)
-                return validated_override
-            except ConfigResolutionError:
-                # Override also failed, try default
-                if default is not None:
-                    try:
-                        logger.warning(
-                            f"Falling back to default value for {env_var}: {default}"
-                        )
-                        validated_default = _validate_value(default, rule, env_var)
-                        return validated_default
-                    except ConfigResolutionError:
-                        logger.error(
-                            f"All values for {env_var} are invalid, using None"
-                        )
-                        return None
-                else:
-                    logger.error(
-                        f"Override and default values for {env_var} are invalid, using None"
-                    )
-                    return None
-        elif source == "environment" and default is not None:
-            # Environment failed and no override, try default
-            try:
-                logger.warning(
-                    f"Falling back to default value for {env_var}: {default}"
-                )
-                validated_default = _validate_value(default, rule, env_var)
-                return validated_default
-            except ConfigResolutionError:
-                logger.error(f"Default value for {env_var} is also invalid, using None")
-                return None
-        elif source == "override" and default is not None:
-            # Override failed, try default
-            try:
-                logger.warning(
-                    f"Falling back to default value for {env_var}: {default}"
-                )
-                validated_default = _validate_value(default, rule, env_var)
-                return validated_default
-            except ConfigResolutionError:
-                logger.error(f"Default value for {env_var} is also invalid, using None")
-                return None
-        else:
-            # Already tried the last option or no fallbacks available
-            logger.error(f"No valid fallback for {env_var}, using None")
-            return None
+        return default
 
 
 def _validate_value(value: Any, rule: ValidationRule, env_var: str) -> Any:
