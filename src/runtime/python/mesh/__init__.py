@@ -19,7 +19,8 @@ Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
 from . import decorators
-from .types import LlmMeta, McpMeshAgent, MeshContextModel, MeshLlmAgent, MeshLlmRequest
+from .types import (LlmMeta, McpMeshAgent, MeshContextModel, MeshLlmAgent,
+                    MeshLlmRequest)
 
 # Note: helpers.llm_provider is imported lazily in __getattr__ to avoid
 # initialization timing issues with @mesh.agent auto_run in tests

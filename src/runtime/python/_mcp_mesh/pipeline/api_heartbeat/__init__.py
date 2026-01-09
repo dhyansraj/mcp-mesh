@@ -8,11 +8,9 @@ Uses Rust core for registry communication, dependency resolution,
 and deregistration.
 """
 
-from .api_lifespan_integration import (
-                                       api_heartbeat_lifespan_task,
+from .api_lifespan_integration import (api_heartbeat_lifespan_task,
                                        create_api_lifespan_handler,
-                                       integrate_api_heartbeat_with_fastapi,
-)
+                                       integrate_api_heartbeat_with_fastapi)
 from .rust_api_heartbeat import rust_api_heartbeat_task
 
 __all__ = [

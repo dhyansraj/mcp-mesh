@@ -37,9 +37,7 @@ class RouteCollectionStep(PipelineStep):
             # Update result message
             result.message = f"Collected {len(mesh_routes)} routes"
 
-            self.logger.info(
-                f"📦 Collected decorators: {len(mesh_routes)} @mesh.route"
-            )
+            self.logger.info(f"📦 Collected decorators: {len(mesh_routes)} @mesh.route")
 
             # Validate we have routes to process
             if len(mesh_routes) == 0:

@@ -7,7 +7,6 @@ Tests the centralized host resolution logic for different deployment scenarios.
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 # Import the class under test
 from _mcp_mesh.shared.host_resolver import HostResolver
 

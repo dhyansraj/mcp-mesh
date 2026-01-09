@@ -73,7 +73,9 @@ class ProviderHandlerRegistry:
             )
 
         cls._handlers[vendor] = handler_class
-        logger.info(f"📝 Registered provider handler: {vendor} -> {handler_class.__name__}")
+        logger.info(
+            f"📝 Registered provider handler: {vendor} -> {handler_class.__name__}"
+        )
 
         # Clear cached instance if it exists (force re-instantiation)
         if vendor in cls._instances:
@@ -119,9 +121,7 @@ class ProviderHandlerRegistry:
         # Get handler class (or fallback to Generic)
         if vendor in cls._handlers:
             handler_class = cls._handlers[vendor]
-            logger.info(
-                f"✅ Selected {handler_class.__name__} for vendor: {vendor}"
-            )
+            logger.info(f"✅ Selected {handler_class.__name__} for vendor: {vendor}")
         else:
             handler_class = GenericHandler
             if vendor != "unknown":
@@ -132,7 +132,11 @@ class ProviderHandlerRegistry:
                 logger.debug("Using GenericHandler for unknown vendor")
 
         # Instantiate and cache
-        handler = handler_class() if handler_class != GenericHandler else GenericHandler(vendor)
+        handler = (
+            handler_class()
+            if handler_class != GenericHandler
+            else GenericHandler(vendor)
+        )
         cls._instances[vendor] = handler
 
         logger.debug(f"🆕 Instantiated handler: {handler}")

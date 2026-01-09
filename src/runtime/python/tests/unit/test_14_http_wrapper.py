@@ -8,7 +8,6 @@ into the main FastAPI application.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 # Import the class under test
 from _mcp_mesh.engine.http_wrapper import HttpMcpWrapper
 

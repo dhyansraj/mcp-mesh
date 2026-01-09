@@ -15,9 +15,8 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel, Field
-
 from mesh import MeshContextModel
+from pydantic import BaseModel, Field
 
 # Helper to get fixture paths - tests run from various directories
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
@@ -68,14 +67,16 @@ class TestMeshLlmAgentInjectorBasics:
 
     def test_injector_initialization(self):
         """Test MeshLlmAgentInjector can be initialized."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         injector = MeshLlmAgentInjector()
         assert injector is not None
 
     def test_injector_has_required_methods(self):
         """Test injector has all required methods."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         injector = MeshLlmAgentInjector()
         assert hasattr(injector, "process_llm_tools")
@@ -84,7 +85,8 @@ class TestMeshLlmAgentInjectorBasics:
 
     def test_injector_starts_with_empty_registry(self):
         """Test injector starts with no LLM agents registered."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         injector = MeshLlmAgentInjector()
         # Should have internal registry for tracking LLM agents
@@ -103,7 +105,8 @@ class TestProcessLLMTools:
 
     def test_process_empty_llm_tools(self):
         """Test processing empty llm_tools dict."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         injector = MeshLlmAgentInjector()
         llm_tools = {}
@@ -117,7 +120,8 @@ class TestProcessLLMTools:
         """Test processing llm_tools for a single LLM function."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry first
         def chat(msg: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
@@ -163,7 +167,8 @@ class TestProcessLLMTools:
         """Test processing llm_tools for multiple LLM functions."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register two functions with different names
         def chat_func(msg: str, llm: mesh.MeshLlmAgent = None):
@@ -219,7 +224,8 @@ class TestProcessLLMTools:
 
     def test_process_llm_tools_creates_unified_mcp_proxies(self):
         """Test that UnifiedMCPProxy instances are created for each tool."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         register_test_llm_function("chat_abc123")
@@ -263,7 +269,8 @@ class TestCreateInjectionWrapper:
     def test_create_wrapper_for_function_with_llm_parameter(self):
         """Test creating injection wrapper for function with MeshLlmAgent parameter."""
         import mesh
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         function_id = "chat_abc123"
@@ -289,7 +296,8 @@ class TestCreateInjectionWrapper:
     def test_wrapper_injects_llm_agent_on_call(self):
         """Test that wrapper injects MeshLlmAgent when function is called."""
         import mesh
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         function_id = "chat_abc123"
@@ -332,7 +340,8 @@ class TestCreateInjectionWrapper:
     def test_wrapper_preserves_original_function_metadata(self):
         """Test that wrapper preserves function name and signature."""
         import mesh
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         function_id = "chat_abc123"
@@ -354,7 +363,8 @@ class TestCreateInjectionWrapper:
 
     def test_error_when_function_has_no_llm_parameter(self):
         """Test error handling when function has no MeshLlmAgent parameter."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry (but it won't have the right param)
         function_id = "invalid_func"
@@ -379,7 +389,8 @@ class TestMeshLlmAgentInstantiation:
         """Test that MeshLlmAgent is created with config from DecoratorRegistry."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register an LLM function in DecoratorRegistry
         def test_func(msg: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
@@ -412,7 +423,8 @@ class TestMeshLlmAgentInstantiation:
         """Test that MeshLlmAgent has correct output type from function annotation."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         def advanced_chat(msg: str, llm: mesh.MeshLlmAgent = None) -> AdvancedResponse:
             return AdvancedResponse(result="test", metadata={})
@@ -444,7 +456,8 @@ class TestTopologyUpdates:
 
     def test_update_llm_tools_adds_new_tools(self):
         """Test that update_llm_tools adds new tools when topology changes."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         register_test_llm_function("chat_abc123")
@@ -477,7 +490,8 @@ class TestTopologyUpdates:
 
     def test_update_llm_tools_removes_tools(self):
         """Test that update_llm_tools removes tools when they leave."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         register_test_llm_function("chat_abc123")
@@ -508,7 +522,8 @@ class TestTopologyUpdates:
         """Test handling when entire LLM function is removed from topology."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register two functions with different names
         def chat_func(msg: str, llm: mesh.MeshLlmAgent = None):
@@ -554,7 +569,8 @@ class TestTopologyUpdates:
     def test_update_llm_tools_notifies_existing_wrappers(self):
         """Test that existing function wrappers are notified of tool updates."""
         import mesh
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         function_id = "chat_abc123"
@@ -598,7 +614,8 @@ class TestErrorHandling:
 
     def test_handles_missing_function_in_decorator_registry(self):
         """Test handling when function_id not found in DecoratorRegistry."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         injector = MeshLlmAgentInjector()
 
@@ -615,7 +632,8 @@ class TestErrorHandling:
 
     def test_handles_invalid_tool_endpoint(self):
         """Test handling of invalid tool endpoint format."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         register_test_llm_function("chat_abc123")
@@ -638,7 +656,8 @@ class TestErrorHandling:
 
     def test_handles_empty_tools_list_for_function(self):
         """Test handling when function has empty tools list (no matches from registry)."""
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function in DecoratorRegistry
         register_test_llm_function("chat_abc123")
@@ -662,7 +681,8 @@ class TestIntegrationWithDecoratorRegistry:
         """Test that injector reads LLM config from DecoratorRegistry."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Clear registry
         DecoratorRegistry._mesh_llm_agents = {}
@@ -698,7 +718,8 @@ class TestIntegrationWithDecoratorRegistry:
         """Test that injector uses output_type from DecoratorRegistry."""
         import mesh
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         DecoratorRegistry._mesh_llm_agents = {}
 
@@ -735,7 +756,8 @@ class TestContextExtractionWithTemplates:
     def test_create_llm_agent_with_template_path(self):
         """Test: MeshLlmAgent created with template_path from config."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function with template
         def chat(msg: str, ctx: ChatContext, llm=None):
@@ -775,16 +797,16 @@ class TestContextExtractionWithTemplates:
 
         # Verify template metadata is stored
         assert agent_data["config"]["is_template"] is True
-        assert (
-            agent_data["config"]["template_path"]
-            == str(TEMPLATES_DIR / "simple.jinja2")
+        assert agent_data["config"]["template_path"] == str(
+            TEMPLATES_DIR / "simple.jinja2"
         )
         assert agent_data["config"]["context_param"] == "ctx"
 
     def test_inject_llm_agent_detects_context_parameter(self):
         """Test: Context parameter detected during injection."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function with template and context param
         def chat(msg: str, ctx: ChatContext, llm=None):
@@ -833,7 +855,8 @@ class TestContextExtractionWithTemplates:
         """Test: MeshLlmAgent created with context value from call."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register async function with template
         async def chat(msg: str, ctx: ChatContext, llm: MeshLlmAgent = None):
@@ -884,7 +907,8 @@ class TestContextExtractionWithTemplates:
     def test_inject_llm_agent_without_template_uses_cached_agent(self):
         """Test: Without template, uses cached agent (existing behavior)."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function WITHOUT template
         def analyze(msg: str, llm=None):
@@ -929,7 +953,8 @@ class TestContextExtractionWithTemplates:
     def test_inject_llm_agent_extracts_context_from_kwargs(self):
         """Test: Context extracted from kwargs."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         def chat(msg: str, prompt_context: ChatContext, llm=None):
             return prompt_context
@@ -973,7 +998,8 @@ class TestContextExtractionWithTemplates:
     def test_inject_llm_agent_extracts_context_from_positional_args(self):
         """Test: Context extracted from positional args."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         def chat(msg: str, ctx: ChatContext, llm=None):
             return ctx
@@ -1018,7 +1044,8 @@ class TestContextExtractionWithTemplates:
         """Test: None context passed as empty dict."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         def chat(msg: str, ctx: Optional[ChatContext] = None, llm: MeshLlmAgent = None):
             # Check that llm was injected
@@ -1070,7 +1097,8 @@ class TestTemplateIntegrationInInjector:
         """Test: Complete flow from decorator to template rendering in LLM call."""
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
+        from _mcp_mesh.engine.mesh_llm_agent_injector import \
+            MeshLlmAgentInjector
 
         # Register function with template
         async def chat(msg: str, ctx: ChatContext, llm: MeshLlmAgent = None):

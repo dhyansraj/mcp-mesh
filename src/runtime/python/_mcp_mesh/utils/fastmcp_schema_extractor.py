@@ -274,7 +274,8 @@ class FastMCPSchemaExtractor:
             return schema
 
         # Get McpMeshAgent parameter names from signature analysis
-        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_parameter_names
+        from _mcp_mesh.engine.signature_analyzer import \
+            get_mesh_agent_parameter_names
 
         mesh_param_names = get_mesh_agent_parameter_names(function)
 

@@ -10,9 +10,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import FastAPIServerSetupStep
+from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import \
+    FastAPIServerSetupStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 

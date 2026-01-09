@@ -11,13 +11,10 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-
-from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
-
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.fastmcpserver_discovery import (
-    FastMCPServerDiscoveryStep,
-)
+from _mcp_mesh.pipeline.mcp_startup.fastmcpserver_discovery import \
+    FastMCPServerDiscoveryStep
+from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
 class TestFastMCPServerDiscoveryStep:

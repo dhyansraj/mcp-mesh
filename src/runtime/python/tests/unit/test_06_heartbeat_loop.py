@@ -9,11 +9,9 @@ from typing import Any, Dict
 from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
-
-from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
-
 # Import the classes under test
 from _mcp_mesh.pipeline.mcp_startup.heartbeat_loop import HeartbeatLoopStep
+from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
 class TestHeartbeatLoopStep:

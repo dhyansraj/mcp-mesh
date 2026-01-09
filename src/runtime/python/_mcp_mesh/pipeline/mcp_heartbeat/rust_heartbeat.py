@@ -401,7 +401,8 @@ async def _handle_dependency_change(
 
                 if is_self_dependency:
                     # Create self-dependency proxy
-                    from ...engine.self_dependency_proxy import SelfDependencyProxy
+                    from ...engine.self_dependency_proxy import \
+                        SelfDependencyProxy
 
                     wrapper_func = mesh_tools.get(function_name)
                     if wrapper_func:

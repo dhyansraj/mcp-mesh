@@ -11,13 +11,10 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction
-
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.heartbeat_preparation import (
-    HeartbeatPreparationStep,
-)
+from _mcp_mesh.pipeline.mcp_startup.heartbeat_preparation import \
+    HeartbeatPreparationStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 from _mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
@@ -1036,10 +1033,8 @@ class TestHeartbeatPreparationLLMFilter:
         """Test LLM filter integration with simple string filter."""
         from datetime import datetime
 
-        from _mcp_mesh.engine.decorator_registry import (
-            DecoratorRegistry,
-            LLMAgentMetadata,
-        )
+        from _mcp_mesh.engine.decorator_registry import (DecoratorRegistry,
+                                                         LLMAgentMetadata)
 
         # Clear registry first to ensure test isolation
         DecoratorRegistry._mesh_llm_agents.clear()
@@ -1097,10 +1092,8 @@ class TestHeartbeatPreparationLLMFilter:
         """Test LLM filter integration with dict filter."""
         from datetime import datetime
 
-        from _mcp_mesh.engine.decorator_registry import (
-            DecoratorRegistry,
-            LLMAgentMetadata,
-        )
+        from _mcp_mesh.engine.decorator_registry import (DecoratorRegistry,
+                                                         LLMAgentMetadata)
 
         # Register LLM agent with dict filter
         llm_metadata = LLMAgentMetadata(
@@ -1149,10 +1142,8 @@ class TestHeartbeatPreparationLLMFilter:
         """Test LLM filter integration with list of mixed filters."""
         from datetime import datetime
 
-        from _mcp_mesh.engine.decorator_registry import (
-            DecoratorRegistry,
-            LLMAgentMetadata,
-        )
+        from _mcp_mesh.engine.decorator_registry import (DecoratorRegistry,
+                                                         LLMAgentMetadata)
 
         # Register LLM agent with list filter
         llm_metadata = LLMAgentMetadata(
@@ -1252,10 +1243,8 @@ class TestHeartbeatPreparationLLMFilter:
         """Test LLM filter when filter is None (edge case)."""
         from datetime import datetime
 
-        from _mcp_mesh.engine.decorator_registry import (
-            DecoratorRegistry,
-            LLMAgentMetadata,
-        )
+        from _mcp_mesh.engine.decorator_registry import (DecoratorRegistry,
+                                                         LLMAgentMetadata)
 
         # Register LLM agent with None filter
         llm_metadata = LLMAgentMetadata(

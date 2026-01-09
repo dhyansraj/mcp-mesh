@@ -281,7 +281,8 @@ async def _handle_api_dependency_change(
 
                 if is_self_dependency:
                     # Self-dependency for API services - use SelfDependencyProxy
-                    from ...engine.self_dependency_proxy import SelfDependencyProxy
+                    from ...engine.self_dependency_proxy import \
+                        SelfDependencyProxy
 
                     # For API services, try to find the function in mesh tools
                     mesh_tools = DecoratorRegistry.get_mesh_tools()

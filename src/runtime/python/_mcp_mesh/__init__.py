@@ -14,7 +14,6 @@ Public API: import mesh
 
 import os
 import sys
-
 # Type alias for mesh agent proxy injections - use Any for Pydantic compatibility
 from typing import Any
 
@@ -23,13 +22,10 @@ from typing import Any
 from mesh.types import McpMeshAgent
 
 # Import all the existing exports
-from .engine.decorator_registry import (
-    DecoratedFunction,
-    DecoratorRegistry,
-    clear_decorator_registry,
-    get_all_mesh_agents,
-    get_decorator_stats,
-)
+from .engine.decorator_registry import (DecoratedFunction, DecoratorRegistry,
+                                        clear_decorator_registry,
+                                        get_all_mesh_agents,
+                                        get_decorator_stats)
 
 __version__ = "0.7.21"
 

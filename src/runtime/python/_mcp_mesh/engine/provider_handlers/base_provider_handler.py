@@ -46,7 +46,7 @@ class BaseProviderHandler(ABC):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]],
         output_type: type[BaseModel],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Prepare vendor-specific request parameters.
@@ -75,7 +75,7 @@ class BaseProviderHandler(ABC):
         self,
         base_prompt: str,
         tool_schemas: Optional[List[Dict[str, Any]]],
-        output_type: type[BaseModel]
+        output_type: type[BaseModel],
     ) -> str:
         """
         Format system prompt for vendor-specific requirements.

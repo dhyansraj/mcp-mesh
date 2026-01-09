@@ -7,11 +7,10 @@ Tests follow TDD approach - these should FAIL initially until decorator is imple
 import os
 from typing import get_type_hints
 
-import pytest
-from pydantic import BaseModel
-
 import mesh
+import pytest
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from pydantic import BaseModel
 
 
 class ChatResponse(BaseModel):

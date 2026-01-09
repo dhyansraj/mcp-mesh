@@ -431,7 +431,8 @@ class MeshLlmAgentInjector(BaseInjector):
                     if is_template:
                         # Templates enabled - create per-call agent with context
                         # Import signature analyzer for context detection
-                        from .signature_analyzer import get_context_parameter_name
+                        from .signature_analyzer import \
+                            get_context_parameter_name
 
                         # Detect context parameter
                         context_param_name = config_dict.get("context_param")

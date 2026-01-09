@@ -13,13 +13,10 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-
 # Import the classes under test
-from _mcp_mesh.engine.dependency_injector import (
-    DependencyInjector,
-    analyze_injection_strategy,
-    get_global_injector,
-)
+from _mcp_mesh.engine.dependency_injector import (DependencyInjector,
+                                                  analyze_injection_strategy,
+                                                  get_global_injector)
 
 
 class TestAnalyzeInjectionStrategy:

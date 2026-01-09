@@ -181,9 +181,8 @@ class DebounceCoordinator:
                     # For API services, ONLY do dependency injection - user controls their FastAPI server
                     # Dependency injection is already complete from pipeline execution
                     # Optionally start heartbeat in background (non-blocking)
-                    from ..api_heartbeat.api_lifespan_integration import (
-                        api_heartbeat_lifespan_task,
-                    )
+                    from ..api_heartbeat.api_lifespan_integration import \
+                        api_heartbeat_lifespan_task
 
                     self._setup_heartbeat_background(
                         heartbeat_config,
@@ -208,7 +207,8 @@ class DebounceCoordinator:
                                 f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
                             )
                         # Rust heartbeat is required - no Python fallback
-                        from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
+                        from ..mcp_heartbeat.rust_heartbeat import \
+                            rust_heartbeat_task
 
                         heartbeat_task_fn = rust_heartbeat_task
 

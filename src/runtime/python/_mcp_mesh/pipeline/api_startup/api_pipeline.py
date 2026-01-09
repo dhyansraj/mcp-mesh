@@ -43,22 +43,20 @@ class APIPipeline(MeshPipeline):
         """Setup the API pipeline steps."""
         # Essential API integration steps
         steps = [
-            RouteCollectionStep(),              # Collect @mesh.route decorators
-            FastAPIAppDiscoveryStep(),          # Find user's FastAPI app instances
-            RouteIntegrationStep(),             # Apply dependency injection to routes
-            TracingMiddlewareIntegrationStep(), # Add tracing middleware to FastAPI apps
-            APIServerSetupStep(),               # Prepare service registration metadata
+            RouteCollectionStep(),  # Collect @mesh.route decorators
+            FastAPIAppDiscoveryStep(),  # Find user's FastAPI app instances
+            RouteIntegrationStep(),  # Apply dependency injection to routes
+            TracingMiddlewareIntegrationStep(),  # Add tracing middleware to FastAPI apps
+            APIServerSetupStep(),  # Prepare service registration metadata
             # Note: Heartbeat integration will be added in next phase
             # Note: User controls FastAPI server startup (uvicorn/gunicorn)
         ]
 
         self.add_steps(steps)
         self.logger.debug(f"API pipeline configured with {len(steps)} steps")
-        
+
         # Log the pipeline strategy
         self.logger.info(
             f"🌐 [DEBUG] API Pipeline initialized: dependency injection for @mesh.route decorators"
         )
-        self.logger.debug(
-            f"📋 Pipeline steps: {[step.name for step in steps]}"
-        )
+        self.logger.debug(f"📋 Pipeline steps: {[step.name for step in steps]}")

@@ -10,12 +10,8 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 # Import shared utilities at module level to avoid circular imports during execution
-from .utils import (
-    generate_span_id,
-    get_agent_metadata_with_fallback,
-    is_tracing_enabled,
-    publish_trace_with_fallback,
-)
+from .utils import (generate_span_id, get_agent_metadata_with_fallback,
+                    is_tracing_enabled, publish_trace_with_fallback)
 
 logger = logging.getLogger(__name__)
 
