@@ -15,8 +15,6 @@ use crate::registry::FastHeartbeatStatus;
 pub enum HeartbeatState {
     /// Not yet registered with registry
     Unregistered,
-    /// Currently sending registration/heartbeat
-    Registering,
     /// Registered and healthy
     Healthy,
     /// Registered but degraded health
@@ -137,7 +135,6 @@ impl HeartbeatStateMachine {
     pub fn next_action(&self) -> HeartbeatAction {
         match self.state {
             HeartbeatState::Unregistered => HeartbeatAction::SendFull,
-            HeartbeatState::Registering => HeartbeatAction::Wait(Duration::from_millis(100)),
             HeartbeatState::Healthy | HeartbeatState::Degraded => {
                 if self.should_send_heartbeat() {
                     HeartbeatAction::SendFast
