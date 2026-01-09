@@ -229,12 +229,37 @@ impl HeartbeatRequest {
         let llm_agents: Vec<LlmAgentRegistration> = spec
             .llm_agents
             .iter()
-            .map(|a| LlmAgentRegistration {
-                function_id: a.function_id.clone(),
-                provider: serde_json::from_str(&a.provider).unwrap_or(serde_json::Value::Null),
-                filter: a.filter.as_ref().and_then(|f| serde_json::from_str(f).ok()),
-                filter_mode: a.filter_mode.clone(),
-                max_iterations: a.max_iterations,
+            .map(|a| {
+                let provider = match serde_json::from_str(&a.provider) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse provider JSON for LLM agent '{}': {}. Using null.",
+                            a.function_id, e
+                        );
+                        serde_json::Value::Null
+                    }
+                };
+                let filter = match a.filter.as_ref() {
+                    Some(f) => match serde_json::from_str(f) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            warn!(
+                                "Failed to parse filter JSON for LLM agent '{}': {}. Skipping filter.",
+                                a.function_id, e
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                LlmAgentRegistration {
+                    function_id: a.function_id.clone(),
+                    provider,
+                    filter,
+                    filter_mode: a.filter_mode.clone(),
+                    max_iterations: a.max_iterations,
+                }
             })
             .collect();
 
