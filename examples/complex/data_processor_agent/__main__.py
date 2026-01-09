@@ -8,14 +8,14 @@ This is the recommended way to run complex multi-file MCP Mesh agents
 as it properly handles module imports and dependencies.
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
 
 # Add the current directory to Python path for proper imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from .main import DataProcessorAgent, settings, logger
+from .main import DataProcessorAgent, logger, settings
 
 
 def main():
@@ -28,10 +28,10 @@ def main():
         print(f"📈 Metrics: {'Enabled' if settings.metrics_enabled else 'Disabled'}")
         print(f"🔗 Dependencies: {', '.join(settings.dependencies)}")
         print()
-        
+
         # Just import the main module - MCP Mesh will handle the rest!
         from .main import DataProcessorAgent
-        
+
         print("✅ Data Processor Agent configured successfully")
         print("🎯 Agent capabilities: data parsing, transformation, analysis, export")
         print("📁 Supported formats: csv, json, xlsx, parquet, tsv")
@@ -43,22 +43,22 @@ def main():
         print("   - Handle dependency injection")
         print()
         print("🛑 Press Ctrl+C to stop the agent")
-        
+
         # MCP Mesh auto_run=True will handle server startup
         # We just need to keep the process alive
         import signal
-        
+
         def signal_handler(sig, frame):
             print("\n🛑 Received shutdown signal")
             print("✅ Shutdown complete")
             sys.exit(0)
-        
+
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         # Keep process alive - MCP Mesh handles the server
         signal.pause()
-            
+
     except Exception as e:
         logger.error(f"Failed to start Data Processor Agent: {e}")
         print(f"❌ Error starting agent: {e}")

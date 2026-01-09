@@ -1,13 +1,14 @@
 """Settings and configuration management for the data processor agent."""
 
 import os
-from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 
 @dataclass
 class ProcessingLimits:
     """Limits for data processing operations."""
+
     max_file_size_mb: int = 100
     max_rows: int = 100000
     max_columns: int = 1000
@@ -17,7 +18,10 @@ class ProcessingLimits:
 @dataclass
 class ExportConfig:
     """Configuration for data export operations."""
-    supported_formats: list[str] = field(default_factory=lambda: ["csv", "json", "xlsx", "parquet"])
+
+    supported_formats: list[str] = field(
+        default_factory=lambda: ["csv", "json", "xlsx", "parquet"]
+    )
     default_format: str = "csv"
     compression: bool = True
     include_metadata: bool = True
@@ -26,28 +30,30 @@ class ExportConfig:
 @dataclass
 class Settings:
     """Main configuration settings for the data processor agent."""
-    
+
     # Agent identification
     agent_name: str = "data-processor"
     http_port: int = 9092
     version: str = "1.0.0"
-    
+
     # Processing configuration
     processing: ProcessingLimits = field(default_factory=ProcessingLimits)
     export: ExportConfig = field(default_factory=ExportConfig)
-    
+
     # External service dependencies
-    dependencies: list[str] = field(default_factory=lambda: ["weather-service", "llm-service"])
-    
+    dependencies: list[str] = field(
+        default_factory=lambda: ["weather-service", "llm-service"]
+    )
+
     # Storage and caching
     temp_dir: str = "/tmp/data_processor"
     cache_enabled: bool = True
     cache_ttl_seconds: int = 3600
-    
+
     # Logging and monitoring
     log_level: str = "INFO"
     metrics_enabled: bool = True
-    
+
     @classmethod
     def from_env(cls) -> "Settings":
         """Create settings from environment variables."""
