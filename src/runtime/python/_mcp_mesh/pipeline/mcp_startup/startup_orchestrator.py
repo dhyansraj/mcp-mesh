@@ -200,7 +200,13 @@ class DebounceCoordinator:
                     # For MCP agents - use Rust-backed heartbeat task from config
                     # HeartbeatLoopStep sets this to rust_heartbeat_task
                     heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
-                    if heartbeat_task_fn is None:
+
+                    # Validate heartbeat_task_fn is callable, fall back to Rust heartbeat if not
+                    if heartbeat_task_fn is None or not callable(heartbeat_task_fn):
+                        if heartbeat_task_fn is not None:
+                            self.logger.warning(
+                                f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
+                            )
                         # Rust heartbeat is required - no Python fallback
                         from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
