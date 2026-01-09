@@ -62,7 +62,8 @@ class SimpleShutdownCoordinator:
     def request_shutdown(self) -> None:
         """Request shutdown (called when lifespan exits)."""
         self._shutdown_requested = True
-        logger.info(f"🔄 Shutdown requested for agent '{self._agent_id}'")
+        agent_id = self._agent_id or "<unknown>"
+        logger.info(f"🔄 Shutdown requested for agent '{agent_id}'")
 
     def create_shutdown_lifespan(self, original_lifespan=None):
         """Create lifespan function that signals shutdown on exit.
@@ -70,6 +71,8 @@ class SimpleShutdownCoordinator:
         The Rust core will handle actual deregistration when it receives
         the shutdown signal via handle.shutdown().
         """
+        # Capture agent_id at creation time with fallback for None
+        agent_id = self._agent_id or "<unknown>"
 
         @asynccontextmanager
         async def shutdown_lifespan(app):
@@ -83,7 +86,7 @@ class SimpleShutdownCoordinator:
 
             # Shutdown phase - just signal, Rust handles deregistration
             logger.info(
-                f"🔄 FastAPI shutdown initiated for agent '{self._agent_id}', "
+                f"🔄 FastAPI shutdown initiated for agent '{agent_id}', "
                 "Rust core will handle deregistration"
             )
             self.request_shutdown()
