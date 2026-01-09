@@ -126,7 +126,8 @@ def _resolve_via_rust(
 
     else:
         # String resolution (default)
-        return mcp_mesh_core.resolve_config_py(rust_key, param_str)
+        result = mcp_mesh_core.resolve_config_py(rust_key, param_str)
+        return result if result else default
 
 
 def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:
