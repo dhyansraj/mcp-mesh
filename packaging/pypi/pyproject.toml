@@ -37,7 +37,7 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     # Rust core runtime (required - no Python fallback)
-    "mcp-mesh-core>=0.7.0",
+    "mcp-mesh-core>=0.8.0",
     "fastapi>=0.104.0,<1.0.0",
     "uvicorn>=0.24.0,<1.0.0",
     "httpx>=0.25.0,<1.0.0",
