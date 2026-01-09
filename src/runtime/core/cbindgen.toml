@@ -19,6 +19,15 @@ header = """
  *   4. Use mesh_next_event() to receive topology events
  *   5. Call mesh_shutdown() and mesh_free_handle() on cleanup
  *
+ * Functions:
+ *   - mesh_start_agent(spec_json) - Start an agent, returns handle
+ *   - mesh_next_event(handle, timeout_ms) - Poll for next event (JSON string)
+ *   - mesh_is_running(handle) - Check if agent is running (returns 1/0)
+ *   - mesh_report_health(handle, status_json) - Report health status (returns 0 on success, -1 on error)
+ *   - mesh_shutdown(handle) - Signal agent to shut down
+ *   - mesh_last_error() - Get last error message for current thread
+ *   - mesh_version() - Get library version string
+ *
  * Memory Management:
  *   - Strings returned by mesh_* functions must be freed with mesh_free_string()
  *   - Handles returned by mesh_start_agent() must be freed with mesh_free_handle()
