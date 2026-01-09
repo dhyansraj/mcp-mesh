@@ -107,10 +107,8 @@ jobs:
           echo "🤖 Generating Go server stubs..."
           ./tools/codegen/generate.sh go
 
-      - name: Generate Python client
-        run: |
-          echo "🤖 Generating Python client..."
-          ./tools/codegen/generate.sh python
+      # Note: Python registry client generation removed - registry communication
+      # is now handled by Rust core with hand-written clients
 
       - name: Check for code generation differences
         run: |
@@ -128,7 +126,6 @@ jobs:
           name: generated-code
           path: |
             src/core/registry/generated/
-            src/runtime/python/src/mcp_mesh/registry_client_generated/
 
   # Step 3: Detect Unauthorized Endpoints
   detect-endpoints:
@@ -199,10 +196,8 @@ jobs:
 
           # Code generation tools
           go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
-          npm install -g @openapitools/openapi-generator-cli
 
-          # Python dependencies
-          pip install -e src/runtime/python
+          # Python validation tools (for OpenAPI spec validation)
           pip install openapi-spec-validator jsonschema pyyaml
 
       - name: Regenerate code (ensure consistency)
@@ -221,18 +216,8 @@ jobs:
           go build -o bin/meshctl ./cmd/meshctl
           echo "✅ Go CLI built successfully"
 
-      - name: Test Python generated client
-        run: |
-          echo "🧪 Testing Python generated client import..."
-          cd src/runtime/python
-          python3 -c "
-          try:
-              from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
-              print('✅ Generated Python client imports successfully')
-          except ImportError as e:
-              print(f'❌ Generated Python client import failed: {e}')
-              exit(1)
-          "
+      # Note: Python generated client test removed - registry communication
+      # is now handled by Rust core (mcp_mesh_core module)
 
   # Step 5: Contract Validation Tests
   contract-tests:
