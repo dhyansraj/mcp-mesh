@@ -57,6 +57,8 @@ pub struct MeshAgentHandle {
     is_running: AtomicBool,
     /// Agent ID once registered
     agent_id: Option<String>,
+    /// Shared state with runtime (for health status updates)
+    shared_state: Arc<tokio::sync::RwLock<HandleState>>,
 }
 
 impl MeshAgentHandle {
@@ -164,6 +166,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
         runtime,
         is_running: AtomicBool::new(true),
         agent_id: None,
+        shared_state,
     });
 
     info!("FFI: Agent '{}' started successfully", spec.name);
@@ -369,7 +372,7 @@ pub unsafe extern "C" fn mesh_report_health(
         }
     };
 
-    let _health_status = match status_str {
+    let health_status = match status_str {
         "healthy" => crate::events::HealthStatus::Healthy,
         "degraded" => crate::events::HealthStatus::Degraded,
         "unhealthy" => crate::events::HealthStatus::Unhealthy,
@@ -382,9 +385,14 @@ pub unsafe extern "C" fn mesh_report_health(
         }
     };
 
-    // TODO: Implement health status update in runtime
-    // For now, just log it
-    info!("FFI: Health status reported: {}", status_str);
+    // Update health status in shared state
+    let handle = &*handle;
+    handle.runtime.block_on(async {
+        let mut state = handle.shared_state.write().await;
+        state.health_status = health_status;
+    });
+
+    info!("FFI: Health status updated to: {}", status_str);
 
     0
 }
