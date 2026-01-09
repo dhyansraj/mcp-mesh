@@ -9,8 +9,7 @@ This module is implemented in Rust and provides:
 """
 
 from .mcp_mesh_core import (AgentHandle, AgentSpec, DependencySpec, EventType,
-                            HealthStatus, LlmAgentSpec, LlmToolInfo, MeshEvent,
-                            ToolSpec)
+                            LlmAgentSpec, LlmToolInfo, MeshEvent, ToolSpec)
 from .mcp_mesh_core import start_agent_py as start_agent
 
 __all__ = [
@@ -22,6 +21,5 @@ __all__ = [
     "LlmToolInfo",
     "MeshEvent",
     "EventType",
-    "HealthStatus",
     "start_agent",
 ]
