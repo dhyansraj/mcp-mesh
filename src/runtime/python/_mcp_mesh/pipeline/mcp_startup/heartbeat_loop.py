@@ -47,7 +47,7 @@ class HeartbeatLoopStep(PipelineStep):
             # Check for explicit standalone mode configuration
             standalone_mode = self._get_standalone_mode()
 
-            # Import heartbeat task function - prefer Rust if available
+            # Import Rust-backed heartbeat task (required - raises RuntimeError if Rust core missing)
             from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
             # Create heartbeat config - Rust core handles registry connection
