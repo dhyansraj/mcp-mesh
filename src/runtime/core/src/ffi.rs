@@ -206,7 +206,9 @@ pub unsafe extern "C" fn mesh_shutdown(handle: *mut MeshAgentHandle) {
 
 /// Free agent handle and associated resources.
 ///
-/// Call after shutdown completes or on error.
+/// If the agent is still running, this will trigger graceful shutdown
+/// and wait briefly (up to 2 seconds) for the agent to unregister from
+/// the registry before dropping resources.
 ///
 /// # Safety
 /// * `handle` must be a valid handle from `mesh_start_agent` or NULL
@@ -219,8 +221,21 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
 
     info!("FFI: Freeing agent handle");
 
-    // Take ownership and drop
+    // Take ownership
     let handle = Box::from_raw(handle);
+
+    // If still running, trigger graceful shutdown and wait briefly
+    if handle.is_running() {
+        warn!("FFI: Agent still running during free, triggering graceful shutdown");
+
+        // Send shutdown signal
+        let _ = handle.shutdown_tx.try_send(());
+
+        // Wait briefly for graceful termination (up to 2 seconds)
+        handle.runtime.block_on(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+    }
 
     // Mark as stopped
     handle.mark_stopped();
