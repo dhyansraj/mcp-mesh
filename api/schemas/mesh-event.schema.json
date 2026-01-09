@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mcpmesh.io/schemas/mesh-event.schema.json",
+  "title": "MeshEvent",
+  "description": "Events emitted by the MCP Mesh Rust core to language SDKs",
+  "type": "object",
+  "required": ["event_type"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "agent_registered",
+        "registration_failed",
+        "dependency_available",
+        "dependency_changed",
+        "dependency_unavailable",
+        "llm_tools_updated",
+        "llm_provider_available",
+        "health_check_due",
+        "health_status_changed",
+        "registry_connected",
+        "registry_disconnected",
+        "shutdown"
+      ],
+      "description": "Type of mesh event"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Agent identifier (for registration events)"
+    },
+    "capability": {
+      "type": "string",
+      "description": "Capability name (for dependency events)"
+    },
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "Endpoint URL (for dependency/provider events)"
+    },
+    "function_name": {
+      "type": "string",
+      "description": "Function name to call (for dependency events)"
+    },
+    "function_id": {
+      "type": "string",
+      "description": "LLM function identifier (for LLM events)"
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/LlmToolInfo" },
+      "description": "Available tools (for llm_tools_updated)"
+    },
+    "provider_info": {
+      "$ref": "#/definitions/LlmProviderInfo",
+      "description": "LLM provider details (for llm_provider_available)"
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message (for error events)"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["healthy", "degraded", "unhealthy"],
+      "description": "Health status (for health events)"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Reason for event (for disconnect events)"
+    }
+  },
+  "definitions": {
+    "LlmToolInfo": {
+      "type": "object",
+      "required": ["function_name", "capability", "endpoint"],
+      "properties": {
+        "function_name": {
+          "type": "string",
+          "description": "Name of the tool function"
+        },
+        "capability": {
+          "type": "string",
+          "description": "Capability provided by this tool"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "HTTP endpoint to call the tool"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Agent providing this tool"
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema for tool input"
+        }
+      }
+    },
+    "LlmProviderInfo": {
+      "type": "object",
+      "required": ["function_id", "endpoint", "function_name"],
+      "properties": {
+        "function_id": {
+          "type": "string",
+          "description": "LLM function that requested this provider"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Agent providing the LLM capability"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "HTTP endpoint to call the provider"
+        },
+        "function_name": {
+          "type": "string",
+          "description": "Function name to invoke"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name (e.g., 'anthropic/claude-sonnet-4-5')"
+        }
+      }
+    }
+  }
+}

@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ...shared.config_resolver import ValidationRule, get_config_value
-from ...shared.registry_client_wrapper import RegistryClientWrapper
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
@@ -48,16 +47,16 @@ class HeartbeatLoopStep(PipelineStep):
             # Check for explicit standalone mode configuration
             standalone_mode = self._get_standalone_mode()
 
-            # Import heartbeat task function
-            from ..mcp_heartbeat import heartbeat_lifespan_task
+            # Import Rust-backed heartbeat task (required - raises RuntimeError if Rust core missing)
+            from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
-            # Create heartbeat config - registry connection will be attempted in heartbeat pipeline
+            # Create heartbeat config - Rust core handles registry connection
             heartbeat_config = {
-                "registry_wrapper": None,  # Will be created in heartbeat pipeline
+                "registry_wrapper": None,  # Rust core manages registry connection
                 "agent_id": agent_id,
                 "interval": heartbeat_interval,
                 "context": context,  # Pass full context for health status building
-                "heartbeat_task_fn": heartbeat_lifespan_task,  # Pass function to avoid cross-imports
+                "heartbeat_task_fn": rust_heartbeat_task,  # Use Rust-backed heartbeat
                 "standalone_mode": standalone_mode,
             }
 

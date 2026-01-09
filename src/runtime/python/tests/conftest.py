@@ -27,12 +27,11 @@ import pytest
 # Configure logging with TRACE level support BEFORE any other mcp_mesh imports
 # This ensures the Logger.trace method is available for all modules
 import _mcp_mesh.shared.logging_config  # noqa: F401 - import for side effects
-from _mcp_mesh.generated.mcp_mesh_registry_client.api_client import ApiClient
-from _mcp_mesh.generated.mcp_mesh_registry_client.configuration import Configuration
 from _mcp_mesh.shared.support_types import HealthStatus
 
 # Import SDK components for testing
 # FileOperations has been removed
+# Generated OpenAPI client has been removed - Rust core handles registry communication
 
 
 # Configure asyncio for all tests
@@ -61,19 +60,7 @@ async def async_temp_dir() -> AsyncGenerator[Path, None]:
     shutil.rmtree(temp_path, ignore_errors=True)
 
 
-# Mock registry client
-@pytest.fixture
-def mock_registry_client():
-    """Create a mock registry client for testing."""
-    mock_client = AsyncMock(spec=RegistryClient)
-
-    # Configure default behavior
-    mock_client.register_agent = AsyncMock()
-    mock_client.get_dependency = AsyncMock(return_value="mock-service-v1.0.0")
-    mock_client.send_heartbeat = AsyncMock()
-    mock_client.close = AsyncMock()
-
-    return mock_client
+# Registry client fixtures removed - Rust core handles registry communication
 
 
 # FileOperations fixtures removed since FileOperations was removed

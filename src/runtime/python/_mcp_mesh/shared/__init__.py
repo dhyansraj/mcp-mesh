@@ -5,6 +5,7 @@ Shared utilities and types built on the official MCP SDK.
 Common functionality used across server and client components.
 
 Core mesh processing infrastructure has been moved to mcp_mesh.engine.
+Registry communication is handled by the Rust core.
 """
 
 # Import only non-circular dependencies at module level
@@ -13,7 +14,6 @@ from .support_types import DependencyConfig, HealthStatus
 __all__ = [
     "HealthStatus",
     "DependencyConfig",
-    "RegistryClient",
     "ContentExtractor",
     "configure_logging",
 ]
@@ -22,13 +22,7 @@ __all__ = [
 # Lazy imports for circular dependency resolution
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
-    if name == "RegistryClient":
-        from ..generated.mcp_mesh_registry_client.api_client import (
-            ApiClient as RegistryClient,
-        )
-
-        return RegistryClient
-    elif name == "ContentExtractor":
+    if name == "ContentExtractor":
         from .content_extractor import ContentExtractor
 
         return ContentExtractor
