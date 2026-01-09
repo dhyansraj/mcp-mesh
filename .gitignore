@@ -249,3 +249,4 @@ rust-core-implementation.org
 
 # Claude Code local files
 .claude/memories.json
+*.node

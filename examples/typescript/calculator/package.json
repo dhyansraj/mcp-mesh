@@ -1,0 +1,18 @@
+{
+  "name": "calculator-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Calculator agent example using @mcpmesh/sdk",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "fastmcp": "^3.26.8",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}

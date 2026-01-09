@@ -28,6 +28,7 @@
 //! # Features
 //!
 //! - `python` (default): Enable Python bindings via PyO3
+//! - `typescript`: Enable TypeScript/Node.js bindings via napi-rs
 //! - `ffi`: Enable C FFI bindings for multi-language SDK support
 
 pub mod events;
@@ -39,6 +40,10 @@ pub mod spec;
 
 // C FFI bindings module
 pub mod ffi;
+
+// Node.js/TypeScript bindings module (napi-rs)
+#[cfg(feature = "typescript")]
+pub mod napi;
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

@@ -1,11 +1,16 @@
 //! Build script for MCP Mesh Core.
 //!
 //! Generates C header file for FFI bindings using cbindgen.
+//! Sets up napi-rs for TypeScript bindings.
 
 use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // napi-rs build setup (for TypeScript bindings)
+    #[cfg(feature = "typescript")]
+    napi_build::setup();
+
     // Always track these env vars so Cargo re-runs build.rs when they change
     println!("cargo:rerun-if-env-changed=MCP_MESH_GENERATE_FFI_HEADER");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FFI");
