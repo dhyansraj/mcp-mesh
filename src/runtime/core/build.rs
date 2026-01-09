@@ -28,10 +28,16 @@ fn main() {
 
     let header_path = include_dir.join("mcp_mesh_core.h");
 
-    // Load cbindgen config
+    // Load cbindgen config (best-effort, fall back to defaults on error)
     let config_path = crate_dir.join("cbindgen.toml");
     let config = if config_path.exists() {
-        cbindgen::Config::from_file(&config_path).expect("Failed to load cbindgen.toml")
+        match cbindgen::Config::from_file(&config_path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                println!("cargo:warning=Failed to load cbindgen.toml: {}, using defaults", e);
+                cbindgen::Config::default()
+            }
+        }
     } else {
         cbindgen::Config::default()
     };
