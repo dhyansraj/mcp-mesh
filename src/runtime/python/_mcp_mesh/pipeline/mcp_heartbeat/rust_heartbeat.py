@@ -291,17 +291,27 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
         )
 
     elif event_type == "llm_tools_updated":
-        await _handle_llm_tools_update(
-            function_id=event.function_id,
-            tools=event.tools,
-            context=context,
-        )
+        if event.tools is None:
+            logger.warning(
+                f"llm_tools_updated event for '{event.function_id}' has no tools data, skipping"
+            )
+        else:
+            await _handle_llm_tools_update(
+                function_id=event.function_id,
+                tools=event.tools,
+                context=context,
+            )
 
     elif event_type == "llm_provider_available":
-        await _handle_llm_provider_update(
-            provider_info=event.provider_info,
-            context=context,
-        )
+        if event.provider_info is None:
+            logger.warning(
+                "llm_provider_available event has no provider_info, skipping"
+            )
+        else:
+            await _handle_llm_provider_update(
+                provider_info=event.provider_info,
+                context=context,
+            )
 
     elif event_type == "health_check_due":
         # Python can perform health check and report back
