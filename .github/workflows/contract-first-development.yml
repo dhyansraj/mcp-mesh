@@ -196,6 +196,7 @@ jobs:
 
           # Code generation tools
           go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+          npm install -g @openapitools/openapi-generator-cli
 
           # Python validation tools (for OpenAPI spec validation)
           pip install openapi-spec-validator jsonschema pyyaml
