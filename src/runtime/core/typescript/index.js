@@ -310,7 +310,16 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { JsAgentHandle, startAgent } = nativeBinding
+const { JsAgentHandle, startAgent, resolveConfig, resolveConfigBool, resolveConfigInt, isTracingEnabled, getRedisUrl, autoDetectIp, initTracePublisher, publishSpan, isTracePublisherAvailable } = nativeBinding
 
 module.exports.JsAgentHandle = JsAgentHandle
 module.exports.startAgent = startAgent
+module.exports.resolveConfig = resolveConfig
+module.exports.resolveConfigBool = resolveConfigBool
+module.exports.resolveConfigInt = resolveConfigInt
+module.exports.isTracingEnabled = isTracingEnabled
+module.exports.getRedisUrl = getRedisUrl
+module.exports.autoDetectIp = autoDetectIp
+module.exports.initTracePublisher = initTracePublisher
+module.exports.publishSpan = publishSpan
+module.exports.isTracePublisherAvailable = isTracePublisherAvailable

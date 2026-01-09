@@ -486,6 +486,18 @@ func isIPAddress(s string) bool {
 
 // callMCPToolWithHost makes an MCP tools/call request with a custom Host header (for ingress)
 func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
+	// Inject trace context into arguments (for agents that can't access HTTP headers)
+	// This is in addition to HTTP headers for maximum compatibility
+	argsWithTrace := args
+	if traceCtx != nil {
+		argsWithTrace = make(map[string]interface{})
+		for k, v := range args {
+			argsWithTrace[k] = v
+		}
+		argsWithTrace["_trace_id"] = traceCtx.TraceID
+		argsWithTrace["_parent_span"] = traceCtx.SpanID
+	}
+
 	// Build MCP request
 	mcpReq := MCPRequest{
 		JSONRPC: "2.0",
@@ -493,7 +505,7 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 		Method:  "tools/call",
 		Params: map[string]interface{}{
 			"name":      toolName,
-			"arguments": args,
+			"arguments": argsWithTrace,
 		},
 	}
 
@@ -582,6 +594,18 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 
 // callMCPTool makes an MCP tools/call request to the agent
 func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
+	// Inject trace context into arguments (for agents that can't access HTTP headers)
+	// This is in addition to HTTP headers for maximum compatibility
+	argsWithTrace := args
+	if traceCtx != nil {
+		argsWithTrace = make(map[string]interface{})
+		for k, v := range args {
+			argsWithTrace[k] = v
+		}
+		argsWithTrace["_trace_id"] = traceCtx.TraceID
+		argsWithTrace["_parent_span"] = traceCtx.SpanID
+	}
+
 	// Build MCP request
 	mcpReq := MCPRequest{
 		JSONRPC: "2.0",
@@ -589,7 +613,7 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 		Method:  "tools/call",
 		Params: map[string]interface{}{
 			"name":      toolName,
-			"arguments": args,
+			"arguments": argsWithTrace,
 		},
 	}
 

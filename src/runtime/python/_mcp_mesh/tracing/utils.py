@@ -7,10 +7,9 @@ and maintain consistency.
 
 import json
 import logging
-import os
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +17,15 @@ logger = logging.getLogger(__name__)
 def is_tracing_enabled() -> bool:
     """Check if distributed tracing is enabled via environment variable.
 
+    Uses Rust core for consistent config resolution across all SDKs.
+    Priority: ENV > param > default (false)
+
     Returns:
         True if tracing is enabled, False otherwise
     """
-    return os.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
+    import mcp_mesh_core
+
+    return mcp_mesh_core.is_tracing_enabled_py()
 
 
 def generate_span_id() -> str:

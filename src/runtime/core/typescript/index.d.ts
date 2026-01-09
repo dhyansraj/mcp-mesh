@@ -79,6 +79,70 @@ export interface JsMeshEvent {
  * - Event streaming
  */
 export declare function startAgent(spec: JsAgentSpec): JsAgentHandle
+/**
+ * Resolve configuration value with priority: ENV > param > default.
+ *
+ * @param keyName - Config key (e.g., "registry_url", "http_host", "namespace")
+ * @param paramValue - Optional value from code/config
+ * @returns Resolved value or empty string if unknown key
+ */
+export declare function resolveConfig(keyName: string, paramValue?: string | undefined | null): string
+/**
+ * Resolve boolean configuration value with priority: ENV > param > default.
+ *
+ * @param keyName - Config key (e.g., "distributed_tracing_enabled")
+ * @param paramValue - Optional value from code/config
+ * @returns Resolved boolean value
+ */
+export declare function resolveConfigBool(keyName: string, paramValue?: boolean | undefined | null): boolean
+/**
+ * Resolve integer configuration value with priority: ENV > param > default.
+ *
+ * @param keyName - Config key (e.g., "http_port", "health_interval")
+ * @param paramValue - Optional value from code/config
+ * @returns Resolved integer value or null if unknown key
+ */
+export declare function resolveConfigInt(keyName: string, paramValue?: number | undefined | null): number | null
+/**
+ * Check if distributed tracing is enabled.
+ *
+ * Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+ */
+export declare function isTracingEnabled(): boolean
+/** Get Redis URL with fallback to default (redis://localhost:6379). */
+export declare function getRedisUrl(): string
+/**
+ * Auto-detect external IP address.
+ *
+ * Uses UDP socket trick to find the IP that would route to external networks.
+ * Falls back to "localhost" if detection fails.
+ */
+export declare function autoDetectIp(): string
+/**
+ * Initialize the trace publisher.
+ *
+ * Must be called before publishing spans. Checks if tracing is enabled
+ * and initializes Redis connection.
+ *
+ * @returns true if tracing is enabled and Redis is available, false otherwise.
+ */
+export declare function initTracePublisher(): Promise<boolean>
+/**
+ * Publish a trace span to Redis.
+ *
+ * Publishes span data to the `mesh:trace` Redis stream.
+ * Non-blocking - silently handles failures to never break agent operations.
+ *
+ * @param spanData - Map of span data (all values must be strings)
+ * @returns true if published successfully, false otherwise.
+ */
+export declare function publishSpan(spanData: Record<string, string>): Promise<boolean>
+/**
+ * Check if trace publishing is available.
+ *
+ * @returns true if tracing is enabled and Redis is connected.
+ */
+export declare function isTracePublisherAvailable(): Promise<boolean>
 /** Handle to a running agent runtime (TypeScript wrapper). */
 export declare class JsAgentHandle {
   /**

@@ -16,6 +16,8 @@ from ..shared.logging_config import (
     get_trace_prefix,
 )
 from ..shared.sse_parser import SSEParser
+from ..tracing.context import TraceContext
+from ..tracing.utils import generate_span_id
 
 logger = logging.getLogger(__name__)
 
@@ -177,37 +179,6 @@ class UnifiedMCPProxy:
             raise ImportError(
                 f"FastMCP client failed: {e}"
             )  # Convert to ImportError to trigger fallback
-
-    def _get_trace_headers(self) -> dict[str, str]:
-        """Extract trace headers from current context for distributed tracing.
-
-        Returns:
-            Dict of trace headers or empty dict if no trace context available
-        """
-        try:
-            from ..tracing.context import TraceContext
-
-            current_trace = TraceContext.get_current()
-            if current_trace:
-                headers = {
-                    "X-Trace-ID": current_trace.trace_id,
-                    "X-Parent-Span": current_trace.span_id,  # Current span becomes parent for downstream
-                }
-                self.logger.info(
-                    f"🔗 TRACE_PROPAGATION: Injecting headers trace_id={current_trace.trace_id[:8]}... "
-                    f"parent_span={current_trace.span_id[:8]}..."
-                )
-                return headers
-            else:
-                self.logger.warning("🔗 TRACE_PROPAGATION: No trace context available")
-                return {}
-
-        except Exception as e:
-            # Never fail MCP calls due to tracing issues
-            self.logger.warning(
-                f"🔗 TRACE_PROPAGATION: Exception getting trace context: {e}"
-            )
-            return {}
 
     def _configure_from_kwargs(self):
         """Auto-configure proxy settings from kwargs."""
@@ -433,6 +404,19 @@ class UnifiedMCPProxy:
         # Get trace prefix if available
         tp = get_trace_prefix()
 
+        # Inject trace context into arguments for downstream agents
+        # This is the fallback mechanism for agents that can't access HTTP headers (e.g., TypeScript)
+        args_with_trace = dict(arguments) if arguments else {}
+        current_trace = TraceContext.get_current()
+        if current_trace:
+            # Generate a new span ID for this outgoing call (becomes parent for downstream)
+            outgoing_span_id = generate_span_id()
+            args_with_trace["_trace_id"] = current_trace.trace_id
+            args_with_trace["_parent_span"] = outgoing_span_id
+            self.logger.debug(
+                f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={outgoing_span_id[:8]}..."
+            )
+
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []
         self.logger.debug(
@@ -451,7 +435,7 @@ class UnifiedMCPProxy:
             async with client_instance as client:
 
                 # Use FastMCP's call_tool which returns CallToolResult object
-                result = await client.call_tool(name, arguments or {})
+                result = await client.call_tool(name, args_with_trace)
 
                 # Calculate performance metrics
                 end_time = time.time()
@@ -479,12 +463,12 @@ class UnifiedMCPProxy:
             self.logger.warning(
                 f"FastMCP Client not available: {e}, falling back to HTTP"
             )
-            return await self._fallback_http_call(name, arguments)
+            return await self._fallback_http_call(name, args_with_trace)
         except Exception as e:
             self.logger.warning(f"FastMCP Client failed: {e}, falling back to HTTP")
             # Try HTTP fallback
             try:
-                result = await self._fallback_http_call(name, arguments)
+                result = await self._fallback_http_call(name, args_with_trace)
                 return result
             except Exception as fallback_error:
                 raise RuntimeError(

@@ -42,6 +42,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
+# Redis for distributed tracing
+redis = { version = "0.27", features = ["tokio-comp"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1"

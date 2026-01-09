@@ -35,6 +35,20 @@ export { mesh, MeshAgent } from "./agent.js";
 // Proxy utilities (for advanced use)
 export { createProxy, normalizeDependency } from "./proxy.js";
 
+// Tracing utilities (for advanced use)
+export {
+  initTracing,
+  isTracingAvailable,
+  generateTraceId,
+  generateSpanId,
+  parseTraceContext,
+  createTraceHeaders,
+  publishTraceSpan,
+  type TraceContext,
+  type AgentMetadata,
+  type SpanData,
+} from "./tracing.js";
+
 // Types
 export type {
   AgentConfig,

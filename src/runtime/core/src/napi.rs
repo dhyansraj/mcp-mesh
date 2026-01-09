@@ -233,6 +233,104 @@ pub fn start_agent(spec: JsAgentSpec) -> Result<JsAgentHandle> {
     }
 }
 
+// =============================================================================
+// Config resolution functions
+// =============================================================================
+
+/// Resolve configuration value with priority: ENV > param > default.
+///
+/// @param keyName - Config key (e.g., "registry_url", "http_host", "namespace")
+/// @param paramValue - Optional value from code/config
+/// @returns Resolved value or empty string if unknown key
+#[napi]
+pub fn resolve_config(key_name: String, param_value: Option<String>) -> String {
+    crate::config::resolve_config_by_name(&key_name, param_value.as_deref())
+}
+
+/// Resolve boolean configuration value with priority: ENV > param > default.
+///
+/// @param keyName - Config key (e.g., "distributed_tracing_enabled")
+/// @param paramValue - Optional value from code/config
+/// @returns Resolved boolean value
+#[napi]
+pub fn resolve_config_bool(key_name: String, param_value: Option<bool>) -> bool {
+    match crate::config::ConfigKey::from_name(&key_name) {
+        Some(key) => crate::config::resolve_config_bool(key, param_value),
+        None => false,
+    }
+}
+
+/// Resolve integer configuration value with priority: ENV > param > default.
+///
+/// @param keyName - Config key (e.g., "http_port", "health_interval")
+/// @param paramValue - Optional value from code/config
+/// @returns Resolved integer value or null if unknown key
+#[napi]
+pub fn resolve_config_int(key_name: String, param_value: Option<i64>) -> Option<i64> {
+    match crate::config::ConfigKey::from_name(&key_name) {
+        Some(key) => crate::config::resolve_config_int(key, param_value),
+        None => None,
+    }
+}
+
+/// Check if distributed tracing is enabled.
+///
+/// Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+#[napi]
+pub fn is_tracing_enabled() -> bool {
+    crate::config::is_tracing_enabled()
+}
+
+/// Get Redis URL with fallback to default (redis://localhost:6379).
+#[napi]
+pub fn get_redis_url() -> String {
+    crate::config::get_redis_url()
+}
+
+/// Auto-detect external IP address.
+///
+/// Uses UDP socket trick to find the IP that would route to external networks.
+/// Falls back to "localhost" if detection fails.
+#[napi]
+pub fn auto_detect_ip() -> String {
+    crate::config::auto_detect_external_ip()
+}
+
+// =============================================================================
+// Tracing publish functions
+// =============================================================================
+
+/// Initialize the trace publisher.
+///
+/// Must be called before publishing spans. Checks if tracing is enabled
+/// and initializes Redis connection.
+///
+/// @returns true if tracing is enabled and Redis is available, false otherwise.
+#[napi]
+pub async fn init_trace_publisher() -> Result<bool> {
+    Ok(crate::tracing_publish::init_trace_publisher().await)
+}
+
+/// Publish a trace span to Redis.
+///
+/// Publishes span data to the `mesh:trace` Redis stream.
+/// Non-blocking - silently handles failures to never break agent operations.
+///
+/// @param spanData - Map of span data (all values must be strings)
+/// @returns true if published successfully, false otherwise.
+#[napi]
+pub async fn publish_span(span_data: HashMap<String, String>) -> Result<bool> {
+    Ok(crate::tracing_publish::publish_span(span_data).await)
+}
+
+/// Check if trace publishing is available.
+///
+/// @returns true if tracing is enabled and Redis is connected.
+#[napi]
+pub async fn is_trace_publisher_available() -> Result<bool> {
+    Ok(crate::tracing_publish::is_trace_publisher_available().await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

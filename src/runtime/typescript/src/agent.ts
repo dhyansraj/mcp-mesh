@@ -29,7 +29,15 @@ import type {
   NormalizedDependency,
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix } from "./config.js";
-import { createProxy, normalizeDependency } from "./proxy.js";
+import { createProxy, normalizeDependency, runWithTraceContext } from "./proxy.js";
+import {
+  initTracing,
+  generateTraceId,
+  generateSpanId,
+  publishTraceSpan,
+  type TraceContext,
+  type AgentMetadata,
+} from "./tracing.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -66,6 +74,7 @@ export class MeshAgent {
   private tools: Map<string, ToolMeta> = new Map();
   private handle: JsAgentHandle | null = null;
   private started = false;
+  private tracingEnabled = false;
 
   /**
    * Resolved dependencies: capability -> proxy
@@ -102,24 +111,101 @@ export class MeshAgent {
     const normalizedDeps: NormalizedDependency[] = (def.dependencies ?? []).map(
       normalizeDependency
     );
+    const depEndpoints = normalizedDeps.map((d) => d.capability);
 
-    // Create wrapper that injects dependencies positionally
+    // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
       // Build positional deps array
       const depsArray: (McpMeshAgent | null)[] = normalizedDeps.map(
         (dep) => this.resolvedDeps.get(dep.capability) ?? null
       );
+      const injectedCount = depsArray.filter((d) => d !== null).length;
 
-      // Call original with args + positional deps
-      const result = await execute(args, ...depsArray);
-      return result;
+      // Extract trace context from arguments (injected by upstream proxy)
+      // This is the fallback mechanism since fastmcp doesn't expose HTTP headers
+      let incomingTraceId: string | null = null;
+      let incomingParentSpan: string | null = null;
+      let cleanArgs = args;
+
+      if (args && typeof args === "object") {
+        const argsObj = args as Record<string, unknown>;
+        if (typeof argsObj._trace_id === "string") {
+          incomingTraceId = argsObj._trace_id;
+        }
+        if (typeof argsObj._parent_span === "string") {
+          incomingParentSpan = argsObj._parent_span;
+        }
+        // Remove trace context from args before passing to tool
+        if (incomingTraceId || incomingParentSpan) {
+          const { _trace_id, _parent_span, ...rest } = argsObj;
+          cleanArgs = rest as z.infer<T>;
+        }
+      }
+
+      // Use incoming trace context or generate new one
+      const traceId = incomingTraceId ?? generateTraceId();
+      const spanId = generateSpanId();
+      const parentSpanId = incomingParentSpan ?? null;
+      const traceContext: TraceContext = { traceId, parentSpanId: spanId };
+
+      const startTime = Date.now() / 1000;
+      let success = true;
+      let error: string | null = null;
+      let resultType = "string";
+
+      try {
+        // Run tool execution within trace context using AsyncLocalStorage
+        // This ensures trace context is properly propagated to all async operations
+        // and isolated between concurrent requests
+        const result = await runWithTraceContext(traceContext, async () => {
+          return await execute(cleanArgs, ...depsArray);
+        });
+        return result;
+      } catch (err) {
+        success = false;
+        error = err instanceof Error ? err.message : String(err);
+        throw err;
+      } finally {
+        // Publish span (fire and forget)
+        if (this.tracingEnabled) {
+          const endTime = Date.now() / 1000;
+          const durationMs = (endTime - startTime) * 1000;
+
+          publishTraceSpan({
+            traceId,
+            spanId,
+            parentSpan: parentSpanId,
+            functionName: toolName,
+            startTime,
+            endTime,
+            durationMs,
+            success,
+            error,
+            resultType,
+            argsCount: 0,
+            kwargsCount: typeof cleanArgs === "object" ? Object.keys(cleanArgs as object).length : 0,
+            dependencies: depEndpoints,
+            injectedDependencies: injectedCount,
+            meshPositions: [],
+          }).catch(() => {
+            // Silently ignore publish errors
+          });
+        }
+      }
     };
 
     // Register with fastmcp
+    // Use passthrough() to allow trace context fields (_trace_id, _parent_span)
+    // to pass through Zod validation without being stripped
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = def.parameters as any;
+    const parametersWithPassthrough = typeof schema.passthrough === "function"
+      ? schema.passthrough()
+      : def.parameters;
     this.server.addTool({
       name: toolName,
       description: def.description,
-      parameters: def.parameters,
+      parameters: parametersWithPassthrough,
       execute: wrappedExecute,
     });
 
@@ -153,6 +239,18 @@ export class MeshAgent {
     this.started = true;
 
     console.log(`Starting MCP Mesh agent: ${this.agentId}`);
+
+    // 0. Initialize distributed tracing
+    const agentMetadata: AgentMetadata = {
+      agentId: this.agentId,
+      agentName: this.config.name,
+      agentNamespace: this.config.namespace,
+      agentHostname: this.config.host,
+      agentIp: this.config.host,
+      agentPort: this.config.port,
+      agentEndpoint: `http://${this.config.host}:${this.config.port}`,
+    };
+    this.tracingEnabled = await initTracing(agentMetadata);
 
     // 1. Start HTTP server via fastmcp
     // Note: fastmcp.start() is async and starts the server

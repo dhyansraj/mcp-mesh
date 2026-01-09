@@ -90,9 +90,10 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                     """Pure ASGI middleware for trace context and header injection.
 
                     This middleware:
-                    1. Extracts trace context from incoming request headers
-                    2. Sets up trace context for the request lifecycle
-                    3. Injects trace headers into the response (works with SSE)
+                    1. Extracts trace context from incoming request headers AND arguments
+                    2. Strips trace fields (_trace_id, _parent_span) from arguments to avoid validation errors
+                    3. Sets up trace context for the request lifecycle
+                    4. Injects trace headers into the response (works with SSE)
                     """
 
                     def __init__(self, app):
@@ -127,7 +128,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                 headers_list, "x-parent-span"
                             )
 
-                            # Setup trace context
+                            # Setup trace context from headers
                             trace_context = {
                                 "trace_id": (
                                     incoming_trace_id if incoming_trace_id else None
@@ -151,6 +152,87 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                         except Exception as e:
                             logger.warning(f"Failed to set trace context: {e}")
 
+                        # Create body-modifying receive wrapper to strip trace fields from arguments
+                        # This handles the case where trace context is passed in JSON-RPC arguments
+                        import json as json_module
+
+                        async def receive_with_trace_stripping():
+                            message = await receive()
+                            if message["type"] == "http.request":
+                                body = message.get("body", b"")
+                                if body:
+                                    try:
+                                        payload = json_module.loads(
+                                            body.decode("utf-8")
+                                        )
+                                        if payload.get("method") == "tools/call":
+                                            arguments = payload.get("params", {}).get(
+                                                "arguments", {}
+                                            )
+
+                                            # Extract trace context from arguments if not in headers
+                                            nonlocal trace_id, span_id, parent_span
+                                            if not trace_id and arguments.get(
+                                                "_trace_id"
+                                            ):
+                                                try:
+                                                    from _mcp_mesh.tracing.context import (
+                                                        TraceContext,
+                                                    )
+                                                    from _mcp_mesh.tracing.trace_context_helper import (
+                                                        TraceContextHelper,
+                                                    )
+
+                                                    arg_trace_id = arguments.get(
+                                                        "_trace_id"
+                                                    )
+                                                    arg_parent_span = arguments.get(
+                                                        "_parent_span"
+                                                    )
+                                                    trace_context = {
+                                                        "trace_id": arg_trace_id,
+                                                        "parent_span": arg_parent_span,
+                                                    }
+                                                    TraceContextHelper.setup_request_trace_context(
+                                                        trace_context, logger
+                                                    )
+                                                    current_trace = (
+                                                        TraceContext.get_current()
+                                                    )
+                                                    if current_trace:
+                                                        trace_id = (
+                                                            current_trace.trace_id
+                                                        )
+                                                        span_id = current_trace.span_id
+                                                        parent_span = (
+                                                            current_trace.parent_span
+                                                        )
+                                                except Exception:
+                                                    pass
+
+                                            # Strip trace context fields from arguments
+                                            if (
+                                                "_trace_id" in arguments
+                                                or "_parent_span" in arguments
+                                            ):
+                                                arguments.pop("_trace_id", None)
+                                                arguments.pop("_parent_span", None)
+                                                modified_body = json_module.dumps(
+                                                    payload
+                                                ).encode("utf-8")
+                                                logger.debug(
+                                                    "[TRACE] Stripped trace fields from arguments"
+                                                )
+                                                return {
+                                                    **message,
+                                                    "body": modified_body,
+                                                }
+                                    except Exception as e:
+                                        logger.debug(
+                                            f"[TRACE] Failed to process body: {e}"
+                                        )
+                            return message
+
                         # Wrap send to inject headers before response starts
                         async def send_with_trace_headers(message):
                             if message["type"] == "http.response.start" and trace_id:
@@ -166,7 +248,9 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                 message = {**message, "headers": headers}
                             await send(message)
 
-                        await self.app(scope, receive, send_with_trace_headers)
+                        await self.app(
+                            scope, receive_with_trace_stripping, send_with_trace_headers
+                        )
 
                 app.add_middleware(TraceContextMiddleware)
                 logger.debug(

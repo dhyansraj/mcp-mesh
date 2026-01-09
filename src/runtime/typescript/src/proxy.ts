@@ -4,7 +4,51 @@
  * Provides HTTP client proxies for calling remote MCP agents.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { McpMeshAgent, DependencyKwargs } from "./types.js";
+import type { TraceContext } from "./tracing.js";
+import {
+  generateSpanId,
+  publishTraceSpan,
+  createTraceHeaders,
+} from "./tracing.js";
+
+/**
+ * AsyncLocalStorage for trace context - provides async-safe context propagation.
+ * Unlike module-level variables, this correctly handles concurrent requests
+ * without trace context bleeding between them.
+ */
+const traceContextStorage = new AsyncLocalStorage<TraceContext>();
+
+/**
+ * Run a function with trace context.
+ * The context is automatically propagated to all async operations within the callback.
+ * This is the preferred way to set trace context for tool execution.
+ */
+export function runWithTraceContext<T>(
+  ctx: TraceContext,
+  fn: () => T | Promise<T>
+): T | Promise<T> {
+  return traceContextStorage.run(ctx, fn);
+}
+
+/**
+ * Get the current trace context.
+ * Returns the trace context for the current async execution context,
+ * or null if not within a traced context.
+ */
+export function getCurrentTraceContext(): TraceContext | null {
+  return traceContextStorage.getStore() ?? null;
+}
+
+/**
+ * @deprecated Use runWithTraceContext() instead for async-safe context propagation.
+ * This function is kept for backward compatibility but does nothing.
+ */
+export function setCurrentTraceContext(_ctx: TraceContext | null): void {
+  // No-op - use runWithTraceContext() instead
+  // This is kept for backward compatibility with any external code
+}
 
 /**
  * Create an McpMeshAgent proxy for a resolved dependency.
@@ -25,7 +69,7 @@ export function createProxy(
   const proxyFn = async (
     args?: Record<string, unknown>
   ): Promise<string> => {
-    return callMcpTool(endpoint, functionName, args, timeout, retryCount);
+    return callMcpTool(endpoint, functionName, args, timeout, retryCount, capability);
   };
 
   // Attach properties and methods
@@ -39,7 +83,7 @@ export function createProxy(
         toolName: string,
         args?: Record<string, unknown>
       ): Promise<string> => {
-        return callMcpTool(endpoint, toolName, args, timeout, retryCount);
+        return callMcpTool(endpoint, toolName, args, timeout, retryCount, capability);
       },
       writable: false,
     },
@@ -53,18 +97,35 @@ export function createProxy(
  *
  * Uses the MCP HTTP Streamable protocol:
  * POST /mcp with JSON-RPC 2.0 payload.
+ * Includes distributed tracing: propagates trace context and publishes spans.
  */
 async function callMcpTool(
   endpoint: string,
   toolName: string,
   args: Record<string, unknown> | undefined,
   timeout: number,
-  retryCount: number
+  retryCount: number,
+  capability: string
 ): Promise<string> {
   // Ensure endpoint ends with /mcp
   const mcpEndpoint = endpoint.endsWith("/mcp")
     ? endpoint
     : `${endpoint.replace(/\/$/, "")}/mcp`;
+
+  // Tracing: create span for this outgoing call
+  // Use AsyncLocalStorage to get trace context for the current async execution
+  const traceCtx = getCurrentTraceContext();
+  const spanId = traceCtx ? generateSpanId() : null;
+  const startTime = Date.now() / 1000;
+
+  // Build arguments with trace context injection (for downstream agents)
+  // This is the fallback mechanism since fastmcp doesn't expose HTTP headers
+  const argsWithTrace: Record<string, unknown> = { ...(args ?? {}) };
+  if (traceCtx && spanId) {
+    // Inject trace context into arguments - downstream agent will extract these
+    argsWithTrace._trace_id = traceCtx.traceId;
+    argsWithTrace._parent_span = spanId; // Our span becomes their parent
+  }
 
   const payload = {
     jsonrpc: "2.0",
@@ -72,7 +133,7 @@ async function callMcpTool(
     method: "tools/call",
     params: {
       name: toolName,
-      arguments: args ?? {},
+      arguments: argsWithTrace,
     },
   };
 
@@ -83,12 +144,20 @@ async function callMcpTool(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+      // Build headers with trace context propagation
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      };
+
+      // Propagate trace context to downstream agent
+      if (traceCtx && spanId) {
+        Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
+      }
+
       const response = await fetch(mcpEndpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
@@ -105,7 +174,10 @@ async function callMcpTool(
 
       // Handle SSE streaming response
       if (contentType.includes("text/event-stream")) {
-        return await parseSSEResponse(response);
+        const sseResult = await parseSSEResponse(response);
+        // Publish success span
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult);
+        return sseResult;
       }
 
       // Handle JSON response
@@ -115,18 +187,23 @@ async function callMcpTool(
       };
 
       if (result.error) {
-        throw new Error(
-          `MCP error: ${result.error.message ?? JSON.stringify(result.error)}`
-        );
+        const errorMsg = result.error.message ?? JSON.stringify(result.error);
+        // Publish error span
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, errorMsg, "error");
+        throw new Error(`MCP error: ${errorMsg}`);
       }
 
       // Extract content from result
-      return extractContent(result.result);
+      const content = extractContent(result.result);
+      // Publish success span
+      publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof content);
+      return content;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
       // Don't retry on abort (timeout)
       if (lastError.name === "AbortError") {
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error");
         throw new Error(`MCP call timed out after ${timeout}ms`);
       }
 
@@ -138,7 +215,50 @@ async function callMcpTool(
     }
   }
 
+  // All retries failed
+  publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error");
   throw lastError ?? new Error("MCP call failed");
+}
+
+/**
+ * Helper to publish a proxy call span (fire and forget).
+ */
+function publishProxySpan(
+  traceCtx: TraceContext | null,
+  spanId: string | null,
+  startTime: number,
+  toolName: string,
+  _capability: string,
+  endpoint: string,
+  success: boolean,
+  error: string | null,
+  resultType: string
+): void {
+  if (!traceCtx || !spanId) return;
+
+  const endTime = Date.now() / 1000;
+  const durationMs = (endTime - startTime) * 1000;
+
+  // Fire and forget - don't await
+  publishTraceSpan({
+    traceId: traceCtx.traceId,
+    spanId,
+    parentSpan: traceCtx.parentSpanId,
+    functionName: `proxy_call:${toolName}`,
+    startTime,
+    endTime,
+    durationMs,
+    success,
+    error,
+    resultType,
+    argsCount: 0,
+    kwargsCount: 0,
+    dependencies: [endpoint],
+    injectedDependencies: 0,
+    meshPositions: [],
+  }).catch(() => {
+    // Silently ignore publish errors
+  });
 }
 
 /**
