@@ -6,6 +6,10 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // Always track these env vars so Cargo re-runs build.rs when they change
+    println!("cargo:rerun-if-env-changed=MCP_MESH_GENERATE_FFI_HEADER");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FFI");
+
     // Only generate C bindings when the ffi feature is enabled
     // or when explicitly requested via environment variable
     let ffi_enabled = env::var("CARGO_FEATURE_FFI").is_ok()
@@ -51,5 +55,4 @@ fn main() {
     // Tell Cargo to re-run if these files change
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
-    println!("cargo:rerun-if-env-changed=MCP_MESH_GENERATE_FFI_HEADER");
 }
