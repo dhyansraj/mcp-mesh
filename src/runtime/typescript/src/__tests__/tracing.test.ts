@@ -60,12 +60,12 @@ describe("generateTraceId", () => {
 });
 
 describe("generateSpanId", () => {
-  it("should generate a 32-character hex string (UUID without dashes)", () => {
+  it("should generate a 16-character hex string (OTel compliant)", () => {
     const spanId = generateSpanId();
 
-    // 32 hex characters (UUID without dashes, same format as traceId)
-    expect(spanId).toHaveLength(32);
-    expect(spanId).toMatch(/^[0-9a-f]{32}$/);
+    // 16 hex characters (64-bit span ID per OpenTelemetry spec)
+    expect(spanId).toHaveLength(16);
+    expect(spanId).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it("should not contain dashes", () => {
@@ -108,6 +108,19 @@ describe("parseTraceContext", () => {
     expect(context?.parentSpanId).toBe("parent-mixed-case");
   });
 
+  it("should parse trace context from Python SDK headers", () => {
+    const headers = {
+      "X-Trace-ID": "python-trace-id",
+      "X-Parent-Span": "python-parent-span",
+    };
+
+    const context = parseTraceContext(headers);
+
+    expect(context).not.toBeNull();
+    expect(context?.traceId).toBe("python-trace-id");
+    expect(context?.parentSpanId).toBe("python-parent-span");
+  });
+
   it("should return null when trace ID is missing", () => {
     const headers = {
       "x-parent-span-id": "orphan-span",
@@ -148,11 +161,11 @@ describe("parseTraceContext", () => {
 });
 
 describe("createTraceHeaders", () => {
-  it("should create headers with trace ID and span ID", () => {
+  it("should create headers with trace ID and span ID (Python SDK convention)", () => {
     const headers = createTraceHeaders("my-trace-id", "my-span-id");
 
-    expect(headers["X-Trace-Id"]).toBe("my-trace-id");
-    expect(headers["X-Parent-Span-Id"]).toBe("my-span-id");
+    expect(headers["X-Trace-ID"]).toBe("my-trace-id");
+    expect(headers["X-Parent-Span"]).toBe("my-span-id");
   });
 
   it("should create headers that can be parsed back", () => {

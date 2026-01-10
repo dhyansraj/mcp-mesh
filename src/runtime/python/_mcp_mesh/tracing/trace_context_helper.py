@@ -67,19 +67,9 @@ class TraceContextHelper:
                     or "",  # Use parent as current (will be overwritten by ExecutionTracer)
                     parent_span=None,  # No grandparent needed at this level
                 )
-            else:
-                # NEW ROOT TRACE: This service is the entry point (no incoming trace headers)
-                from .utils import generate_span_id, generate_trace_id
-
-                root_trace_id = generate_trace_id()
-                root_span_id = generate_span_id()
-
-                # Set context for root trace (no parent_span)
-                TraceContext.set_current(
-                    trace_id=root_trace_id,
-                    span_id=root_span_id,
-                    parent_span=None,  # Root trace has no parent
-                )
+            # else: Don't generate root trace here - let ExecutionTracer do it
+            # This prevents orphan parent_span values when middleware context doesn't
+            # propagate to FastMCP's async context
 
         except Exception as e:
             logger_instance.warning(f"Failed to setup trace context: {e}")

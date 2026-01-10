@@ -80,46 +80,54 @@ export async function isTracingAvailable(): Promise<boolean> {
 }
 
 /**
- * Generate a new trace ID.
+ * Generate a new trace ID (OpenTelemetry compliant).
+ *
+ * @returns 32-character hex string (128-bit trace ID per OTel spec)
  */
 export function generateTraceId(): string {
   return randomUUID().replace(/-/g, "");
 }
 
 /**
- * Generate a new span ID.
+ * Generate a new span ID (OpenTelemetry compliant).
+ *
+ * @returns 16-character hex string (64-bit span ID per OTel spec)
  */
 export function generateSpanId(): string {
-  return randomUUID().replace(/-/g, "");
+  return randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
 /**
  * Parse trace context from HTTP headers.
  *
- * Looks for X-Trace-Id and X-Parent-Span-Id headers.
+ * Looks for X-Trace-ID and X-Parent-Span headers (matching Python SDK).
  */
 export function parseTraceContext(
   headers: Record<string, string | undefined>
 ): TraceContext | null {
-  const traceId = headers["x-trace-id"] || headers["X-Trace-Id"];
+  // Check both cases: X-Trace-ID (Python) and X-Trace-Id (legacy)
+  const traceId = headers["x-trace-id"] || headers["X-Trace-ID"] || headers["X-Trace-Id"];
   if (!traceId) return null;
 
   return {
     traceId,
-    parentSpanId: headers["x-parent-span-id"] || headers["X-Parent-Span-Id"] || null,
+    // Check both: X-Parent-Span (Python) and X-Parent-Span-Id (legacy)
+    parentSpanId: headers["x-parent-span"] || headers["X-Parent-Span"] ||
+                  headers["x-parent-span-id"] || headers["X-Parent-Span-Id"] || null,
   };
 }
 
 /**
  * Create trace headers to propagate context to downstream calls.
+ * Uses Python SDK convention: X-Trace-ID, X-Parent-Span
  */
 export function createTraceHeaders(
   traceId: string,
   spanId: string
 ): Record<string, string> {
   return {
-    "X-Trace-Id": traceId,
-    "X-Parent-Span-Id": spanId,
+    "X-Trace-ID": traceId,
+    "X-Parent-Span": spanId,
   };
 }
 

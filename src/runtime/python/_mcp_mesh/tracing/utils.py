@@ -44,21 +44,21 @@ def is_tracing_enabled() -> bool:
 
 
 def generate_span_id() -> str:
-    """Generate a unique span ID for tracing.
+    """Generate a unique span ID for tracing (OpenTelemetry compliant).
 
     Returns:
-        UUID string for span identification
+        16-character hex string (64-bit span ID per OTel spec)
     """
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex[:16]
 
 
 def generate_trace_id() -> str:
-    """Generate a unique trace ID for tracing.
+    """Generate a unique trace ID for tracing (OpenTelemetry compliant).
 
     Returns:
-        UUID string for trace identification
+        32-character hex string (128-bit trace ID per OTel spec)
     """
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex
 
 
 def get_agent_metadata_with_fallback(logger_instance: logging.Logger) -> dict[str, Any]:

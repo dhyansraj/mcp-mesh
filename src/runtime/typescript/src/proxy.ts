@@ -112,7 +112,7 @@ async function callMcpTool(
     ? endpoint
     : `${endpoint.replace(/\/$/, "")}/mcp`;
 
-  // Tracing: create span for this outgoing call
+  // Tracing: create span for this outgoing proxy call
   // Use AsyncLocalStorage to get trace context for the current async execution
   const traceCtx = getCurrentTraceContext();
   const spanId = traceCtx ? generateSpanId() : null;
@@ -123,8 +123,9 @@ async function callMcpTool(
   const argsWithTrace: Record<string, unknown> = { ...(args ?? {}) };
   if (traceCtx && spanId) {
     // Inject trace context into arguments - downstream agent will extract these
+    // spanId is the proxy span we're about to publish, which becomes child's parent
     argsWithTrace._trace_id = traceCtx.traceId;
-    argsWithTrace._parent_span = spanId; // Our span becomes their parent
+    argsWithTrace._parent_span = spanId;
   }
 
   const payload = {
@@ -227,7 +228,7 @@ function publishProxySpan(
   traceCtx: TraceContext | null,
   spanId: string | null,
   startTime: number,
-  toolName: string,
+  _toolName: string,
   _capability: string,
   endpoint: string,
   success: boolean,
@@ -244,7 +245,7 @@ function publishProxySpan(
     traceId: traceCtx.traceId,
     spanId,
     parentSpan: traceCtx.parentSpanId,
-    functionName: `proxy_call:${toolName}`,
+    functionName: "proxy_call_wrapper",
     startTime,
     endTime,
     durationMs,

@@ -409,12 +409,12 @@ class UnifiedMCPProxy:
         args_with_trace = dict(arguments) if arguments else {}
         current_trace = TraceContext.get_current()
         if current_trace:
-            # Generate a new span ID for this outgoing call (becomes parent for downstream)
-            outgoing_span_id = generate_span_id()
+            # Use current function's span_id as parent for downstream call
+            # Don't generate a new span - that creates unpublished "ghost" spans that break the tree
             args_with_trace["_trace_id"] = current_trace.trace_id
-            args_with_trace["_parent_span"] = outgoing_span_id
+            args_with_trace["_parent_span"] = current_trace.span_id
             self.logger.debug(
-                f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={outgoing_span_id[:8]}..."
+                f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
             )
 
         # Log cross-agent call - summary line
