@@ -29,10 +29,10 @@ except ImportError:
 
 
 def is_tracing_enabled() -> bool:
-    """Check if distributed tracing is enabled via environment variable.
+    """Check if distributed tracing is enabled via Rust core config resolution.
 
-    Uses Rust core for consistent config resolution across all SDKs.
-    Priority: ENV > param > default (false)
+    Delegates to mcp_mesh_core.is_tracing_enabled_py() for consistent behavior
+    across all language SDKs. Priority: ENV > param > default (false)
 
     Returns:
         True if tracing is enabled, False otherwise
