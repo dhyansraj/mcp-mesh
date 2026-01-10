@@ -60,13 +60,17 @@ describe("generateTraceId", () => {
 });
 
 describe("generateSpanId", () => {
-  it("should generate a valid UUID format", () => {
+  it("should generate a 32-character hex string (UUID without dashes)", () => {
     const spanId = generateSpanId();
 
-    // UUID format: 8-4-4-4-12
-    expect(spanId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-    );
+    // 32 hex characters (UUID without dashes, same format as traceId)
+    expect(spanId).toHaveLength(32);
+    expect(spanId).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("should not contain dashes", () => {
+    const spanId = generateSpanId();
+    expect(spanId).not.toContain("-");
   });
 
   it("should generate unique span IDs", () => {
