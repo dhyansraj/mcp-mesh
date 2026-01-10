@@ -77,8 +77,12 @@ export class MeshAgent {
   private tracingEnabled = false;
 
   /**
-   * Resolved dependencies: capability -> proxy
+   * Resolved dependencies: composite key -> proxy
+   * Key format: "${toolName}:dep_${depIndex}" (e.g., "myTool:dep_0")
    * Updated when dependency_available/unavailable events arrive.
+   *
+   * This allows multiple tools to depend on the same capability with
+   * different tags/settings without overwriting each other.
    */
   private resolvedDeps: Map<string, McpMeshAgent> = new Map();
 
@@ -115,9 +119,9 @@ export class MeshAgent {
 
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
-      // Build positional deps array
+      // Build positional deps array using composite keys (toolName:dep_index)
       const depsArray: (McpMeshAgent | null)[] = normalizedDeps.map(
-        (dep) => this.resolvedDeps.get(dep.capability) ?? null
+        (_, depIndex) => this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
 
@@ -420,7 +424,10 @@ export class MeshAgent {
 
   /**
    * Handle dependency_available event.
-   * Creates or updates proxy for the capability.
+   * Creates or updates proxy for each tool+index that matches this capability.
+   *
+   * Uses composite keys (toolName:dep_index) to support multiple tools depending
+   * on the same capability with different tags/settings.
    */
   private handleDependencyAvailable(
     capability: string,
@@ -428,45 +435,82 @@ export class MeshAgent {
     functionName: string,
     agentId: string
   ): void {
-    // Find kwargs for this dependency by index (from any tool that uses it)
-    // Array index corresponds to dependencies array position
-    let kwargs = undefined;
-    for (const meta of this.tools.values()) {
-      if (meta.dependencyKwargs && meta.dependencies) {
-        // Find the index of this capability in the dependencies array
-        const depIndex = meta.dependencies.findIndex(
-          (dep) => dep.capability === capability
-        );
-        if (depIndex >= 0 && meta.dependencyKwargs[depIndex]) {
-          kwargs = meta.dependencyKwargs[depIndex];
-          break;
+    let matchCount = 0;
+
+    // Iterate through all tools and their dependencies
+    for (const [toolName, meta] of this.tools.entries()) {
+      if (!meta.dependencies) continue;
+
+      // Find all dependencies in this tool that match the capability
+      meta.dependencies.forEach((dep, depIndex) => {
+        if (dep.capability === capability) {
+          // Get kwargs for this specific dependency index
+          const kwargs = meta.dependencyKwargs?.[depIndex];
+
+          // Create proxy with composite key
+          const depKey = `${toolName}:dep_${depIndex}`;
+          const proxy = createProxy(endpoint, capability, functionName, kwargs);
+          this.resolvedDeps.set(depKey, proxy);
+          matchCount++;
         }
-      }
+      });
     }
 
-    // Create proxy
-    const proxy = createProxy(endpoint, capability, functionName, kwargs);
-    this.resolvedDeps.set(capability, proxy);
-
     console.log(
-      `Dependency available: ${capability} at ${endpoint} (agent: ${agentId})`
+      `Dependency available: ${capability} at ${endpoint} (agent: ${agentId}, ${matchCount} tool bindings)`
     );
   }
 
   /**
    * Handle dependency_unavailable event.
-   * Removes proxy for the capability.
+   * Removes proxies for all tool+index that match this capability.
    */
   private handleDependencyUnavailable(capability: string): void {
-    this.resolvedDeps.delete(capability);
-    console.log(`Dependency unavailable: ${capability}`);
+    let removeCount = 0;
+
+    // Iterate through all tools and their dependencies
+    for (const [toolName, meta] of this.tools.entries()) {
+      if (!meta.dependencies) continue;
+
+      meta.dependencies.forEach((dep, depIndex) => {
+        if (dep.capability === capability) {
+          const depKey = `${toolName}:dep_${depIndex}`;
+          this.resolvedDeps.delete(depKey);
+          removeCount++;
+        }
+      });
+    }
+
+    console.log(`Dependency unavailable: ${capability} (${removeCount} tool bindings removed)`);
   }
 
   /**
    * Get a resolved dependency proxy by capability name.
+   * Returns the first matching proxy if multiple tools depend on the same capability.
+   *
+   * For more precise lookup, use getDependencyByKey with composite key "toolName:dep_index".
    */
   getDependency(capability: string): McpMeshAgent | null {
-    return this.resolvedDeps.get(capability) ?? null;
+    // Find first matching capability in any tool
+    for (const [toolName, meta] of this.tools.entries()) {
+      if (!meta.dependencies) continue;
+      const depIndex = meta.dependencies.findIndex((d) => d.capability === capability);
+      if (depIndex >= 0) {
+        return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get a resolved dependency proxy by composite key.
+   *
+   * @param toolName - The tool name
+   * @param depIndex - The dependency index within that tool
+   * @returns The proxy or null if not available
+   */
+  getDependencyByKey(toolName: string, depIndex: number): McpMeshAgent | null {
+    return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
   }
 
   /**
