@@ -143,8 +143,9 @@ def _resolve_via_rust(
 
     else:
         # String resolution (default)
+        # Rust core returns empty string when no value found, treat as None
         result = mcp_mesh_core.resolve_config_py(rust_key, param_str)
-        return result if result is not None else default
+        return result if result else default
 
 
 def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:
