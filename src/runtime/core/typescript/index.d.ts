@@ -62,6 +62,10 @@ export interface JsMeshEvent {
   functionName?: string
   /** Agent ID (for dependency events) */
   agentId?: string
+  /** Function that requested this dependency (for dependency events) */
+  requestingFunction?: string
+  /** Dependency index within the requesting function (for dependency events) */
+  depIndex?: number
   /** Function ID of the LLM agent (for llm_tools_updated) */
   functionId?: string
   /** Error message (for error events) */

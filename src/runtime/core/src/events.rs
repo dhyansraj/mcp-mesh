@@ -194,6 +194,14 @@ pub struct MeshEvent {
     /// Agent ID (for dependency events)
     pub agent_id: Option<String>,
 
+    /// Function ID that requested this dependency (for dependency events)
+    /// This is the tool/function that declared the dependency.
+    pub requesting_function: Option<String>,
+
+    /// Dependency index within the requesting function (for dependency events)
+    /// This allows SDKs to inject the resolved dependency at the correct position.
+    pub dep_index: Option<u32>,
+
     // Fields for LLM tools events
     /// Function ID of the LLM agent (for llm_tools_updated)
     pub function_id: Option<String>,
@@ -248,6 +256,16 @@ impl MeshEvent {
     #[getter]
     fn agent_id(&self) -> Option<String> {
         self.agent_id.clone()
+    }
+
+    #[getter]
+    fn requesting_function(&self) -> Option<String> {
+        self.requesting_function.clone()
+    }
+
+    #[getter]
+    fn dep_index(&self) -> Option<u32> {
+        self.dep_index
     }
 
     #[getter]
@@ -318,11 +336,21 @@ impl MeshEvent {
     }
 
     /// Create a "dependency_available" event
+    ///
+    /// Args:
+    /// - capability: The capability name being provided
+    /// - endpoint: The endpoint URL to call
+    /// - function_name: The function name to call
+    /// - agent_id: The agent providing this dependency
+    /// - requesting_function: The function that requested this dependency
+    /// - dep_index: The index of this dependency in the requesting function's dependencies array
     pub fn dependency_available(
         capability: String,
         endpoint: String,
         function_name: String,
         agent_id: String,
+        requesting_function: String,
+        dep_index: u32,
     ) -> Self {
         Self {
             event_type: EventType::DependencyAvailable,
@@ -330,25 +358,48 @@ impl MeshEvent {
             endpoint: Some(endpoint),
             function_name: Some(function_name),
             agent_id: Some(agent_id),
+            requesting_function: Some(requesting_function),
+            dep_index: Some(dep_index),
             ..Default::default()
         }
     }
 
     /// Create a "dependency_unavailable" event
-    pub fn dependency_unavailable(capability: String) -> Self {
+    ///
+    /// Args:
+    /// - capability: The capability name that is no longer available
+    /// - requesting_function: The function that had this dependency
+    /// - dep_index: The index of this dependency in the requesting function's dependencies array
+    pub fn dependency_unavailable(
+        capability: String,
+        requesting_function: String,
+        dep_index: u32,
+    ) -> Self {
         Self {
             event_type: EventType::DependencyUnavailable,
             capability: Some(capability),
+            requesting_function: Some(requesting_function),
+            dep_index: Some(dep_index),
             ..Default::default()
         }
     }
 
     /// Create a "dependency_changed" event (endpoint or function changed)
+    ///
+    /// Args:
+    /// - capability: The capability name being provided
+    /// - endpoint: The new endpoint URL to call
+    /// - function_name: The new function name to call
+    /// - agent_id: The agent providing this dependency
+    /// - requesting_function: The function that requested this dependency
+    /// - dep_index: The index of this dependency in the requesting function's dependencies array
     pub fn dependency_changed(
         capability: String,
         endpoint: String,
         function_name: String,
         agent_id: String,
+        requesting_function: String,
+        dep_index: u32,
     ) -> Self {
         Self {
             event_type: EventType::DependencyChanged,
@@ -356,6 +407,8 @@ impl MeshEvent {
             endpoint: Some(endpoint),
             function_name: Some(function_name),
             agent_id: Some(agent_id),
+            requesting_function: Some(requesting_function),
+            dep_index: Some(dep_index),
             ..Default::default()
         }
     }
@@ -433,12 +486,16 @@ mod tests {
             "http://localhost:9001".to_string(),
             "get_date".to_string(),
             "date-service-abc123".to_string(),
+            "my-tool".to_string(),
+            0,
         );
 
         assert_eq!(event.event_type, EventType::DependencyAvailable);
         assert_eq!(event.event_type.as_str(), "dependency_available");
         assert_eq!(event.capability, Some("date-service".to_string()));
         assert_eq!(event.endpoint, Some("http://localhost:9001".to_string()));
+        assert_eq!(event.requesting_function, Some("my-tool".to_string()));
+        assert_eq!(event.dep_index, Some(0));
     }
 
     #[test]

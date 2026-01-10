@@ -268,6 +268,8 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=event.agent_id,
             available=True,
             context=context,
+            requesting_function=getattr(event, "requesting_function", None),
+            dep_index=getattr(event, "dep_index", None),
         )
 
     elif event_type == "dependency_changed":
@@ -278,6 +280,8 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=event.agent_id,
             available=True,
             context=context,
+            requesting_function=getattr(event, "requesting_function", None),
+            dep_index=getattr(event, "dep_index", None),
         )
 
     elif event_type == "dependency_unavailable":
@@ -288,6 +292,8 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=None,
             available=False,
             context=context,
+            requesting_function=getattr(event, "requesting_function", None),
+            dep_index=getattr(event, "dep_index", None),
         )
 
     elif event_type == "llm_tools_updated":
@@ -334,17 +340,23 @@ async def _handle_dependency_change(
     agent_id: Optional[str],
     available: bool,
     context: dict[str, Any],
+    requesting_function: Optional[str] = None,
+    dep_index: Optional[int] = None,
 ) -> None:
     """
     Handle dependency availability change.
 
     Updates the DI system with new/changed/removed dependencies.
-    This reuses the existing DependencyResolutionStep logic.
+
+    If requesting_function and dep_index are provided (new behavior from Rust core),
+    we can directly register/unregister at the exact position. Otherwise, we fall
+    back to capability-based matching (backward compatibility).
     """
     logger.info(
         f"Dependency change: {capability} -> "
         f"{'available' if available else 'unavailable'} "
         f"at {endpoint}/{function_name}"
+        + (f" (func: {requesting_function}, idx: {dep_index})" if requesting_function else "")
     )
 
     # Import DI components
@@ -353,10 +365,67 @@ async def _handle_dependency_change(
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
 
     injector = get_global_injector()
+    mesh_tools = DecoratorRegistry.get_mesh_tools()
 
+    # If we have position info, use it directly (new behavior)
+    if requesting_function is not None and dep_index is not None:
+        # Build dep_key - requesting_function is the function_name from registry
+        # We need to find the corresponding func_id
+        func_id = requesting_function
+        for tool_name, decorated_func in mesh_tools.items():
+            if tool_name == requesting_function:
+                func = decorated_func.function
+                func_id = f"{func.__module__}.{func.__qualname__}"
+                break
+
+        dep_key = f"{func_id}:dep_{dep_index}"
+
+        if not available:
+            await injector.unregister_dependency(dep_key)
+            logger.info(f"Unregistered dependency: {dep_key}")
+            return
+
+        # Get kwargs from the tool metadata
+        kwargs_config = {}
+        for tool_name, decorated_func in mesh_tools.items():
+            if tool_name == requesting_function:
+                tool_metadata = decorated_func.metadata or {}
+                dependencies = tool_metadata.get("dependencies", [])
+                if dep_index < len(dependencies):
+                    kwargs_config = dependencies[dep_index].get("kwargs", {})
+                break
+
+        # Check for self-dependency
+        import os
+        current_agent_id = None
+        try:
+            config = DecoratorRegistry.get_resolved_agent_config()
+            current_agent_id = config.get("agent_id")
+        except Exception:
+            current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
+
+        is_self_dependency = current_agent_id and agent_id and current_agent_id == agent_id
+
+        if is_self_dependency:
+            from ...engine.self_dependency_proxy import SelfDependencyProxy
+            wrapper_func = mesh_tools.get(function_name)
+            if wrapper_func:
+                proxy = SelfDependencyProxy(wrapper_func.function, function_name)
+                logger.debug(f"Created SelfDependencyProxy for {capability}")
+            else:
+                proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
+                logger.debug(f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}")
+        else:
+            proxy = EnhancedUnifiedMCPProxy(endpoint, function_name, kwargs_config=kwargs_config)
+            logger.debug(f"Created EnhancedUnifiedMCPProxy for {capability} -> {endpoint}")
+
+        await injector.register_dependency(dep_key, proxy)
+        logger.info(f"Registered dependency: {dep_key}")
+        return
+
+    # Fallback: capability-based matching (backward compatibility)
     if not available:
         # Dependency became unavailable - unregister it
-        # Find all dependency keys for this capability
         if hasattr(injector, "_dependencies"):
             keys_to_remove = [
                 key for key in injector._dependencies.keys() if capability in key
@@ -368,7 +437,6 @@ async def _handle_dependency_change(
 
     # Dependency is available - create proxy and register
     # Map tool names to func_ids
-    mesh_tools = DecoratorRegistry.get_mesh_tools()
     tool_name_to_func_id = {}
     for tool_name, decorated_func in mesh_tools.items():
         func = decorated_func.function
@@ -380,10 +448,10 @@ async def _handle_dependency_change(
         tool_metadata = decorated_func.metadata or {}
         dependencies = tool_metadata.get("dependencies", [])
 
-        for dep_index, dep_info in enumerate(dependencies):
+        for idx, dep_info in enumerate(dependencies):
             if dep_info.get("capability") == capability:
                 func_id = tool_name_to_func_id.get(tool_name, tool_name)
-                dep_key = f"{func_id}:dep_{dep_index}"
+                dep_key = f"{func_id}:dep_{idx}"
 
                 # Check for self-dependency
                 import os

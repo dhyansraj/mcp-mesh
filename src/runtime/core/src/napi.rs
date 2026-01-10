@@ -123,6 +123,12 @@ pub struct JsMeshEvent {
     pub function_name: Option<String>,
     /// Agent ID (for dependency events)
     pub agent_id: Option<String>,
+    /// Function that requested this dependency (for dependency events)
+    /// This is the tool/function that declared the dependency.
+    pub requesting_function: Option<String>,
+    /// Dependency index within the requesting function (for dependency events)
+    /// This allows SDKs to inject the resolved dependency at the correct position.
+    pub dep_index: Option<u32>,
     /// Function ID of the LLM agent (for llm_tools_updated)
     pub function_id: Option<String>,
     /// Error message (for error events)
@@ -139,6 +145,8 @@ impl From<MeshEvent> for JsMeshEvent {
             endpoint: event.endpoint,
             function_name: event.function_name,
             agent_id: event.agent_id,
+            requesting_function: event.requesting_function,
+            dep_index: event.dep_index,
             function_id: event.function_id,
             error: event.error,
             reason: event.reason,

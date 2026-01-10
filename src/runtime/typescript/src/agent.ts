@@ -381,12 +381,18 @@ export class MeshAgent {
               event.capability!,
               event.endpoint!,
               event.functionName!,
-              event.agentId!
+              event.agentId!,
+              event.requestingFunction,
+              event.depIndex
             );
             break;
 
           case "dependency_unavailable":
-            this.handleDependencyUnavailable(event.capability!);
+            this.handleDependencyUnavailable(
+              event.capability!,
+              event.requestingFunction,
+              event.depIndex
+            );
             break;
 
           case "dependency_changed":
@@ -395,7 +401,9 @@ export class MeshAgent {
               event.capability!,
               event.endpoint!,
               event.functionName!,
-              event.agentId!
+              event.agentId!,
+              event.requestingFunction,
+              event.depIndex
             );
             break;
 
@@ -424,31 +432,45 @@ export class MeshAgent {
 
   /**
    * Handle dependency_available event.
-   * Creates or updates proxy for each tool+index that matches this capability.
+   * Creates proxy at the exact position specified by the event.
    *
-   * Uses composite keys (toolName:dep_index) to support multiple tools depending
-   * on the same capability with different tags/settings.
+   * The Rust core now sends events with requestingFunction and depIndex,
+   * so we can directly create the proxy at the correct position without
+   * needing to match by capability.
    */
   private handleDependencyAvailable(
     capability: string,
     endpoint: string,
     functionName: string,
-    agentId: string
+    agentId: string,
+    requestingFunction?: string,
+    depIndex?: number
   ): void {
-    let matchCount = 0;
+    // If we have position info, use it directly (new behavior)
+    if (requestingFunction !== undefined && depIndex !== undefined) {
+      const meta = this.tools.get(requestingFunction);
+      const kwargs = meta?.dependencyKwargs?.[depIndex];
 
+      const depKey = `${requestingFunction}:dep_${depIndex}`;
+      const proxy = createProxy(endpoint, capability, functionName, kwargs);
+      this.resolvedDeps.set(depKey, proxy);
+
+      console.log(
+        `Dependency available: ${capability} at ${endpoint} (tool: ${requestingFunction}, index: ${depIndex}, agent: ${agentId})`
+      );
+      return;
+    }
+
+    // Fallback for backward compatibility (old events without position info)
     // Iterate through all tools and their dependencies
+    let matchCount = 0;
     for (const [toolName, meta] of this.tools.entries()) {
       if (!meta.dependencies) continue;
 
-      // Find all dependencies in this tool that match the capability
-      meta.dependencies.forEach((dep, depIndex) => {
+      meta.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
-          // Get kwargs for this specific dependency index
-          const kwargs = meta.dependencyKwargs?.[depIndex];
-
-          // Create proxy with composite key
-          const depKey = `${toolName}:dep_${depIndex}`;
+          const kwargs = meta.dependencyKwargs?.[idx];
+          const depKey = `${toolName}:dep_${idx}`;
           const proxy = createProxy(endpoint, capability, functionName, kwargs);
           this.resolvedDeps.set(depKey, proxy);
           matchCount++;
@@ -463,18 +485,32 @@ export class MeshAgent {
 
   /**
    * Handle dependency_unavailable event.
-   * Removes proxies for all tool+index that match this capability.
+   * Removes proxy at the exact position specified by the event.
    */
-  private handleDependencyUnavailable(capability: string): void {
-    let removeCount = 0;
+  private handleDependencyUnavailable(
+    capability: string,
+    requestingFunction?: string,
+    depIndex?: number
+  ): void {
+    // If we have position info, use it directly (new behavior)
+    if (requestingFunction !== undefined && depIndex !== undefined) {
+      const depKey = `${requestingFunction}:dep_${depIndex}`;
+      this.resolvedDeps.delete(depKey);
 
-    // Iterate through all tools and their dependencies
+      console.log(
+        `Dependency unavailable: ${capability} (tool: ${requestingFunction}, index: ${depIndex})`
+      );
+      return;
+    }
+
+    // Fallback for backward compatibility (old events without position info)
+    let removeCount = 0;
     for (const [toolName, meta] of this.tools.entries()) {
       if (!meta.dependencies) continue;
 
-      meta.dependencies.forEach((dep, depIndex) => {
+      meta.dependencies.forEach((dep, idx) => {
         if (dep.capability === capability) {
-          const depKey = `${toolName}:dep_${depIndex}`;
+          const depKey = `${toolName}:dep_${idx}`;
           this.resolvedDeps.delete(depKey);
           removeCount++;
         }

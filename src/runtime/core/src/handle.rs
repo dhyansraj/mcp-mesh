@@ -240,6 +240,8 @@ mod tests {
                 "http://localhost:9002".to_string(),
                 "get_weather".to_string(),
                 "weather-agent".to_string(),
+                "test-tool".to_string(),
+                0,
             ))
             .await
             .unwrap();

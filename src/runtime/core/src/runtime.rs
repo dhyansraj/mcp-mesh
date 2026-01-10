@@ -47,11 +47,35 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Key for tracking dependencies by position.
+/// Combines the requesting function and the dependency index within that function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DepKey {
+    /// The function that requested this dependency
+    requesting_function: String,
+    /// The index of the dependency in the function's dependencies array
+    dep_index: u32,
+}
+
+/// Resolved dependency value with all details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DepValue {
+    /// The capability name
+    capability: String,
+    /// The endpoint URL
+    endpoint: String,
+    /// The function name to call
+    function_name: String,
+    /// The agent providing this dependency
+    agent_id: String,
+}
+
 /// Topology state - tracks current dependency endpoints.
 #[derive(Debug, Default)]
 struct TopologyState {
-    /// Current dependencies (capability -> (endpoint, function_name, agent_id))
-    dependencies: HashMap<String, (String, String, String)>,
+    /// Current dependencies keyed by (requesting_function, dep_index)
+    /// This allows multiple dependencies on the same capability with different tags
+    dependencies: HashMap<DepKey, DepValue>,
     /// LLM tools (function_id -> tools)
     llm_tools: HashMap<String, Vec<LlmToolInfo>>,
     /// LLM providers (function_id -> provider info) - using internal struct to avoid GIL issues
@@ -249,115 +273,148 @@ impl AgentRuntime {
 
     /// Process dependency resolution changes and emit events.
     ///
+    /// The registry returns dependencies keyed by requesting function name,
+    /// with an ordered Vec of resolved dependencies matching the order in which
+    /// they were declared. This preserves position information so that duplicate
+    /// capabilities with different tags can be correctly injected.
+    ///
     /// This method batches state updates to minimize lock contention.
     async fn process_dependency_changes(
         &mut self,
         resolved: &HashMap<String, Vec<crate::registry::ResolvedDependency>>,
     ) {
-        let mut new_deps = HashMap::new();
+        // Build new dependency map keyed by (requesting_function, dep_index)
+        let mut new_deps: HashMap<DepKey, DepValue> = HashMap::new();
 
         // The registry returns dependencies keyed by the function that NEEDS them,
-        // but each provider has the actual capability name we need to emit.
-        // A function can depend on MULTIPLE capabilities (e.g., math_greeting needs add AND multiply).
-        for (_requesting_func, providers) in resolved {
-            // Process ALL available/healthy providers, not just the first one
-            for provider in providers.iter().filter(|p| p.status == "available" || p.status == "healthy") {
-                // Use the actual capability from the provider, not the key
-                new_deps.insert(
-                    provider.capability.clone(),
-                    (
-                        provider.endpoint.clone(),
-                        provider.function_name.clone(),
-                        provider.agent_id.clone(),
-                    ),
-                );
+        // with the Vec preserving the declaration order (index = position in dependencies array).
+        for (requesting_func, providers) in resolved {
+            for (dep_index, provider) in providers.iter().enumerate() {
+                // Only process available/healthy providers
+                if provider.status != "available" && provider.status != "healthy" {
+                    continue;
+                }
+
+                let key = DepKey {
+                    requesting_function: requesting_func.clone(),
+                    dep_index: dep_index as u32,
+                };
+
+                let value = DepValue {
+                    capability: provider.capability.clone(),
+                    endpoint: provider.endpoint.clone(),
+                    function_name: provider.function_name.clone(),
+                    agent_id: provider.agent_id.clone(),
+                };
+
+                new_deps.insert(key, value);
             }
         }
 
         // Collect all changes first (before acquiring any locks)
-        let mut removed_caps: Vec<String> = Vec::new();
-        let mut added_or_changed: Vec<(String, String, String, String, bool)> = Vec::new(); // (cap, endpoint, func_name, agent_id, is_new)
+        let mut removed: Vec<(DepKey, DepValue)> = Vec::new();
+        let mut added_or_changed: Vec<(DepKey, DepValue, bool)> = Vec::new(); // (key, value, is_new)
 
         // Find removed dependencies
-        let old_caps: Vec<String> = self.topology.dependencies.keys().cloned().collect();
-        for cap in old_caps {
-            if !new_deps.contains_key(&cap) {
-                info!("Dependency '{}' removed", cap);
-                removed_caps.push(cap);
+        let old_keys: Vec<DepKey> = self.topology.dependencies.keys().cloned().collect();
+        for key in old_keys {
+            if !new_deps.contains_key(&key) {
+                if let Some(old_value) = self.topology.dependencies.get(&key) {
+                    info!(
+                        "Dependency '{}' at {}:{} removed",
+                        old_value.capability, key.requesting_function, key.dep_index
+                    );
+                    removed.push((key, old_value.clone()));
+                }
             }
         }
 
         // Find new or changed dependencies
-        for (cap, (endpoint, func_name, agent_id)) in &new_deps {
-            let changed = match self.topology.dependencies.get(cap) {
-                Some((old_ep, old_fn, _)) => old_ep != endpoint || old_fn != func_name,
+        for (key, value) in &new_deps {
+            let changed = match self.topology.dependencies.get(key) {
+                Some(old_value) => {
+                    old_value.endpoint != value.endpoint
+                        || old_value.function_name != value.function_name
+                }
                 None => true,
             };
 
             if changed {
-                let is_new = !self.topology.dependencies.contains_key(cap);
+                let is_new = !self.topology.dependencies.contains_key(key);
                 if is_new {
                     info!(
-                        "Dependency '{}' available at {} ({})",
-                        cap, endpoint, func_name
+                        "Dependency '{}' at {}:{} available at {} ({})",
+                        value.capability,
+                        key.requesting_function,
+                        key.dep_index,
+                        value.endpoint,
+                        value.function_name
                     );
                 } else {
                     info!(
-                        "Dependency '{}' changed to {} ({})",
-                        cap, endpoint, func_name
+                        "Dependency '{}' at {}:{} changed to {} ({})",
+                        value.capability,
+                        key.requesting_function,
+                        key.dep_index,
+                        value.endpoint,
+                        value.function_name
                     );
                 }
-                added_or_changed.push((
-                    cap.clone(),
-                    endpoint.clone(),
-                    func_name.clone(),
-                    agent_id.clone(),
-                    is_new,
-                ));
+                added_or_changed.push((key.clone(), value.clone(), is_new));
             }
         }
 
         // Batch update shared state (single lock acquisition)
-        if !removed_caps.is_empty() || !added_or_changed.is_empty() {
+        // Note: shared state still uses capability as key for backward compatibility
+        // with other parts of the system that lookup by capability
+        if !removed.is_empty() || !added_or_changed.is_empty() {
             let mut state = self.shared_state.write().await;
-            for cap in &removed_caps {
-                state.dependencies.remove(cap);
+            for (_, value) in &removed {
+                state.dependencies.remove(&value.capability);
             }
-            for (cap, endpoint, _, _, _) in &added_or_changed {
-                state.dependencies.insert(cap.clone(), endpoint.clone());
+            for (_, value, _) in &added_or_changed {
+                state
+                    .dependencies
+                    .insert(value.capability.clone(), value.endpoint.clone());
             }
         }
 
         // Update local topology and emit events (no lock needed)
-        for cap in removed_caps {
+        for (key, value) in removed {
             let _ = self
                 .event_tx
-                .send(MeshEvent::dependency_unavailable(cap.clone()))
+                .send(MeshEvent::dependency_unavailable(
+                    value.capability.clone(),
+                    key.requesting_function.clone(),
+                    key.dep_index,
+                ))
                 .await;
-            self.topology.dependencies.remove(&cap);
+            self.topology.dependencies.remove(&key);
         }
 
-        for (cap, endpoint, func_name, agent_id, is_new) in added_or_changed {
+        for (key, value, is_new) in added_or_changed {
             let event = if is_new {
                 MeshEvent::dependency_available(
-                    cap.clone(),
-                    endpoint.clone(),
-                    func_name.clone(),
-                    agent_id.clone(),
+                    value.capability.clone(),
+                    value.endpoint.clone(),
+                    value.function_name.clone(),
+                    value.agent_id.clone(),
+                    key.requesting_function.clone(),
+                    key.dep_index,
                 )
             } else {
                 MeshEvent::dependency_changed(
-                    cap.clone(),
-                    endpoint.clone(),
-                    func_name.clone(),
-                    agent_id.clone(),
+                    value.capability.clone(),
+                    value.endpoint.clone(),
+                    value.function_name.clone(),
+                    value.agent_id.clone(),
+                    key.requesting_function.clone(),
+                    key.dep_index,
                 )
             };
             let _ = self.event_tx.send(event).await;
 
-            self.topology
-                .dependencies
-                .insert(cap, (endpoint, func_name, agent_id));
+            self.topology.dependencies.insert(key, value);
         }
     }
 
