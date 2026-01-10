@@ -11,13 +11,10 @@ from .fastapiserver_setup import FastAPIServerSetupStep
 from .fastmcpserver_discovery import FastMCPServerDiscoveryStep
 from .heartbeat_loop import HeartbeatLoopStep
 from .heartbeat_preparation import HeartbeatPreparationStep
-from .startup_orchestrator import (
-                                   MeshOrchestrator,
+from .startup_orchestrator import (MeshOrchestrator,
                                    clear_debounce_coordinator,
                                    get_debounce_coordinator,
-                                   get_global_orchestrator,
-                                   start_runtime,
-)
+                                   get_global_orchestrator, start_runtime)
 from .startup_pipeline import StartupPipeline
 
 __all__ = [

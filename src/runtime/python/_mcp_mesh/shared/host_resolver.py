@@ -6,8 +6,8 @@ Provides clean, testable logic for determining hostnames for different purposes:
 """
 
 import logging
-import os
-import socket
+
+import mcp_mesh_core
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,9 @@ class HostResolver:
         """Get external hostname for registry advertisement.
 
         This is what other agents will use to connect to this agent.
+        Uses Rust core for consistent config resolution across all SDKs.
 
-        Priority order:
+        Priority order (handled by Rust core):
         1. MCP_MESH_HTTP_HOST (explicit override - for production K8s deployments)
         2. Auto-detection (socket-based external IP - for development/testing)
         3. localhost (fallback)
@@ -29,23 +30,10 @@ class HostResolver:
         Returns:
             str: External hostname for registry advertisement
         """
-        # Priority 1: Explicit override for production deployments
-        explicit_host = os.getenv("MCP_MESH_HTTP_HOST")
-        if explicit_host:
-            logger.debug(f"Using explicit external host: {explicit_host}")
-            return explicit_host
-
-        # Priority 2: Auto-detection for development/testing
-        try:
-            auto_detected = HostResolver._auto_detect_external_ip()
-            logger.debug(f"Auto-detected external host: {auto_detected}")
-            return auto_detected
-        except Exception as e:
-            logger.warning(f"Failed to auto-detect external IP: {e}")
-
-        # Priority 3: Fallback
-        logger.debug("Using fallback external host: localhost")
-        return "localhost"
+        # Rust core handles: ENV > auto-detect > localhost
+        host = mcp_mesh_core.resolve_config_py("http_host", None)
+        logger.debug(f"Resolved external host via Rust core: {host}")
+        return host
 
     @staticmethod
     def get_binding_host() -> str:
@@ -58,29 +46,3 @@ class HostResolver:
             str: Always "0.0.0.0" for binding to all interfaces
         """
         return "0.0.0.0"
-
-    @staticmethod
-    def _auto_detect_external_ip() -> str:
-        """Auto-detect external IP by connecting to a public DNS server.
-
-        This determines what IP address would be used for outbound connections,
-        which is typically the correct IP for other services to connect back to.
-
-        Returns:
-            str: Auto-detected external IP address
-
-        Raises:
-            Exception: If auto-detection fails
-        """
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            # Connect to a public DNS server to determine our outbound IP
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-
-            # Validate the IP isn't localhost
-            if local_ip.startswith("127."):
-                raise Exception(
-                    "Auto-detected IP is localhost, not useful for external connections"
-                )
-
-            return local_ip

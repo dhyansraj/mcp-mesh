@@ -12,9 +12,8 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
-
 from _mcp_mesh.engine.llm_config import LLMConfig
+from pydantic import BaseModel, Field, ValidationError
 
 # Helper to get fixture paths - tests run from various directories
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
@@ -356,7 +355,8 @@ class TestMeshLlmAgentToolErrors:
     @pytest.mark.asyncio
     async def test_tool_execution_error(self):
         """Test handling of tool execution errors."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent, ToolExecutionError
+        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
+                                                     ToolExecutionError)
 
         mock_tool = AsyncMock()
         mock_tool.name = "failing_tool"
@@ -396,7 +396,8 @@ class TestMeshLlmAgentToolErrors:
     @pytest.mark.asyncio
     async def test_tool_not_found_error(self):
         """Test handling when LLM requests unknown tool."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent, ToolExecutionError
+        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
+                                                     ToolExecutionError)
 
         agent = MeshLlmAgent(
             config=make_test_config(
@@ -431,7 +432,8 @@ class TestMeshLlmAgentToolErrors:
         """Test handling of tool execution timeout."""
         import asyncio
 
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent, ToolExecutionError
+        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
+                                                     ToolExecutionError)
 
         mock_tool = AsyncMock()
         mock_tool.name = "slow_tool"
@@ -576,7 +578,8 @@ class TestMeshLlmAgentMaxIterations:
     @pytest.mark.asyncio
     async def test_max_iterations_exceeded(self):
         """Test error when max_iterations is exceeded."""
-        from _mcp_mesh.engine.mesh_llm_agent import MaxIterationsError, MeshLlmAgent
+        from _mcp_mesh.engine.mesh_llm_agent import (MaxIterationsError,
+                                                     MeshLlmAgent)
 
         mock_tool = AsyncMock()
         mock_tool.name = "endless_tool"
@@ -1137,9 +1140,8 @@ class TestTemplateLoading:
 
     def test_load_template_syntax_error(self):
         """Test: Template with syntax error raises error."""
-        from jinja2 import TemplateSyntaxError
-
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+        from jinja2 import TemplateSyntaxError
 
         config = make_test_config()
         template_path = str(TEMPLATES_DIR / "syntax_error.jinja2")
@@ -1403,9 +1405,8 @@ class TestTemplateRendering:
 
     def test_render_template_missing_required_var_error(self):
         """Test: Template rendering fails when required var missing."""
-        from jinja2 import UndefinedError
-
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+        from jinja2 import UndefinedError
 
         config = make_test_config()
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
@@ -1502,7 +1503,8 @@ class TestRuntimeContextInjection:
 
     def test_resolve_context_no_runtime_context_provided(self):
         """Test: When no runtime context provided, use auto-populated context."""
-        from _mcp_mesh.engine.mesh_llm_agent import _CONTEXT_NOT_PROVIDED, MeshLlmAgent
+        from _mcp_mesh.engine.mesh_llm_agent import (_CONTEXT_NOT_PROVIDED,
+                                                     MeshLlmAgent)
 
         config = make_test_config()
         auto_context = ChatContext(user_name="Alice", domain="Python")

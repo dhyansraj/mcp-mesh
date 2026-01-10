@@ -28,17 +28,24 @@
 //! # Features
 //!
 //! - `python` (default): Enable Python bindings via PyO3
+//! - `typescript`: Enable TypeScript/Node.js bindings via napi-rs
 //! - `ffi`: Enable C FFI bindings for multi-language SDK support
 
+pub mod config;
 pub mod events;
 pub mod handle;
 pub mod heartbeat;
 pub mod registry;
 pub mod runtime;
 pub mod spec;
+pub mod tracing_publish;
 
 // C FFI bindings module
 pub mod ffi;
+
+// Node.js/TypeScript bindings module (napi-rs)
+#[cfg(feature = "typescript")]
+pub mod napi;
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -173,6 +180,19 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register functions - use the Python wrapper
     m.add_function(wrap_pyfunction!(start_agent_py, m)?)?;
+
+    // Config resolution functions (defined in config.rs)
+    m.add_function(wrap_pyfunction!(config::resolve_config_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::resolve_config_bool_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::resolve_config_int_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::is_tracing_enabled_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::get_redis_url_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::auto_detect_ip_py, m)?)?;
+
+    // Tracing publish functions (defined in tracing_publish.rs)
+    m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;
+    m.add_function(wrap_pyfunction!(tracing_publish::publish_span_py, m)?)?;
+    m.add_function(wrap_pyfunction!(tracing_publish::is_trace_publisher_available_py, m)?)?;
 
     Ok(())
 }

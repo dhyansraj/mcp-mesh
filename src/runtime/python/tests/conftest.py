@@ -22,11 +22,10 @@ from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-import pytest
-
 # Configure logging with TRACE level support BEFORE any other mcp_mesh imports
 # This ensures the Logger.trace method is available for all modules
 import _mcp_mesh.shared.logging_config  # noqa: F401 - import for side effects
+import pytest
 from _mcp_mesh.shared.support_types import HealthStatus
 
 # Import SDK components for testing

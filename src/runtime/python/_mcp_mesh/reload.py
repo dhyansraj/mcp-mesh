@@ -103,9 +103,7 @@ def terminate_process(process: subprocess.Popen, timeout: int = 3) -> None:
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning(
-            f"Process {pid} didn't terminate gracefully, force killing..."
-        )
+        logger.warning(f"Process {pid} didn't terminate gracefully, force killing...")
         # Force kill the entire process group
         try:
             os.killpg(pid, signal.SIGKILL)

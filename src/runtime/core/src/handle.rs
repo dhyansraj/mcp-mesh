@@ -73,6 +73,11 @@ impl AgentHandle {
     pub fn state(&self) -> Arc<RwLock<HandleState>> {
         self.state.clone()
     }
+
+    /// Get a reference to the event receiver (for language bindings).
+    pub fn event_rx(&self) -> Arc<Mutex<mpsc::Receiver<MeshEvent>>> {
+        self.event_rx.clone()
+    }
 }
 
 /// Python-specific methods for AgentHandle
@@ -187,6 +192,19 @@ impl AgentHandle {
         // Send shutdown signal (non-blocking, ignore if full)
         let _ = self.shutdown_tx.try_send(());
     }
+
+    /// Request graceful shutdown of the agent runtime (async version).
+    /// Use this when calling from an async context (e.g., napi-rs).
+    pub async fn shutdown_async(&self) {
+        // Set shutdown flag
+        {
+            let mut state = self.state.write().await;
+            state.shutdown_requested = true;
+        }
+
+        // Send shutdown signal (non-blocking, ignore if full)
+        let _ = self.shutdown_tx.try_send(());
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +240,8 @@ mod tests {
                 "http://localhost:9002".to_string(),
                 "get_weather".to_string(),
                 "weather-agent".to_string(),
+                "test-tool".to_string(),
+                0,
             ))
             .await
             .unwrap();

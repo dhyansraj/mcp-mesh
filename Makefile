@@ -28,7 +28,7 @@ all: generate build
 
 # Generate all code from OpenAPI specification
 .PHONY: generate
-generate: generate-go generate-python
+generate: generate-go
 
 # Generate Go server stubs from OpenAPI spec
 .PHONY: generate-go
@@ -37,12 +37,8 @@ generate-go:
 	@$(CODEGEN_SCRIPT) go
 	@echo "✅ Go code generation completed"
 
-# Generate Python client from OpenAPI spec
-.PHONY: generate-python
-generate-python:
-	@echo "🤖 Generating Python client from OpenAPI specification..."
-	@$(CODEGEN_SCRIPT) python
-	@echo "✅ Python code generation completed"
+# Note: Python client generation removed - registry communication
+# is now handled by Rust core with hand-written clients
 
 # Validate contract compliance
 .PHONY: validate-contract

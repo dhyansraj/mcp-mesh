@@ -387,8 +387,13 @@ class HttpMcpWrapper:
                 self.logger = logger
 
             async def dispatch(self, request: Request, call_next):
-                # Extract and set trace context from headers for distributed tracing
+                # Read body once for processing
+                body = await request.body()
+                modified_body = body
+
+                # Extract and set trace context from headers and arguments
                 try:
+                    from ..tracing.context import TraceContext
                     from ..tracing.trace_context_helper import TraceContextHelper
 
                     # DEBUG: Log incoming headers for trace propagation debugging
@@ -399,22 +404,67 @@ class HttpMcpWrapper:
                         f"X-Parent-Span={parent_span_header}, path={request.url.path}"
                     )
 
-                    # Use helper class for trace context extraction and setup
-                    trace_context = (
-                        await TraceContextHelper.extract_trace_context_from_request(
-                            request
+                    # Extract trace context from both headers AND arguments
+                    trace_id = trace_id_header
+                    parent_span = parent_span_header
+
+                    # Try extracting from JSON-RPC body arguments as fallback
+                    # Also strip trace fields from arguments to avoid Pydantic validation errors
+                    if body:
+                        try:
+                            payload = json.loads(body.decode("utf-8"))
+                            if payload.get("method") == "tools/call":
+                                arguments = payload.get("params", {}).get(
+                                    "arguments", {}
+                                )
+
+                                # Extract trace context from arguments (TypeScript uses _trace_id/_parent_span)
+                                if not trace_id and arguments.get("_trace_id"):
+                                    trace_id = arguments.get("_trace_id")
+                                if not parent_span and arguments.get("_parent_span"):
+                                    parent_span = arguments.get("_parent_span")
+
+                                # Strip trace context fields from arguments before passing to FastMCP
+                                if (
+                                    "_trace_id" in arguments
+                                    or "_parent_span" in arguments
+                                ):
+                                    arguments.pop("_trace_id", None)
+                                    arguments.pop("_parent_span", None)
+                                    # Update payload with cleaned arguments
+                                    modified_body = json.dumps(payload).encode("utf-8")
+                                    self.logger.debug(
+                                        f"🔗 Stripped trace fields from arguments, "
+                                        f"trace_id={trace_id[:8] if trace_id else None}..."
+                                    )
+                        except Exception as e:
+                            self.logger.debug(
+                                f"Failed to process body for trace context: {e}"
+                            )
+
+                    # Setup trace context if we have a trace_id
+                    if trace_id:
+                        trace_context = {
+                            "trace_id": trace_id,
+                            "parent_span": parent_span,
+                        }
+                        TraceContextHelper.setup_request_trace_context(
+                            trace_context, self.logger
                         )
-                    )
-                    TraceContextHelper.setup_request_trace_context(
-                        trace_context, self.logger
-                    )
                 except Exception as e:
                     # Never fail request due to tracing issues
                     self.logger.warning(f"Failed to set trace context: {e}")
                     pass
 
+                # Create a new request scope with the modified body
+                async def receive():
+                    return {"type": "http.request", "body": modified_body}
+
+                # Update request with modified receive
+                request._receive = receive
+
                 # Extract session ID from request
-                session_id = await self.http_wrapper._extract_session_id(request)
+                session_id = await self.http_wrapper._extract_session_id_from_body(body)
 
                 if session_id:
                     # Check for existing session assignment
@@ -458,6 +508,15 @@ class HttpMcpWrapper:
         # Try extracting from JSON-RPC body
         try:
             body = await request.body()
+            return await self._extract_session_id_from_body(body)
+        except Exception:
+            pass
+
+        return None
+
+    async def _extract_session_id_from_body(self, body: bytes) -> str:
+        """Extract session ID from already-read request body."""
+        try:
             if body:
                 payload = json.loads(body.decode("utf-8"))
                 if payload.get("method") == "tools/call":

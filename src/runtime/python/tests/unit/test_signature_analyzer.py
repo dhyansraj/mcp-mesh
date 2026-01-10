@@ -7,10 +7,9 @@ Tests context parameter detection for Phase 2 (TDD approach).
 from typing import Optional
 
 import pytest
-from pydantic import Field
-
 from _mcp_mesh.engine.signature_analyzer import get_context_parameter_name
 from mesh import MeshContextModel, MeshLlmAgent
+from pydantic import Field
 
 
 class ChatContext(MeshContextModel):

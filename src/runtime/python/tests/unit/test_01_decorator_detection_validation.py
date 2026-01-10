@@ -10,10 +10,9 @@ import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Import the decorators and registry
 import mesh
+import pytest
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.shared.config_resolver import get_config_value
 
@@ -671,7 +670,8 @@ class TestConstraintValidation:
     def test_agent_id_shared_across_process(self):
         """Test that agent ID is shared across the process."""
         # Clear any existing agent ID
-        from mesh.decorators import _clear_shared_agent_id, _get_or_create_agent_id
+        from mesh.decorators import (_clear_shared_agent_id,
+                                     _get_or_create_agent_id)
 
         _clear_shared_agent_id()
 
@@ -685,7 +685,8 @@ class TestConstraintValidation:
 
     def test_agent_id_generation_precedence(self):
         """Test agent ID generation precedence: env > name > default."""
-        from mesh.decorators import _clear_shared_agent_id, _get_or_create_agent_id
+        from mesh.decorators import (_clear_shared_agent_id,
+                                     _get_or_create_agent_id)
 
         # Test with environment variable
         os.environ["MCP_MESH_AGENT_NAME"] = "env-agent"

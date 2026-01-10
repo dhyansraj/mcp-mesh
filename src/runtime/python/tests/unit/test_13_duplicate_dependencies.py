@@ -10,7 +10,6 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from _mcp_mesh.engine.dependency_injector import DependencyInjector
 
 

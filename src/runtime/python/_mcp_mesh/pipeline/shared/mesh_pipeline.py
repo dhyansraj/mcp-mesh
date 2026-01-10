@@ -78,7 +78,6 @@ class MeshPipeline:
                     step_result = await step.execute(self.context)
                     executed_steps += 1
 
-
                     # Log step result
                     if step_result.is_success():
                         self.logger.info(
@@ -112,7 +111,6 @@ class MeshPipeline:
 
                 except Exception as e:
                     executed_steps += 1
-
 
                     error_msg = f"Step '{step.name}' threw exception: {e}"
                     overall_result.add_error(error_msg)

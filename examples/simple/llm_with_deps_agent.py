@@ -52,24 +52,10 @@ class AnalysisResponse(BaseModel):
 )
 async def smart_analyze(
     query: str,
-    time_service: mesh.McpMeshAgent = None,
-    info: mesh.McpMeshAgent = None,
-    llm: mesh.MeshLlmAgent = None,
+    time_service: mesh.McpMeshAgent = None
 ) -> AnalysisResponse:
-    """
-    Analyze data using LLM with time and system info context.
 
-    This function has BOTH:
-    - Static dependencies (time_service, info) injected via mesh DI
-    - LLM provider (Claude) for intelligent analysis
-    """
-    # Get timestamp from dependency
-    timestamp = "unknown"
-    if time_service:
-        try:
-            timestamp = await time_service()
-        except Exception:
-            pass
+    timestamp = await time_service()
 
     # Get system info from dependency
     system_info = "unknown"

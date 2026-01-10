@@ -14,12 +14,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel
 
 from .llm_config import LLMConfig
-from .llm_errors import (
-    LLMAPIError,
-    MaxIterationsError,
-    ResponseParseError,
-    ToolExecutionError,
-)
+from .llm_errors import (LLMAPIError, MaxIterationsError, ResponseParseError,
+                         ToolExecutionError)
 from .provider_handlers import ProviderHandlerRegistry
 from .response_parser import ResponseParser
 from .tool_executor import ToolExecutor
@@ -27,7 +23,8 @@ from .tool_schema_builder import ToolSchemaBuilder
 
 # Import Jinja2 for template rendering
 try:
-    from jinja2 import Environment, FileSystemLoader, Template, TemplateSyntaxError
+    from jinja2 import (Environment, FileSystemLoader, Template,
+                        TemplateSyntaxError)
 except ImportError:
     Environment = None
     FileSystemLoader = None

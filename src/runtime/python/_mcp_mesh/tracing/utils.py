@@ -7,44 +7,58 @@ and maintain consistency.
 
 import json
 import logging
-import os
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Try to import the Rust core module for tracing
+# Falls back gracefully if not available
+try:
+    import mcp_mesh_core
+
+    _RUST_CORE_AVAILABLE = True
+except ImportError:
+    mcp_mesh_core = None  # type: ignore[assignment]
+    _RUST_CORE_AVAILABLE = False
+    logger.warning(
+        "mcp_mesh_core not available - tracing features will be disabled. "
+        "Build/install mcp-mesh-core for full functionality."
+    )
+
 
 def is_tracing_enabled() -> bool:
-    """Check if distributed tracing is enabled via environment variable.
+    """Check if distributed tracing is enabled via Rust core config resolution.
+
+    Delegates to mcp_mesh_core.is_tracing_enabled_py() for consistent behavior
+    across all language SDKs. Priority: ENV > param > default (false)
 
     Returns:
         True if tracing is enabled, False otherwise
     """
-    return os.getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-        "on",
-    )
+    if not _RUST_CORE_AVAILABLE or mcp_mesh_core is None:
+        return False
+
+    return mcp_mesh_core.is_tracing_enabled_py()
 
 
 def generate_span_id() -> str:
-    """Generate a unique span ID for tracing.
+    """Generate a unique span ID for tracing (OpenTelemetry compliant).
 
     Returns:
-        UUID string for span identification
+        16-character hex string (64-bit span ID per OTel spec)
     """
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex[:16]
 
 
 def generate_trace_id() -> str:
-    """Generate a unique trace ID for tracing.
+    """Generate a unique trace ID for tracing (OpenTelemetry compliant).
 
     Returns:
-        UUID string for trace identification
+        32-character hex string (128-bit trace ID per OTel spec)
     """
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex
 
 
 def get_agent_metadata_with_fallback(logger_instance: logging.Logger) -> dict[str, Any]:

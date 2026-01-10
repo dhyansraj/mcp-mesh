@@ -7,12 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
 from _mcp_mesh.shared.health_check_manager import (
-    clear_health_cache,
-    get_cache_stats,
-    get_health_status_with_cache,
-)
+    clear_health_cache, get_cache_stats, get_health_status_with_cache)
 from _mcp_mesh.shared.support_types import HealthStatus, HealthStatusType
 
 

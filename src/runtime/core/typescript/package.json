@@ -1,0 +1,45 @@
+{
+  "name": "@mcpmesh/core",
+  "version": "0.8.0",
+  "description": "MCP Mesh Rust core bindings for Node.js",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "mcp-mesh-core",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.5.1"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
+    "build:debug": "napi build --platform --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
+    "prepublishOnly": "napi prepublish -t npm",
+    "universal": "napi universal",
+    "version": "napi version"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcp-mesh/mcp-mesh"
+  },
+  "keywords": [
+    "mcp",
+    "mesh",
+    "agent",
+    "napi",
+    "rust"
+  ]
+}

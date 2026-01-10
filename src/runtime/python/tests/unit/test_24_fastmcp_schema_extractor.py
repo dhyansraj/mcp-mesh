@@ -7,7 +7,6 @@ Tests schema extraction from FastMCP tools for LLM integration (Phase 2).
 from unittest.mock import MagicMock
 
 import pytest
-
 from _mcp_mesh.engine.decorator_registry import DecoratedFunction
 from _mcp_mesh.utils.fastmcp_schema_extractor import FastMCPSchemaExtractor
 
@@ -344,9 +343,8 @@ class TestMeshContextModelDetection:
 
     def test_detect_mesh_context_model_parameter(self):
         """Test: Detect parameter with MeshContextModel type hint."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -385,9 +383,8 @@ class TestMeshContextModelDetection:
 
     def test_detect_mesh_context_model_subclass(self):
         """Test: Detect parameter with MeshContextModel subclass."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class BaseContext(MeshContextModel):
             user_name: str = Field(description="Name of user")
@@ -444,9 +441,8 @@ class TestMeshContextModelDetection:
 
     def test_handle_multiple_parameters_mixed(self):
         """Test: Handle multiple parameters (some context, some regular)."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class ChatContext(MeshContextModel):
             domain: str = Field(description="Chat domain")
@@ -482,9 +478,8 @@ class TestMeshContextModelDetection:
         """Test: Handle optional MeshContextModel (| None)."""
         from typing import Optional
 
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -517,9 +512,8 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_simple_field_descriptions(self):
         """Test: Extract Field description for simple fields."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class SimpleContext(MeshContextModel):
             name: str = Field(description="User name")
@@ -545,9 +539,8 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_optional_fields_with_defaults(self):
         """Test: Extract Field description for optional fields with defaults."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class ConfigContext(MeshContextModel):
             timeout: int = Field(default=30, description="Timeout in seconds")
@@ -573,9 +566,8 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_complex_types(self):
         """Test: Extract Field description for complex types (list, dict)."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class ComplexContext(MeshContextModel):
             tags: list[str] = Field(description="List of tags")
@@ -601,9 +593,8 @@ class TestFieldDescriptionExtraction:
 
     def test_extract_nested_mesh_context_model(self):
         """Test: Extract Field description for nested MeshContextModel."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class UserInfo(MeshContextModel):
             name: str = Field(description="User name")
@@ -672,9 +663,8 @@ class TestFieldDescriptionExtraction:
 
     def test_preserve_non_mesh_context_params(self):
         """Test: Preserve original schema for non-MeshContextModel params."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -708,9 +698,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_includes_descriptions(self):
         """Test: Enhanced schema includes MeshContextModel field descriptions."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain: infrastructure, security")
@@ -753,9 +742,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_includes_defaults(self):
         """Test: Enhanced schema includes default values."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class ConfigContext(MeshContextModel):
             timeout: int = Field(default=60, description="Timeout in seconds")
@@ -779,9 +767,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_marks_context_param(self):
         """Test: Enhanced schema marks context params with description."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class ChatContext(MeshContextModel):
             domain: str = Field(description="Chat domain")
@@ -811,9 +798,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_enhanced_schema_preserves_all_fields(self):
         """Test: Enhanced schema preserves all original fields."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -845,9 +831,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_schema_filtering_still_works(self):
         """Test: Schema filtering still works (dependency params removed)."""
-        from pydantic import Field
-
         from mesh import MeshContextModel, MeshLlmAgent
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")
@@ -876,9 +861,8 @@ class TestEnhancedSchemaGeneration:
 
     def test_complete_schema_is_valid_json_schema(self):
         """Test: Complete schema sent to registry is valid JSON Schema."""
-        from pydantic import Field
-
         from mesh import MeshContextModel
+        from pydantic import Field
 
         class AnalysisContext(MeshContextModel):
             domain: str = Field(description="Analysis domain")

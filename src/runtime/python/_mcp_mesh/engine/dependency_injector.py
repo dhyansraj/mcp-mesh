@@ -14,12 +14,10 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from ..shared.logging_config import (
-    format_log_value,
-    format_result_summary,
-    get_trace_prefix,
-)
-from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
+from ..shared.logging_config import (format_log_value, format_result_summary,
+                                     get_trace_prefix)
+from .signature_analyzer import (get_mesh_agent_positions,
+                                 has_llm_agent_parameter)
 
 logger = logging.getLogger(__name__)
 

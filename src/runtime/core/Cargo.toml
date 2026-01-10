@@ -13,12 +13,17 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["python"]
 python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
+typescript = ["dep:napi", "dep:napi-derive"]
 ffi = []  # C FFI support for multi-language SDKs
 
 [dependencies]
 # Python bindings (optional, enabled by default)
 pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"], optional = true }
+
+# TypeScript/Node.js bindings (optional)
+napi = { version = "3", features = ["async", "serde-json"], optional = true }
+napi-derive = { version = "3", optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -37,12 +42,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
+# Redis for distributed tracing
+redis = { version = "0.32.7", features = ["tokio-comp"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1"
 
 [build-dependencies]
 cbindgen = "0.27"  # C header generation for FFI
+napi-build = "2"   # napi-rs build support
 
 [profile.release]
 lto = true

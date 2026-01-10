@@ -1,0 +1,71 @@
+/**
+ * @mcpmesh/sdk - MCP Mesh SDK for TypeScript
+ *
+ * Build distributed MCP agents with automatic service discovery and dependency injection.
+ *
+ * @example
+ * ```typescript
+ * import { FastMCP } from "fastmcp";
+ * import { mesh } from "@mcpmesh/sdk";
+ * import { z } from "zod";
+ *
+ * const server = new FastMCP({ name: "Calculator", version: "1.0.0" });
+ *
+ * const agent = mesh(server, {
+ *   name: "calculator",
+ *   port: 9002,
+ * });
+ *
+ * agent.addTool({
+ *   name: "add",
+ *   capability: "add",
+ *   tags: ["tools", "math"],
+ *   description: "Add two numbers together",
+ *   parameters: z.object({ a: z.number(), b: z.number() }),
+ *   execute: async ({ a, b }) => String(a + b),
+ * });
+ *
+ * // No server.start() or main function needed!
+ * ```
+ */
+
+// Main API
+export { mesh, MeshAgent } from "./agent.js";
+
+// Proxy utilities (for advanced use)
+export { createProxy, normalizeDependency } from "./proxy.js";
+
+// Tracing utilities (for advanced use)
+export {
+  initTracing,
+  isTracingAvailable,
+  generateTraceId,
+  generateSpanId,
+  parseTraceContext,
+  createTraceHeaders,
+  publishTraceSpan,
+  type TraceContext,
+  type AgentMetadata,
+  type SpanData,
+} from "./tracing.js";
+
+// Types
+export type {
+  AgentConfig,
+  ResolvedAgentConfig,
+  MeshToolDef,
+  ToolMeta,
+  DependencySpec,
+  NormalizedDependency,
+  ResolvedDependency,
+  DependencyKwargs,
+  McpMeshAgent,
+  JsAgentHandle,
+  JsMeshEvent,
+  JsAgentSpec,
+  JsToolSpec,
+  JsDependencySpec,
+} from "./types.js";
+
+// Default export for convenience
+export { mesh as default } from "./agent.js";

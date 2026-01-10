@@ -9,14 +9,9 @@ and FastAPI server preparation.
 import logging
 
 from ..shared.mesh_pipeline import MeshPipeline
-from . import (
-    ConfigurationStep,
-    DecoratorCollectionStep,
-    FastAPIServerSetupStep,
-    FastMCPServerDiscoveryStep,
-    HeartbeatLoopStep,
-    HeartbeatPreparationStep,
-)
+from . import (ConfigurationStep, DecoratorCollectionStep,
+               FastAPIServerSetupStep, FastMCPServerDiscoveryStep,
+               HeartbeatLoopStep, HeartbeatPreparationStep)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)

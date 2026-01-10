@@ -1,0 +1,45 @@
+{
+  "name": "@mcpmesh/sdk",
+  "version": "0.8.0",
+  "description": "MCP Mesh SDK for TypeScript - Build distributed MCP agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "license": "MIT",
+  "author": "MCP Mesh Team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcp-mesh/mcp-mesh"
+  },
+  "keywords": [
+    "mcp",
+    "mesh",
+    "agent",
+    "llm",
+    "fastmcp"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src/",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@mcpmesh/core": "file:../core/typescript",
+    "fastmcp": "^3.26.8",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

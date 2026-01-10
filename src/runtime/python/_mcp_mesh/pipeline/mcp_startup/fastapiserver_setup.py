@@ -236,11 +236,9 @@ class FastAPIServerSetupStep(PipelineStep):
         try:
             from fastapi import FastAPI
 
-            from .lifespan_factory import (
-                create_minimal_lifespan,
-                create_multiple_fastmcp_lifespan,
-                create_single_fastmcp_lifespan,
-            )
+            from .lifespan_factory import (create_minimal_lifespan,
+                                           create_multiple_fastmcp_lifespan,
+                                           create_single_fastmcp_lifespan)
 
             agent_name = agent_config.get("name", "mcp-mesh-agent")
             agent_description = agent_config.get(
@@ -330,7 +328,8 @@ class FastAPIServerSetupStep(PipelineStep):
             if health_check_fn:
                 # Use health check cache if configured
                 from ...engine.decorator_registry import DecoratorRegistry
-                from ...shared.health_check_manager import get_health_status_with_cache
+                from ...shared.health_check_manager import \
+                    get_health_status_with_cache
 
                 health_status = await get_health_status_with_cache(
                     agent_id=agent_name,
