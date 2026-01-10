@@ -106,9 +106,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src/runtime/core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-rust-${{ hashFiles('src/runtime/core/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-rust-
 
       - name: Run Rust tests
         run: cargo test --no-default-features -- --test-threads=1
@@ -136,9 +136,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src/runtime/core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-ts-${{ hashFiles('src/runtime/core/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-ts-
 
       - name: Build @mcpmesh/core native module
         working-directory: src/runtime/core/typescript
@@ -185,9 +185,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src/runtime/core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src/runtime/core/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-py-${{ hashFiles('src/runtime/core/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-py-
 
       - name: Build and install mcp_mesh_core
         run: |
