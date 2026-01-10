@@ -10,8 +10,6 @@ import {
   generateSpanId,
   parseTraceContext,
   createTraceHeaders,
-  initTracing,
-  isTracingAvailable,
   publishTraceSpan,
   type TraceContext,
   type AgentMetadata,

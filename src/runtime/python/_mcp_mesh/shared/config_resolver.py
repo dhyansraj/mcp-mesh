@@ -78,8 +78,12 @@ def get_config_value(
         rule: Validation rule to apply
 
     Returns:
-        Validated configuration value, or None if validation fails for both
-        the resolved value and the default fallback.
+        Validated configuration value, or None if no default was provided
+        and the resolved value failed validation.
+
+    Raises:
+        ConfigResolutionError: If both the resolved value and an explicit
+            default fail validation (indicates a programming error).
     """
     # Check if this is a known mesh config key - delegate to Rust core if available
     rust_key = _ENV_TO_RUST_KEY.get(env_var)
@@ -98,8 +102,12 @@ def get_config_value(
         if default is not None and raw_value != default:
             try:
                 return _validate_value(default, rule, env_var)
-            except ConfigResolutionError:
-                pass
+            except ConfigResolutionError as default_error:
+                # Both raw_value and explicit default failed validation - this is a programming error
+                raise ConfigResolutionError(
+                    f"{env_var}: both resolved value '{raw_value}' and default '{default}' failed validation"
+                ) from default_error
+        # No default provided or raw_value == default, return None for optional config
         return None
 
 
@@ -117,25 +125,34 @@ def _resolve_via_rust(
 
     # Use appropriate Rust function based on validation rule
     if rule == ValidationRule.TRUTHY_RULE:
-        # Boolean resolution
+        # Boolean resolution - validate override before passing to Rust
         param_bool = None
         if override is not None:
             if isinstance(override, bool):
                 param_bool = override
             elif isinstance(override, str):
-                param_bool = override.lower() in ("true", "1", "yes", "on")
+                lower_val = override.lower()
+                if lower_val in ("true", "1", "yes", "on"):
+                    param_bool = True
+                elif lower_val in ("false", "0", "no", "off"):
+                    param_bool = False
+                else:
+                    # Invalid string override - let validation catch it
+                    # Return the raw override so _validate_value can raise proper error
+                    return override
             else:
                 param_bool = bool(override)
         return mcp_mesh_core.resolve_config_bool_py(rust_key, param_bool)
 
     elif rule in (ValidationRule.PORT_RULE, ValidationRule.NONZERO_RULE):
-        # Integer resolution
+        # Integer resolution - validate override before passing to Rust
         param_int = None
         if override is not None:
             try:
                 param_int = int(override)
             except (ValueError, TypeError):
-                pass
+                # Invalid override - return raw value so _validate_value can raise proper error
+                return override
         result = mcp_mesh_core.resolve_config_int_py(rust_key, param_int)
         return result if result is not None else default
 

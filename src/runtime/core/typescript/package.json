@@ -16,12 +16,12 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "@napi-rs/cli": "^3.5.0"
+    "@napi-rs/cli": "^3.5.1"
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release --manifest-path ../Cargo.toml --features typescript --no-default-features",
-    "build:debug": "napi build --platform --manifest-path ../Cargo.toml --features typescript --no-default-features",
+    "build": "napi build --platform --release --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
+    "build:debug": "napi build --platform --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
     "prepublishOnly": "napi prepublish -t npm",
     "universal": "napi universal",
     "version": "napi version"

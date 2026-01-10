@@ -4,7 +4,7 @@
  * Tests configuration resolution utilities for MCP Mesh TypeScript SDK.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { generateAgentIdSuffix, resolveConfig } from "../config.js";
 import type { AgentConfig } from "../types.js";
 

@@ -90,7 +90,7 @@ export function generateTraceId(): string {
  * Generate a new span ID.
  */
 export function generateSpanId(): string {
-  return randomUUID();
+  return randomUUID().replace(/-/g, "");
 }
 
 /**
