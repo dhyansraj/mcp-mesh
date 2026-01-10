@@ -78,10 +78,8 @@ def get_config_value(
         rule: Validation rule to apply
 
     Returns:
-        Validated configuration value
-
-    Raises:
-        ConfigResolutionError: If validation fails and no valid default
+        Validated configuration value, or None if validation fails for both
+        the resolved value and the default fallback.
     """
     # Check if this is a known mesh config key - delegate to Rust core if available
     rust_key = _ENV_TO_RUST_KEY.get(env_var)
