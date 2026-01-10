@@ -8,10 +8,14 @@ robust app discovery, and graceful error handling.
 
 import gc
 import logging
+import threading
 import time
 from typing import List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+# Lock for thread-safe singleton initialization
+_middleware_manager_lock = threading.Lock()
 
 
 class FastAPIMiddlewareManager:
@@ -80,6 +84,10 @@ class FastAPIMiddlewareManager:
             # Apply the monkey-patch
             FastAPI.__init__ = enhanced_fastapi_init
             self._monkey_patch_applied = True
+
+            # Ensure manager is initialized before any app instances are created
+            # This guarantees the closure in enhanced_fastapi_init can rely on a ready manager
+            get_fastapi_middleware_manager()
 
             logger.debug(
                 "🔍 TRACING: Successfully applied FastAPI creation monkey-patch"
@@ -402,8 +410,20 @@ _middleware_manager: Optional[FastAPIMiddlewareManager] = None
 
 
 def get_fastapi_middleware_manager() -> FastAPIMiddlewareManager:
-    """Get or create global FastAPI middleware manager instance."""
+    """Get or create global FastAPI middleware manager instance.
+
+    Uses double-checked locking for thread-safe singleton initialization.
+    """
     global _middleware_manager
-    if _middleware_manager is None:
-        _middleware_manager = FastAPIMiddlewareManager()
+
+    # First check without lock (fast path)
+    if _middleware_manager is not None:
+        return _middleware_manager
+
+    # Acquire lock for initialization
+    with _middleware_manager_lock:
+        # Double-check after acquiring lock
+        if _middleware_manager is None:
+            _middleware_manager = FastAPIMiddlewareManager()
+
     return _middleware_manager

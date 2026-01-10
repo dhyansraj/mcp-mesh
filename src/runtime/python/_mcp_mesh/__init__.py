@@ -27,7 +27,7 @@ from .engine.decorator_registry import (DecoratedFunction, DecoratorRegistry,
                                         get_all_mesh_agents,
                                         get_decorator_stats)
 
-__version__ = "0.7.21"
+__version__ = "0.8.0"
 
 # Store reference to runtime processor if initialized
 _runtime_processor = None

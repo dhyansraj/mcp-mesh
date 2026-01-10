@@ -242,7 +242,7 @@ export function createTracedExecutor<TArgs, TResult>(
         error,
         resultType,
         argsCount: 0,
-        kwargsCount: typeof args === "object" ? Object.keys(args as object).length : 0,
+        kwargsCount: typeof args === "object" && args !== null ? Object.keys(args).length : 0,
         dependencies,
         injectedDependencies,
         meshPositions: [],

@@ -428,12 +428,19 @@ export class MeshAgent {
     functionName: string,
     agentId: string
   ): void {
-    // Find kwargs for this dependency (from any tool that uses it)
+    // Find kwargs for this dependency by index (from any tool that uses it)
+    // Array index corresponds to dependencies array position
     let kwargs = undefined;
     for (const meta of this.tools.values()) {
-      if (meta.dependencyKwargs?.[capability]) {
-        kwargs = meta.dependencyKwargs[capability];
-        break;
+      if (meta.dependencyKwargs && meta.dependencies) {
+        // Find the index of this capability in the dependencies array
+        const depIndex = meta.dependencies.findIndex(
+          (dep) => dep.capability === capability
+        );
+        if (depIndex >= 0 && meta.dependencyKwargs[depIndex]) {
+          kwargs = meta.dependencyKwargs[depIndex];
+          break;
+        }
       }
     }
 

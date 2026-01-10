@@ -75,6 +75,43 @@ impl ConfigKey {
             _ => None,
         }
     }
+
+    /// Check if this config key contains sensitive data (credentials, URLs with auth).
+    pub fn is_sensitive(&self) -> bool {
+        matches!(self, ConfigKey::RedisUrl | ConfigKey::RegistryUrl)
+    }
+}
+
+/// Redact sensitive values for logging.
+///
+/// For URLs, preserves the scheme and host but redacts credentials and path.
+/// Example: "redis://user:pass@host:6379/db" -> "redis://***@host:6379/***"
+fn redact_for_logging(key: ConfigKey, value: &str) -> String {
+    if !key.is_sensitive() {
+        return value.to_string();
+    }
+
+    // Try to parse as URL and redact credentials
+    if let Ok(mut url) = url::Url::parse(value) {
+        let had_password = url.password().is_some();
+        let had_username = !url.username().is_empty();
+
+        // Redact credentials
+        if had_username || had_password {
+            let _ = url.set_username("***");
+            let _ = url.set_password(Some("***"));
+        }
+
+        // Redact path if non-empty (could contain db names, etc.)
+        if !url.path().is_empty() && url.path() != "/" {
+            url.set_path("/***");
+        }
+
+        url.to_string()
+    } else {
+        // Not a valid URL, fully redact
+        "[REDACTED]".to_string()
+    }
 }
 
 /// Auto-detect external IP address.
@@ -118,7 +155,11 @@ pub fn resolve_config(key: ConfigKey, param_value: Option<&str>) -> Option<Strin
     let env_var = key.env_var();
     if let Ok(value) = env::var(env_var) {
         if !value.is_empty() {
-            debug!("Config '{}' resolved from ENV: {}", env_var, value);
+            debug!(
+                "Config '{}' resolved from ENV: {}",
+                env_var,
+                redact_for_logging(key, &value)
+            );
             return Some(value);
         }
     }
@@ -126,7 +167,11 @@ pub fn resolve_config(key: ConfigKey, param_value: Option<&str>) -> Option<Strin
     // Priority 2: Parameter value (from decorator/script)
     if let Some(value) = param_value {
         if !value.is_empty() {
-            debug!("Config '{}' resolved from param: {}", env_var, value);
+            debug!(
+                "Config '{}' resolved from param: {}",
+                env_var,
+                redact_for_logging(key, value)
+            );
             return Some(value.to_string());
         }
     }
@@ -140,7 +185,11 @@ pub fn resolve_config(key: ConfigKey, param_value: Option<&str>) -> Option<Strin
     }
 
     if let Some(default) = key.default_value() {
-        debug!("Config '{}' resolved from default: {}", env_var, default);
+        debug!(
+            "Config '{}' resolved from default: {}",
+            env_var,
+            redact_for_logging(key, default)
+        );
         return Some(default.to_string());
     }
 
@@ -179,10 +228,28 @@ pub fn resolve_config_bool(key: ConfigKey, param_value: Option<bool>) -> bool {
     // Priority 1: Environment variable
     let env_var = key.env_var();
     if let Ok(value) = env::var(env_var) {
-        let lower = value.to_lowercase();
-        let result = matches!(lower.as_str(), "true" | "1" | "yes" | "on");
-        debug!("Config '{}' (bool) resolved from ENV: {} -> {}", env_var, value, result);
-        return result;
+        let lower = value.trim().to_lowercase();
+        if lower.is_empty() {
+            // Treat empty as "unset" - fall through to param/default
+        } else if matches!(lower.as_str(), "true" | "1" | "yes" | "on") {
+            debug!(
+                "Config '{}' (bool) resolved from ENV: {} -> true",
+                env_var, value
+            );
+            return true;
+        } else if matches!(lower.as_str(), "false" | "0" | "no" | "off") {
+            debug!(
+                "Config '{}' (bool) resolved from ENV: {} -> false",
+                env_var, value
+            );
+            return false;
+        } else {
+            warn!(
+                "Config '{}' (bool) has unrecognized value '{}'; falling back",
+                env_var, value
+            );
+            // Fall through to param/default
+        }
     }
 
     // Priority 2: Parameter value
@@ -195,7 +262,10 @@ pub fn resolve_config_bool(key: ConfigKey, param_value: Option<bool>) -> bool {
     if let Some(default) = key.default_value() {
         let lower = default.to_lowercase();
         let result = matches!(lower.as_str(), "true" | "1" | "yes" | "on");
-        debug!("Config '{}' (bool) resolved from default: {} -> {}", env_var, default, result);
+        debug!(
+            "Config '{}' (bool) resolved from default: {} -> {}",
+            env_var, default, result
+        );
         return result;
     }
 
@@ -229,7 +299,10 @@ pub fn resolve_config_int(key: ConfigKey, param_value: Option<i64>) -> Option<i6
     // Priority 3: Default value
     if let Some(default) = key.default_value() {
         if let Ok(parsed) = default.parse::<i64>() {
-            debug!("Config '{}' (int) resolved from default: {}", env_var, parsed);
+            debug!(
+                "Config '{}' (int) resolved from default: {}",
+                env_var, parsed
+            );
             return Some(parsed);
         }
     }
@@ -315,6 +388,15 @@ pub fn auto_detect_ip_py() -> String {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
+
+    /// Global mutex to serialize tests that mutate environment variables.
+    /// This prevents race conditions when tests run in parallel.
+    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // =========================================================================
+    // Tests that don't mutate environment (no lock needed)
+    // =========================================================================
 
     #[test]
     fn test_config_key_env_var() {
@@ -324,13 +406,80 @@ mod tests {
 
     #[test]
     fn test_config_key_default_value() {
-        assert_eq!(ConfigKey::RegistryUrl.default_value(), Some("http://localhost:8000"));
+        assert_eq!(
+            ConfigKey::RegistryUrl.default_value(),
+            Some("http://localhost:8000")
+        );
         assert_eq!(ConfigKey::Namespace.default_value(), Some("default"));
         assert_eq!(ConfigKey::HttpPort.default_value(), None);
     }
 
     #[test]
+    fn test_config_key_from_name() {
+        assert_eq!(
+            ConfigKey::from_name("registry_url"),
+            Some(ConfigKey::RegistryUrl)
+        );
+        assert_eq!(
+            ConfigKey::from_name("REGISTRY_URL"),
+            Some(ConfigKey::RegistryUrl)
+        );
+        assert_eq!(ConfigKey::from_name("unknown"), None);
+    }
+
+    #[test]
+    fn test_is_sensitive() {
+        assert!(ConfigKey::RedisUrl.is_sensitive());
+        assert!(ConfigKey::RegistryUrl.is_sensitive());
+        assert!(!ConfigKey::Namespace.is_sensitive());
+        assert!(!ConfigKey::HttpPort.is_sensitive());
+    }
+
+    #[test]
+    fn test_redact_for_logging_non_sensitive() {
+        let value = redact_for_logging(ConfigKey::Namespace, "production");
+        assert_eq!(value, "production");
+    }
+
+    #[test]
+    fn test_redact_for_logging_redis_with_credentials() {
+        let value =
+            redact_for_logging(ConfigKey::RedisUrl, "redis://user:secret@redis.example.com:6379/0");
+        assert!(value.contains("***"));
+        assert!(!value.contains("user"));
+        assert!(!value.contains("secret"));
+        assert!(value.contains("redis.example.com"));
+    }
+
+    #[test]
+    fn test_redact_for_logging_redis_no_credentials() {
+        let value = redact_for_logging(ConfigKey::RedisUrl, "redis://localhost:6379");
+        // No credentials to redact, but path might be redacted
+        assert!(value.contains("localhost"));
+    }
+
+    #[test]
+    fn test_redact_for_logging_invalid_url() {
+        let value = redact_for_logging(ConfigKey::RedisUrl, "not-a-valid-url");
+        assert_eq!(value, "[REDACTED]");
+    }
+
+    #[test]
+    fn test_auto_detect_ip() {
+        // This test doesn't mutate env, just reads network state
+        let ip = auto_detect_external_ip();
+        // Should return something (either real IP or localhost)
+        assert!(!ip.is_empty());
+    }
+
+    // =========================================================================
+    // Tests that mutate environment (require lock)
+    // =========================================================================
+
+    #[test]
     fn test_resolve_config_default() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
         // Clear any existing env var
         env::remove_var("MCP_MESH_NAMESPACE");
 
@@ -340,6 +489,8 @@ mod tests {
 
     #[test]
     fn test_resolve_config_param_over_default() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
         env::remove_var("MCP_MESH_NAMESPACE");
 
         let value = resolve_config(ConfigKey::Namespace, Some("production"));
@@ -348,6 +499,8 @@ mod tests {
 
     #[test]
     fn test_resolve_config_env_over_param() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
         env::set_var("MCP_MESH_NAMESPACE", "staging");
 
         let value = resolve_config(ConfigKey::Namespace, Some("production"));
@@ -358,32 +511,103 @@ mod tests {
 
     #[test]
     fn test_resolve_config_bool() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
         env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
 
         // Default is false
-        assert!(!resolve_config_bool(ConfigKey::DistributedTracingEnabled, None));
+        assert!(!resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            None
+        ));
 
         // Param override
-        assert!(resolve_config_bool(ConfigKey::DistributedTracingEnabled, Some(true)));
+        assert!(resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(true)
+        ));
 
-        // Env override
+        // Env override with "true"
         env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
-        assert!(resolve_config_bool(ConfigKey::DistributedTracingEnabled, Some(false)));
+        assert!(resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(false)
+        ));
+
+        // Env override with explicit "false"
+        env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false");
+        assert!(!resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(true)
+        ));
 
         env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
     }
 
     #[test]
-    fn test_auto_detect_ip() {
-        let ip = auto_detect_external_ip();
-        // Should return something (either real IP or localhost)
-        assert!(!ip.is_empty());
+    fn test_resolve_config_bool_empty_env_falls_through() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        // Empty env should fall through to param
+        env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "");
+        assert!(resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(true)
+        ));
+        assert!(!resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(false)
+        ));
+        env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
     }
 
     #[test]
-    fn test_config_key_from_name() {
-        assert_eq!(ConfigKey::from_name("registry_url"), Some(ConfigKey::RegistryUrl));
-        assert_eq!(ConfigKey::from_name("REGISTRY_URL"), Some(ConfigKey::RegistryUrl));
-        assert_eq!(ConfigKey::from_name("unknown"), None);
+    fn test_resolve_config_bool_invalid_env_falls_through() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        // Invalid/typo env value should fall through to param (with warning)
+        env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "tru");
+        assert!(resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(true)
+        ));
+
+        env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "invalid");
+        assert!(!resolve_config_bool(
+            ConfigKey::DistributedTracingEnabled,
+            Some(false)
+        ));
+
+        env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    #[test]
+    fn test_resolve_config_bool_various_true_values() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        for val in &["true", "TRUE", "True", "1", "yes", "YES", "on", "ON"] {
+            env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", *val);
+            assert!(
+                resolve_config_bool(ConfigKey::DistributedTracingEnabled, None),
+                "Expected true for '{}'",
+                val
+            );
+        }
+        env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    #[test]
+    fn test_resolve_config_bool_various_false_values() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        for val in &["false", "FALSE", "False", "0", "no", "NO", "off", "OFF"] {
+            env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", *val);
+            assert!(
+                !resolve_config_bool(ConfigKey::DistributedTracingEnabled, Some(true)),
+                "Expected false for '{}'",
+                val
+            );
+        }
+        env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
     }
 }

@@ -193,6 +193,8 @@ jobs:
         run: |
           pip install maturin
           cd ../core
+          # Remove any stale wheels to ensure we install the freshly built one
+          rm -f target/wheels/*.whl
           maturin build --release
           pip install target/wheels/*.whl
 

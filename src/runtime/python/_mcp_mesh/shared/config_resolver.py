@@ -12,9 +12,21 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
 
-import mcp_mesh_core
-
 logger = logging.getLogger(__name__)
+
+# Try to import the Rust core module for config resolution
+# Falls back to Python-only resolution if not available
+try:
+    import mcp_mesh_core
+
+    _RUST_CORE_AVAILABLE = True
+except ImportError as e:
+    mcp_mesh_core = None  # type: ignore[assignment]
+    _RUST_CORE_AVAILABLE = False
+    logger.warning(
+        "mcp_mesh_core not available - falling back to Python-only config resolution. "
+        "Build/install mcp-mesh-core for full functionality: cd src/runtime/core && maturin develop"
+    )
 
 # Map env var names to Rust config key names
 _ENV_TO_RUST_KEY: dict[str, str] = {
@@ -71,12 +83,12 @@ def get_config_value(
     Raises:
         ConfigResolutionError: If validation fails and no valid default
     """
-    # Check if this is a known mesh config key - delegate to Rust core
+    # Check if this is a known mesh config key - delegate to Rust core if available
     rust_key = _ENV_TO_RUST_KEY.get(env_var)
-    if rust_key is not None:
+    if rust_key is not None and _RUST_CORE_AVAILABLE:
         raw_value = _resolve_via_rust(rust_key, override, default, rule)
     else:
-        # Non-mesh config - use Python fallback
+        # Non-mesh config or Rust core unavailable - use Python fallback
         raw_value = _resolve_via_python(env_var, override, default)
 
     # Validate and convert the value
@@ -97,6 +109,11 @@ def _resolve_via_rust(
     rust_key: str, override: Any, default: Any, rule: ValidationRule
 ) -> Any:
     """Resolve config value via Rust core."""
+    if mcp_mesh_core is None:
+        raise RuntimeError(
+            "mcp_mesh_core is not available - this function should not be called"
+        )
+
     # Convert override to string for Rust (it expects Option<String>)
     param_str = str(override) if override is not None else None
 
@@ -127,7 +144,7 @@ def _resolve_via_rust(
     else:
         # String resolution (default)
         result = mcp_mesh_core.resolve_config_py(rust_key, param_str)
-        return result if result else default
+        return result if result is not None else default
 
 
 def _resolve_via_python(env_var: str, override: Any, default: Any) -> Any:

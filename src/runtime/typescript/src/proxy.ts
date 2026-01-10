@@ -63,13 +63,13 @@ export function createProxy(
   kwargs?: DependencyKwargs
 ): McpMeshAgent {
   const timeout = (kwargs?.timeout ?? 30) * 1000; // Convert to ms
-  const retryCount = kwargs?.retryCount ?? 1;
+  const maxAttempts = kwargs?.maxAttempts ?? 1;
 
   // The proxy function that calls the bound tool
   const proxyFn = async (
     args?: Record<string, unknown>
   ): Promise<string> => {
-    return callMcpTool(endpoint, functionName, args, timeout, retryCount, capability);
+    return callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability);
   };
 
   // Attach properties and methods
@@ -83,7 +83,7 @@ export function createProxy(
         toolName: string,
         args?: Record<string, unknown>
       ): Promise<string> => {
-        return callMcpTool(endpoint, toolName, args, timeout, retryCount, capability);
+        return callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability);
       },
       writable: false,
     },
@@ -104,7 +104,7 @@ async function callMcpTool(
   toolName: string,
   args: Record<string, unknown> | undefined,
   timeout: number,
-  retryCount: number,
+  maxAttempts: number,
   capability: string
 ): Promise<string> {
   // Ensure endpoint ends with /mcp
@@ -139,7 +139,7 @@ async function callMcpTool(
 
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt < retryCount; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -208,7 +208,7 @@ async function callMcpTool(
       }
 
       // Retry on network errors
-      if (attempt < retryCount - 1) {
+      if (attempt < maxAttempts - 1) {
         await sleep(100 * (attempt + 1)); // Exponential backoff
         continue;
       }

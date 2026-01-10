@@ -106,8 +106,8 @@ export type ResolvedAgentConfig = Required<AgentConfig>;
 export interface DependencyKwargs {
   /** Request timeout in seconds. Defaults to 30 */
   timeout?: number;
-  /** Number of retry attempts. Defaults to 1 */
-  retryCount?: number;
+  /** Total number of attempts (1 = one attempt with zero retries). Defaults to 1 */
+  maxAttempts?: number;
   /** Enable streaming responses. Defaults to false */
   streaming?: boolean;
   /** Require session affinity. Defaults to false */
@@ -146,10 +146,11 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   dependencies?: DependencySpec[];
   /**
-   * Per-dependency configuration.
-   * Keys are capability names, values are proxy settings.
+   * Per-dependency configuration indexed by position.
+   * Array index corresponds to dependencies array position.
+   * Supports duplicate capabilities with different settings.
    */
-  dependencyKwargs?: Record<string, DependencyKwargs>;
+  dependencyKwargs?: DependencyKwargs[];
   /**
    * Tool implementation.
    *
@@ -238,6 +239,6 @@ export interface ToolMeta {
   inputSchema?: string;
   /** Normalized dependencies for this tool */
   dependencies: NormalizedDependency[];
-  /** Per-dependency configuration */
-  dependencyKwargs?: Record<string, DependencyKwargs>;
+  /** Per-dependency configuration indexed by position (matches dependencies array) */
+  dependencyKwargs?: DependencyKwargs[];
 }

@@ -157,7 +157,7 @@ impl JsAgentHandle {
     /// Wait for and return the next mesh event.
     ///
     /// This is an async method that blocks until an event is available.
-    /// Returns null when the runtime has shut down.
+    /// Returns a JsMeshEvent with eventType "shutdown" when the runtime has shut down.
     #[napi]
     pub async fn next_event(&self) -> Result<JsMeshEvent> {
         let handle = self.inner.lock().await;

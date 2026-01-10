@@ -13,6 +13,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Try to import the Rust core module for tracing
+# Falls back gracefully if not available
+try:
+    import mcp_mesh_core
+
+    _RUST_CORE_AVAILABLE = True
+except ImportError:
+    mcp_mesh_core = None  # type: ignore[assignment]
+    _RUST_CORE_AVAILABLE = False
+    logger.warning(
+        "mcp_mesh_core not available - tracing features will be disabled. "
+        "Build/install mcp-mesh-core for full functionality."
+    )
+
 
 def is_tracing_enabled() -> bool:
     """Check if distributed tracing is enabled via environment variable.
@@ -23,7 +37,8 @@ def is_tracing_enabled() -> bool:
     Returns:
         True if tracing is enabled, False otherwise
     """
-    import mcp_mesh_core
+    if not _RUST_CORE_AVAILABLE or mcp_mesh_core is None:
+        return False
 
     return mcp_mesh_core.is_tracing_enabled_py()
 
