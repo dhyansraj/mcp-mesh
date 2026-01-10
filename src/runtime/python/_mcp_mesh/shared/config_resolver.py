@@ -114,7 +114,11 @@ def get_config_value(
 def _resolve_via_rust(
     rust_key: str, override: Any, default: Any, rule: ValidationRule
 ) -> Any:
-    """Resolve config value via Rust core."""
+    """Resolve config value via Rust core.
+
+    Maintains ENV > override > default precedence by always calling Rust resolver.
+    Invalid overrides are treated as None so Rust can fall back to ENV vars.
+    """
     if mcp_mesh_core is None:
         raise RuntimeError(
             "mcp_mesh_core is not available - this function should not be called"
@@ -125,7 +129,8 @@ def _resolve_via_rust(
 
     # Use appropriate Rust function based on validation rule
     if rule == ValidationRule.TRUTHY_RULE:
-        # Boolean resolution - validate override before passing to Rust
+        # Boolean resolution - try to coerce override, use None if invalid
+        # This ensures Rust can still check ENV vars when override is invalid
         param_bool = None
         if override is not None:
             if isinstance(override, bool):
@@ -136,23 +141,21 @@ def _resolve_via_rust(
                     param_bool = True
                 elif lower_val in ("false", "0", "no", "off"):
                     param_bool = False
-                else:
-                    # Invalid string override - let validation catch it
-                    # Return the raw override so _validate_value can raise proper error
-                    return override
+                # else: invalid string - leave param_bool as None, let Rust check ENV
             else:
                 param_bool = bool(override)
         return mcp_mesh_core.resolve_config_bool_py(rust_key, param_bool)
 
     elif rule in (ValidationRule.PORT_RULE, ValidationRule.NONZERO_RULE):
-        # Integer resolution - validate override before passing to Rust
+        # Integer resolution - try to coerce override, use None if invalid
+        # This ensures Rust can still check ENV vars when override is invalid
         param_int = None
         if override is not None:
             try:
                 param_int = int(override)
             except (ValueError, TypeError):
-                # Invalid override - return raw value so _validate_value can raise proper error
-                return override
+                # Invalid override - leave param_int as None, let Rust check ENV
+                pass
         result = mcp_mesh_core.resolve_config_int_py(rust_key, param_int)
         return result if result is not None else default
 
