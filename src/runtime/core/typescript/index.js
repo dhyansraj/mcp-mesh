@@ -578,6 +578,8 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.JsAgentHandle = nativeBinding.JsAgentHandle
 module.exports.autoDetectIp = nativeBinding.autoDetectIp
+module.exports.getDefault = nativeBinding.getDefault
+module.exports.getEnvVar = nativeBinding.getEnvVar
 module.exports.getRedisUrl = nativeBinding.getRedisUrl
 module.exports.initTracePublisher = nativeBinding.initTracePublisher
 module.exports.isTracePublisherAvailable = nativeBinding.isTracePublisherAvailable

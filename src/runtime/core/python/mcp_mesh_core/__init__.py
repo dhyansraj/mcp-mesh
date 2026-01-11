@@ -13,8 +13,8 @@ This module is implemented in Rust and provides:
 # Config resolution functions
 from .mcp_mesh_core import (AgentHandle, AgentSpec, DependencySpec, EventType,
                             LlmAgentSpec, LlmToolInfo, MeshEvent, ToolSpec,
-                            auto_detect_ip_py, get_redis_url_py,
-                            init_trace_publisher_py,
+                            auto_detect_ip_py, get_default_py, get_env_var_py,
+                            get_redis_url_py, init_trace_publisher_py,
                             is_trace_publisher_available_py,
                             is_tracing_enabled_py, publish_span_py,
                             resolve_config_bool_py, resolve_config_int_py,
@@ -38,6 +38,8 @@ __all__ = [
     "is_tracing_enabled_py",
     "get_redis_url_py",
     "auto_detect_ip_py",
+    "get_default_py",
+    "get_env_var_py",
     # Tracing publish functions
     "init_trace_publisher_py",
     "publish_span_py",

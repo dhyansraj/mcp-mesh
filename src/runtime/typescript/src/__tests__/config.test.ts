@@ -23,6 +23,15 @@ vi.mock("@mcpmesh/core", () => ({
     if (key === "health_interval") return value ?? 5;
     return value;
   }),
+  getDefault: vi.fn((key: string) => {
+    // Simulate Rust core defaults
+    if (key === "registry_url") return "http://localhost:8000";
+    if (key === "namespace") return "default";
+    if (key === "health_interval") return "5";
+    if (key === "distributed_tracing_enabled") return "false";
+    if (key === "redis_url") return "redis://localhost:6379";
+    return null;
+  }),
 }));
 
 describe("generateAgentIdSuffix", () => {

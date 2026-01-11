@@ -65,10 +65,10 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
     # Get registry URL
     from ...shared.config_resolver import get_config_value
 
+    # Default is handled by Rust core
     registry_url = get_config_value(
         "MCP_MESH_REGISTRY_URL",
         override=agent_config.get("registry_url"),
-        default="http://localhost:8000",
     )
 
     # Get heartbeat interval
@@ -267,13 +267,12 @@ async def _handle_api_dependency_change(
         for dep_index, dep_cap in enumerate(dependencies):
             if dep_cap == capability:
                 # Check for self-dependency (rare for API services but handle it)
-                import os
-
                 current_service_id = context.get("service_id") or context.get(
                     "agent_id"
                 )
                 if not current_service_id:
-                    current_service_id = os.getenv("MCP_MESH_AGENT_ID")
+                    # Use config resolver for consistent env var handling
+                    current_service_id = get_config_value("MCP_MESH_AGENT_ID")
 
                 is_self_dependency = (
                     current_service_id and agent_id and current_service_id == agent_id
@@ -281,8 +280,7 @@ async def _handle_api_dependency_change(
 
                 if is_self_dependency:
                     # Self-dependency for API services - use SelfDependencyProxy
-                    from ...engine.self_dependency_proxy import \
-                        SelfDependencyProxy
+                    from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                     # For API services, try to find the function in mesh tools
                     mesh_tools = DecoratorRegistry.get_mesh_tools()

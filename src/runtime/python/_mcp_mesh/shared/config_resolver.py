@@ -35,6 +35,7 @@ _ENV_TO_RUST_KEY: dict[str, str] = {
     "MCP_MESH_HTTP_PORT": "http_port",
     "MCP_MESH_NAMESPACE": "namespace",
     "MCP_MESH_AGENT_NAME": "agent_name",
+    "MCP_MESH_AGENT_ID": "agent_id",
     "MCP_MESH_HEALTH_INTERVAL": "health_interval",
     "MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "distributed_tracing_enabled",
     "REDIS_URL": "redis_url",
