@@ -304,6 +304,27 @@ pub fn auto_detect_ip() -> String {
     crate::config::auto_detect_external_ip()
 }
 
+/// Get the default value for a configuration key.
+///
+/// This allows SDKs to retrieve default values without doing full resolution,
+/// useful for documentation, type hints, and avoiding duplicate default definitions.
+///
+/// @param keyName - Config key (e.g., "registry_url", "namespace", "health_interval")
+/// @returns Default value if the key is known and has a default, null otherwise.
+#[napi]
+pub fn get_default(key_name: String) -> Option<String> {
+    crate::config::get_default_by_name(&key_name)
+}
+
+/// Get the environment variable name for a configuration key.
+///
+/// @param keyName - Config key (e.g., "registry_url", "namespace")
+/// @returns Environment variable name if the key is known, null otherwise.
+#[napi]
+pub fn get_env_var(key_name: String) -> Option<String> {
+    crate::config::get_env_var_by_name(&key_name)
+}
+
 // =============================================================================
 // Tracing publish functions
 // =============================================================================

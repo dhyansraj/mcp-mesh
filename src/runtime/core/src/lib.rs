@@ -188,6 +188,8 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(config::is_tracing_enabled_py, m)?)?;
     m.add_function(wrap_pyfunction!(config::get_redis_url_py, m)?)?;
     m.add_function(wrap_pyfunction!(config::auto_detect_ip_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::get_default_py, m)?)?;
+    m.add_function(wrap_pyfunction!(config::get_env_var_py, m)?)?;
 
     // Tracing publish functions (defined in tracing_publish.rs)
     m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;

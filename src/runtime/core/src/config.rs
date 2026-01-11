@@ -23,6 +23,8 @@ pub enum ConfigKey {
     Namespace,
     /// Agent name (MCP_MESH_AGENT_NAME)
     AgentName,
+    /// Agent ID assigned by registry at runtime (MCP_MESH_AGENT_ID)
+    AgentId,
     /// Heartbeat interval in seconds (MCP_MESH_HEALTH_INTERVAL)
     HealthInterval,
     /// Enable distributed tracing (MCP_MESH_DISTRIBUTED_TRACING_ENABLED)
@@ -40,6 +42,7 @@ impl ConfigKey {
             ConfigKey::HttpPort => "MCP_MESH_HTTP_PORT",
             ConfigKey::Namespace => "MCP_MESH_NAMESPACE",
             ConfigKey::AgentName => "MCP_MESH_AGENT_NAME",
+            ConfigKey::AgentId => "MCP_MESH_AGENT_ID",
             ConfigKey::HealthInterval => "MCP_MESH_HEALTH_INTERVAL",
             ConfigKey::DistributedTracingEnabled => "MCP_MESH_DISTRIBUTED_TRACING_ENABLED",
             ConfigKey::RedisUrl => "REDIS_URL",
@@ -55,6 +58,7 @@ impl ConfigKey {
             ConfigKey::HttpPort => None, // Required from param
             ConfigKey::Namespace => Some("default"),
             ConfigKey::AgentName => None, // Required from param
+            ConfigKey::AgentId => None,   // Runtime value, set after registration
             ConfigKey::HealthInterval => Some("5"),
             ConfigKey::DistributedTracingEnabled => Some("false"),
             ConfigKey::RedisUrl => Some("redis://localhost:6379"),
@@ -69,6 +73,7 @@ impl ConfigKey {
             "http_port" => Some(ConfigKey::HttpPort),
             "namespace" => Some(ConfigKey::Namespace),
             "agent_name" => Some(ConfigKey::AgentName),
+            "agent_id" => Some(ConfigKey::AgentId),
             "health_interval" => Some(ConfigKey::HealthInterval),
             "distributed_tracing_enabled" => Some(ConfigKey::DistributedTracingEnabled),
             "redis_url" => Some(ConfigKey::RedisUrl),
@@ -325,6 +330,31 @@ pub fn get_redis_url() -> String {
         .unwrap_or_else(|| "redis://localhost:6379".to_string())
 }
 
+/// Get the default value for a configuration key by name.
+///
+/// This allows SDKs to retrieve default values without doing full resolution,
+/// useful for documentation, type hints, and avoiding duplicate default definitions.
+///
+/// # Arguments
+/// * `key_name` - The configuration key name (e.g., "registry_url", "namespace")
+///
+/// # Returns
+/// The default value if the key is known and has a default, None otherwise.
+pub fn get_default_by_name(key_name: &str) -> Option<String> {
+    ConfigKey::from_name(key_name).and_then(|k| k.default_value().map(|s| s.to_string()))
+}
+
+/// Get the environment variable name for a configuration key.
+///
+/// # Arguments
+/// * `key_name` - The configuration key name (e.g., "registry_url", "namespace")
+///
+/// # Returns
+/// The environment variable name if the key is known, None otherwise.
+pub fn get_env_var_by_name(key_name: &str) -> Option<String> {
+    ConfigKey::from_name(key_name).map(|k| k.env_var().to_string())
+}
+
 // =============================================================================
 // Python bindings
 // =============================================================================
@@ -378,6 +408,18 @@ pub fn get_redis_url_py() -> String {
 #[pyfunction]
 pub fn auto_detect_ip_py() -> String {
     auto_detect_external_ip()
+}
+
+#[cfg(feature = "python")]
+#[pyfunction]
+pub fn get_default_py(key_name: &str) -> Option<String> {
+    get_default_by_name(key_name)
+}
+
+#[cfg(feature = "python")]
+#[pyfunction]
+pub fn get_env_var_py(key_name: &str) -> Option<String> {
+    get_env_var_by_name(key_name)
 }
 
 // =============================================================================

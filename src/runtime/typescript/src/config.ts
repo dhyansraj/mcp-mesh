@@ -3,6 +3,8 @@
  *
  * All configuration resolution is delegated to Rust core for consistency
  * across all language SDKs. Priority: ENV > config > defaults
+ *
+ * Defaults are also sourced from Rust core to ensure single source of truth.
  */
 
 import { randomBytes } from "crypto";
@@ -10,7 +12,14 @@ import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
 import {
   resolveConfig as rustResolveConfig,
   resolveConfigInt,
+  getDefault,
 } from "@mcpmesh/core";
+
+// TypeScript-specific defaults (not in Rust core)
+const TS_DEFAULTS = {
+  version: "1.0.0",
+  description: "",
+} as const;
 
 /**
  * Generate a short UUID suffix (8 hex chars) for agent IDs.
@@ -48,13 +57,17 @@ export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
     "registry_url",
     config.registryUrl ?? null
   );
+
+  // Get heartbeat interval with fallback to Rust core default
+  const healthIntervalDefault = parseInt(getDefault("health_interval") ?? "5", 10);
   const resolvedHeartbeatInterval =
-    resolveConfigInt("health_interval", config.heartbeatInterval ?? null) ?? 5;
+    resolveConfigInt("health_interval", config.heartbeatInterval ?? null) ??
+    healthIntervalDefault;
 
   return {
     name: resolvedName,
-    version: config.version ?? "1.0.0",
-    description: config.description ?? "",
+    version: config.version ?? TS_DEFAULTS.version,
+    description: config.description ?? TS_DEFAULTS.description,
     port: resolvedPort,
     host: resolvedHost,
     namespace: resolvedNamespace,

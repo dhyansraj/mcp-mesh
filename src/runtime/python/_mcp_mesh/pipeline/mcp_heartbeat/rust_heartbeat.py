@@ -53,10 +53,10 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
     # Get registry URL
     from ...shared.config_resolver import get_config_value
 
+    # Default is handled by Rust core
     registry_url = get_config_value(
         "MCP_MESH_REGISTRY_URL",
         override=agent_config.get("registry_url"),
-        default="http://localhost:8000",
     )
 
     # Get heartbeat interval
@@ -356,13 +356,18 @@ async def _handle_dependency_change(
         f"Dependency change: {capability} -> "
         f"{'available' if available else 'unavailable'} "
         f"at {endpoint}/{function_name}"
-        + (f" (func: {requesting_function}, idx: {dep_index})" if requesting_function else "")
+        + (
+            f" (func: {requesting_function}, idx: {dep_index})"
+            if requesting_function
+            else ""
+        )
     )
 
     # Import DI components
     from ...engine.decorator_registry import DecoratorRegistry
     from ...engine.dependency_injector import get_global_injector
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+    from ...shared.config_resolver import get_config_value
 
     injector = get_global_injector()
     mesh_tools = DecoratorRegistry.get_mesh_tools()
@@ -396,28 +401,37 @@ async def _handle_dependency_change(
                 break
 
         # Check for self-dependency
-        import os
         current_agent_id = None
         try:
             config = DecoratorRegistry.get_resolved_agent_config()
             current_agent_id = config.get("agent_id")
         except Exception:
-            current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
+            # Use config resolver for consistent env var handling
+            current_agent_id = get_config_value("MCP_MESH_AGENT_ID")
 
-        is_self_dependency = current_agent_id and agent_id and current_agent_id == agent_id
+        is_self_dependency = (
+            current_agent_id and agent_id and current_agent_id == agent_id
+        )
 
         if is_self_dependency:
             from ...engine.self_dependency_proxy import SelfDependencyProxy
+
             wrapper_func = mesh_tools.get(function_name)
             if wrapper_func:
                 proxy = SelfDependencyProxy(wrapper_func.function, function_name)
                 logger.debug(f"Created SelfDependencyProxy for {capability}")
             else:
                 proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
-                logger.debug(f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}")
+                logger.debug(
+                    f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}"
+                )
         else:
-            proxy = EnhancedUnifiedMCPProxy(endpoint, function_name, kwargs_config=kwargs_config)
-            logger.debug(f"Created EnhancedUnifiedMCPProxy for {capability} -> {endpoint}")
+            proxy = EnhancedUnifiedMCPProxy(
+                endpoint, function_name, kwargs_config=kwargs_config
+            )
+            logger.debug(
+                f"Created EnhancedUnifiedMCPProxy for {capability} -> {endpoint}"
+            )
 
         await injector.register_dependency(dep_key, proxy)
         logger.info(f"Registered dependency: {dep_key}")
@@ -454,14 +468,13 @@ async def _handle_dependency_change(
                 dep_key = f"{func_id}:dep_{idx}"
 
                 # Check for self-dependency
-                import os
-
                 current_agent_id = None
                 try:
                     config = DecoratorRegistry.get_resolved_agent_config()
                     current_agent_id = config.get("agent_id")
                 except Exception:
-                    current_agent_id = os.getenv("MCP_MESH_AGENT_ID")
+                    # Use config resolver for consistent env var handling
+                    current_agent_id = get_config_value("MCP_MESH_AGENT_ID")
 
                 is_self_dependency = (
                     current_agent_id and agent_id and current_agent_id == agent_id
@@ -469,8 +482,7 @@ async def _handle_dependency_change(
 
                 if is_self_dependency:
                     # Create self-dependency proxy
-                    from ...engine.self_dependency_proxy import \
-                        SelfDependencyProxy
+                    from ...engine.self_dependency_proxy import SelfDependencyProxy
 
                     wrapper_func = mesh_tools.get(function_name)
                     if wrapper_func:
