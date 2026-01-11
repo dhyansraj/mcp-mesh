@@ -367,6 +367,7 @@ async def _handle_dependency_change(
     from ...engine.decorator_registry import DecoratorRegistry
     from ...engine.dependency_injector import get_global_injector
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+    from ...shared.config_resolver import get_config_value
 
     injector = get_global_injector()
     mesh_tools = DecoratorRegistry.get_mesh_tools()
@@ -400,8 +401,6 @@ async def _handle_dependency_change(
                 break
 
         # Check for self-dependency
-        import os
-
         current_agent_id = None
         try:
             config = DecoratorRegistry.get_resolved_agent_config()
@@ -469,8 +468,6 @@ async def _handle_dependency_change(
                 dep_key = f"{func_id}:dep_{idx}"
 
                 # Check for self-dependency
-                import os
-
                 current_agent_id = None
                 try:
                     config = DecoratorRegistry.get_resolved_agent_config()
