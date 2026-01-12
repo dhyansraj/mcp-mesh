@@ -53,27 +53,32 @@
 import { mesh as meshFn, MeshAgent } from "./agent.js";
 import { route, routeWithConfig } from "./route.js";
 import { bindToExpress } from "./api-runtime.js";
+import { llm } from "./llm.js";
 
-// Create mesh namespace with route attached
+// Create mesh namespace with route and llm attached
 interface MeshNamespace {
   (server: import("fastmcp").FastMCP, config: import("./types.js").AgentConfig): MeshAgent;
   route: typeof route;
   routeWithConfig: typeof routeWithConfig;
   /** Optional: Bind to Express for proper route names in logs. Port auto-detected from PORT env. */
   bind: typeof bindToExpress;
+  /** Create an LLM-powered tool with agentic capabilities */
+  llm: typeof llm;
 }
 
 /**
- * Main mesh function with route helpers attached.
+ * Main mesh function with route and llm helpers attached.
  *
  * - `mesh(server, config)` - Create an MCP agent (wraps fastmcp)
  * - `mesh.route(deps, handler)` - Create Express route with DI
  * - `mesh.bind(app, options)` - Bind to Express, introspect routes
+ * - `mesh.llm(config)` - Create LLM-powered tool with agentic loop
  */
 const mesh: MeshNamespace = Object.assign(meshFn, {
   route,
   routeWithConfig,
   bind: bindToExpress,
+  llm,
 });
 
 // Main API
@@ -120,6 +125,61 @@ export {
   type SpanData,
 } from "./tracing.js";
 
+// LLM utilities
+export {
+  llm,
+  LlmToolRegistry,
+  buildLlmAgentSpecs,
+  handleLlmToolsUpdated,
+  handleLlmProviderAvailable,
+  handleLlmProviderUnavailable,
+  getLlmToolMetadata,
+  isLlmTool,
+  type LlmToolConfig,
+  type ResolvedProvider,
+  type FastMcpToolDef,
+} from "./llm.js";
+
+// LLM Agent
+export {
+  MeshLlmAgent,
+  LiteLLMProvider,
+  MeshDelegatedProvider,
+  createLlmToolProxy,
+  type MeshLlmAgentConfig,
+  type AgentRunContext,
+  type LlmProvider,
+} from "./llm-agent.js";
+
+// Error classes
+export {
+  MaxIterationsError,
+  ToolExecutionError,
+  LLMAPIError,
+  ResponseParseError as LlmResponseParseError,
+  ProviderUnavailableError,
+} from "./errors.js";
+
+// Template utilities
+export {
+  renderTemplate,
+  clearTemplateCache,
+  registerHelper,
+  registerPartial,
+  isFileTemplate,
+  extractFilePath,
+} from "./template.js";
+
+// Response parser
+export {
+  ResponseParser,
+  ResponseParseError,
+  createResponseParser,
+  extractJson,
+  zodSchemaToPromptDescription,
+  formatZodError,
+} from "./response-parser.js";
+
 // Types
 export type {
   AgentConfig,
@@ -136,6 +196,28 @@ export type {
   JsAgentSpec,
   JsToolSpec,
   JsDependencySpec,
+  JsLlmAgentSpec,
+  JsLlmToolInfo,
+  JsLlmProviderInfo,
+  // LLM types
+  LlmProviderSpec,
+  LlmFilterSpec,
+  LlmFilterMode,
+  LlmMeta,
+  LlmToolCall,
+  LlmMessage,
+  LlmToolCallRequest,
+  LlmToolDefinition,
+  LlmCompletionParams,
+  LlmCompletionResponse,
+  MeshLlmConfig,
+  LlmAgent,
+  LlmCallOptions,
+  LlmToolProxy,
+  // New types for feature parity
+  LlmMessageInput,
+  LlmContextMode,
+  LlmOutputMode,
 } from "./types.js";
 
 // Default export for convenience

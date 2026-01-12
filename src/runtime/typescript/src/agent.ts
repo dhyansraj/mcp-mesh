@@ -18,6 +18,7 @@ import {
   type JsAgentHandle,
   type JsToolSpec,
   type JsDependencySpec,
+  type JsLlmAgentSpec,
 } from "@mcpmesh/core";
 
 import type {
@@ -38,6 +39,13 @@ import {
   type TraceContext,
   type AgentMetadata,
 } from "./tracing.js";
+import {
+  buildLlmAgentSpecs,
+  handleLlmToolsUpdated,
+  handleLlmProviderAvailable,
+  handleLlmProviderUnavailable,
+  LlmToolRegistry,
+} from "./llm.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -270,11 +278,38 @@ export class MeshAgent {
 
     console.log(`Agent listening on port ${this.config.port}`);
 
-    // 2. Start heartbeat to registry via Rust core
+    // 2. Register LLM tools from LlmToolRegistry
+    this.registerLlmTools();
+
+    // 3. Start heartbeat to registry via Rust core
     await this.startHeartbeat();
 
-    // 3. Install signal handlers for graceful shutdown
+    // 4. Install signal handlers for graceful shutdown
     this.installSignalHandlers();
+  }
+
+  /**
+   * Register LLM tools from LlmToolRegistry.
+   * This adds tool metadata for LLM tools created via mesh.llm().
+   */
+  private registerLlmTools(): void {
+    const registry = LlmToolRegistry.getInstance();
+    const configs = registry.getAllConfigs();
+
+    for (const [, config] of configs) {
+      // Only register if not already in tools map
+      if (this.tools.has(config.name)) continue;
+
+      this.tools.set(config.name, {
+        capability: config.capability,
+        version: config.version,
+        tags: config.tags,
+        description: config.description,
+        inputSchema: config.inputSchema,
+        dependencies: [], // LLM tools get their deps via llm_tools_updated events
+        dependencyKwargs: undefined,
+      });
+    }
   }
 
   /**
@@ -312,25 +347,67 @@ export class MeshAgent {
    * Start the Rust core heartbeat loop.
    */
   private async startHeartbeat(): Promise<void> {
+    // Get LLM tool registry for llmFilter/llmProvider
+    const llmRegistry = LlmToolRegistry.getInstance();
+
     // Build the agent spec for Rust core
     const tools: JsToolSpec[] = Array.from(this.tools.entries()).map(
-      ([name, meta]) => ({
-        functionName: name,
-        capability: meta.capability,
-        version: meta.version,
-        tags: meta.tags,
-        description: meta.description,
-        // Pass dependencies to Rust core for registry resolution
-        dependencies: meta.dependencies.map(
-          (dep): JsDependencySpec => ({
-            capability: dep.capability,
-            tags: dep.tags,
-            version: dep.version,
-          })
-        ),
-        inputSchema: meta.inputSchema,
-      })
+      ([name, meta]) => {
+        // Check if this tool has LLM config
+        const llmConfig = llmRegistry.getConfig(name);
+
+        // Build llmFilter as JSON string (like Python does)
+        let llmFilter: string | undefined;
+        if (llmConfig?.filter && llmConfig.filter.length > 0) {
+          llmFilter = JSON.stringify({
+            filter: llmConfig.filter,
+            filter_mode: llmConfig.filterMode,
+          });
+        }
+
+        // Build llmProvider as JSON string (like Python does)
+        let llmProvider: string | undefined;
+        if (llmConfig?.provider && typeof llmConfig.provider === "object") {
+          llmProvider = JSON.stringify({
+            capability: llmConfig.provider.capability,
+            tags: llmConfig.provider.tags ?? [],
+          });
+        }
+
+        return {
+          functionName: name,
+          capability: meta.capability,
+          version: meta.version,
+          tags: meta.tags,
+          description: meta.description,
+          // Pass dependencies to Rust core for registry resolution
+          dependencies: meta.dependencies.map(
+            (dep): JsDependencySpec => ({
+              capability: dep.capability,
+              tags: dep.tags,
+              version: dep.version,
+            })
+          ),
+          inputSchema: meta.inputSchema,
+          // LLM filter/provider as JSON strings (matches Python format)
+          llmFilter,
+          llmProvider,
+        };
+      }
     );
+
+    // Build LLM agent specs for tools using mesh.llm()
+    const llmAgentSpecs = buildLlmAgentSpecs();
+    const llmAgents: JsLlmAgentSpec[] | undefined =
+      llmAgentSpecs.length > 0
+        ? llmAgentSpecs.map((spec) => ({
+            functionId: spec.functionId,
+            provider: spec.provider,
+            filter: spec.filter,
+            filterMode: spec.filterMode,
+            maxIterations: spec.maxIterations,
+          }))
+        : undefined;
 
     const spec: JsAgentSpec = {
       name: this.agentId,
@@ -341,6 +418,7 @@ export class MeshAgent {
       httpHost: this.config.host,
       namespace: this.config.namespace,
       tools,
+      llmAgents,
       heartbeatInterval: this.config.heartbeatInterval,
     };
 
@@ -413,6 +491,45 @@ export class MeshAgent {
 
           case "registry_disconnected":
             console.warn(`Disconnected from registry: ${event.reason}`);
+            break;
+
+          case "llm_tools_updated":
+            // Handle LLM tools update
+            if (event.functionId && event.tools) {
+              handleLlmToolsUpdated(
+                event.functionId,
+                event.tools.map((t) => ({
+                  functionName: t.functionName,
+                  capability: t.capability,
+                  endpoint: t.endpoint,
+                  agentId: t.agentId,
+                  inputSchema: t.inputSchema,
+                }))
+              );
+            }
+            break;
+
+          case "llm_provider_available":
+            // Handle LLM provider available
+            // Note: functionId is inside providerInfo, not on event root
+            if (event.providerInfo) {
+              const funcId = event.functionId || event.providerInfo.functionId;
+              if (funcId) {
+                handleLlmProviderAvailable(funcId, {
+                  agentId: event.providerInfo.agentId,
+                  endpoint: event.providerInfo.endpoint,
+                  functionName: event.providerInfo.functionName,
+                  model: event.providerInfo.model,
+                });
+              }
+            }
+            break;
+
+          case "llm_provider_unavailable":
+            // Handle LLM provider unavailable
+            if (event.functionId) {
+              handleLlmProviderUnavailable(event.functionId);
+            }
             break;
 
           case "shutdown":

@@ -121,6 +121,8 @@ export interface JsAgentSpec {
   agentType?: string
   /** Tools/capabilities provided by this agent */
   tools: Array<JsToolSpec>
+  /** LLM agent specifications for tools using mesh.llm() */
+  llmAgents?: Array<JsLlmAgentSpec>
   /** Heartbeat interval in seconds */
   heartbeatInterval: number
 }
@@ -135,9 +137,63 @@ export interface JsDependencySpec {
   version?: string
 }
 
+/**
+ * LLM agent specification for TypeScript.
+ * Used to register LLM-powered tools with the mesh.
+ */
+export interface JsLlmAgentSpec {
+  /** Unique identifier for this LLM function (matches the tool's function_name) */
+  functionId: string
+  /**
+   * Provider selector - serialized JSON string
+   * e.g., '{"capability": "llm", "tags": ["+claude"]}'
+   */
+  provider: string
+  /**
+   * Tool filter specification - serialized JSON string
+   * e.g., '[{"capability": "calculator"}, {"tags": ["tools"]}]'
+   */
+  filter?: string
+  /** Filter mode: "all", "best_match", or "*" */
+  filterMode: string
+  /** Maximum agentic loop iterations */
+  maxIterations: number
+}
+
+/** LLM provider information returned in llm_provider_available events. */
+export interface JsLlmProviderInfo {
+  /** Function ID of the LLM function that requested this provider */
+  functionId: string
+  /** Agent ID providing this capability */
+  agentId: string
+  /** Endpoint URL to call */
+  endpoint: string
+  /** Function name to call */
+  functionName: string
+  /** Model name (optional) */
+  model?: string
+}
+
+/**
+ * LLM tool information returned in llm_tools_updated events.
+ * Contains resolved tool metadata for LLM agents to use.
+ */
+export interface JsLlmToolInfo {
+  /** Function name of the tool */
+  functionName: string
+  /** Capability name */
+  capability: string
+  /** Endpoint URL to call */
+  endpoint: string
+  /** Agent ID providing this tool */
+  agentId: string
+  /** Input schema (serialized JSON string) */
+  inputSchema?: string
+}
+
 /** Mesh event for TypeScript. */
 export interface JsMeshEvent {
-  /** Event type (e.g., "dependency_available", "agent_registered") */
+  /** Event type (e.g., "dependency_available", "agent_registered", "llm_tools_updated") */
   eventType: string
   /** Capability name (for dependency events) */
   capability?: string
@@ -157,8 +213,12 @@ export interface JsMeshEvent {
    * This allows SDKs to inject the resolved dependency at the correct position.
    */
   depIndex?: number
-  /** Function ID of the LLM agent (for llm_tools_updated) */
+  /** Function ID of the LLM agent (for llm_tools_updated, llm_provider_available) */
   functionId?: string
+  /** List of available tools (for llm_tools_updated event) */
+  tools?: Array<JsLlmToolInfo>
+  /** Provider info (for llm_provider_available event) */
+  providerInfo?: JsLlmProviderInfo
   /** Error message (for error events) */
   error?: string
   /** Reason for event (for disconnect events) */
@@ -181,6 +241,10 @@ export interface JsToolSpec {
   dependencies: Array<JsDependencySpec>
   /** JSON Schema for input parameters (MCP format) - serialized JSON string */
   inputSchema?: string
+  /** LLM filter specification (for @mesh.llm decorated functions) - serialized JSON string */
+  llmFilter?: string
+  /** LLM provider specification (for mesh delegation) - serialized JSON string */
+  llmProvider?: string
 }
 
 /**
