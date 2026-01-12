@@ -87,6 +87,9 @@ pub struct JsAgentSpec {
     pub http_host: String,
     /// Namespace for isolation
     pub namespace: String,
+    /// Agent type: "mcp_agent" (provides capabilities) or "api" (only consumes)
+    /// Defaults to "mcp_agent" if not specified
+    pub agent_type: Option<String>,
     /// Tools/capabilities provided by this agent
     pub tools: Vec<JsToolSpec>,
     /// Heartbeat interval in seconds
@@ -103,6 +106,7 @@ impl From<JsAgentSpec> for RustAgentSpec {
             js.http_port,
             js.http_host,
             js.namespace,
+            js.agent_type, // "mcp_agent" or "api", defaults to "mcp_agent"
             Some(js.tools.into_iter().map(|t| t.into()).collect()),
             None, // llm_agents - not used in Phase 1
             js.heartbeat_interval as u64,
@@ -217,6 +221,32 @@ impl JsAgentHandle {
         let handle = self.inner.lock().await;
         handle.shutdown_async().await;
         Ok(())
+    }
+
+    /// Update the tools/routes registered with the registry.
+    ///
+    /// Uses smart diffing - only triggers a heartbeat if tools have changed.
+    /// Call this after Express route introspection to update route names
+    /// from placeholders (e.g., "route_0_UNKNOWN:UNKNOWN") to proper names
+    /// (e.g., "GET:/time").
+    ///
+    /// @param tools - Array of tool specifications with updated function names
+    /// @returns true if the update was sent successfully
+    #[napi]
+    pub async fn update_tools(&self, tools: Vec<JsToolSpec>) -> Result<bool> {
+        let handle = self.inner.lock().await;
+        let rust_tools: Vec<crate::spec::ToolSpec> = tools.into_iter().map(|t| t.into()).collect();
+        Ok(handle.update_tools_async(rust_tools).await)
+    }
+
+    /// Update the HTTP port (e.g., after auto-detection from Express).
+    ///
+    /// @param port - The detected HTTP port
+    /// @returns true if the update was sent successfully
+    #[napi]
+    pub async fn update_port(&self, port: u16) -> Result<bool> {
+        let handle = self.inner.lock().await;
+        Ok(handle.update_port_async(port).await)
     }
 }
 
@@ -363,6 +393,7 @@ pub async fn is_trace_publisher_available() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::AgentType;
 
     #[test]
     fn test_js_spec_conversion() {
@@ -374,6 +405,7 @@ mod tests {
             http_port: 9000,
             http_host: "localhost".to_string(),
             namespace: "default".to_string(),
+            agent_type: None, // defaults to mcp_agent
             tools: vec![],
             heartbeat_interval: 5,
         };
@@ -381,5 +413,26 @@ mod tests {
         let rust_spec: RustAgentSpec = js_spec.into();
         assert_eq!(rust_spec.name, "test-agent");
         assert_eq!(rust_spec.http_port, 9000);
+        assert_eq!(rust_spec.agent_type, AgentType::McpAgent);
+    }
+
+    #[test]
+    fn test_js_spec_api_type() {
+        let js_spec = JsAgentSpec {
+            name: "api-service".to_string(),
+            version: "1.0.0".to_string(),
+            description: "API service".to_string(),
+            registry_url: "http://localhost:8100".to_string(),
+            http_port: 0, // port doesn't matter for API
+            http_host: "localhost".to_string(),
+            namespace: "default".to_string(),
+            agent_type: Some("api".to_string()), // API agent type
+            tools: vec![],
+            heartbeat_interval: 5,
+        };
+
+        let rust_spec: RustAgentSpec = js_spec.into();
+        assert_eq!(rust_spec.agent_type, AgentType::Api);
+        assert_eq!(rust_spec.http_port, 0);
     }
 }

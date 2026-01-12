@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::events::{HealthStatus, MeshEvent};
+use crate::runtime::RuntimeCommand;
+use crate::spec::ToolSpec;
 
 /// Internal state shared between handle and runtime.
 pub struct HandleState {
@@ -53,6 +55,9 @@ pub struct AgentHandle {
 
     /// Shutdown signal sender
     shutdown_tx: mpsc::Sender<()>,
+
+    /// Command sender for runtime commands (e.g., update tools)
+    command_tx: mpsc::Sender<RuntimeCommand>,
 }
 
 impl AgentHandle {
@@ -61,11 +66,13 @@ impl AgentHandle {
         event_rx: mpsc::Receiver<MeshEvent>,
         state: Arc<RwLock<HandleState>>,
         shutdown_tx: mpsc::Sender<()>,
+        command_tx: mpsc::Sender<RuntimeCommand>,
     ) -> Self {
         Self {
             event_rx: Arc::new(Mutex::new(event_rx)),
             state,
             shutdown_tx,
+            command_tx,
         }
     }
 
@@ -205,6 +212,43 @@ impl AgentHandle {
         // Send shutdown signal (non-blocking, ignore if full)
         let _ = self.shutdown_tx.try_send(());
     }
+
+    /// Update the tools/routes registered with the registry.
+    /// Uses smart diffing - only triggers a heartbeat if tools have changed.
+    pub fn update_tools(&self, tools: Vec<ToolSpec>) -> bool {
+        self.command_tx
+            .try_send(RuntimeCommand::UpdateTools(tools))
+            .is_ok()
+    }
+
+    /// Update the tools/routes registered with the registry (async version).
+    /// Uses smart diffing - only triggers a heartbeat if tools have changed.
+    pub async fn update_tools_async(&self, tools: Vec<ToolSpec>) -> bool {
+        self.command_tx
+            .send(RuntimeCommand::UpdateTools(tools))
+            .await
+            .is_ok()
+    }
+
+    /// Update the HTTP port (e.g., after auto-detection).
+    pub fn update_port(&self, port: u16) -> bool {
+        self.command_tx
+            .try_send(RuntimeCommand::UpdatePort(port))
+            .is_ok()
+    }
+
+    /// Update the HTTP port (e.g., after auto-detection) - async version.
+    pub async fn update_port_async(&self, port: u16) -> bool {
+        self.command_tx
+            .send(RuntimeCommand::UpdatePort(port))
+            .await
+            .is_ok()
+    }
+
+    /// Get a reference to the command sender (for language bindings that need direct access).
+    pub fn command_tx(&self) -> mpsc::Sender<RuntimeCommand> {
+        self.command_tx.clone()
+    }
 }
 
 #[cfg(test)]
@@ -215,9 +259,10 @@ mod tests {
     async fn test_handle_state() {
         let (event_tx, event_rx) = mpsc::channel(10);
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, _command_rx) = mpsc::channel(10);
         let state = Arc::new(RwLock::new(HandleState::default()));
 
-        let _handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx);
+        let _handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
 
         // Update state
         {
@@ -253,9 +298,10 @@ mod tests {
     fn test_handle_shutdown() {
         let (_event_tx, event_rx) = mpsc::channel(10);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+        let (command_tx, _command_rx) = mpsc::channel(10);
         let state = Arc::new(RwLock::new(HandleState::default()));
 
-        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx);
+        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
 
         // Request shutdown (using internal method for tests)
         handle.shutdown_internal();
@@ -265,5 +311,41 @@ mod tests {
 
         // Check signal was sent
         assert!(shutdown_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_update_tools() {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+
+        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
+
+        // Send update tools command
+        let tools = vec![ToolSpec::new(
+            "GET:/time".to_string(),
+            "".to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            None,
+            Some(vec![crate::spec::DependencySpec::new("time_service".to_string(), None, None)]),
+            None,
+            None,
+            None,
+            None,
+        )];
+
+        assert!(handle.update_tools(tools));
+
+        // Verify command was received
+        let cmd = command_rx.try_recv().unwrap();
+        match cmd {
+            RuntimeCommand::UpdateTools(received_tools) => {
+                assert_eq!(received_tools.len(), 1);
+                assert_eq!(received_tools[0].function_name, "GET:/time");
+            }
+            _ => panic!("Expected UpdateTools command"),
+        }
     }
 }

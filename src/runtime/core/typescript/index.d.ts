@@ -23,6 +23,25 @@ export declare class JsAgentHandle {
   isShutdownRequested(): Promise<boolean>
   /** Request graceful shutdown of the agent runtime. */
   shutdown(): Promise<void>
+  /**
+   * Update the tools/routes registered with the registry.
+   *
+   * Uses smart diffing - only triggers a heartbeat if tools have changed.
+   * Call this after Express route introspection to update route names
+   * from placeholders (e.g., "route_0_UNKNOWN:UNKNOWN") to proper names
+   * (e.g., "GET:/time").
+   *
+   * @param tools - Array of tool specifications with updated function names
+   * @returns true if the update was sent successfully
+   */
+  updateTools(tools: Array<JsToolSpec>): Promise<boolean>
+  /**
+   * Update the HTTP port (e.g., after auto-detection from Express).
+   *
+   * @param port - The detected HTTP port
+   * @returns true if the update was sent successfully
+   */
+  updatePort(port: number): Promise<boolean>
 }
 
 /**
@@ -95,6 +114,11 @@ export interface JsAgentSpec {
   httpHost: string
   /** Namespace for isolation */
   namespace: string
+  /**
+   * Agent type: "mcp_agent" (provides capabilities) or "api" (only consumes)
+   * Defaults to "mcp_agent" if not specified
+   */
+  agentType?: string
   /** Tools/capabilities provided by this agent */
   tools: Array<JsToolSpec>
   /** Heartbeat interval in seconds */

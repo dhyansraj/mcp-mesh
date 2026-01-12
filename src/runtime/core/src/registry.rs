@@ -13,7 +13,7 @@ use thiserror::Error;
 use tracing::{debug, info, trace, warn};
 
 use crate::events::HealthStatus;
-use crate::spec::AgentSpec;
+use crate::spec::{AgentSpec, AgentType};
 
 /// Errors that can occur during registry communication.
 #[derive(Debug, Error)]
@@ -184,6 +184,7 @@ pub struct HeartbeatRequest {
     pub agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    pub agent_type: String,
     pub version: String,
     pub http_host: String,
     pub http_port: u16,
@@ -266,6 +267,7 @@ impl HeartbeatRequest {
         Self {
             agent_id: spec.agent_id(),
             name: Some(spec.name.clone()),
+            agent_type: spec.agent_type.as_api_str().to_string(),
             version: spec.version.clone(),
             http_host: spec.http_host.clone(),
             http_port: spec.http_port,
@@ -488,6 +490,7 @@ mod tests {
             9000,
             "localhost".to_string(),
             "default".to_string(),
+            None, // agent_type defaults to mcp_agent
             Some(vec![ToolSpec::new(
                 "greet".to_string(),
                 "greeting".to_string(),
@@ -507,8 +510,31 @@ mod tests {
         let request = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
 
         assert_eq!(request.agent_id, "test-agent");
+        assert_eq!(request.agent_type, "mcp_agent");
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.tools[0].function_name, "greet");
         assert_eq!(request.tools[0].capability, "greeting");
+    }
+
+    #[test]
+    fn test_heartbeat_request_api_type() {
+        let spec = AgentSpec::new(
+            "api-service".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "API".to_string(),
+            0, // port doesn't matter for API
+            "localhost".to_string(),
+            "default".to_string(),
+            Some("api".to_string()), // API agent type
+            None,
+            None,
+            5,
+        );
+
+        let request = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+
+        assert_eq!(request.agent_type, "api");
+        assert_eq!(request.http_port, 0);
     }
 }

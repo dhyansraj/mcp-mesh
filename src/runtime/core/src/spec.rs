@@ -220,6 +220,49 @@ impl LlmAgentSpec {
     }
 }
 
+/// Agent type for registration with registry.
+#[cfg_attr(feature = "python", pyclass(eq, eq_int))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentType {
+    /// MCP agent that provides capabilities (tools) to the mesh
+    #[default]
+    McpAgent = 0,
+    /// API service that only consumes capabilities (e.g., FastAPI, Express)
+    Api = 1,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl AgentType {
+    /// String representation of the agent type
+    fn __str__(&self) -> &'static str {
+        self.as_api_str()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("AgentType.{:?}", self)
+    }
+}
+
+impl AgentType {
+    /// Convert to registry API string format.
+    pub fn as_api_str(&self) -> &'static str {
+        match self {
+            Self::McpAgent => "mcp_agent",
+            Self::Api => "api",
+        }
+    }
+
+    /// Create from string (for Python/TypeScript bindings).
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "api" => Self::Api,
+            _ => Self::McpAgent,
+        }
+    }
+}
+
 /// Complete specification for an MCP Mesh agent.
 ///
 /// This is the primary configuration passed from language SDKs to start the agent runtime.
@@ -247,6 +290,10 @@ pub struct AgentSpec {
     /// Namespace for isolation
     pub namespace: String,
 
+    /// Agent type: "mcp_agent" (provides capabilities) or "api" (only consumes)
+    #[serde(default)]
+    pub agent_type: AgentType,
+
     /// Tools/capabilities provided by this agent
     pub tools: Vec<ToolSpec>,
 
@@ -269,6 +316,7 @@ impl AgentSpec {
         http_port=0,
         http_host="localhost".to_string(),
         namespace="default".to_string(),
+        agent_type=None,
         tools=None,
         llm_agents=None,
         heartbeat_interval=5
@@ -282,6 +330,7 @@ impl AgentSpec {
         http_port: u16,
         http_host: String,
         namespace: String,
+        agent_type: Option<String>,
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
@@ -294,6 +343,7 @@ impl AgentSpec {
             http_port,
             http_host,
             namespace,
+            agent_type,
             tools,
             llm_agents,
             heartbeat_interval,
@@ -302,8 +352,9 @@ impl AgentSpec {
 
     fn __repr__(&self) -> String {
         format!(
-            "AgentSpec(name={:?}, tools={}, llm_agents={})",
+            "AgentSpec(name={:?}, agent_type={:?}, tools={}, llm_agents={})",
             self.name,
+            self.agent_type.as_api_str(),
             self.tools.len(),
             self.llm_agents.len()
         )
@@ -321,6 +372,7 @@ impl AgentSpec {
         http_port: u16,
         http_host: String,
         namespace: String,
+        agent_type: Option<String>,
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
@@ -333,6 +385,9 @@ impl AgentSpec {
             http_port,
             http_host,
             namespace,
+            agent_type: agent_type
+                .map(|s| AgentType::from_str(&s))
+                .unwrap_or_default(),
             tools: tools.unwrap_or_default(),
             llm_agents: llm_agents.unwrap_or_default(),
             heartbeat_interval,
@@ -420,6 +475,7 @@ mod tests {
             9000,
             "localhost".to_string(),
             "default".to_string(),
+            None, // agent_type defaults to mcp_agent
             None,
             None,
             5,
@@ -428,6 +484,27 @@ mod tests {
         assert_eq!(spec.name, "test-agent");
         assert_eq!(spec.agent_id(), "test-agent");
         assert!(spec.tools.is_empty());
+        assert_eq!(spec.agent_type, AgentType::McpAgent);
+    }
+
+    #[test]
+    fn test_agent_type_api() {
+        let spec = AgentSpec::new(
+            "api-service".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "API service".to_string(),
+            0, // port doesn't matter for API
+            "localhost".to_string(),
+            "default".to_string(),
+            Some("api".to_string()), // API agent type
+            None,
+            None,
+            5,
+        );
+
+        assert_eq!(spec.agent_type, AgentType::Api);
+        assert_eq!(spec.agent_type.as_api_str(), "api");
     }
 
     #[test]
@@ -440,6 +517,7 @@ mod tests {
             0,
             "localhost".to_string(),
             "default".to_string(),
+            None,
             None,
             None,
             5,
