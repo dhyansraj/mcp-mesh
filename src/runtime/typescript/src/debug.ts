@@ -1,41 +1,59 @@
 /**
  * Debug logging utilities for MCP Mesh SDK.
  *
- * Debug output is controlled by the MESH_DEBUG environment variable:
- * - MESH_DEBUG=1 or MESH_DEBUG=true - Enable all debug output
- * - MESH_DEBUG=llm - Enable only LLM-related debug output
- * - MESH_DEBUG=llm,sse - Enable multiple categories (comma-separated)
+ * Debug output is controlled by standard MCP Mesh environment variables:
+ * - MCP_MESH_LOG_LEVEL=DEBUG - Enable debug output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+ * - MCP_MESH_DEBUG_MODE=true - Force DEBUG level
  *
  * @example
  * ```bash
- * # Enable all debug output
- * MESH_DEBUG=1 node my-agent.js
+ * # Enable debug output
+ * MCP_MESH_LOG_LEVEL=DEBUG node my-agent.js
  *
- * # Enable only LLM debug output
- * MESH_DEBUG=llm node my-agent.js
+ * # Or use debug mode
+ * MCP_MESH_DEBUG_MODE=true node my-agent.js
  * ```
  */
 
 type DebugCategory = "llm" | "sse" | "template" | "agent" | "registry";
 
+/** Log levels in order of severity */
+const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
+type LogLevel = (typeof LOG_LEVELS)[number];
+
 /**
- * Check if debug logging is enabled for a category.
+ * Get the current log level from environment.
  */
-function isDebugEnabled(category: DebugCategory): boolean {
-  const debugEnv = process.env.MESH_DEBUG;
-
-  if (!debugEnv) {
-    return false;
+function getLogLevel(): LogLevel {
+  // MCP_MESH_DEBUG_MODE forces DEBUG level
+  const debugMode = process.env.MCP_MESH_DEBUG_MODE;
+  if (debugMode === "true" || debugMode === "1") {
+    return "DEBUG";
   }
 
-  // Enable all if "1", "true", or "*"
-  if (debugEnv === "1" || debugEnv === "true" || debugEnv === "*") {
-    return true;
+  // MCP_MESH_LOG_LEVEL sets the level
+  const level = process.env.MCP_MESH_LOG_LEVEL?.toUpperCase() as LogLevel | undefined;
+  if (level && LOG_LEVELS.includes(level)) {
+    return level;
   }
 
-  // Check for specific category
-  const categories = debugEnv.split(",").map((c) => c.trim().toLowerCase());
-  return categories.includes(category) || categories.includes("all");
+  // Default to INFO
+  return "INFO";
+}
+
+/**
+ * Check if a log level is enabled.
+ */
+function isLevelEnabled(level: LogLevel): boolean {
+  const currentLevel = getLogLevel();
+  return LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(currentLevel);
+}
+
+/**
+ * Check if debug logging is enabled.
+ */
+function isDebugEnabled(_category: DebugCategory): boolean {
+  return isLevelEnabled("DEBUG");
 }
 
 /**
@@ -76,6 +94,5 @@ export const debug = {
  * Check if any debug logging is enabled.
  */
 export function isAnyDebugEnabled(): boolean {
-  const debugEnv = process.env.MESH_DEBUG;
-  return !!debugEnv && debugEnv !== "0" && debugEnv !== "false";
+  return isLevelEnabled("DEBUG");
 }
