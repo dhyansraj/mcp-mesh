@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "express": ["./node_modules/express-v5"],
+      "@types/express": ["./node_modules/@types/express-v5"]
+    },
+    "baseUrl": "."
+  }
+}

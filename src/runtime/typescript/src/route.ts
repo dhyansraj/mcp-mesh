@@ -212,14 +212,18 @@ export class RouteRegistry {
   /**
    * Get all resolved dependencies for a route as an object.
    * Keys are capability names for easy destructuring in handlers.
+   * Handles remapped route IDs (e.g., route_0_UNKNOWN:UNKNOWN -> GET:/time).
    */
   getDependenciesForRoute(routeId: string): RouteDependencies {
-    const route = this.routes.get(routeId);
+    // Use getRoute to handle remapped IDs
+    const route = this.getRoute(routeId);
     if (!route) return {};
 
+    // Use the resolved route ID for dependency lookup
+    const resolvedId = route.routeId;
     const deps: RouteDependencies = {};
     route.dependencies.forEach((dep, idx) => {
-      deps[dep.capability] = this.getDependency(routeId, idx);
+      deps[dep.capability] = this.getDependency(resolvedId, idx);
     });
 
     return deps;
