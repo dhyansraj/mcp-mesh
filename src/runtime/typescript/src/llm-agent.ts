@@ -47,6 +47,7 @@ import {
   MaxIterationsError,
   LLMAPIError,
 } from "./errors.js";
+import { parseSSEResponse } from "./sse.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -241,31 +242,12 @@ export class MeshDelegatedProvider implements LlmProvider {
 
     // Handle SSE response from FastMCP stateless HTTP stream
     const responseText = await response.text();
-    console.log(`[mesh.llm] Raw provider response (first 500 chars): ${responseText.slice(0, 500)}`);
 
-    let result: {
+    const result = parseSSEResponse<{
       error?: { message: string };
       result?: { content?: Array<{ type: string; text: string }> };
-    };
+    }>(responseText);
 
-    // Check if it's SSE format (starts with "event:")
-    if (responseText.startsWith("event:")) {
-      // Parse SSE: extract the last "data:" line with JSON
-      const lines = responseText.split("\n");
-      let jsonData = "";
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          jsonData = line.slice(6); // Remove "data: " prefix
-        }
-      }
-      if (!jsonData) {
-        throw new Error("No data in SSE response");
-      }
-      console.log(`[mesh.llm] SSE parsed JSON: ${jsonData.slice(0, 300)}`);
-      result = JSON.parse(jsonData);
-    } else {
-      result = JSON.parse(responseText);
-    }
     if (result.error) {
       throw new Error(`Mesh provider RPC error: ${result.error.message}`);
     }
@@ -750,28 +732,11 @@ export function createLlmToolProxy(
 
     // Handle SSE response from FastMCP stateless HTTP stream
     const responseText = await response.text();
-    let result: {
+
+    const result = parseSSEResponse<{
       error?: { message: string };
       result?: { content?: Array<{ type: string; text?: string }> };
-    };
-
-    // Check if it's SSE format (starts with "event:")
-    if (responseText.startsWith("event:")) {
-      // Parse SSE: extract the last "data:" line with JSON
-      const lines = responseText.split("\n");
-      let jsonData = "";
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          jsonData = line.slice(6); // Remove "data: " prefix
-        }
-      }
-      if (!jsonData) {
-        throw new Error("No data in SSE response");
-      }
-      result = JSON.parse(jsonData);
-    } else {
-      result = JSON.parse(responseText);
-    }
+    }>(responseText);
 
     if (result.error) {
       throw new Error(`Tool error: ${result.error.message}`);

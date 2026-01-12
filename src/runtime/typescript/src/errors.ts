@@ -61,19 +61,21 @@ export class LLMAPIError extends Error {
 
 /**
  * Error thrown when response parsing/validation fails.
+ * Unified class used by both LLM agent and response parser.
  */
 export class ResponseParseError extends Error {
   readonly name = "ResponseParseError";
 
   constructor(
+    message: string,
     /** The raw content that failed to parse */
     public readonly rawContent: string,
-    /** The underlying parse/validation error */
-    public readonly cause: Error,
+    /** Zod validation error (if schema validation failed) */
+    public readonly zodError?: unknown,
     /** The expected schema (if using structured output) */
     public readonly expectedSchema?: unknown
   ) {
-    super(`Failed to parse LLM response: ${cause.message}`);
+    super(message);
   }
 }
 

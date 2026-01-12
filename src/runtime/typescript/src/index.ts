@@ -160,6 +160,12 @@ export {
   ProviderUnavailableError,
 } from "./errors.js";
 
+// SSE utilities
+export { parseSSEResponse, isSSEResponse, parseSSEStream } from "./sse.js";
+
+// Debug utilities
+export { debug, createDebug, isAnyDebugEnabled } from "./debug.js";
+
 // Template utilities
 export {
   renderTemplate,

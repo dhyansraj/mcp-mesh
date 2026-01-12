@@ -76,24 +76,36 @@ async function loadTemplateFile(filePath: string): Promise<string> {
 
 /**
  * Get or compile a Handlebars template.
- * Templates are cached by their source (inline string or file path).
+ * Templates are cached by their source (inline string or resolved absolute file path).
  */
 async function getCompiledTemplate(
   template: string
 ): Promise<HandlebarsTemplateDelegate> {
-  // Check cache first
-  const cacheKey = template;
-  const cached = templateCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  // Load template content
+  // Determine cache key - use absolute path for file templates
+  let cacheKey: string;
   let templateContent: string;
+
   if (isFileTemplate(template)) {
     const filePath = extractFilePath(template);
+    const absolutePath = resolveTemplatePath(filePath);
+    cacheKey = absolutePath; // Use absolute path as cache key
+
+    // Check cache first
+    const cached = templateCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     templateContent = await loadTemplateFile(filePath);
   } else {
+    cacheKey = template; // Use inline template as cache key
+
+    // Check cache first
+    const cached = templateCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     templateContent = template;
   }
 

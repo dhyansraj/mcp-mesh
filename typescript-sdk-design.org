@@ -990,6 +990,177 @@ Deliverable: Zero-code LLM providers in TypeScript
 
 Deliverable: Full CLI support for TypeScript agents
 
+* Technical Debt / Refactoring
+
+Items identified during code review that should be addressed:
+
+** DONE Duplicate SSE Parsing Logic [HIGH]
+:PROPERTIES:
+:FILE: src/runtime/typescript/src/llm-agent.ts
+:LINES: 251-268, 758-774
+:END:
+
+SSE (Server-Sent Events) parsing code is duplicated in two places:
+- =MeshDelegatedProvider.complete()= - parses SSE response from LLM provider
+- =createLlmToolProxy()= - parses SSE response from tool calls
+
+*Current code (duplicated):*
+#+BEGIN_SRC typescript
+// Check if it's SSE format (starts with "event:")
+if (responseText.startsWith("event:")) {
+  const lines = responseText.split("\n");
+  let jsonData = "";
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      jsonData = line.slice(6);
+    }
+  }
+  if (!jsonData) {
+    throw new Error("No data in SSE response");
+  }
+  result = JSON.parse(jsonData);
+} else {
+  result = JSON.parse(responseText);
+}
+#+END_SRC
+
+*Recommended fix:* Extract to shared utility function:
+#+BEGIN_SRC typescript
+// In a new file: src/runtime/typescript/src/sse.ts
+export function parseSSEResponse<T>(responseText: string): T {
+  if (responseText.startsWith("event:")) {
+    const lines = responseText.split("\n");
+    let jsonData = "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        jsonData = line.slice(6);
+      }
+    }
+    if (!jsonData) {
+      throw new Error("No data in SSE response");
+    }
+    return JSON.parse(jsonData);
+  }
+  return JSON.parse(responseText);
+}
+#+END_SRC
+
+** DONE Duplicate ResponseParseError Class [MEDIUM]
+:PROPERTIES:
+:FILES: src/runtime/typescript/src/errors.ts, src/runtime/typescript/src/response-parser.ts
+:END:
+
+Two different =ResponseParseError= classes exist with different shapes:
+
+| File | Properties |
+|------|------------|
+| errors.ts | =rawContent=, =cause: Error=, =expectedSchema?= |
+| response-parser.ts | =rawContent=, =zodError?: ZodErrorType= |
+
+*Recommended fix:* Consolidate into single class in =errors.ts=:
+#+BEGIN_SRC typescript
+export class ResponseParseError extends Error {
+  readonly name = "ResponseParseError";
+  constructor(
+    public readonly rawContent: string,
+    public readonly cause?: Error,
+    public readonly zodError?: ZodErrorType,
+    public readonly expectedSchema?: unknown
+  ) {
+    super(`Failed to parse LLM response: ${cause?.message ?? "unknown error"}`);
+  }
+}
+#+END_SRC
+
+Then update =response-parser.ts= to import from =errors.ts=.
+
+** DONE Debug Logging Should Be Configurable [MEDIUM]
+:PROPERTIES:
+:FILES: src/runtime/typescript/src/llm-agent.ts, src/runtime/typescript/src/llm.ts
+:END:
+
+Many =console.log= statements throughout the LLM code:
+- =[mesh.llm] Executing...=
+- =[mesh.llm] Tools: X, Provider: Y=
+- =[mesh.llm] Raw provider response...=
+- =[mesh.llm] SSE parsed JSON...=
+
+*Recommended fix:* Add debug flag or use existing tracing infrastructure:
+#+BEGIN_SRC typescript
+// Option 1: Environment variable
+const DEBUG = process.env.MESH_LLM_DEBUG === "true";
+
+function debug(message: string, ...args: unknown[]) {
+  if (DEBUG) console.log(message, ...args);
+}
+
+// Option 2: Use tracing module
+import { publishTraceSpan } from "./tracing.js";
+#+END_SRC
+
+** DONE MeshLlmAgent Created on Every Tool Call [LOW]
+:PROPERTIES:
+:FILE: src/runtime/typescript/src/llm.ts
+:LINES: 249-263
+:END:
+
+In =wrappedExecute=, a new =MeshLlmAgent= instance is created for every tool
+invocation, even though the config is static.
+
+*Current code:*
+#+BEGIN_SRC typescript
+const wrappedExecute = async (args) => {
+  // Created every time!
+  const agent = new MeshLlmAgent({
+    functionId,
+    provider: llmConfig.provider,
+    // ... static config
+  });
+  // ...
+};
+#+END_SRC
+
+*Recommended fix:* Create agent once at registration time:
+#+BEGIN_SRC typescript
+// Create once
+const agent = new MeshLlmAgent({ functionId, provider, ... });
+
+const wrappedExecute = async (args) => {
+  // Reuse existing agent
+  const llmCallable = agent.createCallable({ tools, meshProvider, ... });
+  // ...
+};
+#+END_SRC
+
+*Note:* Need to verify =MeshLlmAgent= is stateless enough for reuse (check
+=_systemPromptOverride= and =_meta= state).
+
+** DONE Template Cache Key Uses Raw Path [LOW]
+:PROPERTIES:
+:FILE: src/runtime/typescript/src/template.ts
+:LINES: 85-86
+:END:
+
+For file templates, the cache key is the original =file://...= string, not the
+resolved absolute path. This means the same file accessed via different relative
+paths won't share the cache.
+
+*Current code:*
+#+BEGIN_SRC typescript
+const cacheKey = template;  // "file://prompts/foo.hbs"
+const cached = templateCache.get(cacheKey);
+#+END_SRC
+
+*Recommended fix:* Use resolved absolute path as cache key:
+#+BEGIN_SRC typescript
+let cacheKey = template;
+if (isFileTemplate(template)) {
+  const filePath = extractFilePath(template);
+  cacheKey = resolveTemplatePath(filePath);  // Absolute path
+}
+const cached = templateCache.get(cacheKey);
+#+END_SRC
+
 * References
 
 - fastmcp TypeScript: https://github.com/punkpeye/fastmcp

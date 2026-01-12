@@ -20,21 +20,10 @@
  */
 
 import type { ZodType, ZodError as ZodErrorType } from "zod";
+import { ResponseParseError } from "./errors.js";
 
-/**
- * Error thrown when response parsing fails.
- */
-export class ResponseParseError extends Error {
-  readonly rawContent: string;
-  readonly zodError?: ZodErrorType;
-
-  constructor(message: string, rawContent: string, zodError?: ZodErrorType) {
-    super(message);
-    this.name = "ResponseParseError";
-    this.rawContent = rawContent;
-    this.zodError = zodError;
-  }
-}
+// Re-export for backwards compatibility
+export { ResponseParseError };
 
 /**
  * Extract JSON from a string that may contain markdown code blocks.

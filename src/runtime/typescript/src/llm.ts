@@ -44,6 +44,7 @@ import type {
   LlmOutputMode,
 } from "./types.js";
 import { MeshLlmAgent, createLlmToolProxy } from "./llm-agent.js";
+import { debug } from "./debug.js";
 
 /**
  * Registry for LLM tools - stores configuration and resolved dependencies.
@@ -102,7 +103,7 @@ export class LlmToolRegistry {
    */
   setResolvedTools(functionId: string, tools: LlmToolProxy[]): void {
     this.resolvedTools.set(functionId, tools);
-    console.log(`LLM tools updated for ${functionId}: ${tools.length} tools available`);
+    debug.llm(`Tools updated for ${functionId}: ${tools.length} tools available`);
   }
 
   /**
@@ -117,7 +118,7 @@ export class LlmToolRegistry {
    */
   setResolvedProvider(functionId: string, provider: ResolvedProvider): void {
     this.resolvedProviders.set(functionId, provider);
-    console.log(`LLM provider available for ${functionId}: ${provider.endpoint}`);
+    debug.llm(`Provider available for ${functionId}: ${provider.endpoint}`);
   }
 
   /**
@@ -125,7 +126,7 @@ export class LlmToolRegistry {
    */
   removeResolvedProvider(functionId: string): void {
     this.resolvedProviders.delete(functionId);
-    console.log(`LLM provider unavailable for ${functionId}`);
+    debug.llm(`Provider unavailable for ${functionId}`);
   }
 
   /**
@@ -241,31 +242,31 @@ export function llm<
   // Register with LLM tool registry
   registry.register(functionId, llmConfig);
 
+  // Create MeshLlmAgent once (cached for reuse)
+  const agent = new MeshLlmAgent({
+    functionId,
+    provider: llmConfig.provider,
+    model: llmConfig.model,
+    systemPrompt: llmConfig.systemPrompt,
+    contextParam: llmConfig.contextParam,
+    maxIterations: llmConfig.maxIterations,
+    maxTokens: llmConfig.maxTokens,
+    temperature: llmConfig.temperature,
+    topP: llmConfig.topP,
+    stop: llmConfig.stop,
+    returnSchema: llmConfig.returnSchema,
+    outputMode: llmConfig.outputMode,
+  });
+
   // Create the execute wrapper
   const wrappedExecute = async (args: z.infer<TParams>): Promise<string> => {
     try {
-      console.log(`[mesh.llm] Executing ${functionId} with args:`, JSON.stringify(args));
-
-      // Create MeshLlmAgent
-      const agent = new MeshLlmAgent({
-        functionId,
-        provider: llmConfig.provider,
-        model: llmConfig.model,
-        systemPrompt: llmConfig.systemPrompt,
-        contextParam: llmConfig.contextParam,
-        maxIterations: llmConfig.maxIterations,
-        maxTokens: llmConfig.maxTokens,
-        temperature: llmConfig.temperature,
-        topP: llmConfig.topP,
-        stop: llmConfig.stop,
-        returnSchema: llmConfig.returnSchema,
-        outputMode: llmConfig.outputMode,
-      });
+      debug.llm(`Executing ${functionId} with args:`, JSON.stringify(args));
 
       // Get resolved tools and provider
       const tools = registry.getResolvedTools(functionId);
       const meshProvider = registry.getResolvedProvider(functionId);
-      console.log(`[mesh.llm] Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : 'none');
+      debug.llm(`Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : "none");
 
       // Extract template context from args if contextParam is specified
       let templateContext: Record<string, unknown> = {};
@@ -290,9 +291,9 @@ export function llm<
       });
 
       // Call user's execute handler
-      console.log(`[mesh.llm] Calling user execute handler`);
+      debug.llm(`Calling user execute handler`);
       const result = await llmConfig.execute(args, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
-      console.log(`[mesh.llm] Execute completed successfully`);
+      debug.llm(`Execute completed successfully`);
 
       // Convert result to string for MCP
       if (typeof result === "string") {
@@ -300,7 +301,7 @@ export function llm<
       }
       return JSON.stringify(result);
     } catch (error) {
-      console.error(`[mesh.llm] Error in ${functionId}:`, error);
+      debug.llm(`Error in ${functionId}:`, error);
       throw error;
     }
   };
@@ -390,7 +391,7 @@ export function handleLlmProviderAvailable(
     model?: string;
   }
 ): void {
-  console.log(`[mesh.llm] Provider available for ${functionId}: ${providerInfo.endpoint}/${providerInfo.functionName}`);
+  debug.llm(`Provider available for ${functionId}: ${providerInfo.endpoint}/${providerInfo.functionName}`);
   const registry = LlmToolRegistry.getInstance();
 
   registry.setResolvedProvider(functionId, {
@@ -399,7 +400,7 @@ export function handleLlmProviderAvailable(
     model: providerInfo.model,
     agentId: providerInfo.agentId,
   });
-  console.log(`[mesh.llm] Provider stored for ${functionId}`);
+  debug.llm(`Provider stored for ${functionId}`);
 }
 
 /**
