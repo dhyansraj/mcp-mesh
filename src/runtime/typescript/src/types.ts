@@ -198,14 +198,16 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
 export interface McpMeshAgent {
   /**
    * Call the bound tool with arguments.
-   * Returns the tool result as a string.
+   * Returns parsed result (object/array) or raw string if not JSON.
+   * Matches Python's behavior - no need to JSON.parse().
    */
-  (args?: Record<string, unknown>): Promise<string>;
+  (args?: Record<string, unknown>): Promise<unknown>;
 
   /**
    * Call a specific tool by name.
+   * Returns parsed result (object/array) or raw string if not JSON.
    */
-  callTool(toolName: string, args?: Record<string, unknown>): Promise<string>;
+  callTool(toolName: string, args?: Record<string, unknown>): Promise<unknown>;
 
   /**
    * Get the endpoint URL for this dependency.

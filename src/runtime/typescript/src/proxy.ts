@@ -66,10 +66,17 @@ export function createProxy(
   const maxAttempts = kwargs?.maxAttempts ?? 1;
 
   // The proxy function that calls the bound tool
+  // Returns parsed object (like Python) or raw string if not JSON
   const proxyFn = async (
     args?: Record<string, unknown>
-  ): Promise<string> => {
-    return callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability);
+  ): Promise<unknown> => {
+    const result = await callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability);
+    // Parse JSON if possible, otherwise return raw string (matches Python behavior)
+    try {
+      return JSON.parse(result);
+    } catch {
+      return result;
+    }
   };
 
   // Attach properties and methods
@@ -82,8 +89,13 @@ export function createProxy(
       value: async (
         toolName: string,
         args?: Record<string, unknown>
-      ): Promise<string> => {
-        return callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability);
+      ): Promise<unknown> => {
+        const result = await callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability);
+        try {
+          return JSON.parse(result);
+        } catch {
+          return result;
+        }
       },
       writable: false,
     },

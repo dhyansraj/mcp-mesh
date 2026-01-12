@@ -112,10 +112,11 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
 
     // We need to spawn a tokio runtime in a background thread
     // because Python's asyncio and tokio don't mix well in the same thread
-    let (event_rx, shared_state, shutdown_tx) = {
+    let (event_rx, shared_state, shutdown_tx, command_tx) = {
         // Create channels that will be used by both the spawned thread and the handle
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(config.event_buffer_size);
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+        let (command_tx, command_rx) = tokio::sync::mpsc::channel::<runtime::RuntimeCommand>(10);
         let shared_state = Arc::new(RwLock::new(HandleState::default()));
 
         let spec_clone = spec.clone();
@@ -140,6 +141,7 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
                     event_tx_clone,
                     shared_state_clone,
                     shutdown_rx,
+                    command_rx,
                 ) {
                     Ok(agent_runtime) => {
                         agent_runtime.run().await;
@@ -151,11 +153,11 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
             });
         });
 
-        (event_rx, shared_state, shutdown_tx)
+        (event_rx, shared_state, shutdown_tx, command_tx)
     };
 
     // Create the handle
-    let handle = AgentHandle::new(event_rx, shared_state, shutdown_tx);
+    let handle = AgentHandle::new(event_rx, shared_state, shutdown_tx, command_tx);
 
     Ok(handle)
 }

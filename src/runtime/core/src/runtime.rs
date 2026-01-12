@@ -17,7 +17,17 @@ use crate::events::{LlmProviderInfo, LlmToolInfo, MeshEvent};
 use crate::handle::HandleState;
 use crate::heartbeat::{HeartbeatAction, HeartbeatConfig, HeartbeatStateMachine};
 use crate::registry::{HeartbeatRequest, HeartbeatResponse, RegistryClient};
-use crate::spec::AgentSpec;
+use crate::spec::{AgentSpec, ToolSpec};
+
+/// Commands that can be sent to the runtime to modify its state.
+#[derive(Debug)]
+pub enum RuntimeCommand {
+    /// Update the tools/routes registered with the registry.
+    /// Triggers a full heartbeat if tools have changed.
+    UpdateTools(Vec<ToolSpec>),
+    /// Update the HTTP port (e.g., after auto-detection).
+    UpdatePort(u16),
+}
 
 /// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread)
 #[derive(Debug, Clone)]
@@ -92,6 +102,10 @@ pub struct AgentRuntime {
     event_tx: mpsc::Sender<MeshEvent>,
     shared_state: Arc<RwLock<HandleState>>,
     shutdown_rx: mpsc::Receiver<()>,
+    /// Channel for receiving commands from the SDK (e.g., update tools)
+    command_rx: mpsc::Receiver<RuntimeCommand>,
+    /// Flag to force a full heartbeat on next iteration
+    force_full_heartbeat: bool,
 }
 
 impl AgentRuntime {
@@ -102,6 +116,7 @@ impl AgentRuntime {
         event_tx: mpsc::Sender<MeshEvent>,
         shared_state: Arc<RwLock<HandleState>>,
         shutdown_rx: mpsc::Receiver<()>,
+        command_rx: mpsc::Receiver<RuntimeCommand>,
     ) -> Result<Self, crate::registry::RegistryError> {
         let registry_client = RegistryClient::new(&spec.registry_url)?;
         let heartbeat_config = HeartbeatConfig {
@@ -119,6 +134,8 @@ impl AgentRuntime {
             event_tx,
             shared_state,
             shutdown_rx,
+            command_rx,
+            force_full_heartbeat: false,
         })
     }
 
@@ -135,10 +152,20 @@ impl AgentRuntime {
                 self.state_machine.shutdown();
             }
 
+            // Process any pending commands (non-blocking)
+            self.process_pending_commands();
+
             if self.state_machine.is_shutting_down() {
                 // Gracefully unregister from registry before stopping
                 self.unregister_from_registry().await;
                 break;
+            }
+
+            // Check if we need to force a full heartbeat (e.g., after tools update)
+            if self.force_full_heartbeat {
+                self.force_full_heartbeat = false;
+                self.send_full_heartbeat().await;
+                continue;
             }
 
             // Determine next action
@@ -160,6 +187,11 @@ impl AgentRuntime {
                             info!("Shutdown signal received during wait");
                             self.state_machine.shutdown();
                         }
+                        cmd = self.command_rx.recv() => {
+                            if let Some(cmd) = cmd {
+                                self.handle_command(cmd);
+                            }
+                        }
                     }
                 }
                 HeartbeatAction::Retry { attempt, backoff } => {
@@ -169,6 +201,11 @@ impl AgentRuntime {
                         _ = self.shutdown_rx.recv() => {
                             info!("Shutdown signal received during backoff");
                             self.state_machine.shutdown();
+                        }
+                        cmd = self.command_rx.recv() => {
+                            if let Some(cmd) = cmd {
+                                self.handle_command(cmd);
+                            }
                         }
                     }
                     // After backoff, try full registration
@@ -183,6 +220,77 @@ impl AgentRuntime {
         // Send shutdown event
         let _ = self.event_tx.send(MeshEvent::shutdown()).await;
         info!("Agent runtime for '{}' stopped", self.spec.name);
+    }
+
+    /// Process any pending commands without blocking.
+    fn process_pending_commands(&mut self) {
+        while let Ok(cmd) = self.command_rx.try_recv() {
+            self.handle_command(cmd);
+        }
+    }
+
+    /// Handle a runtime command.
+    fn handle_command(&mut self, cmd: RuntimeCommand) {
+        match cmd {
+            RuntimeCommand::UpdateTools(new_tools) => {
+                self.handle_update_tools(new_tools);
+            }
+            RuntimeCommand::UpdatePort(port) => {
+                if self.spec.http_port != port {
+                    info!("Updating HTTP port from {} to {}", self.spec.http_port, port);
+                    self.spec.http_port = port;
+                    self.force_full_heartbeat = true;
+                }
+            }
+        }
+    }
+
+    /// Handle tools update with smart diffing.
+    /// Only triggers a full heartbeat if tools have actually changed.
+    fn handle_update_tools(&mut self, new_tools: Vec<ToolSpec>) {
+        // Smart diff: compare new tools with existing ones
+        if self.tools_are_different(&new_tools) {
+            info!(
+                "Tools updated: {} tools (was {} tools)",
+                new_tools.len(),
+                self.spec.tools.len()
+            );
+            self.spec.tools = new_tools;
+            self.force_full_heartbeat = true;
+        } else {
+            trace!("Tools unchanged, skipping heartbeat");
+        }
+    }
+
+    /// Compare tools for equality (smart diffing).
+    /// Returns true if the new tools are different from the current spec.
+    fn tools_are_different(&self, new_tools: &[ToolSpec]) -> bool {
+        if self.spec.tools.len() != new_tools.len() {
+            return true;
+        }
+
+        for (old, new) in self.spec.tools.iter().zip(new_tools.iter()) {
+            // Compare key fields that affect registration
+            if old.function_name != new.function_name
+                || old.capability != new.capability
+                || old.version != new.version
+                || old.dependencies.len() != new.dependencies.len()
+            {
+                return true;
+            }
+
+            // Compare dependencies
+            for (old_dep, new_dep) in old.dependencies.iter().zip(new.dependencies.iter()) {
+                if old_dep.capability != new_dep.capability
+                    || old_dep.tags != new_dep.tags
+                    || old_dep.version != new_dep.version
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Unregister the agent from the registry during shutdown.

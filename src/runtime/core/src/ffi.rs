@@ -51,6 +51,8 @@ pub struct MeshAgentHandle {
     event_rx: mpsc::Receiver<MeshEvent>,
     /// Channel to signal shutdown to the runtime
     shutdown_tx: mpsc::Sender<()>,
+    /// Channel to send commands to the runtime (e.g., update tools)
+    command_tx: mpsc::Sender<crate::runtime::RuntimeCommand>,
     /// Tokio runtime running the agent
     runtime: tokio::runtime::Runtime,
     /// Whether the agent is still running
@@ -134,6 +136,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
     // Create channels
     let (event_tx, event_rx) = mpsc::channel(100);
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+    let (command_tx, command_rx) = mpsc::channel::<crate::runtime::RuntimeCommand>(10);
     let shared_state = Arc::new(tokio::sync::RwLock::new(HandleState::default()));
 
     // Create runtime config
@@ -149,7 +152,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
     let spec_clone = spec.clone();
     let shared_state_clone = shared_state.clone();
     let agent_runtime = match runtime.block_on(async {
-        AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx)
+        AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx, command_rx)
     }) {
         Ok(rt) => rt,
         Err(e) => {
@@ -167,6 +170,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
     let handle = Box::new(MeshAgentHandle {
         event_rx,
         shutdown_tx,
+        command_tx,
         runtime,
         is_running: AtomicBool::new(true),
         agent_id: None,
