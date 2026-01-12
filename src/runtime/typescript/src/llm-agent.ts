@@ -46,6 +46,7 @@ import { ResponseParser } from "./response-parser.js";
 import {
   MaxIterationsError,
   LLMAPIError,
+  ToolExecutionError,
 } from "./errors.js";
 import { parseSSEResponse } from "./sse.js";
 
@@ -151,13 +152,29 @@ export class LiteLLMProvider implements LlmProvider {
     if (options?.topP !== undefined) body.top_p = options.topP;
     if (options?.stop) body.stop = options.stop;
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    // Set up timeout with AbortController (default 300s to match Python SDK's stream_timeout)
+    const timeoutMs = parseInt(process.env.LITELLM_TIMEOUT_MS || "300000", 10);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new LLMAPIError(408, `Request timed out after ${timeoutMs}ms`, "litellm");
+      }
+      throw new LLMAPIError(0, `Fetch failed: ${error instanceof Error ? error.message : String(error)}`, "litellm");
+    }
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const error = await response.text();
@@ -217,23 +234,39 @@ export class MeshDelegatedProvider implements LlmProvider {
     // Wrap in "request" parameter as expected by Python claude_provider
     const args = { request };
 
+    // Set up timeout with AbortController (default 300s to match Python SDK's stream_timeout)
+    const timeoutMs = parseInt(process.env.MESH_PROVIDER_TIMEOUT_MS || "300000", 10);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     // Call the mesh provider via MCP
-    const response = await fetch(`${this.endpoint}/mcp`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method: "tools/call",
-        params: {
-          name: this.functionName,
-          arguments: args,
+    let response: Response;
+    try {
+      response = await fetch(`${this.endpoint}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
         },
-      }),
-    });
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: this.functionName,
+            arguments: args,
+          },
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new LLMAPIError(408, `Request timed out after ${timeoutMs}ms`, `mesh:${this.endpoint}`);
+      }
+      throw new LLMAPIError(0, `Fetch failed: ${error instanceof Error ? error.message : String(error)}`, `mesh:${this.endpoint}`);
+    }
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const error = await response.text();
@@ -708,23 +741,45 @@ export function createLlmToolProxy(
   description?: string
 ): LlmToolProxy {
   const proxy = async (args: Record<string, unknown>): Promise<unknown> => {
+    // Set up timeout with AbortController (default 30s for tool calls)
+    const timeoutMs = parseInt(process.env.MESH_TOOL_TIMEOUT_MS || "30000", 10);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     // Make MCP call to the tool
-    const response = await fetch(`${toolInfo.endpoint}/mcp`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method: "tools/call",
-        params: {
-          name: toolInfo.functionName,
-          arguments: args,
+    let response: Response;
+    try {
+      response = await fetch(`${toolInfo.endpoint}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
         },
-      }),
-    });
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: toolInfo.functionName,
+            arguments: args,
+          },
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new ToolExecutionError(
+          toolInfo.functionName,
+          new Error(`Tool call timed out after ${timeoutMs}ms (endpoint: ${toolInfo.endpoint})`)
+        );
+      }
+      throw new ToolExecutionError(
+        toolInfo.functionName,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Tool call failed: ${response.status}`);

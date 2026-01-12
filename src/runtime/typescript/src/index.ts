@@ -179,7 +179,6 @@ export {
 // Response parser
 export {
   ResponseParser,
-  ResponseParseError,
   createResponseParser,
   extractJson,
   zodSchemaToPromptDescription,

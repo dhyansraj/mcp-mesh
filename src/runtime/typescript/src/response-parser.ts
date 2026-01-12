@@ -20,6 +20,7 @@
  */
 
 import type { ZodType, ZodError as ZodErrorType } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { ResponseParseError } from "./errors.js";
 
 // Re-export for backwards compatibility
@@ -31,19 +32,47 @@ export { ResponseParseError };
  * Handles:
  * - ```json ... ``` code blocks
  * - ``` ... ``` code blocks (no language)
- * - Raw JSON (object or array)
+ * - Raw JSON (object or array) using balanced-brace parsing
  */
 export function extractJson(content: string): string | null {
-  // Try to extract from markdown code blocks first
+  // Strategy 1: Try to extract from markdown code blocks first
   const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (codeBlockMatch) {
     return codeBlockMatch[1].trim();
   }
 
-  // Try to find raw JSON object or array
-  const jsonMatch = content.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (jsonMatch) {
-    return jsonMatch[1].trim();
+  // Strategy 2: Try to find JSON object using balanced-brace parser (matches Python SDK)
+  const braceStart = content.indexOf("{");
+  if (braceStart !== -1) {
+    let braceCount = 0;
+    for (let i = braceStart; i < content.length; i++) {
+      if (content[i] === "{") {
+        braceCount++;
+      } else if (content[i] === "}") {
+        braceCount--;
+        if (braceCount === 0) {
+          // Found matching brace
+          return content.slice(braceStart, i + 1);
+        }
+      }
+    }
+  }
+
+  // Strategy 3: Try to find JSON array using balanced-bracket parser
+  const bracketStart = content.indexOf("[");
+  if (bracketStart !== -1) {
+    let bracketCount = 0;
+    for (let i = bracketStart; i < content.length; i++) {
+      if (content[i] === "[") {
+        bracketCount++;
+      } else if (content[i] === "]") {
+        bracketCount--;
+        if (bracketCount === 0) {
+          // Found matching bracket
+          return content.slice(bracketStart, i + 1);
+        }
+      }
+    }
   }
 
   return null;
@@ -174,28 +203,33 @@ export function createResponseParser<T = string>(
 }
 
 /**
- * Convert a Zod schema to a JSON Schema object for LLM prompting.
- * This is useful for including the expected format in system prompts.
+ * Convert a Zod schema to a human-readable description for LLM prompting.
+ * Uses zod-to-json-schema for forward compatibility with Zod v4.
  */
 export function zodSchemaToPromptDescription(schema: ZodType): string {
-  // Get the Zod description or use a generic message
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const zodSchema = schema as any;
-  const description = zodSchema._def?.description;
+  // Convert to JSON Schema using the public API (Zod v4 compatible)
+  const jsonSchema = zodToJsonSchema(schema, { $refStrategy: "none" }) as Record<string, unknown>;
 
-  if (description) {
-    return description;
+  // Check for top-level description
+  if (jsonSchema.description && typeof jsonSchema.description === "string") {
+    return jsonSchema.description;
   }
 
-  // Try to infer from shape if it's an object
-  if (zodSchema._def?.typeName === "ZodObject") {
-    const shape = zodSchema._def.shape();
-    const fields = Object.keys(shape).map((key) => {
-      const fieldType = shape[key]._def?.typeName || "unknown";
-      const fieldDesc = shape[key]._def?.description || "";
-      return `  - ${key}: ${fieldType.replace("Zod", "").toLowerCase()}${fieldDesc ? ` (${fieldDesc})` : ""}`;
+  // If it's an object type, describe the fields
+  if (jsonSchema.type === "object" && jsonSchema.properties) {
+    const properties = jsonSchema.properties as Record<string, Record<string, unknown>>;
+    const fields = Object.keys(properties).map((key) => {
+      const prop = properties[key];
+      const fieldType = (prop.type as string) || "unknown";
+      const fieldDesc = prop.description ? ` (${prop.description})` : "";
+      return `  - ${key}: ${fieldType}${fieldDesc}`;
     });
     return `JSON object with fields:\n${fields.join("\n")}`;
+  }
+
+  // Fallback for other types
+  if (jsonSchema.type) {
+    return `JSON ${jsonSchema.type}`;
   }
 
   return "JSON";

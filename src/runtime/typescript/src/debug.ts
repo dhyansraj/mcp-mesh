@@ -66,7 +66,7 @@ function isDebugEnabled(_category: DebugCategory): boolean {
  * ```typescript
  * const debug = createDebug("llm");
  * debug("Executing tool", { name: "add" });
- * // Only logs if MESH_DEBUG=llm or MESH_DEBUG=1
+ * // Only logs if MCP_MESH_LOG_LEVEL=DEBUG or MCP_MESH_DEBUG_MODE=true
  * ```
  */
 export function createDebug(category: DebugCategory): (...args: unknown[]) => void {
