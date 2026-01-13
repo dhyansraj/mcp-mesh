@@ -8,7 +8,10 @@
  * src/runtime/python/_mcp_mesh/engine/provider_handlers/base_provider_handler.py
  */
 
+import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
+
+const debug = createDebug("provider-handler");
 
 // ============================================================================
 // Types
@@ -137,11 +140,21 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
 
       // Add tool calls as content blocks
       for (const tc of msg.tool_calls!) {
+        // Parse arguments with fallback for malformed JSON
+        let args: unknown = {};
+        try {
+          args = JSON.parse(tc.function.arguments);
+        } catch (err) {
+          debug(
+            `Failed to parse tool call arguments for ${tc.function.name}: ${err}. Using empty object.`
+          );
+        }
+
         contentParts.push({
           type: "tool-call",
           toolCallId: tc.id,
           toolName: tc.function.name,
-          args: JSON.parse(tc.function.arguments),
+          args,
         });
       }
 

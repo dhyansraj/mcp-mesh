@@ -82,6 +82,11 @@ export class MeshAgent {
   private config: ResolvedAgentConfig;
   private agentId: string;
   private tools: Map<string, ToolMeta> = new Map();
+  /**
+   * Maps LLM provider tool names to their vendor (e.g., "process_chat" -> "anthropic").
+   * TODO: Use for provider metrics, health checks, or exposing via getLlmProviderVendor() getter.
+   * Currently populated by addLlmProviderTool() for future introspection needs.
+   */
   private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
   private started = false;

@@ -410,18 +410,19 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
         const content = msg.content ?? "";
 
         // Convert string content to cached content block format
-        // Note: This format is specific to Anthropic's API
-        // Vercel AI SDK should preserve this structure
-        const cachedMsg: LlmMessage = {
-          role: "system",
-          content: JSON.stringify([
+        // Anthropic API expects an array of content blocks, not a JSON string
+        // Use type assertion since LlmMessage.content is typed as string,
+        // but Vercel AI SDK's Anthropic provider accepts content block arrays
+        const cachedMsg = {
+          role: "system" as const,
+          content: [
             {
               type: "text",
               text: content,
               cache_control: { type: "ephemeral" },
             },
-          ]),
-        };
+          ],
+        } as unknown as LlmMessage;
 
         cachedMessages.push(cachedMsg);
         debug(`Applied prompt caching to system message (${content.length} chars)`);
