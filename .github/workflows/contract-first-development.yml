@@ -8,6 +8,7 @@ on:
     branches: [main, develop, alpha-4.0]
     paths:
       - "api/**/*.yaml"
+      - "src/core/ent/schema/**"
       - "tools/codegen/**"
       - "tools/validation/**"
       - "tools/detection/**"
@@ -17,6 +18,7 @@ on:
       - "api/**/*.yaml"
       - "src/**/*.go"
       - "src/**/*.py"
+      - "src/core/ent/schema/**"
       - "tools/codegen/**"
       - "tools/validation/**"
       - "tools/detection/**"
@@ -102,10 +104,22 @@ jobs:
           # Install additional Python dependencies for validation
           pip install openapi-spec-validator jsonschema pyyaml
 
+      - name: Download Go dependencies
+        run: |
+          echo "📦 Downloading Go dependencies (ensures Ent version matches go.mod)..."
+          go mod download
+          echo "✅ Using Ent version: $(grep 'entgo.io/ent ' go.mod | awk '{print $2}')"
+
       - name: Generate Go server stubs
         run: |
           echo "🤖 Generating Go server stubs..."
           ./tools/codegen/generate.sh go
+
+      - name: Generate Ent ORM code
+        run: |
+          echo "🗄️ Generating Ent ORM code..."
+          cd src/core && go generate ./ent
+          echo "✅ Ent code generation completed"
 
       # Note: Python registry client generation removed - registry communication
       # is now handled by Rust core with hand-written clients
@@ -116,6 +130,7 @@ jobs:
           if ! git diff --exit-code; then
             echo "❌ Generated code differs from repository!"
             echo "🔧 Run 'make generate' locally and commit changes"
+            echo "   This regenerates both OpenAPI server stubs and Ent ORM code"
             exit 1
           fi
           echo "✅ Generated code is up to date"
@@ -126,6 +141,8 @@ jobs:
           name: generated-code
           path: |
             src/core/registry/generated/
+            src/core/ent/
+            !src/core/ent/schema/
 
   # Step 3: Detect Unauthorized Endpoints
   detect-endpoints:
@@ -347,11 +364,15 @@ jobs:
           echo "If any step failed:" >> $GITHUB_STEP_SUMMARY
           echo "1. **OpenAPI Validation**: Fix syntax/schema errors in specification" >> $GITHUB_STEP_SUMMARY
           echo "2. **Code Generation**: Run \`make generate\` locally and commit" >> $GITHUB_STEP_SUMMARY
+          echo "   - OpenAPI: Generates Go server stubs from api/*.yaml" >> $GITHUB_STEP_SUMMARY
+          echo "   - Ent ORM: Generates Go code from src/core/ent/schema/" >> $GITHUB_STEP_SUMMARY
           echo "3. **Endpoint Detection**: Remove manual endpoints or add to OpenAPI spec" >> $GITHUB_STEP_SUMMARY
           echo "4. **Build Failures**: Fix code to match generated interfaces" >> $GITHUB_STEP_SUMMARY
           echo "5. **Contract Validation**: Ensure responses match OpenAPI schemas" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Never modify generated code directly!**" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenAPI generated: \`src/core/registry/generated/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Ent generated: \`src/core/ent/\` (except schema/)" >> $GITHUB_STEP_SUMMARY
 
 # Workflow configuration
 concurrency:

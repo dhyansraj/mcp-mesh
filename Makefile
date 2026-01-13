@@ -26,9 +26,9 @@ all: generate build
 # 🤖 AI CONTRACT-FIRST DEVELOPMENT TARGETS
 # These targets enforce OpenAPI-first development workflow
 
-# Generate all code from OpenAPI specification
+# Generate all code from OpenAPI specification and Ent schemas
 .PHONY: generate
-generate: generate-go
+generate: generate-go generate-ent
 
 # Generate Go server stubs from OpenAPI spec
 .PHONY: generate-go
@@ -36,6 +36,13 @@ generate-go:
 	@echo "🤖 Generating Go server stubs from OpenAPI specification..."
 	@$(CODEGEN_SCRIPT) go
 	@echo "✅ Go code generation completed"
+
+# Generate Ent ORM code from schema
+.PHONY: generate-ent
+generate-ent:
+	@echo "🗄️ Generating Ent ORM code from schema..."
+	@cd src/core && go generate ./ent
+	@echo "✅ Ent code generation completed"
 
 # Note: Python client generation removed - registry communication
 # is now handled by Rust core with hand-written clients
