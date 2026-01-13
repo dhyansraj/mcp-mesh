@@ -28,6 +28,7 @@ import type {
   ToolMeta,
   McpMeshAgent,
   NormalizedDependency,
+  LlmProviderConfig,
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix } from "./config.js";
 import { createProxy, normalizeDependency, runWithTraceContext } from "./proxy.js";
@@ -46,6 +47,7 @@ import {
   handleLlmProviderUnavailable,
   LlmToolRegistry,
 } from "./llm.js";
+import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -80,6 +82,7 @@ export class MeshAgent {
   private config: ResolvedAgentConfig;
   private agentId: string;
   private tools: Map<string, ToolMeta> = new Map();
+  private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
   private started = false;
   private tracingEnabled = false;
@@ -232,6 +235,58 @@ export class MeshAgent {
       dependencies: normalizedDeps,
       dependencyKwargs: def.dependencyKwargs,
     });
+
+    return this;
+  }
+
+  /**
+   * Add an LLM provider tool to the agent.
+   *
+   * This creates a zero-code LLM provider that other agents can use
+   * via mesh delegation.
+   *
+   * @param config - LLM provider configuration
+   * @returns This agent for chaining
+   *
+   * @example
+   * ```typescript
+   * agent.addLlmProviderTool({
+   *   model: "anthropic/claude-sonnet-4-5",
+   *   capability: "llm",
+   *   tags: ["llm", "claude", "anthropic", "provider"],
+   * });
+   * ```
+   */
+  addLlmProviderTool(config: LlmProviderConfig): this {
+    // Create the LLM provider tool definition
+    const toolDef = llmProvider(config);
+
+    // Add to FastMCP server
+    this.server.addTool({
+      name: toolDef.name,
+      description: toolDef.description,
+      parameters: toolDef.parameters,
+      execute: toolDef.execute,
+    });
+
+    // Get mesh metadata from the tool definition
+    const meta = getLlmProviderMeta(toolDef);
+    if (meta) {
+      // Store mesh metadata with JSON Schema for registry
+      const inputSchema = this.convertZodToJsonSchema(toolDef.parameters);
+      this.tools.set(toolDef.name, {
+        capability: meta.capability,
+        version: meta.version,
+        tags: meta.tags,
+        description: toolDef.description,
+        inputSchema: JSON.stringify(inputSchema),
+        dependencies: [],
+        dependencyKwargs: undefined,
+      });
+
+      // Store vendor for provider handler selection
+      this.llmProviderVendors.set(toolDef.name, meta.vendor);
+    }
 
     return this;
   }

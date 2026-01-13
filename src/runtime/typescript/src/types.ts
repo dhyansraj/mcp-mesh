@@ -580,3 +580,110 @@ export interface LlmToolProxy {
    */
   (args: Record<string, unknown>): Promise<unknown>;
 }
+
+// ============================================================================
+// LLM Provider Types (Phase 4)
+// ============================================================================
+
+/**
+ * Standard LLM request format for mesh-delegated LLM calls.
+ *
+ * This interface is used when delegating LLM calls to mesh-registered LLM provider
+ * agents via mesh.llmProvider(). It standardizes the request format across the mesh.
+ *
+ * @example
+ * ```typescript
+ * // Provider side (automatic with mesh.llmProvider):
+ * server.addTool(mesh.llmProvider({
+ *   model: "anthropic/claude-sonnet-4-5",
+ *   capability: "llm",
+ * }));
+ *
+ * // Consumer side:
+ * const response = await llmProvider({
+ *   request: {
+ *     messages: [
+ *       { role: "system", content: "You are helpful." },
+ *       { role: "user", content: "Hello!" },
+ *     ],
+ *   },
+ * });
+ * ```
+ */
+export interface MeshLlmRequest {
+  /** List of message dicts with "role" and "content" keys (and optionally "tool_calls") */
+  messages: LlmMessage[];
+  /** Optional list of tool definitions (MCP format) */
+  tools?: LlmToolDefinition[];
+  /** Optional parameters to pass to the model (temperature, max_tokens, model, etc.) */
+  model_params?: Record<string, unknown>;
+  /** Optional arbitrary context data for debugging/tracing */
+  context?: Record<string, unknown>;
+  /** Optional request ID for tracking */
+  request_id?: string;
+  /** Optional agent name that initiated the request */
+  caller_agent?: string;
+}
+
+/**
+ * Usage metadata included in LLM provider responses.
+ * Tracks token usage for cost monitoring.
+ */
+export interface MeshLlmUsage {
+  /** Number of input/prompt tokens used */
+  prompt_tokens: number;
+  /** Number of output/completion tokens used */
+  completion_tokens: number;
+  /** Model used for generation */
+  model: string;
+}
+
+/**
+ * Response from an LLM provider.
+ * Contains the assistant message with optional tool calls and usage metadata.
+ */
+export interface MeshLlmResponse {
+  /** Role is always "assistant" for provider responses */
+  role: "assistant";
+  /** Text content from the LLM */
+  content: string;
+  /** Tool calls requested by the LLM (for agentic loop) */
+  tool_calls?: LlmToolCallRequest[];
+  /** Token usage metadata for cost tracking */
+  _mesh_usage?: MeshLlmUsage;
+}
+
+/**
+ * Configuration for mesh.llmProvider() tool definition.
+ *
+ * @example
+ * ```typescript
+ * server.addTool(mesh.llmProvider({
+ *   model: "anthropic/claude-sonnet-4-5",
+ *   capability: "llm",
+ *   tags: ["llm", "claude", "anthropic", "provider"],
+ *   maxTokens: 4096,
+ *   temperature: 0.7,
+ * }));
+ * ```
+ */
+export interface LlmProviderConfig {
+  /** LLM model identifier (e.g., "anthropic/claude-sonnet-4-5", "openai/gpt-4o") */
+  model: string;
+  /** Capability name for mesh registration. Defaults to "llm" */
+  capability?: string;
+  /** Tags for mesh registration (e.g., ["llm", "claude", "anthropic"]) */
+  tags?: string[];
+  /** Version string for mesh registration. Defaults to "1.0.0" */
+  version?: string;
+  /** Maximum tokens to generate. Passed to Vercel AI SDK */
+  maxTokens?: number;
+  /** Sampling temperature. Passed to Vercel AI SDK */
+  temperature?: number;
+  /** Top-p sampling. Passed to Vercel AI SDK */
+  topP?: number;
+  /** Custom tool name. Defaults to "process_chat" */
+  toolName?: string;
+  /** Description for the tool */
+  description?: string;
+}
