@@ -142,6 +142,7 @@ jobs:
           path: |
             src/core/registry/generated/
             src/core/ent/
+            !src/core/ent/schema/
 
   # Step 3: Detect Unauthorized Endpoints
   detect-endpoints:

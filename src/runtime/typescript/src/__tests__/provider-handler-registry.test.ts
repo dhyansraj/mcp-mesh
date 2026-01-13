@@ -50,6 +50,13 @@ describe("ProviderHandlerRegistry", () => {
       expect(handler.constructor.name).toBe("GenericHandler");
     });
 
+    it("should return GenericHandler for undefined vendor", () => {
+      const handler = ProviderHandlerRegistry.getHandler(undefined);
+
+      expect(handler).toBeDefined();
+      expect(handler.constructor.name).toBe("GenericHandler");
+    });
+
     it("should return GenericHandler for unregistered vendor", () => {
       const handler = ProviderHandlerRegistry.getHandler("some-custom-vendor");
 

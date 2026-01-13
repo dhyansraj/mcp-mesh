@@ -353,10 +353,10 @@ describe("OpenAIHandler", () => {
       expect(items.required).toEqual(["id"]);
     });
 
-    it("should process anyOf, oneOf, allOf schemas", () => {
+    it("should process anyOf schemas", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
-      const unionSchema: OutputSchema = {
-        name: "Union",
+      const anyOfSchema: OutputSchema = {
+        name: "AnyOfUnion",
         schema: {
           type: "object",
           properties: {
@@ -370,7 +370,7 @@ describe("OpenAIHandler", () => {
         },
       };
 
-      const request = handler.prepareRequest(messages, null, unionSchema);
+      const request = handler.prepareRequest(messages, null, anyOfSchema);
 
       const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
       const properties = schema.properties as Record<string, Record<string, unknown>>;
@@ -378,6 +378,60 @@ describe("OpenAIHandler", () => {
 
       expect(anyOf[0].additionalProperties).toBe(false);
       expect(anyOf[1].additionalProperties).toBe(false);
+    });
+
+    it("should process oneOf schemas", () => {
+      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
+      const oneOfSchema: OutputSchema = {
+        name: "OneOfUnion",
+        schema: {
+          type: "object",
+          properties: {
+            result: {
+              oneOf: [
+                { type: "object", properties: { success: { type: "boolean" } } },
+                { type: "object", properties: { error: { type: "string" } } },
+              ],
+            },
+          },
+        },
+      };
+
+      const request = handler.prepareRequest(messages, null, oneOfSchema);
+
+      const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
+      const properties = schema.properties as Record<string, Record<string, unknown>>;
+      const oneOf = properties.result.oneOf as Array<Record<string, unknown>>;
+
+      expect(oneOf[0].additionalProperties).toBe(false);
+      expect(oneOf[1].additionalProperties).toBe(false);
+    });
+
+    it("should process allOf schemas", () => {
+      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
+      const allOfSchema: OutputSchema = {
+        name: "AllOfComposite",
+        schema: {
+          type: "object",
+          properties: {
+            combined: {
+              allOf: [
+                { type: "object", properties: { id: { type: "number" } } },
+                { type: "object", properties: { name: { type: "string" } } },
+              ],
+            },
+          },
+        },
+      };
+
+      const request = handler.prepareRequest(messages, null, allOfSchema);
+
+      const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
+      const properties = schema.properties as Record<string, Record<string, unknown>>;
+      const allOf = properties.combined.allOf as Array<Record<string, unknown>>;
+
+      expect(allOf[0].additionalProperties).toBe(false);
+      expect(allOf[1].additionalProperties).toBe(false);
     });
   });
 });
