@@ -47,6 +47,26 @@ func (au *AgentUpdate) SetNillableAgentType(at *agent.AgentType) *AgentUpdate {
 	return au
 }
 
+// SetRuntime sets the "runtime" field.
+func (au *AgentUpdate) SetRuntime(a agent.Runtime) *AgentUpdate {
+	au.mutation.SetRuntime(a)
+	return au
+}
+
+// SetNillableRuntime sets the "runtime" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableRuntime(a *agent.Runtime) *AgentUpdate {
+	if a != nil {
+		au.SetRuntime(*a)
+	}
+	return au
+}
+
+// ClearRuntime clears the value of the "runtime" field.
+func (au *AgentUpdate) ClearRuntime() *AgentUpdate {
+	au.mutation.ClearRuntime()
+	return au
+}
+
 // SetName sets the "name" field.
 func (au *AgentUpdate) SetName(s string) *AgentUpdate {
 	au.mutation.SetName(s)
@@ -445,6 +465,11 @@ func (au *AgentUpdate) check() error {
 			return &ValidationError{Name: "agent_type", err: fmt.Errorf(`ent: validator failed for field "Agent.agent_type": %w`, err)}
 		}
 	}
+	if v, ok := au.mutation.Runtime(); ok {
+		if err := agent.RuntimeValidator(v); err != nil {
+			return &ValidationError{Name: "runtime", err: fmt.Errorf(`ent: validator failed for field "Agent.runtime": %w`, err)}
+		}
+	}
 	if v, ok := au.mutation.Status(); ok {
 		if err := agent.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
@@ -467,6 +492,12 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if value, ok := au.mutation.AgentType(); ok {
 		_spec.SetField(agent.FieldAgentType, field.TypeEnum, value)
+	}
+	if value, ok := au.mutation.Runtime(); ok {
+		_spec.SetField(agent.FieldRuntime, field.TypeEnum, value)
+	}
+	if au.mutation.RuntimeCleared() {
+		_spec.ClearField(agent.FieldRuntime, field.TypeEnum)
 	}
 	if value, ok := au.mutation.Name(); ok {
 		_spec.SetField(agent.FieldName, field.TypeString, value)
@@ -772,6 +803,26 @@ func (auo *AgentUpdateOne) SetNillableAgentType(at *agent.AgentType) *AgentUpdat
 	if at != nil {
 		auo.SetAgentType(*at)
 	}
+	return auo
+}
+
+// SetRuntime sets the "runtime" field.
+func (auo *AgentUpdateOne) SetRuntime(a agent.Runtime) *AgentUpdateOne {
+	auo.mutation.SetRuntime(a)
+	return auo
+}
+
+// SetNillableRuntime sets the "runtime" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableRuntime(a *agent.Runtime) *AgentUpdateOne {
+	if a != nil {
+		auo.SetRuntime(*a)
+	}
+	return auo
+}
+
+// ClearRuntime clears the value of the "runtime" field.
+func (auo *AgentUpdateOne) ClearRuntime() *AgentUpdateOne {
+	auo.mutation.ClearRuntime()
 	return auo
 }
 
@@ -1186,6 +1237,11 @@ func (auo *AgentUpdateOne) check() error {
 			return &ValidationError{Name: "agent_type", err: fmt.Errorf(`ent: validator failed for field "Agent.agent_type": %w`, err)}
 		}
 	}
+	if v, ok := auo.mutation.Runtime(); ok {
+		if err := agent.RuntimeValidator(v); err != nil {
+			return &ValidationError{Name: "runtime", err: fmt.Errorf(`ent: validator failed for field "Agent.runtime": %w`, err)}
+		}
+	}
 	if v, ok := auo.mutation.Status(); ok {
 		if err := agent.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
@@ -1225,6 +1281,12 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if value, ok := auo.mutation.AgentType(); ok {
 		_spec.SetField(agent.FieldAgentType, field.TypeEnum, value)
+	}
+	if value, ok := auo.mutation.Runtime(); ok {
+		_spec.SetField(agent.FieldRuntime, field.TypeEnum, value)
+	}
+	if auo.mutation.RuntimeCleared() {
+		_spec.ClearField(agent.FieldRuntime, field.TypeEnum)
 	}
 	if value, ok := auo.mutation.Name(); ok {
 		_spec.SetField(agent.FieldName, field.TypeString, value)

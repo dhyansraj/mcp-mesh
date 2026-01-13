@@ -116,8 +116,7 @@ repos:
           - >-
             echo "Checking if generated code is up to date...";
             make generate > /dev/null 2>&1;
-            if ! git diff --exit-code src/core/registry/generated/
-            src/runtime/python/_mcp_mesh/generated/ > /dev/null 2>&1;
+            if ! git diff --exit-code src/core/registry/generated/ > /dev/null 2>&1;
             then echo "Generated code is out of date!";
             echo "Run: make generate"; exit 1;
             fi; echo "Generated code is up to date"

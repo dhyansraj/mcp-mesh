@@ -170,6 +170,13 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		}
 	}
 
+	runtime := "python" // default
+	if rt, ok := req.Metadata["runtime"]; ok {
+		if rtStr, ok := rt.(string); ok {
+			runtime = rtStr
+		}
+	}
+
 	name := req.AgentID // default to agent_id
 	if n, ok := req.Metadata["name"]; ok {
 		if nameStr, ok := n.(string); ok {
@@ -213,6 +220,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		agentCreate := tx.Agent.Create().
 			SetID(req.AgentID).
 			SetAgentType(agent.AgentType(agentType)).
+			SetRuntime(agent.Runtime(runtime)).
 			SetName(name).
 			SetNamespace(namespace).
 			SetStatus(agent.StatusHealthy).
@@ -246,6 +254,7 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			// Update existing agent
 			updateBuilder := existingAgent.Update().
 				SetAgentType(agent.AgentType(agentType)).
+				SetRuntime(agent.Runtime(runtime)).
 				SetName(name).
 				SetNamespace(namespace).
 				SetStatus(agent.StatusHealthy).
@@ -977,6 +986,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					}
 				}
 
+				runtime := "python" // default
+				if rt, ok := req.Metadata["runtime"]; ok {
+					if rtStr, ok := rt.(string); ok {
+						runtime = rtStr
+					}
+				}
+
 				name := req.AgentID // default to agent_id
 				if n, ok := req.Metadata["name"]; ok {
 					if nameStr, ok := n.(string); ok {
@@ -1017,6 +1033,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				// Update existing agent metadata and status using transaction client
 				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
 					SetAgentType(agent.AgentType(agentType)).
+					SetRuntime(agent.Runtime(runtime)).
 					SetName(name).
 					SetNamespace(namespace).
 					SetStatus(agent.StatusHealthy).
@@ -1303,10 +1320,18 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		// This provides consistency with health monitor and prevents mismatches
 		status := string(a.Status)
 
+		// Convert runtime to AgentInfoRuntime pointer
+		var runtimePtr *generated.AgentInfoRuntime
+		if a.Runtime != "" {
+			rt := generated.AgentInfoRuntime(a.Runtime)
+			runtimePtr = &rt
+		}
+
 		agentInfo := generated.AgentInfo{
 			Id:        a.ID,
 			Name:      a.Name,
 			AgentType: generated.AgentInfoAgentType(a.AgentType),
+			Runtime:   runtimePtr,
 			Version:   &a.Version,
 			Status:    generated.AgentInfoStatus(status),
 			Endpoint:  endpoint,

@@ -25,6 +25,11 @@ func (Agent) Fields() []ent.Field {
 			Values("mcp_agent", "mesh_tool", "decorator_agent", "api").
 			Default("mcp_agent").
 			Comment("Type of agent"),
+		field.Enum("runtime").
+			Values("python", "typescript").
+			Default("python").
+			Optional().
+			Comment("SDK runtime: python or typescript"),
 		field.String("name").
 			Comment("Human-readable name of the agent"),
 		field.String("version").

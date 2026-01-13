@@ -31,7 +31,7 @@ This document outlines the design for the MCP Mesh TypeScript SDK, enabling Type
 | Phase 1 scope         | =mesh.tool= equivalent (MCP agents)                       |
 | Phase 2 scope         | =mesh.route= for Express routes (REST APIs)               |
 | LLM/LLM Provider      | Deferred to Phase 3                                       |
-| CLI tooling           | Use existing Go-based =meshctl= (TS support in Phase 4)   |
+| CLI tooling           | Use existing Go-based =meshctl= (TS support in Phase 6)   |
 
 * Package Structure
 
@@ -970,7 +970,7 @@ const tool = mesh.llm({
 | Medium | JSON schema injection | Medium | Improves tool usage |
 | Low | Runtime system prompt | Low | Edge case utility |
 
-Note: Provider handlers (vendor-specific optimizations) will be addressed in Phase 4
+Note: Provider handlers (vendor-specific optimizations) are addressed in Phase 4
 with =mesh.llmProvider()= implementation.
 
 ** Phase 4: LLM Provider Support [IN PROGRESS]
@@ -1175,13 +1175,690 @@ Key features to match:
 
 Deliverable: Zero-code LLM providers in TypeScript
 
-** Phase 5: meshctl TypeScript Support (Future)
+** Phase 5: Unit Test Coverage [COMPLETED]
 
-- [ ] Add =meshctl scaffold --language typescript= support
-- [ ] Add =meshctl start= support for TypeScript agents
-- [ ] TypeScript agent templates
+Comprehensive unit test coverage for TypeScript SDK components.
 
-Deliverable: Full CLI support for TypeScript agents
+*** Test Files Created
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| =provider-handler-registry.test.ts= | 17 | Registry singleton, caching, vendor lookup |
+| =claude-handler.test.ts= | 30 | Output modes, schema strictness, prompt caching |
+| =openai-handler.test.ts= | 26 | Strict mode, additionalProperties, anyOf/oneOf/allOf |
+| =generic-handler.test.ts= | 20 | Fallback behavior, conservative capabilities |
+| =response-parser.test.ts= | 45 | JSON extraction, Zod schema validation |
+| =sse.test.ts= | 20 | SSE parsing, streaming responses |
+| =llm-provider.test.ts= | 30 | Vendor extraction, tool generation |
+| =template.test.ts= | 25 | Handlebars rendering, built-in helpers |
+| =errors.test.ts= | 20 | Custom error classes |
+
+*** CI Enhancements
+
+- Added Ent ORM code generation validation to =contract-first-development.yml=
+- Added =generate-ent= target to Makefile
+- Added =.gitattributes= to exclude ~32k lines of generated code from language stats
+
+*** Running Tests
+
+#+BEGIN_SRC bash
+cd src/runtime/typescript
+npm test
+#+END_SRC
+
+Deliverable: 284 unit tests covering provider handlers, response parsing, templates, and errors ✓
+
+** Phase 6: meshctl TypeScript Support
+
+Enable =meshctl= to manage TypeScript agents alongside Python agents.
+
+*** Pre-requisite: Runtime Field in Database and Heartbeat
+
+Before meshctl can distinguish between Python and TypeScript agents, we need to add
+a =runtime= field throughout the stack. This is a cross-cutting change affecting all
+four languages (Go, Rust, Python, TypeScript).
+
+**** Runtime Enum Values
+
+| Value | Description |
+|-------|-------------|
+| =python= | Python SDK agent (using mcp_mesh_core via PyO3) |
+| =typescript= | TypeScript SDK agent (using mcp-mesh-core via napi-rs) |
+
+**** Changes Required
+
+***** 1. Go - Database (Ent ORM)
+
+File: =src/core/ent/schema/agent.go=
+
+#+BEGIN_SRC go
+// Add to Fields():
+field.Enum("runtime").
+    Values("python", "typescript").
+    Optional().
+    Comment("SDK runtime: python or typescript"),
+#+END_SRC
+
+Then run: =make generate-ent=
+
+***** 2. Go - OpenAPI Specification
+
+File: =api/mcp-mesh-registry.openapi.yaml=
+
+Add =runtime= to HeartbeatRequest schema:
+
+#+BEGIN_SRC yaml
+HeartbeatRequest:
+  type: object
+  required: [agent_id, status, metadata]
+  properties:
+    # ... existing fields ...
+    runtime:
+      type: string
+      enum: [python, typescript]
+      description: SDK runtime language
+      example: "python"
+#+END_SRC
+
+Then run: =make generate-go=
+
+***** 3. Go - Registry Handlers
+
+File: =src/core/registry/handlers/heartbeat.go=
+
+- Extract =runtime= from heartbeat request
+- Save to Agent entity in database
+- Include in response for debugging
+
+***** 4. Rust Core - Spec and Registry
+
+Files:
+- =src/runtime/core/src/spec.rs= - Add =runtime= field to =AgentSpec=
+- =src/runtime/core/src/registry.rs= - Add =runtime= to =HeartbeatRequest=
+
+#+BEGIN_SRC rust
+// In spec.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RuntimeType {
+    #[default]
+    #[serde(rename = "python")]
+    Python,
+    #[serde(rename = "typescript")]
+    TypeScript,
+}
+
+// In AgentSpec struct:
+pub runtime: RuntimeType,
+#+END_SRC
+
+***** 5. Rust Core - napi.rs (TypeScript bindings)
+
+File: =src/runtime/core/src/napi.rs=
+
+#+BEGIN_SRC rust
+// Add to JsAgentSpec:
+pub runtime: Option<String>,  // "python" | "typescript"
+
+// In From<JsAgentSpec> for RustAgentSpec:
+runtime: js.runtime
+    .map(|s| RuntimeType::from_str(&s))
+    .unwrap_or(RuntimeType::TypeScript),  // Default for TS SDK
+#+END_SRC
+
+***** 6. Rust Core - pyo3.rs (Python bindings)
+
+File: =src/runtime/core/src/spec.rs= (PyO3 section)
+
+#+BEGIN_SRC rust
+// In py_new():
+runtime: Option<String>,  // defaults to "python"
+
+// Default to Python for Python SDK
+runtime: runtime
+    .map(|s| RuntimeType::from_str(&s))
+    .unwrap_or(RuntimeType::Python),
+#+END_SRC
+
+***** 7. Python SDK
+
+File: =src/runtime/python/mesh/decorators.py=
+
+The Python SDK automatically uses the Rust core which will default to =runtime: "python"=.
+No changes needed if we set the default correctly in PyO3 bindings.
+
+***** 8. TypeScript SDK
+
+File: =src/runtime/typescript/src/mesh-agent.ts=
+
+The TypeScript SDK automatically uses the Rust core which will default to =runtime: "typescript"=.
+No changes needed if we set the default correctly in napi-rs bindings.
+
+**** Implementation Order
+
+1. [ ] OpenAPI spec - Add runtime field
+2. [ ] Go registry - Generate code, update handlers
+3. [ ] Ent schema - Add runtime field, generate code
+4. [ ] Rust core - Add RuntimeType enum and update specs
+5. [ ] Rebuild Python SDK (maturin)
+6. [ ] Rebuild TypeScript SDK (napi-rs)
+7. [ ] Test end-to-end with both Python and TypeScript agents
+
+*** Architecture: Language Handler Pattern
+
+Create a unified handler pattern for language-specific operations across meshctl commands.
+This allows clean separation of Python vs TypeScript logic.
+
+#+BEGIN_EXAMPLE
+cmd/meshctl/internal/handlers/
+├── language.go           # Interface + detection logic
+├── python_handler.go     # Python-specific operations
+└── typescript_handler.go # TypeScript-specific operations
+#+END_EXAMPLE
+
+**** Language Handler Interface
+
+#+BEGIN_SRC go
+type LanguageHandler interface {
+    // Detection
+    Language() string                           // "python" | "typescript"
+    CanHandle(path string) bool                 // Check if file/dir is this language
+    DetectInDirectory(dir string) bool          // Check if dir contains this language
+
+    // Scaffold
+    GetTemplates() map[string]string            // Template files
+    GenerateAgent(config ScaffoldConfig) error  // Generate agent files
+    GenerateDockerfile() string                 // Dockerfile content
+    GenerateHelmValues() map[string]interface{} // Helm values
+
+    // Compose
+    ParseAgentFile(path string) (*AgentInfo, error)  // Extract name, port, caps
+    GetDockerImage() string                          // Runtime image name
+
+    // Start
+    ValidatePrerequisites(dir string) error     // Check .venv or node_modules
+    GetStartCommand(file string) []string       // Command to start agent
+    GetEnvironment() map[string]string          // Required env vars
+}
+#+END_SRC
+
+**** Language Normalization
+
+#+BEGIN_SRC go
+// NormalizeLanguage converts shorthand to canonical form
+func NormalizeLanguage(lang string) string {
+    switch strings.ToLower(lang) {
+    case "python", "py", "":
+        return "python"
+    case "typescript", "ts":
+        return "typescript"
+    default:
+        return lang // let validation handle unknown
+    }
+}
+
+// GetHandlerByLanguage returns handler for explicit --lang flag
+func GetHandlerByLanguage(lang string) (LanguageHandler, error) {
+    switch NormalizeLanguage(lang) {
+    case "python":
+        return &PythonHandler{}, nil
+    case "typescript":
+        return &TypeScriptHandler{}, nil
+    default:
+        return nil, fmt.Errorf("unsupported language: %s (use: python, py, typescript, ts)", lang)
+    }
+}
+#+END_SRC
+
+**** Auto-Detection Logic
+
+#+BEGIN_SRC go
+// DetectLanguage auto-detects from file/directory (used when --lang not specified)
+func DetectLanguage(path string) LanguageHandler {
+    // 1. File extension check
+    if strings.HasSuffix(path, ".py") {
+        return &PythonHandler{}
+    }
+    if strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".js") {
+        return &TypeScriptHandler{}
+    }
+
+    // 2. Directory detection
+    if fileExists(filepath.Join(path, "pyproject.toml")) ||
+       fileExists(filepath.Join(path, "requirements.txt")) ||
+       fileExists(filepath.Join(path, ".venv")) {
+        return &PythonHandler{}
+    }
+    if fileExists(filepath.Join(path, "package.json")) ||
+       fileExists(filepath.Join(path, "tsconfig.json")) ||
+       fileExists(filepath.Join(path, "node_modules")) {
+        return &TypeScriptHandler{}
+    }
+
+    // 3. Default to Python for backwards compatibility
+    return &PythonHandler{}
+}
+#+END_SRC
+
+*** meshctl scaffold
+
+**** Language Flag
+
+#+BEGIN_EXAMPLE
+--lang, -l <language>    Language: python, py, typescript, ts (default: python)
+#+END_EXAMPLE
+
+| Flag Value | Language |
+|------------|----------|
+| =python= | Python |
+| =py= | Python (shorthand) |
+| =typescript= | TypeScript |
+| =ts= | TypeScript (shorthand) |
+| (omitted) | Python (default) |
+
+**** Examples
+
+#+BEGIN_SRC bash
+# Python (default - backwards compatible)
+meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold --name my-agent --agent-type tool --lang python
+meshctl scaffold --name my-agent --agent-type tool -l py
+
+# TypeScript
+meshctl scaffold --name my-agent --agent-type tool --lang typescript
+meshctl scaffold --name my-agent --agent-type tool -l ts
+meshctl scaffold -n my-agent -t tool -l typescript
+#+END_SRC
+
+**** Python Output (default)
+
+#+BEGIN_SRC bash
+meshctl scaffold --name my-agent --agent-type tool
+# Creates:
+# my-agent/
+# ├── __init__.py
+# ├── __main__.py
+# ├── main.py
+# ├── Dockerfile
+# ├── .dockerignore
+# ├── requirements.txt
+# ├── helm-values.yaml
+# └── README.md
+#+END_SRC
+
+**** TypeScript Output
+
+#+BEGIN_SRC bash
+meshctl scaffold --name my-agent --agent-type tool -l ts
+# Creates:
+# my-agent/
+# ├── src/
+# │   └── index.ts
+# ├── package.json
+# ├── tsconfig.json
+# ├── Dockerfile
+# ├── .dockerignore
+# ├── helm-values.yaml
+# └── README.md
+#+END_SRC
+
+**** TypeScript Templates
+
+| Agent Type | Template File | Key Imports |
+|------------|---------------|-------------|
+| tool | basic.ts.tmpl | =fastmcp=, =@mcpmesh/sdk=, =zod= |
+| llm-agent | llm-agent.ts.tmpl | + =mesh.llm()= |
+| llm-provider | llm-provider.ts.tmpl | + =mesh.llmProvider()= |
+
+**** Docker Images
+
+| Image | Base | Pre-installed | Built During |
+|-------|------|---------------|--------------|
+| =mcpmesh/python-runtime:0.8= | python:3.11-slim | mcp-mesh SDK | Release |
+| =mcpmesh/typescript-runtime:0.8= | node:20-slim | @mcpmesh/sdk, tsx | Release |
+
+Both images are pushed to Docker Hub during release workflow.
+
+**** TypeScript Dockerfile Template
+
+#+BEGIN_SRC dockerfile
+# Dockerfile for {{name}} MCP Mesh agent
+FROM mcpmesh/typescript-runtime:0.8
+
+WORKDIR /app
+
+# Switch to root to copy files (base image runs as non-root mcp-mesh user)
+USER root
+
+# Copy package files and install app-specific dependencies only
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# Copy agent source code and set permissions
+COPY --chmod=755 . .
+RUN chown -R mcp-mesh:mcp-mesh /app
+
+# Switch back to non-root user for security
+USER mcp-mesh
+
+# Expose the agent port
+EXPOSE 9000
+
+# Run the agent (tsx for .ts, node for .js)
+# NOTE: Base image has tsx installed for TypeScript execution
+CMD ["npx", "tsx", "src/index.ts"]
+#+END_SRC
+
+**** TypeScript Runtime Base Image
+
+The =mcpmesh/typescript-runtime= base image includes:
+
+#+BEGIN_SRC dockerfile
+# Base image definition (built during release)
+FROM node:20-slim
+
+# Create non-root user (same as Python runtime)
+RUN groupadd -r mcp-mesh && useradd -r -g mcp-mesh mcp-mesh
+
+WORKDIR /app
+
+# Pre-install mesh SDK and tsx runtime
+RUN npm install -g @mcpmesh/sdk tsx
+
+# Set non-root user
+USER mcp-mesh
+
+ENTRYPOINT []
+#+END_SRC
+
+This means scaffolded agents only install their app-specific dependencies,
+not the mesh SDK (already in base image).
+
+**** Implementation Tasks
+
+- [ ] Create =cmd/meshctl/internal/handlers/= directory
+- [ ] Create =language.go= with =LanguageHandler= interface
+- [ ] Create =python_handler.go= (extract from current code)
+- [ ] Create =typescript_handler.go= (new implementation)
+- [ ] Add TypeScript templates to =cmd/meshctl/templates/typescript/=
+- [ ] Update scaffold command to use handler pattern
+- [ ] Add TypeScript Dockerfile template
+- [ ] Add TypeScript helm values template
+
+*** meshctl scaffold --compose
+
+**** Current Behavior
+
+Scans directory for =.py= files, parses =@mesh.agent= decorator to extract:
+- Agent name
+- Port
+- Capabilities
+
+**** New Behavior (Language Detection)
+
+#+BEGIN_SRC bash
+meshctl scaffold --compose
+# Auto-detects language per subdirectory:
+# ./calculator/       -> Python (has main.py)
+# ./smart-assistant/  -> TypeScript (has package.json)
+#+END_SRC
+
+**** TypeScript Agent Parsing
+
+Extract agent info from TypeScript files:
+
+#+BEGIN_SRC typescript
+// Pattern to detect:
+const agent = mesh(server, {
+  name: "calculator",
+  port: 9002,
+});
+#+END_SRC
+
+Parser needs to extract:
+- =name= from config object
+- =port= from config object
+- Tool names from =agent.addTool()= or =server.addTool(mesh.llm(...))=
+
+**** Implementation Tasks
+
+- [ ] Add =ParseAgentFile()= to TypeScript handler
+- [ ] Use regex or simple AST parsing for config extraction
+- [ ] Support both =mesh()= and =mesh.route()= patterns
+- [ ] Update compose generation to use handlers
+
+*** meshctl start
+
+**** Current Behavior (Python)
+
+#+BEGIN_SRC bash
+meshctl start agent.py
+# 1. Checks .venv exists in PWD
+# 2. Checks mcp-mesh package installed
+# 3. Runs: .venv/bin/python agent.py
+#+END_SRC
+
+**** New Behavior (Auto-Detection)
+
+#+BEGIN_SRC bash
+# Auto-detect by extension
+meshctl start agent.py        # Python
+meshctl start agent.ts        # TypeScript
+meshctl start agent/          # Detect by directory contents
+
+# Explicit override (rare)
+meshctl start --lang python agent.py
+meshctl start --lang typescript src/index.ts
+#+END_SRC
+
+**** TypeScript Prerequisites Check
+
+#+BEGIN_SRC go
+func (h *TypeScriptHandler) ValidatePrerequisites(dir string) error {
+    // 1. Check node_modules exists
+    if !fileExists(filepath.Join(dir, "node_modules")) {
+        return fmt.Errorf("node_modules not found. Run: npm install")
+    }
+
+    // 2. Check @mcpmesh/sdk installed
+    pkgJson := filepath.Join(dir, "package.json")
+    if !hasDependency(pkgJson, "@mcpmesh/sdk") {
+        return fmt.Errorf("@mcpmesh/sdk not found. Run: npm install @mcpmesh/sdk")
+    }
+
+    // 3. Check TypeScript compiled (if .ts file)
+    // OR use ts-node/tsx for development
+
+    return nil
+}
+#+END_SRC
+
+**** TypeScript Start Command
+
+#+BEGIN_SRC go
+func (h *TypeScriptHandler) GetStartCommand(file string) []string {
+    if strings.HasSuffix(file, ".ts") {
+        // Development: use tsx (fast TypeScript execution)
+        return []string{"npx", "tsx", file}
+    }
+    // Production: use compiled JS
+    return []string{"node", file}
+}
+#+END_SRC
+
+**** Implementation Tasks
+
+- [ ] Add language detection to start command
+- [ ] Implement TypeScript prerequisites check
+- [ ] Implement TypeScript start command (tsx for .ts, node for .js)
+- [ ] Update PID file handling for both languages
+- [ ] Test detached mode with TypeScript agents
+
+*** meshctl stop
+
+**** Current Behavior
+
+- Stops agents started with =--detach= flag
+- Uses PID files stored in =~/.mcp-mesh/pids/=
+- Works via =kill= syscall
+
+**** Analysis
+
+Stop is language-agnostic since it uses PID files:
+
+#+BEGIN_EXAMPLE
+~/.mcp-mesh/pids/
+├── calculator.pid      # Contains PID
+├── smart-assistant.pid
+└── registry.pid
+#+END_EXAMPLE
+
+No changes needed for TypeScript support - as long as start creates PID files
+correctly, stop will work.
+
+**** Implementation Tasks
+
+- [ ] Verify PID file creation in TypeScript start path
+- [ ] Test stop with TypeScript agents
+
+*** meshctl list / status
+
+**** Current Output
+
+#+BEGIN_EXAMPLE
+$ meshctl list
+NAME              PORT   STATUS    DEPS      CAPABILITIES
+calculator        9002   healthy   0/0       add, subtract
+smart-assistant   9003   healthy   1/1       assist
+#+END_EXAMPLE
+
+**** New Output (with Runtime Column)
+
+#+BEGIN_EXAMPLE
+$ meshctl list
+NAME              RUNTIME     PORT   STATUS    DEPS      CAPABILITIES
+calculator        python      9002   healthy   0/0       add, subtract
+smart-assistant   typescript  9003   healthy   1/1       assist
+api-gateway       typescript  4000   healthy   2/2       GET:/time, GET:/status
+#+END_EXAMPLE
+
+**** meshctl list --wide
+
+#+BEGIN_EXAMPLE
+$ meshctl list --wide
+NAME              RUNTIME     PORT   STATUS    DEPS   ENDPOINT                      TOOLS
+calculator        python      9002   healthy   0/0    http://localhost:9002/mcp     2
+smart-assistant   typescript  9003   healthy   1/1    http://localhost:9003/mcp     1
+#+END_EXAMPLE
+
+**** Implementation Tasks
+
+- [ ] Add =runtime= field to registry API response (from DB)
+- [ ] Add =RUNTIME= column to list table output
+- [ ] Add =runtime= to JSON output
+- [ ] Add =runtime= to status output
+- [ ] Color-code by runtime (optional): Python=green, TypeScript=blue
+
+*** meshctl man (Manual Pages)
+
+**** Current Behavior
+
+Manual pages are Python-focused with Python examples.
+
+**** New Behavior
+
+- Default: Python examples (backwards compatible)
+- =--typescript= flag: Show TypeScript examples
+- Footer note: "See also: meshctl man <topic> --typescript"
+
+#+BEGIN_SRC bash
+meshctl man decorators              # Python examples (default)
+meshctl man decorators --typescript # TypeScript examples
+
+meshctl man deployment              # Python Dockerfile examples
+meshctl man deployment --typescript # TypeScript Dockerfile examples
+#+END_SRC
+
+**** Topics Needing TypeScript Variants
+
+| Topic | Python Content | TypeScript Content |
+|-------|----------------|-------------------|
+| decorators | =@mesh.tool=, =@mesh.llm= | =mesh()=, =mesh.llm()=, =mesh.route()= |
+| llm | LLM integration with Python | LLM integration with TypeScript |
+| deployment | Python Dockerfile, helm | TypeScript Dockerfile, helm |
+| testing | Python curl examples | TypeScript curl examples |
+| quickstart | Python hello world | TypeScript hello world |
+
+**** Implementation
+
+#+BEGIN_SRC go
+// In man command
+var typescriptFlag bool
+
+func init() {
+    manCmd.Flags().BoolVar(&typescriptFlag, "typescript", false,
+        "Show TypeScript examples instead of Python")
+}
+
+func getManPage(topic string) string {
+    if typescriptFlag {
+        return manPages[topic + "_typescript"]
+    }
+    content := manPages[topic]
+    // Append footer
+    return content + "\n\nSee also: meshctl man " + topic + " --typescript"
+}
+#+END_SRC
+
+**** Implementation Tasks
+
+- [ ] Add =--typescript= flag to man command
+- [ ] Create TypeScript variants for key topics
+- [ ] Add footer note to Python man pages
+- [ ] Update embedded man page content
+
+*** Implementation Summary
+
+**** Pre-requisite: Runtime Field
+- [ ] Add runtime to OpenAPI spec
+- [ ] Update Go registry handlers
+- [ ] Add runtime to Ent schema
+- [ ] Add RuntimeType to Rust core
+- [ ] Update napi.rs bindings (default: typescript)
+- [ ] Update pyo3 bindings (default: python)
+- [ ] Rebuild SDKs and test
+
+**** Language Handler Pattern
+- [ ] Create =LanguageHandler= interface
+- [ ] Extract Python handler from existing code
+- [ ] Implement TypeScript handler
+- [ ] Add detection logic
+
+**** meshctl scaffold
+- [ ] TypeScript templates (tool, llm-agent, llm-provider)
+- [ ] TypeScript Dockerfile template
+- [ ] TypeScript helm values template
+- [ ] Update scaffold to use handlers
+
+**** meshctl scaffold --compose
+- [ ] TypeScript agent file parsing
+- [ ] Mixed-language compose generation
+
+**** meshctl start
+- [ ] Language auto-detection
+- [ ] TypeScript prerequisites check
+- [ ] TypeScript start command (tsx/node)
+- [ ] PID file handling
+
+**** meshctl list/status
+- [ ] Add RUNTIME column
+- [ ] Update JSON output
+
+**** meshctl man
+- [ ] Add =--typescript= flag
+- [ ] Create TypeScript man page variants
+- [ ] Add footer notes
+
+Deliverable: Full CLI support for TypeScript agents with runtime visibility
 
 * Technical Debt / Refactoring
 

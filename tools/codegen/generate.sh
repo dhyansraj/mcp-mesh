@@ -1,26 +1,19 @@
 #!/bin/bash
 # Code Generation Script for MCP Mesh Contract-First Development
 #
-# This script generates:
-# 1. Go server stubs from Registry OpenAPI spec
-# 2. Python client from Registry OpenAPI spec
-# 3. Python server stubs from Agent OpenAPI spec
+# This script generates Go server stubs from Registry OpenAPI spec.
 #
-# 🤖 AI BEHAVIOR GUIDANCE:
-# This script implements dual-contract development:
-# - Registry API: Go server + Python client (for agent-registry communication)
-# - Agent API: Python server (for agent HTTP wrapper endpoints)
+# NOTE: Python/TypeScript SDKs communicate with the registry via Rust core,
+# which uses a manually written client (auto-generated Rust clients are too verbose).
 #
 # WHAT THIS SCRIPT DOES:
-# 1. Validates both OpenAPI specifications
+# 1. Validates the OpenAPI specification
 # 2. Generates Go registry server handlers from registry spec
-# 3. Generates Python registry client from registry spec
-# 4. Generates Python agent server handlers from agent spec
-# 5. Validates all generated code compiles
+# 3. Validates generated code compiles
 #
 # IF THIS SCRIPT FAILS:
-# - Check both OpenAPI spec syntax and schema
-# - Ensure Go and Python generators are installed
+# - Check OpenAPI spec syntax and schema
+# - Ensure oapi-codegen is installed
 # - Verify output directories exist and are writable
 # - Check that generated code matches expected interfaces
 
@@ -33,7 +26,6 @@ CONFIG_FILE="$SCRIPT_DIR/config.yaml"
 
 # API specifications
 REGISTRY_SPEC="$PROJECT_ROOT/api/mcp-mesh-registry.openapi.yaml"
-AGENT_SPEC="$PROJECT_ROOT/api/mcp-mesh-agent.openapi.yaml"
 
 # Color output functions
 log_info() {
@@ -60,13 +52,6 @@ check_prerequisites() {
     if ! command -v oapi-codegen &> /dev/null; then
         log_error "oapi-codegen not found. Install with:"
         log_error "go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"
-        exit 1
-    fi
-
-    # Check if openapi-generator is installed
-    if ! command -v openapi-generator-cli &> /dev/null; then
-        log_error "openapi-generator-cli not found. Install with:"
-        log_error "npm install -g @openapitools/openapi-generator-cli"
         exit 1
     fi
 
@@ -166,191 +151,6 @@ EOF
     log_success "Go registry server code generated: $output_file"
 }
 
-# Generate Python registry client code
-generate_python_registry_client() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated"
-
-    log_info "Generating Python registry client code..."
-
-    # Remove existing generated code
-    if [[ -d "$output_dir" ]]; then
-        log_info "Removing existing generated Python registry client..."
-        rm -rf "$output_dir"
-    fi
-
-    # Create parent directory
-    mkdir -p "$output_dir"
-
-    # Create ignore file to skip packaging files
-    cat > "$output_dir/.openapi-generator-ignore" << 'EOF'
-# Skip packaging files - we use this as part of our main package
-pyproject.toml
-setup.py
-setup.cfg
-requirements.txt
-test-requirements.txt
-README.md
-tox.ini
-.travis.yml
-.gitlab-ci.yml
-.github/
-git_push.sh
-.gitignore
-test/
-docs/
-EOF
-
-    # Generate Python client using openapi-generator
-    log_info "Running openapi-generator for Python registry client..."
-    openapi-generator-cli generate \
-        -i "$REGISTRY_SPEC" \
-        -g python \
-        -o "$output_dir" \
-        --additional-properties=packageName=mcp_mesh_registry_client \
-        --additional-properties=packageVersion=1.0.0 \
-        --additional-properties=projectName=mcp-mesh-registry-client \
-        --additional-properties=packageUrl=https://github.com/dhyansraj/mcp-mesh \
-        --additional-properties=packageAuthor=DhyanRaj \
-        --additional-properties=packageAuthorEmail=dhyanraj@gmail.com \
-        --skip-validate-spec
-
-    # Add AI behavior guidance to __init__.py
-    local init_file="$output_dir/mcp_mesh_registry_client/__init__.py"
-    if [[ -f "$init_file" ]]; then
-        local temp_file=$(mktemp)
-        cat > "$temp_file" << 'EOF'
-"""
-🤖 AI BEHAVIOR GUIDANCE:
-This package contains generated Python client for MCP Mesh REGISTRY API.
-DO NOT modify files in this package directly - they will be overwritten.
-
-SCOPE: Registry API - for agents to communicate with registry service
-
-TO USE THIS CLIENT:
-1. Import: from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi
-2. Configure: api_client = ApiClient(Configuration(host="http://registry:8000"))
-3. Use: agents_api = AgentsApi(api_client)
-
-GENERATED FROM: api/mcp-mesh-registry.openapi.yaml
-CONTRACT: Registry service communication only
-"""
-
-EOF
-        cat "$init_file" >> "$temp_file"
-        mv "$temp_file" "$init_file"
-    fi
-
-    # Fix import paths to use full project-relative paths
-    log_info "Fixing import paths in generated files..."
-
-    # Define replacement patterns that avoid double-replacement by being specific
-    # Only match paths that are NOT already corrected
-    declare -a patterns=(
-        # Only replace if it's NOT already prefixed with our target path
-        's|from mcp_mesh_registry_client\.|from _mcp_mesh.generated.mcp_mesh_registry_client.|g'
-        's|import mcp_mesh_registry_client\.|import _mcp_mesh.generated.mcp_mesh_registry_client.|g'
-        # Handle getattr() and direct references separately - be very specific
-        's|getattr(mcp_mesh_registry_client\.models,|getattr(_mcp_mesh.generated.mcp_mesh_registry_client.models,|g'
-        's|import mcp_mesh_registry_client\.models|import _mcp_mesh.generated.mcp_mesh_registry_client.models|g'
-        's|import mcp_mesh_registry_client\.api|import _mcp_mesh.generated.mcp_mesh_registry_client.api|g'
-        's|from mcp_mesh_registry_client import|from _mcp_mesh.generated.mcp_mesh_registry_client import|g'
-        # Most general pattern last - for standalone imports only at line boundaries
-        's|^import mcp_mesh_registry_client$|import _mcp_mesh.generated.mcp_mesh_registry_client|g'
-    )
-
-    # Apply all patterns in a single sed command to avoid double-replacement
-    local sed_script=""
-    for pattern in "${patterns[@]}"; do
-        sed_script="${sed_script}${pattern};"
-    done
-
-    log_info "Applying ${#patterns[@]} import path fixes in single pass..."
-    # Use -i '' for macOS compatibility (BSD sed requires extension argument)
-    if [[ "$(uname)" == "Darwin" ]]; then
-        find "$output_dir" -name "*.py" -type f -exec sed -i '' "$sed_script" {} \;
-    else
-        find "$output_dir" -name "*.py" -type f -exec sed -i "$sed_script" {} \;
-    fi
-
-    # Strip trailing whitespace and ensure files end with single newline (pre-commit compatibility)
-    # Note: Generated files are excluded from black/isort in pre-commit config
-    log_info "Normalizing whitespace in generated files..."
-    if [[ "$(uname)" == "Darwin" ]]; then
-        # Strip trailing whitespace from lines
-        find "$output_dir" -name "*.py" -type f -exec sed -i '' 's/[[:space:]]*$//' {} \;
-        # Ensure file ends with exactly one newline
-        for f in $(find "$output_dir" -name "*.py" -type f); do
-            # Remove trailing newlines and add exactly one
-            printf '%s\n' "$(cat "$f")" > "$f"
-        done
-    else
-        find "$output_dir" -name "*.py" -type f -exec sed -i 's/[[:space:]]*$//' {} \;
-        for f in $(find "$output_dir" -name "*.py" -type f); do
-            printf '%s\n' "$(cat "$f")" > "$f"
-        done
-    fi
-
-    log_success "Python registry client code generated: $output_dir"
-}
-
-# Generate Python agent server code
-generate_python_agent_server() {
-    local output_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated"
-
-    log_info "Generating Python agent server code..."
-
-    # Remove existing generated code
-    if [[ -d "$output_dir" ]]; then
-        log_info "Removing existing generated Python agent server..."
-        rm -rf "$output_dir"
-    fi
-
-    # Create parent directory
-    mkdir -p "$(dirname "$output_dir")"
-
-    # Generate Python FastAPI server using openapi-generator
-    log_info "Running openapi-generator for Python agent server..."
-    openapi-generator-cli generate \
-        -i "$AGENT_SPEC" \
-        -g python-fastapi \
-        -o "$output_dir" \
-        --additional-properties=packageName=mcp_mesh_agent_server \
-        --additional-properties=packageVersion=1.0.0 \
-        --additional-properties=projectName=mcp-mesh-agent-server \
-        --additional-properties=packageUrl=https://github.com/dhyansraj/mcp-mesh \
-        --additional-properties=packageAuthor=DhyanRaj \
-        --additional-properties=packageAuthorEmail=dhyanraj@gmail.com \
-        --skip-validate-spec
-
-    # Add AI behavior guidance to main module
-    local main_file="$output_dir/src/openapi_server/__init__.py"
-    if [[ -f "$main_file" ]]; then
-        local temp_file=$(mktemp)
-        cat > "$temp_file" << 'EOF'
-"""
-🤖 AI BEHAVIOR GUIDANCE:
-This package contains generated Python server for MCP Mesh AGENT API.
-DO NOT modify files in this package directly - they will be overwritten.
-
-SCOPE: Agent API - HTTP endpoints served by Python agent HTTP wrapper
-
-TO USE THIS SERVER:
-1. Import generated handlers and models
-2. Implement business logic in your HTTP wrapper
-3. Register handlers with FastAPI app
-
-GENERATED FROM: api/mcp-mesh-agent.openapi.yaml
-CONTRACT: Agent HTTP wrapper endpoints only
-"""
-
-EOF
-        cat "$main_file" >> "$temp_file"
-        mv "$temp_file" "$main_file"
-    fi
-
-    log_success "Python agent server code generated: $output_dir"
-}
-
 # Validate generated code
 validate_generated_code() {
     log_info "Validating generated code..."
@@ -365,34 +165,6 @@ validate_generated_code() {
             exit 1
         fi
         log_success "Go registry code compilation check passed"
-    fi
-
-    # Validate Python registry client imports
-    local python_registry_client_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated/mcp_mesh_registry_client"
-    if [[ -d "$python_registry_client_dir" ]]; then
-        log_info "Checking Python registry client imports..."
-        cd "$PROJECT_ROOT/src/runtime/python"
-        if ! python3 -c "
-import sys
-sys.path.insert(0, '.')
-try:
-    from _mcp_mesh.generated.mcp_mesh_registry_client import AgentsApi, HealthApi
-    print('✅ Python registry client imports successfully')
-except ImportError as e:
-    print(f'❌ Python registry client import failed: {e}')
-    sys.exit(1)
-" 2>/dev/null; then
-            log_warning "Python registry client import check failed - may need additional dependencies"
-        else
-            log_success "Python registry client import check passed"
-        fi
-        cd "$PROJECT_ROOT"
-    fi
-
-    # Check Python agent server generation
-    local python_agent_server_dir="$PROJECT_ROOT/src/runtime/python/_mcp_mesh/generated/mcp_mesh_agent_server"
-    if [[ -d "$python_agent_server_dir" ]]; then
-        log_success "Python agent server code structure created"
     fi
 }
 
@@ -415,59 +187,21 @@ update_dependencies() {
 main() {
     local target="${1:-all}"
 
-    log_info "Starting dual-contract code generation for MCP Mesh (target: $target)"
+    log_info "Starting code generation for MCP Mesh (target: $target)"
     log_info "Project root: $PROJECT_ROOT"
     log_info "Registry spec: $REGISTRY_SPEC"
-    log_info "Agent spec: $AGENT_SPEC"
 
     case "$target" in
-        "registry-go")
+        "go"|"all"|"")
             check_prerequisites
             validate_openapi_spec "$REGISTRY_SPEC" "Registry"
             generate_go_registry_server
-            ;;
-        "registry-python")
-            check_prerequisites
-            validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            generate_python_registry_client
-            ;;
-        "agent-python")
-            check_prerequisites
-            validate_openapi_spec "$AGENT_SPEC" "Agent"
-            generate_python_agent_server
-            ;;
-        "registry")
-            check_prerequisites
-            validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            generate_go_registry_server
-            generate_python_registry_client
-            ;;
-        "agent")
-            check_prerequisites
-            validate_openapi_spec "$AGENT_SPEC" "Agent"
-            generate_python_agent_server
-            ;;
-        "go")
-            check_prerequisites
-            validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            generate_go_registry_server
-            ;;
-        "python")
-            check_prerequisites
-            validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            generate_python_registry_client
-            ;;
-        "all"|"")
-            check_prerequisites
-            validate_openapi_spec "$REGISTRY_SPEC" "Registry"
-            generate_go_registry_server
-            generate_python_registry_client
             validate_generated_code
             update_dependencies
             ;;
         *)
             log_error "Unknown target: $target"
-            log_error "Usage: $0 [registry-go|registry-python|agent-python|registry|agent|go|python|all]"
+            log_error "Usage: $0 [go|all]"
             exit 1
             ;;
     esac
@@ -476,42 +210,28 @@ main() {
     log_info ""
     log_info "📋 Generated files:"
     log_info "  Go registry server: src/core/registry/generated/server.go"
-    log_info "  Python registry client: src/runtime/python/_mcp_mesh/generated/"
-    log_info "  Python agent server: src/runtime/python/_mcp_mesh/generated/"
     log_info ""
     log_info "🔧 Next steps:"
-    log_info "  1. Implement registry business logic in src/core/registry/handlers_impl.go"
-    log_info "  2. Integrate agent server handlers in HTTP wrapper"
-    log_info "  3. Update tests to match both API contracts"
-    log_info "  4. Run: make validate-contract"
-    log_info "  5. Run: make build && make test"
+    log_info "  1. Implement registry business logic in src/core/registry/ent_handlers.go"
+    log_info "  2. Run: make build && make test"
 }
 
 # Show help if requested
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
-    echo "MCP Mesh Dual-Contract Code Generation Script"
+    echo "MCP Mesh Code Generation Script"
     echo ""
     echo "Usage: $0 [target]"
     echo ""
     echo "Targets:"
-    echo "  registry-go      - Generate only Go registry server"
-    echo "  registry-python  - Generate only Python registry client"
-    echo "  agent-python     - Generate only Python agent server"
-    echo "  registry         - Generate both registry Go server and Python client"
-    echo "  agent            - Generate agent Python server"
-    echo "  go               - Generate all Go code"
-    echo "  python           - Generate all Python code"
-    echo "  all              - Generate everything (default)"
+    echo "  go   - Generate Go registry server (default)"
+    echo "  all  - Generate all code (same as go)"
     echo ""
     echo "Examples:"
-    echo "  $0               # Generate all code from both specs"
-    echo "  $0 registry      # Generate registry Go server + Python client"
-    echo "  $0 agent         # Generate agent Python server"
+    echo "  $0        # Generate Go server from OpenAPI spec"
+    echo "  $0 go     # Same as above"
     echo ""
-    echo "🤖 AI GUIDANCE:"
-    echo "This script implements dual-contract development:"
-    echo "- Registry API: For agent-registry communication"
-    echo "- Agent API: For agent HTTP wrapper endpoints"
+    echo "Note: Python/TypeScript SDKs use Rust core for registry communication."
+    echo "      The Rust client is manually written (not auto-generated)."
     exit 0
 fi
 

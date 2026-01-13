@@ -20,6 +20,8 @@ type Agent struct {
 	ID string `json:"id,omitempty"`
 	// Type of agent
 	AgentType agent.AgentType `json:"agent_type,omitempty"`
+	// SDK runtime: python or typescript
+	Runtime agent.Runtime `json:"runtime,omitempty"`
 	// Human-readable name of the agent
 	Name string `json:"name,omitempty"`
 	// Version of the agent
@@ -117,7 +119,7 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
-		case agent.FieldID, agent.FieldAgentType, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus:
+		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus:
 			values[i] = new(sql.NullString)
 		case agent.FieldCreatedAt, agent.FieldUpdatedAt, agent.FieldLastFullRefresh:
 			values[i] = new(sql.NullTime)
@@ -147,6 +149,12 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field agent_type", values[i])
 			} else if value.Valid {
 				a.AgentType = agent.AgentType(value.String)
+			}
+		case agent.FieldRuntime:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field runtime", values[i])
+			} else if value.Valid {
+				a.Runtime = agent.Runtime(value.String)
 			}
 		case agent.FieldName:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -277,6 +285,9 @@ func (a *Agent) String() string {
 	builder.WriteString(fmt.Sprintf("id=%v, ", a.ID))
 	builder.WriteString("agent_type=")
 	builder.WriteString(fmt.Sprintf("%v", a.AgentType))
+	builder.WriteString(", ")
+	builder.WriteString("runtime=")
+	builder.WriteString(fmt.Sprintf("%v", a.Runtime))
 	builder.WriteString(", ")
 	builder.WriteString("name=")
 	builder.WriteString(a.Name)

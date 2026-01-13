@@ -12,6 +12,7 @@ var (
 	AgentsColumns = []*schema.Column{
 		{Name: "agent_id", Type: field.TypeString},
 		{Name: "agent_type", Type: field.TypeEnum, Enums: []string{"mcp_agent", "mesh_tool", "decorator_agent", "api"}, Default: "mcp_agent"},
+		{Name: "runtime", Type: field.TypeEnum, Nullable: true, Enums: []string{"python", "typescript"}, Default: "python"},
 		{Name: "name", Type: field.TypeString},
 		{Name: "version", Type: field.TypeString, Nullable: true},
 		{Name: "http_host", Type: field.TypeString, Nullable: true},
@@ -33,7 +34,7 @@ var (
 			{
 				Name:    "agent_namespace",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[6]},
+				Columns: []*schema.Column{AgentsColumns[7]},
 			},
 			{
 				Name:    "agent_agent_type",
@@ -43,17 +44,17 @@ var (
 			{
 				Name:    "agent_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[11]},
+				Columns: []*schema.Column{AgentsColumns[12]},
 			},
 			{
 				Name:    "agent_status",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[7]},
+				Columns: []*schema.Column{AgentsColumns[8]},
 			},
 			{
 				Name:    "agent_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[7], AgentsColumns[11]},
+				Columns: []*schema.Column{AgentsColumns[8], AgentsColumns[12]},
 			},
 		},
 	}

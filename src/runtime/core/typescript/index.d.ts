@@ -119,6 +119,11 @@ export interface JsAgentSpec {
    * Defaults to "mcp_agent" if not specified
    */
   agentType?: string
+  /**
+   * SDK runtime type: "python" or "typescript"
+   * Defaults to "typescript" for TypeScript SDK
+   */
+  runtime?: string
   /** Tools/capabilities provided by this agent */
   tools: Array<JsToolSpec>
   /** LLM agent specifications for tools using mesh.llm() */

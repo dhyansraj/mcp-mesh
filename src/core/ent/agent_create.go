@@ -39,6 +39,20 @@ func (ac *AgentCreate) SetNillableAgentType(at *agent.AgentType) *AgentCreate {
 	return ac
 }
 
+// SetRuntime sets the "runtime" field.
+func (ac *AgentCreate) SetRuntime(a agent.Runtime) *AgentCreate {
+	ac.mutation.SetRuntime(a)
+	return ac
+}
+
+// SetNillableRuntime sets the "runtime" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableRuntime(a *agent.Runtime) *AgentCreate {
+	if a != nil {
+		ac.SetRuntime(*a)
+	}
+	return ac
+}
+
 // SetName sets the "name" field.
 func (ac *AgentCreate) SetName(s string) *AgentCreate {
 	ac.mutation.SetName(s)
@@ -305,6 +319,10 @@ func (ac *AgentCreate) defaults() {
 		v := agent.DefaultAgentType
 		ac.mutation.SetAgentType(v)
 	}
+	if _, ok := ac.mutation.Runtime(); !ok {
+		v := agent.DefaultRuntime
+		ac.mutation.SetRuntime(v)
+	}
 	if _, ok := ac.mutation.Namespace(); !ok {
 		v := agent.DefaultNamespace
 		ac.mutation.SetNamespace(v)
@@ -343,6 +361,11 @@ func (ac *AgentCreate) check() error {
 	if v, ok := ac.mutation.AgentType(); ok {
 		if err := agent.AgentTypeValidator(v); err != nil {
 			return &ValidationError{Name: "agent_type", err: fmt.Errorf(`ent: validator failed for field "Agent.agent_type": %w`, err)}
+		}
+	}
+	if v, ok := ac.mutation.Runtime(); ok {
+		if err := agent.RuntimeValidator(v); err != nil {
+			return &ValidationError{Name: "runtime", err: fmt.Errorf(`ent: validator failed for field "Agent.runtime": %w`, err)}
 		}
 	}
 	if _, ok := ac.mutation.Name(); !ok {
@@ -412,6 +435,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.AgentType(); ok {
 		_spec.SetField(agent.FieldAgentType, field.TypeEnum, value)
 		_node.AgentType = value
+	}
+	if value, ok := ac.mutation.Runtime(); ok {
+		_spec.SetField(agent.FieldRuntime, field.TypeEnum, value)
+		_node.Runtime = value
 	}
 	if value, ok := ac.mutation.Name(); ok {
 		_spec.SetField(agent.FieldName, field.TypeString, value)

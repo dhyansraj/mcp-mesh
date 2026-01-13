@@ -190,6 +190,8 @@ pub struct HeartbeatRequest {
     pub http_port: u16,
     pub namespace: String,
     pub status: String,
+    /// SDK runtime type: "python" or "typescript"
+    pub runtime: String,
     pub tools: Vec<ToolRegistration>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub llm_agents: Vec<LlmAgentRegistration>,
@@ -273,6 +275,7 @@ impl HeartbeatRequest {
             http_port: spec.http_port,
             namespace: spec.namespace.clone(),
             status: health_status.as_api_str().to_string(),
+            runtime: spec.runtime.as_api_str().to_string(),
             tools,
             llm_agents,
         }
@@ -491,6 +494,7 @@ mod tests {
             "localhost".to_string(),
             "default".to_string(),
             None, // agent_type defaults to mcp_agent
+            None, // runtime defaults to python
             Some(vec![ToolSpec::new(
                 "greet".to_string(),
                 "greeting".to_string(),
@@ -527,6 +531,7 @@ mod tests {
             "localhost".to_string(),
             "default".to_string(),
             Some("api".to_string()), // API agent type
+            None, // runtime defaults to python
             None,
             None,
             5,

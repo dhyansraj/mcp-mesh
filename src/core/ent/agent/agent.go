@@ -17,6 +17,8 @@ const (
 	FieldID = "agent_id"
 	// FieldAgentType holds the string denoting the agent_type field in the database.
 	FieldAgentType = "agent_type"
+	// FieldRuntime holds the string denoting the runtime field in the database.
+	FieldRuntime = "runtime"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
 	// FieldVersion holds the string denoting the version field in the database.
@@ -102,6 +104,7 @@ const (
 var Columns = []string{
 	FieldID,
 	FieldAgentType,
+	FieldRuntime,
 	FieldName,
 	FieldVersion,
 	FieldHTTPHost,
@@ -168,6 +171,32 @@ func AgentTypeValidator(at AgentType) error {
 	}
 }
 
+// Runtime defines the type for the "runtime" enum field.
+type Runtime string
+
+// RuntimePython is the default value of the Runtime enum.
+const DefaultRuntime = RuntimePython
+
+// Runtime values.
+const (
+	RuntimePython     Runtime = "python"
+	RuntimeTypescript Runtime = "typescript"
+)
+
+func (r Runtime) String() string {
+	return string(r)
+}
+
+// RuntimeValidator is a validator for the "runtime" field enum values. It is called by the builders before save.
+func RuntimeValidator(r Runtime) error {
+	switch r {
+	case RuntimePython, RuntimeTypescript:
+		return nil
+	default:
+		return fmt.Errorf("agent: invalid enum value for runtime field: %q", r)
+	}
+}
+
 // Status defines the type for the "status" enum field.
 type Status string
 
@@ -206,6 +235,11 @@ func ByID(opts ...sql.OrderTermOption) OrderOption {
 // ByAgentType orders the results by the agent_type field.
 func ByAgentType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAgentType, opts...).ToFunc()
+}
+
+// ByRuntime orders the results by the runtime field.
+func ByRuntime(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRuntime, opts...).ToFunc()
 }
 
 // ByName orders the results by the name field.
