@@ -20,13 +20,14 @@
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
-import type {
-  ProviderHandler,
-  VendorCapabilities,
-  ToolSchema,
-  OutputSchema,
-  PreparedRequest,
-  OutputMode,
+import {
+  convertMessagesToVercelFormat,
+  type ProviderHandler,
+  type VendorCapabilities,
+  type ToolSchema,
+  type OutputSchema,
+  type PreparedRequest,
+  type OutputMode,
 } from "./provider-handler.js";
 import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
 
@@ -96,8 +97,8 @@ export class ClaudeHandler implements ProviderHandler {
     const { outputMode, temperature, maxTokens, topP, ...rest } = options ?? {};
     const determinedMode = this.determineOutputMode(outputSchema, outputMode);
 
-    // Convert messages to Vercel AI SDK format for Anthropic
-    const convertedMessages = this.convertMessagesForAnthropic(messages);
+    // Convert messages to Vercel AI SDK format (shared utility)
+    const convertedMessages = convertMessagesToVercelFormat(messages);
 
     // Apply prompt caching to system messages for cost optimization
     const cachedMessages = this.applyPromptCaching(convertedMessages);
@@ -140,78 +141,6 @@ export class ClaudeHandler implements ProviderHandler {
     }
 
     return request;
-  }
-
-  /**
-   * Convert messages to Vercel AI SDK format for Anthropic.
-   *
-   * Anthropic requires specific message format for tool calls:
-   * - Assistant with tool_calls → content array with "tool-call" parts
-   * - Tool results → role "tool" with "tool-result" content parts
-   *
-   * This conversion ensures Vercel AI SDK properly converts to Anthropic's native format.
-   */
-  private convertMessagesForAnthropic(messages: LlmMessage[]): LlmMessage[] {
-    return messages.map((msg) => {
-      if (msg.role === "system" || msg.role === "user") {
-        return {
-          role: msg.role,
-          content: msg.content ?? "",
-        };
-      }
-
-      if (msg.role === "assistant") {
-        const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-
-        if (!hasToolCalls) {
-          return {
-            role: "assistant",
-            content: msg.content ?? "",
-          };
-        }
-
-        // For tool calls, use content blocks format
-        // This is what Vercel AI SDK expects for proper Anthropic conversion
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const contentParts: any[] = [];
-
-        // Add text content if present
-        if (msg.content) {
-          contentParts.push({ type: "text", text: msg.content });
-        }
-
-        // Add tool calls as content blocks
-        for (const tc of msg.tool_calls!) {
-          contentParts.push({
-            type: "tool-call",
-            toolCallId: tc.id,
-            toolName: tc.function.name,
-            args: JSON.parse(tc.function.arguments),
-          });
-        }
-
-        return {
-          role: "assistant",
-          content: contentParts,
-        } as unknown as LlmMessage;
-      }
-
-      if (msg.role === "tool") {
-        // Tool result message - Vercel AI SDK expects content as array with toolName
-        return {
-          role: "tool",
-          content: [{
-            type: "tool-result",
-            toolCallId: msg.tool_call_id ?? "",
-            toolName: msg.name ?? "",
-            result: msg.content ?? "",
-          }],
-        } as unknown as LlmMessage;
-      }
-
-      // Fallback
-      return msg;
-    });
   }
 
   /**

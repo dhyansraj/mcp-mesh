@@ -16,7 +16,7 @@
  * src/runtime/python/_mcp_mesh/engine/provider_handlers/
  */
 
-// Export types first
+// Export types and utilities
 export type {
   ProviderHandler,
   VendorCapabilities,
@@ -25,6 +25,8 @@ export type {
   PreparedRequest,
   OutputMode,
 } from "./provider-handler.js";
+
+export { convertMessagesToVercelFormat } from "./provider-handler.js";
 
 // Export registry
 export {

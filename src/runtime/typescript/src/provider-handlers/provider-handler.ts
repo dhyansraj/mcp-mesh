@@ -89,6 +89,87 @@ export interface OutputSchema {
 }
 
 // ============================================================================
+// Shared Utilities
+// ============================================================================
+
+/**
+ * Convert messages to Vercel AI SDK format for multi-turn tool conversations.
+ *
+ * Both Anthropic and OpenAI require specific message formats for tool calls:
+ * - Assistant messages with tool_calls → content array with "tool-call" parts
+ * - Tool result messages → content array with "tool-result" parts
+ *
+ * This conversion ensures Vercel AI SDK properly converts to each provider's native format.
+ *
+ * @param messages - Messages in OpenAI-style format (from mesh network)
+ * @returns Messages in Vercel AI SDK format
+ */
+export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessage[] {
+  return messages.map((msg) => {
+    // System and user messages pass through
+    if (msg.role === "system" || msg.role === "user") {
+      return {
+        role: msg.role,
+        content: msg.content ?? "",
+      };
+    }
+
+    // Assistant messages - convert tool_calls to content blocks
+    if (msg.role === "assistant") {
+      const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+
+      if (!hasToolCalls) {
+        return {
+          role: "assistant",
+          content: msg.content ?? "",
+        };
+      }
+
+      // For tool calls, use content blocks format
+      // This is what Vercel AI SDK expects for proper provider conversion
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contentParts: any[] = [];
+
+      // Add text content if present
+      if (msg.content) {
+        contentParts.push({ type: "text", text: msg.content });
+      }
+
+      // Add tool calls as content blocks
+      for (const tc of msg.tool_calls!) {
+        contentParts.push({
+          type: "tool-call",
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          args: JSON.parse(tc.function.arguments),
+        });
+      }
+
+      return {
+        role: "assistant",
+        content: contentParts,
+      } as unknown as LlmMessage;
+    }
+
+    // Tool result messages - convert to content blocks with tool-result type
+    if (msg.role === "tool") {
+      return {
+        role: "tool",
+        content: [{
+          type: "tool-result",
+          toolCallId: msg.tool_call_id ?? "",
+          toolName: msg.name ?? "",
+          result: msg.content ?? "",
+        }],
+      } as unknown as LlmMessage;
+    }
+
+    // Fallback - return as-is
+    return msg;
+  });
+}
+
+// ============================================================================
 // Provider Handler Interface
 // ============================================================================
 
