@@ -57,6 +57,11 @@ export class OpenAIHandler implements ProviderHandler {
    * - This is the KEY difference from Claude handler
    * - response_format.json_schema ensures the response matches output schema
    * - Skip structured output for text mode (string return types)
+   *
+   * Message Format (OpenAI-specific):
+   * - Assistant messages with tool_calls → content blocks with type "tool-call"
+   * - Tool result messages → content blocks with type "tool-result"
+   * This is required for Vercel AI SDK to properly convert to OpenAI's native format.
    */
   prepareRequest(
     messages: LlmMessage[],
@@ -73,8 +78,11 @@ export class OpenAIHandler implements ProviderHandler {
     const { outputMode, temperature, maxTokens, topP, ...rest } = options ?? {};
     const determinedMode = this.determineOutputMode(outputSchema, outputMode);
 
+    // Convert messages to Vercel AI SDK format for OpenAI
+    const convertedMessages = this.convertMessagesForOpenAI(messages);
+
     const request: PreparedRequest = {
-      messages: [...messages],
+      messages: convertedMessages,
       ...rest,
     };
 
@@ -283,6 +291,78 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
         }
       }
     }
+  }
+
+  /**
+   * Convert messages to Vercel AI SDK format for OpenAI.
+   *
+   * OpenAI via Vercel AI SDK requires specific message format for tool calls:
+   * - Assistant with tool_calls → content array with "tool-call" parts
+   * - Tool results → role "tool" with "tool-result" content parts
+   *
+   * This conversion ensures Vercel AI SDK properly converts to OpenAI's native format.
+   */
+  private convertMessagesForOpenAI(messages: LlmMessage[]): LlmMessage[] {
+    return messages.map((msg) => {
+      if (msg.role === "system" || msg.role === "user") {
+        return {
+          role: msg.role,
+          content: msg.content ?? "",
+        };
+      }
+
+      if (msg.role === "assistant") {
+        const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+
+        if (!hasToolCalls) {
+          return {
+            role: "assistant",
+            content: msg.content ?? "",
+          };
+        }
+
+        // For tool calls, use content blocks format
+        // This is what Vercel AI SDK expects for proper OpenAI conversion
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const contentParts: any[] = [];
+
+        // Add text content if present
+        if (msg.content) {
+          contentParts.push({ type: "text", text: msg.content });
+        }
+
+        // Add tool calls as content blocks
+        for (const tc of msg.tool_calls!) {
+          contentParts.push({
+            type: "tool-call",
+            toolCallId: tc.id,
+            toolName: tc.function.name,
+            args: JSON.parse(tc.function.arguments),
+          });
+        }
+
+        return {
+          role: "assistant",
+          content: contentParts,
+        } as unknown as LlmMessage;
+      }
+
+      if (msg.role === "tool") {
+        // Tool result message - Vercel AI SDK expects content as array with toolName
+        return {
+          role: "tool",
+          content: [{
+            type: "tool-result",
+            toolCallId: msg.tool_call_id ?? "",
+            toolName: msg.name ?? "",
+            result: msg.content ?? "",
+          }],
+        } as unknown as LlmMessage;
+      }
+
+      // Fallback
+      return msg;
+    });
   }
 }
 

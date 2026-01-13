@@ -624,6 +624,7 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
     logger.info(f"Starting Rust-backed heartbeat for agent '{agent_id}'")
 
+    handle = None
     try:
         # Build AgentSpec from context
         spec = _build_agent_spec(context)
@@ -673,3 +674,22 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     except Exception as e:
         logger.error(f"Rust heartbeat failed for agent '{agent_id}': {e}")
         raise
+    finally:
+        # Always ensure graceful shutdown of Rust core to prevent daemon thread issues
+        # This is critical: without shutdown(), Rust background threads may try to
+        # write to stdout via tracing after Python's stdout is finalized
+        if handle is not None:
+            try:
+                handle.shutdown()
+                # Give Rust core a moment to clean up before Python exits
+                # Use time.sleep as fallback if asyncio is shutting down
+                try:
+                    await asyncio.sleep(0.2)
+                except (asyncio.CancelledError, RuntimeError):
+                    # Event loop might be shutting down, use blocking sleep
+                    import time
+
+                    time.sleep(0.2)
+                logger.debug(f"Rust core shutdown complete for agent '{agent_id}'")
+            except Exception as e:
+                logger.warning(f"Error during Rust core shutdown: {e}")

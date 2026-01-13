@@ -250,3 +250,7 @@ rust-core-implementation.org
 # Claude Code local files
 .claude/memories.json
 *.node
+
+# NAPI-RS auto-generated build artifacts
+src/runtime/core/index.js
+src/runtime/core/index.d.ts

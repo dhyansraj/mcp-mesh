@@ -139,72 +139,22 @@ async function loadProvider(
 }
 
 /**
- * Vercel AI SDK CoreMessage types.
- * The AI SDK uses different message formats than OpenAI:
- * - system/user messages: { role, content: string }
- * - assistant with tool calls: { role: "assistant", content: string, toolCalls: [...] }
- * - tool results: { role: "tool", content: [{ type: "tool-result", toolCallId, result }] }
+ * Vercel AI SDK CoreMessage type (simplified - actual types are more complex).
+ * Messages are passed through handler.prepareRequest() which does vendor-specific conversion.
  */
-type VercelCoreMessage =
-  | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: Array<{ toolCallId: string; toolName: string; args: Record<string, unknown> }> }
-  | { role: "tool"; content: Array<{ type: "tool-result"; toolCallId: string; toolName: string; result: unknown }> };
+type VercelCoreMessage = Record<string, unknown>;
 
 /**
- * Convert LlmMessage array to Vercel AI SDK CoreMessage format.
+ * Convert LlmMessage array to base format for Vercel AI SDK.
+ *
+ * NOTE: This is a simple pass-through conversion. Vendor-specific message
+ * transformations (e.g., Anthropic's tool-call content blocks) are handled
+ * by the provider handlers in their prepareRequest() method.
  */
 function convertToVercelMessages(messages: LlmMessage[]): VercelCoreMessage[] {
-  return messages.map((msg): VercelCoreMessage => {
-    if (msg.role === "system" || msg.role === "user") {
-      return {
-        role: msg.role,
-        content: msg.content ?? "",
-      };
-    }
-
-    if (msg.role === "assistant") {
-      // Assistant message - may have tool_calls
-      // Note: For Anthropic, when there are tool_calls, the content is typically empty
-      // because the tool use IS the content. We preserve any text content if present.
-      const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result: any = {
-        role: "assistant",
-        content: msg.content ?? "",
-      };
-
-      // Convert tool_calls to Vercel AI SDK format
-      if (hasToolCalls) {
-        result.toolCalls = msg.tool_calls!.map((tc) => ({
-          toolCallId: tc.id,
-          toolName: tc.function.name,
-          args: JSON.parse(tc.function.arguments),
-        }));
-      }
-
-      return result;
-    }
-
-    if (msg.role === "tool") {
-      // Tool result message - Vercel AI SDK expects content as array with toolName
-      return {
-        role: "tool",
-        content: [{
-          type: "tool-result" as const,
-          toolCallId: msg.tool_call_id ?? "",
-          toolName: msg.name ?? "", // Required by Vercel AI SDK
-          result: msg.content ?? "",
-        }],
-      };
-    }
-
-    // Fallback (should not happen)
-    return {
-      role: "user",
-      content: msg.content ?? "",
-    };
-  });
+  // Pass through - the handler.prepareRequest() has already transformed messages
+  // for the specific vendor format
+  return messages as unknown as VercelCoreMessage[];
 }
 
 /**
