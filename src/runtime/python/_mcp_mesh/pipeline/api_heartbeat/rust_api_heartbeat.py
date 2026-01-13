@@ -352,6 +352,7 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
     logger.info(f"Starting Rust-backed heartbeat for API service '{service_id}'")
 
+    handle = None
     try:
         # Build AgentSpec from API service context, passing service_id explicitly
         spec = _build_api_agent_spec(context, service_id=service_id)
@@ -401,3 +402,24 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     except Exception as e:
         logger.error(f"Rust API heartbeat failed for service '{service_id}': {e}")
         raise
+    finally:
+        # Always ensure graceful shutdown of Rust core to prevent daemon thread issues
+        # This is critical: without shutdown(), Rust background threads may try to
+        # write to stdout via tracing after Python's stdout is finalized
+        if handle is not None:
+            try:
+                handle.shutdown()
+                # Give Rust core a moment to clean up before Python exits
+                # Use time.sleep as fallback if asyncio is shutting down
+                try:
+                    await asyncio.sleep(0.2)
+                except (asyncio.CancelledError, RuntimeError):
+                    # Event loop might be shutting down, use blocking sleep
+                    import time
+
+                    time.sleep(0.2)
+                logger.debug(
+                    f"Rust core shutdown complete for API service '{service_id}'"
+                )
+            except Exception as e:
+                logger.warning(f"Error during Rust core shutdown for API service: {e}")

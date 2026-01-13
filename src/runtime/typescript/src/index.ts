@@ -54,6 +54,7 @@ import { mesh as meshFn, MeshAgent } from "./agent.js";
 import { route, routeWithConfig } from "./route.js";
 import { bindToExpress } from "./api-runtime.js";
 import { llm } from "./llm.js";
+import { llmProvider } from "./llm-provider.js";
 
 // Create mesh namespace with route and llm attached
 interface MeshNamespace {
@@ -64,6 +65,8 @@ interface MeshNamespace {
   bind: typeof bindToExpress;
   /** Create an LLM-powered tool with agentic capabilities */
   llm: typeof llm;
+  /** Create a zero-code LLM provider tool */
+  llmProvider: typeof llmProvider;
 }
 
 /**
@@ -73,16 +76,21 @@ interface MeshNamespace {
  * - `mesh.route(deps, handler)` - Create Express route with DI
  * - `mesh.bind(app, options)` - Bind to Express, introspect routes
  * - `mesh.llm(config)` - Create LLM-powered tool with agentic loop
+ * - `mesh.llmProvider(config)` - Create zero-code LLM provider
  */
 const mesh: MeshNamespace = Object.assign(meshFn, {
   route,
   routeWithConfig,
   bind: bindToExpress,
   llm,
+  llmProvider,
 });
 
 // Main API
 export { mesh, MeshAgent };
+
+// Re-export FastMCP for convenience (so users don't need to install it separately)
+export { FastMCP } from "fastmcp";
 
 // Express integration
 export { meshExpress, MeshExpress, type MeshExpressConfig } from "./express.js";
@@ -150,6 +158,30 @@ export {
   type AgentRunContext,
   type LlmProvider,
 } from "./llm-agent.js";
+
+// LLM Provider (Phase 4)
+export {
+  llmProvider,
+  extractVendorFromModel,
+  extractModelName,
+  isLlmProviderTool,
+  getLlmProviderMeta,
+} from "./llm-provider.js";
+
+// Provider Handlers (Phase 4)
+export {
+  ProviderHandlerRegistry,
+  GenericHandler,
+  ClaudeHandler,
+  OpenAIHandler,
+  type ProviderHandler,
+  type ProviderHandlerConstructor,
+  type VendorCapabilities,
+  type ToolSchema,
+  type OutputSchema,
+  type PreparedRequest,
+  type OutputMode,
+} from "./provider-handlers/index.js";
 
 // Error classes
 export {
@@ -223,6 +255,11 @@ export type {
   LlmMessageInput,
   LlmContextMode,
   LlmOutputMode,
+  // LLM Provider types (Phase 4)
+  MeshLlmRequest,
+  MeshLlmUsage,
+  MeshLlmResponse,
+  LlmProviderConfig,
 } from "./types.js";
 
 // Default export for convenience

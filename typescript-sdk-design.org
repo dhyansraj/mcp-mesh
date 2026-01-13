@@ -973,12 +973,205 @@ const tool = mesh.llm({
 Note: Provider handlers (vendor-specific optimizations) will be addressed in Phase 4
 with =mesh.llmProvider()= implementation.
 
-** Phase 4: LLM Provider Support (Future)
+** Phase 4: LLM Provider Support [IN PROGRESS]
 
-- [ ] Implement =mesh.llmProvider()= for LLM provider registration
-- [ ] Health checks for LLM providers
-- [ ] Vendor-specific optimizations (Claude strict mode, OpenAI response_format)
-- [ ] Model override at consumer level
+Implement =mesh.llmProvider()= to enable zero-code LLM providers in TypeScript,
+matching Python's =@mesh.llm_provider= decorator functionality.
+
+*** Underlying LLM Library
+
+Python uses LiteLLM for unified multi-provider access. For TypeScript, use:
+
+| Library | Description |
+|---------|-------------|
+| [[https://github.com/vercel/ai][Vercel AI SDK]] | Industry standard (20M+ downloads), unified API for OpenAI/Anthropic/Google/etc |
+
+Install: =npm install ai @ai-sdk/openai @ai-sdk/anthropic @ai-sdk/google=
+
+*** Target API
+
+#+BEGIN_SRC typescript
+import { FastMCP } from "fastmcp";
+import { mesh } from "@mcpmesh/sdk";
+
+const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
+
+// Zero-code LLM provider (mirrors Python @mesh.llm_provider)
+server.addTool(mesh.llmProvider({
+  model: "anthropic/claude-sonnet-4-5",  // Vercel AI SDK model ID
+  capability: "llm",
+  tags: ["llm", "claude", "anthropic", "provider"],
+  version: "1.0.0",
+
+  // Optional: Vercel AI SDK options
+  maxTokens: 4096,
+  temperature: 0.7,
+}));
+
+// Optional health check
+async function healthCheck() {
+  // Validate API key and reachability
+  return { status: "healthy", checks: { api_key: true } };
+}
+
+const agent = mesh(server, {
+  name: "claude-provider",
+  port: 9011,
+  healthCheck,
+  healthCheckTtl: 30,
+});
+#+END_SRC
+
+*** Implementation Tasks
+
+**** Core Implementation
+- [X] Create =src/runtime/typescript/src/llm-provider.ts=
+- [X] Implement =mesh.llmProvider()= wrapper function
+- [X] Create =MeshLlmRequest= type (matches Python dataclass)
+- [X] Create =processChat(request: MeshLlmRequest)= generated handler
+- [X] Integrate Vercel AI SDK for multi-provider support
+- [X] Register as both fastmcp tool and mesh tool
+
+**** Vendor Handling
+- [X] Extract vendor from model string (e.g., "anthropic/claude-sonnet-4-5" → "anthropic")
+- [X] Pass vendor to registry for provider handler selection
+- [X] Support model override with vendor validation (Issue #308)
+- [X] Log warning on vendor mismatch, fallback to provider's model
+
+**** Response Format
+- [X] Return full message dict: ={ role, content, tool_calls? }=
+- [X] Include =_mesh_usage= metadata: ={ prompt_tokens, completion_tokens, model }=
+- [X] Handle content as string or array of content blocks
+- [X] Support tool_calls for agentic loop (critical!)
+
+**** Health Checks
+- [ ] API key presence validation
+- [ ] API reachability check (use free endpoint like /v1/models)
+- [ ] Return structured health: ={ status, checks, errors }=
+- [ ] Support =healthCheckTtl= for caching
+
+**** Vendor-Specific Optimizations
+- [ ] Claude: Strict output mode via =response_format=
+- [ ] OpenAI: JSON mode (=response_format: { type: "json_object" }=)
+- [ ] OpenAI: Strict mode (=response_format: { type: "json_schema", ... }=)
+- [ ] Google Gemini: Structured output support
+
+*** Files Created
+
+| File | Purpose |
+|------|---------|
+| =src/runtime/typescript/src/llm-provider.ts= | =mesh.llmProvider()= implementation |
+| =src/runtime/typescript/src/types.ts= | Added =MeshLlmRequest=, =LlmProviderConfig= types |
+
+*** Files Created
+
+| File | Purpose |
+|------|---------|
+| =test/ts-claude-provider/= | Test Claude provider agent |
+
+*** Provider Handler Plugin Architecture
+
+Python has a sophisticated handler plugin system for vendor-specific optimizations.
+TypeScript should implement the same pattern for feature parity and performance.
+
+**** Python Architecture Reference
+
+#+BEGIN_EXAMPLE
+src/runtime/python/_mcp_mesh/engine/provider_handlers/
+├── __init__.py
+├── base_provider_handler.py     # Abstract base class
+├── claude_handler.py            # Claude-specific optimizations
+├── openai_handler.py            # OpenAI-specific optimizations
+├── generic_handler.py           # Fallback handler
+└── provider_handler_registry.py # Registry + vendor mapping
+#+END_EXAMPLE
+
+**** Key Components
+
+| Component | Python | TypeScript (Target) |
+|-----------|--------|---------------------|
+| Base Handler | =BaseProviderHandler= (ABC) | =ProviderHandler= interface |
+| Claude Handler | =ClaudeHandler= | =ClaudeHandler= class |
+| OpenAI Handler | =OpenAIHandler= | =OpenAIHandler= class |
+| Generic Handler | =GenericHandler= | =GenericHandler= class |
+| Registry | =ProviderHandlerRegistry= | =ProviderHandlerRegistry= singleton |
+
+**** Handler Interface
+
+Each handler implements:
+
+| Method | Purpose |
+|--------|---------|
+| =prepareRequest()= | Vendor-specific request params (response_format, schema) |
+| =formatSystemPrompt()= | Vendor-specific prompt formatting |
+| =getCapabilities()= | Capability flags (streaming, vision, json_mode, etc.) |
+
+**** Claude Handler Features (from Python)
+
+| Feature | Description | Benefit |
+|---------|-------------|---------|
+| Prompt Caching | =cache_control: {type: "ephemeral"}= | Up to 90% cost reduction |
+| Output Modes | strict/hint/text | Performance vs reliability tradeoff |
+| Anti-XML Instructions | Prevents =<invoke>= style tool calls | Better tool calling |
+| Schema Strictness | =additionalProperties: false= | Valid JSON output |
+
+**** OpenAI Handler Features (from Python)
+
+| Feature | Description | Benefit |
+|---------|-------------|---------|
+| response_format | Native structured output | Guaranteed schema compliance |
+| Strict Mode | =additionalProperties: false= recursively | Valid JSON output |
+| Concise Prompts | Shorter system prompts | Better performance |
+
+**** Implementation Tasks
+
+***** Handler Interface & Registry
+- [ ] Create =src/runtime/typescript/src/provider-handlers/= directory
+- [ ] Create =provider-handler.ts= - =ProviderHandler= interface
+- [ ] Create =provider-handler-registry.ts= - Registry singleton with vendor mapping
+- [ ] Create =generic-handler.ts= - Fallback handler
+
+***** Claude Handler
+- [ ] Create =claude-handler.ts= - Claude-specific handler
+- [ ] Implement prompt caching (=cache_control=)
+- [ ] Implement output modes (strict/hint/text)
+- [ ] Implement anti-XML tool calling instructions
+- [ ] Implement =additionalProperties: false= for schema strictness
+- [ ] Implement =determineOutputMode()= based on return type
+
+***** OpenAI Handler
+- [ ] Create =openai-handler.ts= - OpenAI-specific handler
+- [ ] Implement =response_format= with json_schema
+- [ ] Implement recursive =additionalProperties: false=
+- [ ] Implement =strict: true= for schema enforcement
+
+***** Integration
+- [ ] Integrate handlers into =llm-provider.ts=
+- [ ] Update =llm-agent.ts= to use handlers for provider calls
+- [ ] Add tests for handler selection and behavior
+
+**** Files to Create
+
+| File | Purpose |
+|------|---------|
+| =src/runtime/typescript/src/provider-handlers/index.ts= | Exports all handlers |
+| =src/runtime/typescript/src/provider-handlers/provider-handler.ts= | Base interface |
+| =src/runtime/typescript/src/provider-handlers/provider-handler-registry.ts= | Registry singleton |
+| =src/runtime/typescript/src/provider-handlers/claude-handler.ts= | Claude optimizations |
+| =src/runtime/typescript/src/provider-handlers/openai-handler.ts= | OpenAI optimizations |
+| =src/runtime/typescript/src/provider-handlers/generic-handler.ts= | Fallback handler |
+
+*** Python Reference
+
+Python implementation: =src/runtime/python/mesh/helpers.py= (=llm_provider= function)
+Example agent: =test/claude-provider/main.py=
+
+Key features to match:
+1. Zero-code: decorator generates =process_chat= function automatically
+2. Vendor extraction: =litellm.get_llm_provider(model)= → use similar logic
+3. Model override: Consumer can request different model (same vendor only)
+4. Usage tracking: Return =_mesh_usage= for cost monitoring
+5. Error handling: Wrap LLM errors with informative messages
 
 Deliverable: Zero-code LLM providers in TypeScript
 

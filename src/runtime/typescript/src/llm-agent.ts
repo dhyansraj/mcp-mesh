@@ -291,7 +291,13 @@ export class MeshDelegatedProvider implements LlmProvider {
       throw new Error("Invalid response from mesh provider");
     }
 
-    // Parse the Python claude_provider response
+    // Check for MCP tool execution error (isError flag in result)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((result.result as any)?.isError) {
+      throw new Error(`Mesh provider tool error: ${content.text}`);
+    }
+
+    // Parse the LLM provider response
     // Format: { role, content, tool_calls?, _mesh_usage? }
     const meshResponse = JSON.parse(content.text) as {
       role: string;
