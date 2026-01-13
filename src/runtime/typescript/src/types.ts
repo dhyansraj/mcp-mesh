@@ -11,6 +11,9 @@ export type {
   JsAgentSpec,
   JsToolSpec,
   JsDependencySpec,
+  JsLlmAgentSpec,
+  JsLlmToolInfo,
+  JsLlmProviderInfo,
 } from "@mcpmesh/core";
 
 /**
@@ -243,4 +246,337 @@ export interface ToolMeta {
   dependencies: NormalizedDependency[];
   /** Per-dependency configuration indexed by position (matches dependencies array) */
   dependencyKwargs?: DependencyKwargs[];
+}
+
+// ============================================================================
+// LLM Types
+// ============================================================================
+
+/**
+ * LLM provider specification.
+ * Can be a direct LiteLLM provider string or mesh delegation config.
+ *
+ * @example
+ * ```typescript
+ * // Direct LiteLLM provider
+ * provider: "claude"
+ * provider: "openai"
+ *
+ * // Mesh delegation (discover LLM provider via mesh)
+ * provider: { capability: "llm", tags: ["+claude"] }
+ * ```
+ */
+export type LlmProviderSpec =
+  | string // Direct LiteLLM provider (e.g., "claude", "openai")
+  | {
+      /** Capability name to discover in mesh */
+      capability: string;
+      /** Tags for filtering (e.g., ["+claude", "-deprecated"]) */
+      tags?: string[];
+    };
+
+/**
+ * LLM filter specification for tool access.
+ */
+export type LlmFilterSpec =
+  | { capability: string }
+  | { tags: string[] };
+
+/**
+ * Filter mode for LLM tool resolution.
+ */
+export type LlmFilterMode = "all" | "best_match" | "*";
+
+/**
+ * Metadata attached to LLM responses.
+ */
+export interface LlmMeta {
+  /** Total input tokens used */
+  inputTokens: number;
+  /** Total output tokens used */
+  outputTokens: number;
+  /** Total tokens (input + output) */
+  totalTokens: number;
+  /** Response latency in milliseconds */
+  latencyMs: number;
+  /** Number of agentic loop iterations */
+  iterations: number;
+  /** Tool calls made during the agentic loop */
+  toolCalls: LlmToolCall[];
+  /** Model used for generation */
+  model: string;
+  /** Provider used (litellm provider name or mesh agent ID) */
+  provider: string;
+}
+
+/**
+ * Tool call record for LLM tracing.
+ */
+export interface LlmToolCall {
+  /** Tool function name */
+  name: string;
+  /** Arguments passed to the tool */
+  args: Record<string, unknown>;
+  /** Result from the tool */
+  result: unknown;
+  /** Whether the call succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+  /** Latency in milliseconds */
+  latencyMs: number;
+}
+
+/**
+ * LiteLLM-style message format.
+ */
+export interface LlmMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  /** Tool calls requested by the assistant */
+  tool_calls?: LlmToolCallRequest[];
+  /** Tool call ID (for tool responses) */
+  tool_call_id?: string;
+  /** Function name (for tool responses) */
+  name?: string;
+}
+
+/**
+ * Tool call request from LLM.
+ */
+export interface LlmToolCallRequest {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string; // JSON string
+  };
+}
+
+/**
+ * Tool definition for LLM function calling.
+ */
+export interface LlmToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>; // JSON Schema
+  };
+}
+
+/**
+ * LLM completion request parameters (LiteLLM-compatible).
+ */
+export interface LlmCompletionParams {
+  /** Model identifier (e.g., "anthropic/claude-sonnet-4-20250514") */
+  model: string;
+  /** Messages array */
+  messages: LlmMessage[];
+  /** Available tools */
+  tools?: LlmToolDefinition[];
+  /** Tool choice strategy */
+  tool_choice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
+  /** Maximum tokens to generate */
+  max_tokens?: number;
+  /** Sampling temperature */
+  temperature?: number;
+  /** Top-p sampling */
+  top_p?: number;
+  /** Stop sequences */
+  stop?: string[];
+  /** Stream responses */
+  stream?: boolean;
+}
+
+/**
+ * LLM completion response (LiteLLM-compatible).
+ */
+export interface LlmCompletionResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: LlmMessage;
+    finish_reason: "stop" | "tool_calls" | "length" | "content_filter";
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+/**
+ * Configuration for mesh.llm() tool definition.
+ */
+export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.ZodType | undefined = undefined> {
+  /** Tool name (used in MCP protocol) */
+  name: string;
+  /** Capability name for mesh discovery. Defaults to tool name */
+  capability?: string;
+  /** Human-readable description */
+  description?: string;
+  /** Tags for filtering (e.g., ["tools", "llm"]) */
+  tags?: string[];
+  /** Version of this capability. Defaults to "1.0.0" */
+  version?: string;
+
+  // LLM Configuration
+  /** LLM provider - direct string (LiteLLM) or mesh delegation object */
+  provider: LlmProviderSpec;
+  /** Model override (e.g., "anthropic/claude-sonnet-4-20250514") */
+  model?: string;
+  /** Maximum agentic loop iterations. Defaults to 10 */
+  maxIterations?: number;
+
+  // System prompt
+  /** System prompt template (inline or "file://path/to/template.hbs") */
+  systemPrompt?: string;
+  /** Parameter name to use for template context */
+  contextParam?: string;
+
+  // Tool filtering
+  /** Filter specification for which mesh tools the LLM can access */
+  filter?: LlmFilterSpec[];
+  /** Filter mode: "all" (union), "best_match" (single best), "*" (all tools) */
+  filterMode?: LlmFilterMode;
+
+  // LiteLLM parameters
+  /** Maximum tokens to generate */
+  maxTokens?: number;
+  /** Sampling temperature */
+  temperature?: number;
+  /** Top-p sampling */
+  topP?: number;
+  /** Stop sequences */
+  stop?: string[];
+
+  // Schema
+  /** Zod schema for input parameters */
+  parameters: TParams;
+  /** Zod schema for structured output (optional - returns string if not specified) */
+  returns?: TReturns;
+  /**
+   * Output mode for response parsing:
+   * - "strict": Enforce exact schema compliance (use provider's native structured output if available)
+   * - "hint": Include schema in prompt but accept any response (default)
+   * - "text": Return raw text without parsing
+   */
+  outputMode?: LlmOutputMode;
+
+  /**
+   * Execute handler - receives injected LLM agent.
+   * The llm parameter is a callable that runs the agentic loop.
+   */
+  execute: (
+    args: z.infer<TParams>,
+    context: {
+      /** Call the LLM with the user message */
+      llm: LlmAgent<TReturns extends z.ZodType ? z.infer<TReturns> : string>;
+    }
+  ) => Promise<TReturns extends z.ZodType ? z.infer<TReturns> : string>;
+}
+
+/**
+ * Message input for multi-turn conversations.
+ * Can be a simple string (converted to user message) or an array of messages.
+ */
+export type LlmMessageInput =
+  | string
+  | Array<{ role: "user" | "assistant"; content: string }>;
+
+/**
+ * Injected LLM agent for mesh.llm() handlers.
+ */
+export interface LlmAgent<T = string> {
+  /**
+   * Send a message to the LLM and run the agentic loop.
+   *
+   * @param message - User message string or array of messages for multi-turn
+   * @param options - Optional runtime overrides
+   * @returns The LLM response (validated if schema provided)
+   *
+   * @example
+   * ```typescript
+   * // Single message
+   * const result = await llm("What is 5+3?");
+   *
+   * // Multi-turn conversation
+   * const result = await llm([
+   *   { role: "user", content: "What is 5+3?" },
+   *   { role: "assistant", content: "8" },
+   *   { role: "user", content: "Now multiply that by 2" },
+   * ]);
+   * ```
+   */
+  (message: LlmMessageInput, options?: LlmCallOptions): Promise<T>;
+
+  /**
+   * Get response metadata from the last call.
+   */
+  readonly meta: LlmMeta | null;
+
+  /**
+   * Get available tools for this LLM agent.
+   */
+  readonly tools: LlmToolProxy[];
+
+  /**
+   * Override the system prompt at runtime.
+   *
+   * @param prompt - New system prompt (inline or "file://path.hbs")
+   */
+  setSystemPrompt(prompt: string): void;
+}
+
+/**
+ * Context merge mode for runtime context override.
+ */
+export type LlmContextMode = "merge" | "replace";
+
+/**
+ * Output mode for response parsing.
+ */
+export type LlmOutputMode = "strict" | "hint" | "text";
+
+/**
+ * Runtime options for LLM calls.
+ */
+export interface LlmCallOptions {
+  /** Additional context for template rendering */
+  context?: Record<string, unknown>;
+  /** Context merge mode: "merge" (default) adds to base context, "replace" overrides entirely */
+  contextMode?: LlmContextMode;
+  /** Override max tokens */
+  maxTokens?: number;
+  /** Override temperature */
+  temperature?: number;
+  /** Override max iterations */
+  maxIterations?: number;
+}
+
+/**
+ * Proxy for calling mesh tools from LLM agent.
+ */
+export interface LlmToolProxy {
+  /** Tool function name */
+  name: string;
+  /** Capability name */
+  capability: string;
+  /** Description */
+  description?: string;
+  /** Input schema (JSON Schema format) */
+  inputSchema?: Record<string, unknown>;
+  /** Endpoint URL */
+  endpoint: string;
+  /** Agent ID providing this tool */
+  agentId: string;
+
+  /**
+   * Call the tool.
+   */
+  (args: Record<string, unknown>): Promise<unknown>;
 }

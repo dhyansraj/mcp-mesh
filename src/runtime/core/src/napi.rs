@@ -9,9 +9,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::events::{EventType, HealthStatus, LlmToolInfo, MeshEvent};
+use crate::events::{EventType, HealthStatus, LlmToolInfo, LlmProviderInfo, MeshEvent};
 use crate::handle::AgentHandle as RustAgentHandle;
-use crate::spec::{AgentSpec as RustAgentSpec, DependencySpec as RustDependencySpec, ToolSpec as RustToolSpec};
+use crate::spec::{
+    AgentSpec as RustAgentSpec, DependencySpec as RustDependencySpec,
+    LlmAgentSpec as RustLlmAgentSpec, ToolSpec as RustToolSpec,
+};
 use crate::start_agent_internal;
 
 /// Dependency specification for TypeScript.
@@ -29,6 +32,94 @@ pub struct JsDependencySpec {
 impl From<JsDependencySpec> for RustDependencySpec {
     fn from(js: JsDependencySpec) -> Self {
         RustDependencySpec::new(js.capability, Some(js.tags), js.version)
+    }
+}
+
+/// LLM agent specification for TypeScript.
+/// Used to register LLM-powered tools with the mesh.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsLlmAgentSpec {
+    /// Unique identifier for this LLM function (matches the tool's function_name)
+    pub function_id: String,
+    /// Provider selector - serialized JSON string
+    /// e.g., '{"capability": "llm", "tags": ["+claude"]}'
+    pub provider: String,
+    /// Tool filter specification - serialized JSON string
+    /// e.g., '[{"capability": "calculator"}, {"tags": ["tools"]}]'
+    pub filter: Option<String>,
+    /// Filter mode: "all", "best_match", or "*"
+    pub filter_mode: String,
+    /// Maximum agentic loop iterations
+    pub max_iterations: u32,
+}
+
+impl From<JsLlmAgentSpec> for RustLlmAgentSpec {
+    fn from(js: JsLlmAgentSpec) -> Self {
+        RustLlmAgentSpec::new(
+            js.function_id,
+            js.provider,
+            js.filter,
+            js.filter_mode,
+            js.max_iterations,
+        )
+    }
+}
+
+/// LLM tool information returned in llm_tools_updated events.
+/// Contains resolved tool metadata for LLM agents to use.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsLlmToolInfo {
+    /// Function name of the tool
+    pub function_name: String,
+    /// Capability name
+    pub capability: String,
+    /// Endpoint URL to call
+    pub endpoint: String,
+    /// Agent ID providing this tool
+    pub agent_id: String,
+    /// Input schema (serialized JSON string)
+    pub input_schema: Option<String>,
+}
+
+impl From<LlmToolInfo> for JsLlmToolInfo {
+    fn from(info: LlmToolInfo) -> Self {
+        JsLlmToolInfo {
+            function_name: info.function_name,
+            capability: info.capability,
+            endpoint: info.endpoint,
+            agent_id: info.agent_id,
+            input_schema: info.input_schema,
+        }
+    }
+}
+
+/// LLM provider information returned in llm_provider_available events.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsLlmProviderInfo {
+    /// Function ID of the LLM function that requested this provider
+    pub function_id: String,
+    /// Agent ID providing this capability
+    pub agent_id: String,
+    /// Endpoint URL to call
+    pub endpoint: String,
+    /// Function name to call
+    pub function_name: String,
+    /// Model name (optional)
+    pub model: Option<String>,
+}
+
+impl From<LlmProviderInfo> for JsLlmProviderInfo {
+    fn from(info: LlmProviderInfo) -> Self {
+        JsLlmProviderInfo {
+            function_id: info.function_id,
+            agent_id: info.agent_id,
+            endpoint: info.endpoint,
+            function_name: info.function_name,
+            model: info.model,
+        }
     }
 }
 
@@ -50,6 +141,10 @@ pub struct JsToolSpec {
     pub dependencies: Vec<JsDependencySpec>,
     /// JSON Schema for input parameters (MCP format) - serialized JSON string
     pub input_schema: Option<String>,
+    /// LLM filter specification (for @mesh.llm decorated functions) - serialized JSON string
+    pub llm_filter: Option<String>,
+    /// LLM provider specification (for mesh delegation) - serialized JSON string
+    pub llm_provider: Option<String>,
 }
 
 impl From<JsToolSpec> for RustToolSpec {
@@ -62,9 +157,9 @@ impl From<JsToolSpec> for RustToolSpec {
             Some(js.tags),
             Some(js.dependencies.into_iter().map(|d| d.into()).collect()),
             js.input_schema,
-            None, // llm_filter - not used in Phase 1
-            None, // llm_provider - not used in Phase 1
-            None, // kwargs
+            js.llm_filter,
+            js.llm_provider,
+            None, // kwargs - not needed for TypeScript
         )
     }
 }
@@ -92,6 +187,8 @@ pub struct JsAgentSpec {
     pub agent_type: Option<String>,
     /// Tools/capabilities provided by this agent
     pub tools: Vec<JsToolSpec>,
+    /// LLM agent specifications for tools using mesh.llm()
+    pub llm_agents: Option<Vec<JsLlmAgentSpec>>,
     /// Heartbeat interval in seconds
     pub heartbeat_interval: u32,
 }
@@ -108,7 +205,7 @@ impl From<JsAgentSpec> for RustAgentSpec {
             js.namespace,
             js.agent_type, // "mcp_agent" or "api", defaults to "mcp_agent"
             Some(js.tools.into_iter().map(|t| t.into()).collect()),
-            None, // llm_agents - not used in Phase 1
+            js.llm_agents.map(|agents| agents.into_iter().map(|a| a.into()).collect()),
             js.heartbeat_interval as u64,
         )
     }
@@ -117,7 +214,7 @@ impl From<JsAgentSpec> for RustAgentSpec {
 /// Mesh event for TypeScript.
 #[napi(object)]
 pub struct JsMeshEvent {
-    /// Event type (e.g., "dependency_available", "agent_registered")
+    /// Event type (e.g., "dependency_available", "agent_registered", "llm_tools_updated")
     pub event_type: String,
     /// Capability name (for dependency events)
     pub capability: Option<String>,
@@ -133,8 +230,12 @@ pub struct JsMeshEvent {
     /// Dependency index within the requesting function (for dependency events)
     /// This allows SDKs to inject the resolved dependency at the correct position.
     pub dep_index: Option<u32>,
-    /// Function ID of the LLM agent (for llm_tools_updated)
+    /// Function ID of the LLM agent (for llm_tools_updated, llm_provider_available)
     pub function_id: Option<String>,
+    /// List of available tools (for llm_tools_updated event)
+    pub tools: Option<Vec<JsLlmToolInfo>>,
+    /// Provider info (for llm_provider_available event)
+    pub provider_info: Option<JsLlmProviderInfo>,
     /// Error message (for error events)
     pub error: Option<String>,
     /// Reason for event (for disconnect events)
@@ -152,6 +253,8 @@ impl From<MeshEvent> for JsMeshEvent {
             requesting_function: event.requesting_function,
             dep_index: event.dep_index,
             function_id: event.function_id,
+            tools: event.tools.map(|t| t.into_iter().map(|info| info.into()).collect()),
+            provider_info: event.provider_info.map(|p| p.into()),
             error: event.error,
             reason: event.reason,
         }
@@ -407,6 +510,7 @@ mod tests {
             namespace: "default".to_string(),
             agent_type: None, // defaults to mcp_agent
             tools: vec![],
+            llm_agents: None,
             heartbeat_interval: 5,
         };
 
@@ -428,11 +532,67 @@ mod tests {
             namespace: "default".to_string(),
             agent_type: Some("api".to_string()), // API agent type
             tools: vec![],
+            llm_agents: None,
             heartbeat_interval: 5,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
         assert_eq!(rust_spec.agent_type, AgentType::Api);
         assert_eq!(rust_spec.http_port, 0);
+    }
+
+    #[test]
+    fn test_js_llm_agent_spec_conversion() {
+        let js_llm_spec = JsLlmAgentSpec {
+            function_id: "assist".to_string(),
+            provider: r#"{"capability": "llm", "tags": ["+claude"]}"#.to_string(),
+            filter: Some(r#"[{"capability": "calculator"}]"#.to_string()),
+            filter_mode: "all".to_string(),
+            max_iterations: 10,
+        };
+
+        let rust_llm_spec: RustLlmAgentSpec = js_llm_spec.into();
+        assert_eq!(rust_llm_spec.function_id, "assist");
+        assert_eq!(rust_llm_spec.filter_mode, "all");
+        assert_eq!(rust_llm_spec.max_iterations, 10);
+    }
+
+    #[test]
+    fn test_js_spec_with_llm_agents() {
+        let js_spec = JsAgentSpec {
+            name: "llm-agent".to_string(),
+            version: "1.0.0".to_string(),
+            description: "LLM agent".to_string(),
+            registry_url: "http://localhost:8100".to_string(),
+            http_port: 9003,
+            http_host: "localhost".to_string(),
+            namespace: "default".to_string(),
+            agent_type: None,
+            tools: vec![JsToolSpec {
+                function_name: "assist".to_string(),
+                capability: "smart_assistant".to_string(),
+                version: "1.0.0".to_string(),
+                tags: vec!["llm".to_string()],
+                description: "LLM-powered assistant".to_string(),
+                dependencies: vec![],
+                input_schema: None,
+                llm_filter: Some(r#"[{"capability": "calculator"}]"#.to_string()),
+                llm_provider: Some(r#"{"capability": "llm"}"#.to_string()),
+            }],
+            llm_agents: Some(vec![JsLlmAgentSpec {
+                function_id: "assist".to_string(),
+                provider: r#"{"capability": "llm"}"#.to_string(),
+                filter: Some(r#"[{"capability": "calculator"}]"#.to_string()),
+                filter_mode: "all".to_string(),
+                max_iterations: 10,
+            }]),
+            heartbeat_interval: 5,
+        };
+
+        let rust_spec: RustAgentSpec = js_spec.into();
+        assert_eq!(rust_spec.name, "llm-agent");
+        assert_eq!(rust_spec.tools.len(), 1);
+        assert_eq!(rust_spec.llm_agents.len(), 1);
+        assert_eq!(rust_spec.llm_agents[0].function_id, "assist");
     }
 }
