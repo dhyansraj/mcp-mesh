@@ -304,6 +304,14 @@ export class MeshDelegatedProvider implements LlmProvider {
       _mesh_usage?: { prompt_tokens: number; completion_tokens: number };
     };
 
+    // Validate role - LLM responses should always be "assistant"
+    let validatedRole: "assistant" = "assistant";
+    if (meshResponse.role !== "assistant") {
+      console.warn(
+        `[mesh.llm] Unexpected role "${meshResponse.role}" from mesh provider, defaulting to "assistant"`
+      );
+    }
+
     // Convert to OpenAI format expected by MeshLlmAgent
     const openAiResponse: LlmCompletionResponse = {
       id: `mesh-${Date.now()}`,
@@ -314,7 +322,7 @@ export class MeshDelegatedProvider implements LlmProvider {
         {
           index: 0,
           message: {
-            role: meshResponse.role as "assistant",
+            role: validatedRole,
             content: meshResponse.content,
             tool_calls: meshResponse.tool_calls,
           },
@@ -815,6 +823,19 @@ export function createLlmToolProxy(
     return content;
   };
 
+  // Safely parse inputSchema - don't let malformed JSON break proxy creation
+  let parsedInputSchema: unknown;
+  if (toolInfo.inputSchema) {
+    try {
+      parsedInputSchema = JSON.parse(toolInfo.inputSchema);
+    } catch (error) {
+      console.warn(
+        `[mesh.llm] Failed to parse inputSchema for tool "${toolInfo.functionName}": ${error instanceof Error ? error.message : String(error)}`
+      );
+      parsedInputSchema = undefined;
+    }
+  }
+
   // Attach metadata using defineProperties to override read-only 'name'
   Object.defineProperties(proxy, {
     name: {
@@ -833,7 +854,7 @@ export function createLlmToolProxy(
       configurable: true,
     },
     inputSchema: {
-      value: toolInfo.inputSchema ? JSON.parse(toolInfo.inputSchema) : undefined,
+      value: parsedInputSchema,
       writable: false,
       configurable: true,
     },

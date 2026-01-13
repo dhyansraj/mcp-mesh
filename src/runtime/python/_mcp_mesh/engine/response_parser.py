@@ -94,8 +94,9 @@ class ResponseParser:
 
         Tries multiple strategies to find JSON in mixed responses:
         1. Find ```json ... ``` code fence blocks
-        2. Find any JSON object {...} in the content
-        3. Return original content if no extraction needed
+        2. Find any JSON object {...} using progressive json.loads
+        3. Find any JSON array [...] using progressive json.loads
+        4. Return original content if no extraction needed
 
         Args:
             content: Raw content that may contain narrative, XML, and JSON
@@ -109,24 +110,69 @@ class ResponseParser:
             extracted = json_match.group(1).strip()
             return extracted
 
-        # Strategy 2: Try to find any JSON object {...} in content
-        # Look for balanced braces starting with { and ending with }
+        # Strategy 2: Try to find JSON object using progressive json.loads
+        # This correctly handles braces inside string values
         brace_start = content.find("{")
         if brace_start != -1:
-            # Find matching closing brace
-            brace_count = 0
-            for i in range(brace_start, len(content)):
-                if content[i] == "{":
-                    brace_count += 1
-                elif content[i] == "}":
-                    brace_count -= 1
-                    if brace_count == 0:
-                        # Found matching brace
-                        extracted = content[brace_start : i + 1]
-                        return extracted
+            result = ResponseParser._try_progressive_parse(
+                content, brace_start, "{", "}"
+            )
+            if result:
+                return result
+
+        # Strategy 3: Try to find JSON array using progressive json.loads
+        bracket_start = content.find("[")
+        if bracket_start != -1:
+            result = ResponseParser._try_progressive_parse(
+                content, bracket_start, "[", "]"
+            )
+            if result:
+                return result
 
         # No JSON found, return original
         return content
+
+    @staticmethod
+    def _try_progressive_parse(
+        content: str, start: int, open_char: str, close_char: str
+    ) -> str | None:
+        """
+        Try to extract valid JSON by progressively extending the end position.
+        This correctly handles braces/brackets inside string values.
+
+        Args:
+            content: The full content string
+            start: Starting index of the JSON
+            open_char: Opening character ('{' or '[')
+            close_char: Closing character ('}' or ']')
+
+        Returns:
+            Extracted JSON string or None if not found
+        """
+        # Find potential end positions based on depth counting
+        depth = 0
+        potential_ends: list[int] = []
+
+        for i in range(start, len(content)):
+            char = content[i]
+            if char == open_char:
+                depth += 1
+            elif char == close_char:
+                depth -= 1
+                if depth == 0:
+                    potential_ends.append(i)
+
+        # Try each potential end position (shortest first for efficiency)
+        for end in potential_ends:
+            candidate = content[start : end + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                # Not valid JSON, try next potential end
+                continue
+
+        return None
 
     @staticmethod
     def _strip_markdown_fences(content: str) -> str:
