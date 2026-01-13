@@ -1,0 +1,159 @@
+#!/usr/bin/env npx tsx
+/**
+ * {{ .Name }} - MCP Mesh LLM Provider
+ *
+ * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM provider generated using meshctl scaffold.{{ end }}
+ *
+ * This agent provides LLM access to other agents via mesh.llmProvider().
+ */
+
+import { FastMCP } from "fastmcp";
+import { mesh } from "@mcpmesh/sdk";
+
+// FastMCP server instance
+const server = new FastMCP({
+  name: "{{ toPascalCase .Name }}",
+  version: "1.0.0",
+});
+
+// ===== HEALTH CHECK =====
+{{ if contains .Model "anthropic" }}
+async function healthCheck(): Promise<{
+  status: string;
+  checks: Record<string, boolean>;
+  errors: string[];
+}> {
+  const checks: Record<string, boolean> = {};
+  const errors: string[] = [];
+  let status = "healthy";
+
+  // Check API Key presence
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
+    checks.anthropic_api_key_present = true;
+  } else {
+    checks.anthropic_api_key_present = false;
+    errors.push("ANTHROPIC_API_KEY not set");
+    status = "unhealthy";
+  }
+
+  // Check API connectivity
+  if (apiKey) {
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "anthropic-version": "2023-06-01",
+          "x-api-key": apiKey,
+        },
+      });
+
+      if (response.status === 200) {
+        checks.anthropic_api_reachable = true;
+        checks.anthropic_api_key_valid = true;
+      } else if (response.status === 401) {
+        checks.anthropic_api_reachable = true;
+        checks.anthropic_api_key_valid = false;
+        errors.push("Anthropic API key is invalid");
+        status = "unhealthy";
+      } else {
+        checks.anthropic_api_reachable = false;
+        errors.push(`Anthropic API returned status: ${response.status}`);
+        status = "degraded";
+      }
+    } catch (e) {
+      checks.anthropic_api_reachable = false;
+      errors.push(`Anthropic API unreachable: ${e}`);
+      status = "degraded";
+    }
+  }
+
+  return { status, checks, errors };
+}
+{{ else if contains .Model "openai" }}
+async function healthCheck(): Promise<{
+  status: string;
+  checks: Record<string, boolean>;
+  errors: string[];
+}> {
+  const checks: Record<string, boolean> = {};
+  const errors: string[] = [];
+  let status = "healthy";
+
+  // Check API Key presence
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    checks.openai_api_key_present = true;
+  } else {
+    checks.openai_api_key_present = false;
+    errors.push("OPENAI_API_KEY not set");
+    status = "unhealthy";
+  }
+
+  // Check API connectivity
+  if (apiKey) {
+    try {
+      const response = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+
+      if (response.status === 200) {
+        checks.openai_api_reachable = true;
+        checks.openai_api_key_valid = true;
+      } else if (response.status === 401) {
+        checks.openai_api_reachable = true;
+        checks.openai_api_key_valid = false;
+        errors.push("OpenAI API key is invalid");
+        status = "unhealthy";
+      } else {
+        checks.openai_api_reachable = false;
+        errors.push(`OpenAI API returned status: ${response.status}`);
+        status = "degraded";
+      }
+    } catch (e) {
+      checks.openai_api_reachable = false;
+      errors.push(`OpenAI API unreachable: ${e}`);
+      status = "degraded";
+    }
+  }
+
+  return { status, checks, errors };
+}
+{{ else }}
+async function healthCheck(): Promise<{
+  status: string;
+  checks: Record<string, boolean>;
+  errors: string[];
+}> {
+  return {
+    status: "healthy",
+    checks: { provider_configured: true },
+    errors: [],
+  };
+}
+{{ end }}
+
+// ===== LLM PROVIDER =====
+
+server.addTool(
+  mesh.llmProvider({
+    model: "{{ .Model }}",
+    capability: "llm",
+    tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    version: "1.0.0",
+  })
+);
+
+// ===== AGENT CONFIGURATION =====
+
+const agent = mesh(server, {
+  name: "{{ .Name }}",
+  port: {{ .Port }},
+  healthCheck,
+  healthCheckTtl: 30,
+});
+
+// No server.start() needed!
+// Mesh SDK automatically handles:
+// - Vercel AI SDK provider setup
+// - HTTP server configuration
+// - Service registration with mesh registry

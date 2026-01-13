@@ -1,0 +1,67 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM provider for {{ .Model }}.{{ end }}
+
+## Quick Start
+
+```bash
+# Set API key
+{{ if contains .Model "anthropic" }}export ANTHROPIC_API_KEY=your-key{{ else if contains .Model "openai" }}export OPENAI_API_KEY=your-key{{ end }}
+
+# Install dependencies
+npm install
+
+# Run the provider
+npm start
+```
+
+## How It Works
+
+This provider uses `mesh.llmProvider()` which:
+- Wraps the {{ .Model }} model using Vercel AI SDK
+- Registers with mesh for other agents to discover
+- Provides health checks for API connectivity
+- Handles rate limiting and error recovery
+
+## Using This Provider
+
+Other agents can use this provider via `mesh.llm()`:
+
+```typescript
+server.addTool(
+  mesh.llm({
+    name: "my_tool",
+    provider: { capability: "llm", tags: {{ if contains .Model "anthropic" }}["claude"]{{ else if contains .Model "openai" }}["gpt"]{{ else }}["llm"]{{ end }} },
+    // ... rest of config
+  })
+);
+```
+
+## Docker
+
+```bash
+docker build -t {{ .Name }}:latest .
+docker run -p {{ .Port }}:{{ .Port }} \
+  -e {{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }} \
+  {{ .Name }}:latest
+```
+
+## Kubernetes
+
+Create a secret first:
+
+```bash
+kubectl create secret generic llm-secrets \
+  --from-literal={{ if contains .Model "anthropic" }}anthropic-api-key{{ else if contains .Model "openai" }}openai-api-key{{ else }}api-key{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }}
+```
+
+Then deploy:
+
+```bash
+helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+```
+
+## Documentation
+
+- Run `meshctl man llm` for LLM integration guide
+- Run `meshctl man decorators --typescript` for decorator reference

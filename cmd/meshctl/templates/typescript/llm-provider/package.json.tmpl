@@ -1,0 +1,29 @@
+{
+  "name": "{{ .Name }}",
+  "version": "1.0.0",
+  "description": "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM provider for {{ .Model }}{{ end }}",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^0.8.0",
+    "ai": "^3.0.0",
+{{ if contains .Model "anthropic" }}
+    "@ai-sdk/anthropic": "^0.0.40",
+{{ else if contains .Model "openai" }}
+    "@ai-sdk/openai": "^0.0.50",
+{{ else if contains .Model "google" }}
+    "@ai-sdk/google": "^0.0.40",
+{{ end }}
+    "fastmcp": "^3.26.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

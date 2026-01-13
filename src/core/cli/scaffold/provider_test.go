@@ -59,13 +59,12 @@ func TestScaffoldContext_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "typescript coming soon",
+			name: "typescript is now supported",
 			ctx: &ScaffoldContext{
 				Name:     "my-agent",
 				Language: "typescript",
 			},
-			wantErr: true,
-			errMsg:  "coming soon",
+			wantErr: false,
 		},
 		{
 			name: "rust coming soon",
@@ -103,13 +102,12 @@ func TestScaffoldContext_Validate(t *testing.T) {
 			errMsg:  "unsupported language",
 		},
 		{
-			name: "empty language defaults to valid",
+			name: "empty language defaults to python",
 			ctx: &ScaffoldContext{
 				Name:     "my-agent",
 				Language: "",
 			},
-			wantErr: true,
-			errMsg:  "unsupported language",
+			wantErr: false,
 		},
 		{
 			name: "invalid name with spaces",
@@ -164,18 +162,33 @@ func TestScaffoldContext_SupportedLanguages(t *testing.T) {
 	languages := SupportedLanguages()
 
 	assert.Contains(t, languages, "python")
-	// TypeScript and Rust coming soon
-	assert.NotContains(t, languages, "typescript")
+	assert.Contains(t, languages, "typescript")
+	// Rust coming soon
 	assert.NotContains(t, languages, "rust")
-	assert.Len(t, languages, 1)
+	assert.Len(t, languages, 2)
 }
 
 func TestScaffoldContext_IsValidLanguage(t *testing.T) {
 	assert.True(t, IsValidLanguage("python"))
-	// TypeScript and Rust coming soon - not valid yet
-	assert.False(t, IsValidLanguage("typescript"))
+	assert.True(t, IsValidLanguage("typescript"))
+	// Rust coming soon - not valid yet
 	assert.False(t, IsValidLanguage("rust"))
 	assert.False(t, IsValidLanguage("cobol"))
 	assert.False(t, IsValidLanguage(""))
 	assert.False(t, IsValidLanguage("Python")) // case sensitive
+}
+
+func TestNormalizeLanguage(t *testing.T) {
+	// Python variations
+	assert.Equal(t, "python", NormalizeLanguage("python"))
+	assert.Equal(t, "python", NormalizeLanguage("py"))
+	assert.Equal(t, "python", NormalizeLanguage(""))
+
+	// TypeScript variations
+	assert.Equal(t, "typescript", NormalizeLanguage("typescript"))
+	assert.Equal(t, "typescript", NormalizeLanguage("ts"))
+
+	// Unknown returns as-is
+	assert.Equal(t, "rust", NormalizeLanguage("rust"))
+	assert.Equal(t, "cobol", NormalizeLanguage("cobol"))
 }

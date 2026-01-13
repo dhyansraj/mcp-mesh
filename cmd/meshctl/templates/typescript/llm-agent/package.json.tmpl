@@ -1,0 +1,21 @@
+{
+  "name": "{{ .Name }}",
+  "version": "1.0.0",
+  "description": "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent for {{ .Name }}{{ end }}",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^0.8.0",
+    "fastmcp": "^3.26.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

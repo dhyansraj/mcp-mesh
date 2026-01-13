@@ -165,37 +165,67 @@ const (
 	DetectedUnknown     DetectedAgentType = "unknown"
 )
 
-// detectAgentType reads an existing main.py and determines the agent type
-// by looking for characteristic decorators
-func detectAgentType(mainPyPath string) (DetectedAgentType, error) {
-	content, err := os.ReadFile(mainPyPath)
+// detectAgentType reads an existing agent file and determines the agent type
+// by looking for characteristic decorators/functions.
+// Supports both Python (.py) and TypeScript (.ts) files.
+func detectAgentType(agentFilePath string) (DetectedAgentType, error) {
+	content, err := os.ReadFile(agentFilePath)
 	if err != nil {
 		return DetectedUnknown, err
 	}
 
 	contentStr := string(content)
 
-	// Check for @mesh.llm_provider first (most specific)
-	if strings.Contains(contentStr, "@mesh.llm_provider") {
-		return DetectedLLMProvider, nil
+	// Python detection
+	if strings.HasSuffix(agentFilePath, ".py") {
+		// Check for @mesh.llm_provider first (most specific)
+		if strings.Contains(contentStr, "@mesh.llm_provider") {
+			return DetectedLLMProvider, nil
+		}
+		// Check for @mesh.llm decorator (indicates llm-agent or tool with llm tools)
+		if strings.Contains(contentStr, "@mesh.llm(") {
+			return DetectedLLMAgent, nil
+		}
+		// Check for @mesh.tool decorator (basic tool agent)
+		if strings.Contains(contentStr, "@mesh.tool(") {
+			return DetectedTool, nil
+		}
+		// Check for @mesh.agent (generic agent, treat as tool)
+		if strings.Contains(contentStr, "@mesh.agent") {
+			return DetectedTool, nil
+		}
 	}
 
-	// Check for @mesh.llm decorator (indicates llm-agent or tool with llm tools)
-	if strings.Contains(contentStr, "@mesh.llm(") {
-		return DetectedLLMAgent, nil
-	}
-
-	// Check for @mesh.tool decorator (basic tool agent)
-	if strings.Contains(contentStr, "@mesh.tool(") {
-		return DetectedTool, nil
-	}
-
-	// Check for @mesh.agent (generic agent, treat as tool)
-	if strings.Contains(contentStr, "@mesh.agent") {
-		return DetectedTool, nil
+	// TypeScript detection
+	if strings.HasSuffix(agentFilePath, ".ts") || strings.HasSuffix(agentFilePath, ".js") {
+		// Check for mesh.llmProvider first (most specific)
+		if strings.Contains(contentStr, "mesh.llmProvider(") || strings.Contains(contentStr, "llmProvider(") {
+			return DetectedLLMProvider, nil
+		}
+		// Check for mesh.llm function (indicates llm-agent)
+		if strings.Contains(contentStr, "mesh.llm(") {
+			return DetectedLLMAgent, nil
+		}
+		// Check for mesh.tool function (basic tool agent)
+		if strings.Contains(contentStr, "mesh.tool(") {
+			return DetectedTool, nil
+		}
+		// Check for mesh() call (generic agent, treat as tool)
+		if strings.Contains(contentStr, "mesh(server") || strings.Contains(contentStr, "= mesh(") {
+			return DetectedTool, nil
+		}
 	}
 
 	return DetectedUnknown, nil
+}
+
+// getAgentEntryFile returns the entry file path for an agent based on language.
+// Python uses main.py, TypeScript uses src/index.ts
+func getAgentEntryFile(outputDir, language string) string {
+	if language == "typescript" {
+		return filepath.Join(outputDir, "src", "index.ts")
+	}
+	return filepath.Join(outputDir, "main.py")
 }
 
 // Execute performs the scaffold generation using templates.
@@ -214,11 +244,12 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 	}
 
 	// Check if directory already exists (for safety - don't overwrite)
-	mainPyPath := filepath.Join(outputDir, "main.py")
-	if FileExists(mainPyPath) {
+	// Check for both Python (main.py) and TypeScript (src/index.ts) entry files
+	entryFile := getAgentEntryFile(outputDir, ctx.Language)
+	if FileExists(entryFile) {
 		// In interactive mode, ask if user wants to add a tool instead
 		if ctx.IsInteractive {
-			return p.handleExistingAgentInteractive(ctx, outputDir, mainPyPath)
+			return p.handleExistingAgentInteractive(ctx, outputDir, entryFile)
 		}
 
 		// Non-interactive mode: return error
@@ -273,7 +304,12 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 		printGeneratedFiles(ctx.Cmd, outputDir, ctx.Name)
 		ctx.Cmd.Printf("\n")
 		ctx.Cmd.Printf("Next steps:\n")
-		ctx.Cmd.Printf("  meshctl start %s/main.py\n", ctx.Name)
+		if ctx.Language == "typescript" {
+			ctx.Cmd.Printf("  cd %s && npm install\n", ctx.Name)
+			ctx.Cmd.Printf("  meshctl start %s/src/index.ts\n", ctx.Name)
+		} else {
+			ctx.Cmd.Printf("  meshctl start %s/main.py\n", ctx.Name)
+		}
 		ctx.Cmd.Printf("\n")
 		ctx.Cmd.Printf("For Docker/K8s deployment, see: meshctl man deployment\n")
 	}
@@ -282,7 +318,7 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 }
 
 // handleExistingAgentInteractive handles the case when agent already exists in interactive mode
-func (p *StaticProvider) handleExistingAgentInteractive(ctx *ScaffoldContext, outputDir, mainPyPath string) error {
+func (p *StaticProvider) handleExistingAgentInteractive(ctx *ScaffoldContext, outputDir, entryFilePath string) error {
 	if ctx.Cmd != nil {
 		ctx.Cmd.Println()
 		ctx.Cmd.Printf("⚠️  Agent '%s' already exists at %s\n", ctx.Name, outputDir)
@@ -290,7 +326,7 @@ func (p *StaticProvider) handleExistingAgentInteractive(ctx *ScaffoldContext, ou
 	}
 
 	// Detect agent type
-	detectedType, err := detectAgentType(mainPyPath)
+	detectedType, err := detectAgentType(entryFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to detect agent type: %w", err)
 	}

@@ -807,7 +807,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
 #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{ .Name }}:
-  image: mcpmesh/python-runtime:0.7
+  image: mcpmesh/python-runtime:0.8
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1394,7 +1394,7 @@ services:
       - {{ .NetworkName }}
 
   registry:
-    image: mcpmesh/registry:0.7
+    image: mcpmesh/registry:0.8
     container_name: {{ .ProjectName }}-registry
     hostname: registry
     ports:
@@ -1501,7 +1501,7 @@ services:
 {{- range .Agents }}
 
   {{ .Name }}:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
