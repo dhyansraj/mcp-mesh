@@ -10,20 +10,18 @@
   },
   "dependencies": {
     "@mcpmesh/sdk": "^0.8.0",
-    "ai": "^3.0.0",
+    "ai": "^4.0.0",
 {{ if contains .Model "anthropic" }}
-    "@ai-sdk/anthropic": "^0.0.40",
+    "@ai-sdk/anthropic": "^1.0.0"
 {{ else if contains .Model "openai" }}
-    "@ai-sdk/openai": "^0.0.50",
+    "@ai-sdk/openai": "^1.0.0"
 {{ else if contains .Model "google" }}
-    "@ai-sdk/google": "^0.0.40",
+    "@ai-sdk/google": "^1.0.0"
 {{ end }}
-    "fastmcp": "^3.26.0",
-    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
   }
 }

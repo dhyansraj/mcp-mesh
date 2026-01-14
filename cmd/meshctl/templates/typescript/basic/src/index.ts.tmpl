@@ -5,8 +5,7 @@
  * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh agent generated using meshctl scaffold.{{ end }}
  */
 
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 // FastMCP server instance
@@ -15,33 +14,26 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
-// ===== TOOLS =====
-
-server.addTool(
-  mesh.tool({
-    name: "{{ .ToolName | default "hello" }}",
-    capability: "{{ .ToolName | default "hello" }}",
-    description: "{{ .ToolDescription | default "A tool" }}",
-    tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else }}["tools"]{{ end }},
-    parameters: z.object({
-      // TODO: Define your input parameters
-    }),
-    execute: async (args) => {
-      // TODO: Implement tool logic
-      return "Not implemented";
-    },
-  })
-);
-
-// ===== AGENT CONFIGURATION =====
-
+// Wrap with MCP Mesh
 const agent = mesh(server, {
   name: "{{ .Name }}",
   port: {{ .Port }},
 });
 
-// No server.start() needed!
-// Mesh SDK automatically handles:
-// - FastMCP server startup
-// - HTTP server configuration
-// - Service registration with mesh registry
+// ===== TOOLS =====
+
+agent.addTool({
+  name: "{{ .ToolName | default "hello" }}",
+  capability: "{{ .ToolName | default "hello" }}",
+  description: "{{ .ToolDescription | default "A sample tool" }}",
+  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else }}["tools"]{{ end }},
+  parameters: z.object({
+    // TODO: Define your input parameters
+  }),
+  execute: async (args) => {
+    // TODO: Implement tool logic
+    return "Not implemented";
+  },
+});
+
+console.log("{{ .Name }} agent defined. Waiting for auto-start...");
