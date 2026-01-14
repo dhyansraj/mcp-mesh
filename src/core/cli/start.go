@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,42 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// AgentLanguage represents the programming language of an agent
+type AgentLanguage string
+
+const (
+	LanguagePython     AgentLanguage = "python"
+	LanguageTypeScript AgentLanguage = "typescript"
+	LanguageUnknown    AgentLanguage = "unknown"
+)
+
+// detectAgentLanguage determines the language based on file extension
+func detectAgentLanguage(agentPath string) AgentLanguage {
+	ext := filepath.Ext(agentPath)
+	switch ext {
+	case ".py":
+		return LanguagePython
+	case ".ts", ".js":
+		return LanguageTypeScript
+	case ".yaml", ".yml":
+		// YAML configs are Python-based for now
+		return LanguagePython
+	default:
+		return LanguageUnknown
+	}
+}
+
+// isAgentFile returns true if the file is a valid agent file (.py, .ts, .js, .yaml, .yml)
+func isAgentFile(path string) bool {
+	ext := filepath.Ext(path)
+	switch ext {
+	case ".py", ".ts", ".js", ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
 // NewStartCommand creates the start command
 func NewStartCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -27,14 +64,16 @@ func NewStartCommand() *cobra.Command {
 		Short: "Start MCP agent with mesh runtime",
 		Long: `Start one or more MCP agents with mesh runtime support.
 
+Supports both Python (.py) and TypeScript (.ts, .js) agents.
 If no registry is running, a local registry will be started automatically.
 The registry service can also be started independently using --registry-only.
 
 Examples:
   meshctl start                              # Start registry only
-  meshctl start examples/hello_world.py     # Start agent (and registry if needed)
+  meshctl start examples/hello_world.py     # Start Python agent
+  meshctl start src/index.ts                # Start TypeScript agent
   meshctl start --registry-only              # Start only the registry service
-  meshctl start agent1.py agent2.py         # Start multiple agents`,
+  meshctl start agent1.py agent2.ts         # Start multiple agents (mixed languages)`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runStartCommand,
 	}
@@ -537,14 +576,37 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 		fmt.Println("Validating prerequisites...")
 	}
 
-	// 1. Check Python environment (strictly requires .venv in current directory)
-	pythonEnv, err := DetectPythonEnvironment()
-	if err != nil {
-		cwd, _ := os.Getwd()
-		return &PrerequisiteError{
-			Check:   "Python environment",
-			Message: fmt.Sprintf("Python environment check failed: %v", err),
-			Remediation: fmt.Sprintf(`MCP Mesh requires a .venv directory in your current working directory.
+	// Group agents by language
+	pythonAgents := []string{}
+	tsAgents := []string{}
+	for _, agentPath := range agentPaths {
+		lang := detectAgentLanguage(agentPath)
+		switch lang {
+		case LanguagePython:
+			pythonAgents = append(pythonAgents, agentPath)
+		case LanguageTypeScript:
+			tsAgents = append(tsAgents, agentPath)
+		default:
+			return &PrerequisiteError{
+				Check:   "Agent file",
+				Message: fmt.Sprintf("Unknown file type: %s", agentPath),
+				Remediation: `MCP Mesh supports .py, .ts, and .js files.
+Use 'meshctl scaffold' to generate a new agent.`,
+			}
+		}
+	}
+
+	// Validate Python prerequisites if we have Python agents
+	var pythonEnv *PythonEnvironment
+	if len(pythonAgents) > 0 {
+		var err error
+		pythonEnv, err = DetectPythonEnvironment()
+		if err != nil {
+			cwd, _ := os.Getwd()
+			return &PrerequisiteError{
+				Check:   "Python environment",
+				Message: fmt.Sprintf("Python environment check failed: %v", err),
+				Remediation: fmt.Sprintf(`MCP Mesh requires a .venv directory in your current working directory.
 
 Current directory: %s
 
@@ -556,37 +618,42 @@ To fix this issue:
   5. Run meshctl start from this directory
 
 Run 'meshctl man prerequisite' for detailed setup instructions.`, cwd),
+			}
 		}
-	}
 
-	// Note: Python version >= 3.11 is already validated by DetectPythonEnvironment()
-
-	// 2. Check for mcp-mesh package
-	if !checkMcpMeshPackage(pythonEnv.PythonExecutable) {
-		return &PrerequisiteError{
-			Check:   "mcp-mesh package",
-			Message: "mcp-mesh package not found in Python environment.",
-			Remediation: fmt.Sprintf(`To fix this issue:
+		// Check for mcp-mesh package
+		if !checkMcpMeshPackage(pythonEnv.PythonExecutable) {
+			return &PrerequisiteError{
+				Check:   "mcp-mesh package",
+				Message: "mcp-mesh package not found in Python environment.",
+				Remediation: fmt.Sprintf(`To fix this issue:
   1. Activate your virtual environment (if using one)
   2. Install the mcp-mesh package:
      %s -m pip install mcp-mesh
 
 Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.PythonExecutable),
+			}
 		}
 	}
 
-	// 3. Validate agent file paths exist
+	// Validate TypeScript prerequisites if we have TypeScript agents
+	if len(tsAgents) > 0 {
+		if err := validateTypeScriptPrerequisites(tsAgents, quiet); err != nil {
+			return err
+		}
+	}
+
+	// Validate agent file paths exist
 	for _, agentPath := range agentPaths {
 		absPath, err := AbsolutePath(agentPath)
 		if err != nil {
 			return &PrerequisiteError{
 				Check:   "Agent file",
 				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
-				Remediation: fmt.Sprintf(`To fix this issue:
+				Remediation: `To fix this issue:
   1. Verify the agent file exists at the specified path
   2. Use an absolute path or ensure the relative path is correct from your current directory
   3. Check file permissions`,
-				),
 			}
 		}
 
@@ -604,13 +671,117 @@ Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.Pyth
 
 	if !quiet {
 		fmt.Printf("✅ All prerequisites validated successfully\n")
-		fmt.Printf("   Python: %s (%s)\n", pythonEnv.Version, pythonEnv.PythonExecutable)
-		if pythonEnv.IsVirtualEnv {
-			fmt.Printf("   Virtual environment: %s\n", pythonEnv.VenvPath)
+		if pythonEnv != nil {
+			fmt.Printf("   Python: %s (%s)\n", pythonEnv.Version, pythonEnv.PythonExecutable)
+			if pythonEnv.IsVirtualEnv {
+				fmt.Printf("   Virtual environment: %s\n", pythonEnv.VenvPath)
+			}
+		}
+		if len(tsAgents) > 0 {
+			fmt.Printf("   TypeScript: node_modules with @mcpmesh/sdk\n")
 		}
 	}
 
 	return nil
+}
+
+// validateTypeScriptPrerequisites checks TypeScript-specific requirements
+// Checks each agent's directory for node_modules and @mcpmesh/sdk
+func validateTypeScriptPrerequisites(agentPaths []string, quiet bool) error {
+	// 1. Check npx is available (for running tsx)
+	if _, err := exec.LookPath("npx"); err != nil {
+		return &PrerequisiteError{
+			Check:   "npx command",
+			Message: "npx command not found.",
+			Remediation: `npx is required to run TypeScript agents.
+
+To fix this issue:
+  1. Install Node.js (v18+) which includes npx
+  2. Verify installation: npx --version`,
+		}
+	}
+
+	// 2. Check each agent's directory for node_modules and @mcpmesh/sdk
+	for _, agentPath := range agentPaths {
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			continue // Will be caught by file existence check later
+		}
+
+		// Find project root by looking for node_modules or package.json
+		agentDir := filepath.Dir(absPath)
+		projectDir := findNodeProjectRoot(agentDir)
+		if projectDir == "" {
+			return &PrerequisiteError{
+				Check:   "Node.js project",
+				Message: fmt.Sprintf("No package.json or node_modules found for agent: %s", agentPath),
+				Remediation: fmt.Sprintf(`MCP Mesh TypeScript agents require a Node.js project setup.
+
+Agent: %s
+
+To fix this issue:
+  1. Navigate to the agent's project directory
+  2. Run: npm init -y
+  3. Install dependencies: npm install @mcpmesh/sdk
+  4. Run meshctl start again`, agentPath),
+			}
+		}
+
+		// Check node_modules exists
+		nodeModulesPath := filepath.Join(projectDir, "node_modules")
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			return &PrerequisiteError{
+				Check:   "Node.js dependencies",
+				Message: fmt.Sprintf("node_modules not found in: %s", projectDir),
+				Remediation: fmt.Sprintf(`MCP Mesh TypeScript agents require npm dependencies.
+
+Project: %s
+
+To fix this issue:
+  1. Navigate to: %s
+  2. Install dependencies: npm install
+  3. Run meshctl start again`, projectDir, projectDir),
+			}
+		}
+
+		// Check @mcpmesh/sdk is installed
+		sdkPath := filepath.Join(nodeModulesPath, "@mcpmesh", "sdk")
+		if _, err := os.Stat(sdkPath); os.IsNotExist(err) {
+			return &PrerequisiteError{
+				Check:   "@mcpmesh/sdk package",
+				Message: fmt.Sprintf("@mcpmesh/sdk not found in: %s", projectDir),
+				Remediation: fmt.Sprintf(`To fix this issue:
+  1. Navigate to: %s
+  2. Install the package: npm install @mcpmesh/sdk
+  3. Run meshctl start again`, projectDir),
+			}
+		}
+	}
+
+	return nil
+}
+
+// findNodeProjectRoot walks up directories to find package.json or node_modules
+func findNodeProjectRoot(startDir string) string {
+	dir := startDir
+	for {
+		// Check for package.json
+		if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
+			return dir
+		}
+		// Check for node_modules
+		if _, err := os.Stat(filepath.Join(dir, "node_modules")); err == nil {
+			return dir
+		}
+
+		// Move up one directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached root
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // checkMcpMeshPackage checks if mcp-mesh package is installed.
@@ -1180,8 +1351,79 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 	return nil
 }
 
-// Create agent command with Python environment detection and hybrid config support
+// Create agent command with language detection and environment setup
 func createAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
+	lang := detectAgentLanguage(agentPath)
+
+	switch lang {
+	case LanguageTypeScript:
+		return createTypeScriptAgentCommand(agentPath, env, workingDir, user, group, watch)
+	case LanguagePython:
+		return createPythonAgentCommand(agentPath, env, workingDir, user, group, watch)
+	default:
+		return nil, fmt.Errorf("unsupported file type: %s (use .py, .ts, or .js)", agentPath)
+	}
+}
+
+// createTypeScriptAgentCommand creates a command for TypeScript/JavaScript agents
+func createTypeScriptAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
+	// Convert script path to absolute path
+	absScriptPath, err := filepath.Abs(agentPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for %s: %w", agentPath, err)
+	}
+
+	finalWorkingDir := filepath.Dir(absScriptPath)
+
+	// Override working directory if specified in command line
+	if workingDir != "" {
+		absWorkingDir, err := AbsolutePath(workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid working directory: %w", err)
+		}
+		finalWorkingDir = absWorkingDir
+	}
+
+	// Create command based on file extension
+	var cmd *exec.Cmd
+	ext := filepath.Ext(agentPath)
+
+	if watch {
+		// For watch mode with TypeScript, use npx tsx --watch
+		if ext == ".ts" {
+			cmd = exec.Command("npx", "tsx", "--watch", absScriptPath)
+		} else {
+			// For .js files, use node with --watch (Node 18+)
+			cmd = exec.Command("node", "--watch", absScriptPath)
+		}
+	} else {
+		if ext == ".ts" {
+			// Use npx tsx for TypeScript files
+			cmd = exec.Command("npx", "tsx", absScriptPath)
+		} else {
+			// Use node for JavaScript files
+			cmd = exec.Command("node", absScriptPath)
+		}
+	}
+
+	cmd.Env = env
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	cmd.Dir = finalWorkingDir
+
+	// Set user and group (Unix only)
+	if user != "" || group != "" {
+		if err := setProcessCredentials(cmd, user, group); err != nil {
+			return nil, fmt.Errorf("failed to set process credentials: %w", err)
+		}
+	}
+
+	return cmd, nil
+}
+
+// createPythonAgentCommand creates a command for Python agents (including YAML configs)
+func createPythonAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
 	var pythonExec string
 	var scriptPath string
 	var finalWorkingDir string
@@ -1507,9 +1749,8 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	var logName string
 	if registryOnly || len(args) == 0 {
 		logName = "registry"
-	} else if len(args) == 1 && strings.HasSuffix(args[0], ".py") {
-		logName = filepath.Base(args[0])
-		logName = strings.TrimSuffix(logName, ".py")
+	} else if len(args) == 1 && isAgentFile(args[0]) {
+		logName = getAgentNameFallback(args[0])
 	} else {
 		// Multiple agents - use first agent name for primary log
 		logName = "meshctl"
@@ -1549,7 +1790,7 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		// Extract agent names from args for display (use decorator name if available)
 		var agentNames []string
 		for _, arg := range args {
-			if strings.HasSuffix(arg, ".py") {
+			if isAgentFile(arg) {
 				absPath, _ := filepath.Abs(arg)
 				name := extractAgentName(absPath)
 				agentNames = append(agentNames, name)
@@ -1586,26 +1827,52 @@ func isTerminal(f *os.File) bool {
 	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
-// agentNameCache caches extracted agent names to avoid repeated Python calls
+// agentNameCache caches extracted agent names to avoid repeated parsing
 // Uses sync.Map for thread-safe concurrent access when starting multiple agents
 var agentNameCache sync.Map
 
-// extractAgentName extracts the agent name from @mesh.agent(name="...") decorator
-// using Python's AST module. Falls back to the script filename if extraction fails.
-// Results are cached to avoid spawning multiple Python processes for the same file.
+// extractAgentName extracts the agent name from agent configuration.
+// For Python: extracts from @mesh.agent(name="...") decorator
+// For TypeScript: extracts from mesh(server, { name: "..." }) call
+// Falls back to the script filename if extraction fails.
+// Results are cached to avoid repeated file parsing.
 func extractAgentName(scriptPath string) string {
 	// Check cache first (thread-safe)
 	if cached, ok := agentNameCache.Load(scriptPath); ok {
 		return cached.(string)
 	}
 
-	// Fallback: use filename without .py extension
-	fallback := filepath.Base(scriptPath)
-	fallback = strings.TrimSuffix(fallback, ".py")
+	lang := detectAgentLanguage(scriptPath)
 
-	// If filename is "main", use parent directory name instead (#382)
-	// This helps pure FastAPI apps with @mesh.route that don't have @mesh.agent
-	if fallback == "main" {
+	var agentName string
+	switch lang {
+	case LanguageTypeScript:
+		agentName = extractTypeScriptAgentName(scriptPath)
+	case LanguagePython:
+		agentName = extractPythonAgentName(scriptPath)
+	}
+
+	if agentName != "" {
+		agentNameCache.Store(scriptPath, agentName)
+		return agentName
+	}
+
+	// Fallback: use filename without extension
+	fallback := getAgentNameFallback(scriptPath)
+	agentNameCache.Store(scriptPath, fallback)
+	return fallback
+}
+
+// getAgentNameFallback returns a fallback name based on the file path
+func getAgentNameFallback(scriptPath string) string {
+	fallback := filepath.Base(scriptPath)
+	// Remove common extensions
+	fallback = strings.TrimSuffix(fallback, ".py")
+	fallback = strings.TrimSuffix(fallback, ".ts")
+	fallback = strings.TrimSuffix(fallback, ".js")
+
+	// If filename is "main" or "index", use parent directory name instead (#382)
+	if fallback == "main" || fallback == "index" {
 		dir := filepath.Dir(scriptPath)
 		parentName := filepath.Base(dir)
 		// Handle edge case: if dir is "." use actual current directory name
@@ -1614,12 +1881,43 @@ func extractAgentName(scriptPath string) string {
 				parentName = filepath.Base(cwd)
 			}
 		}
+		// For TypeScript, check if we're in a src directory
+		if parentName == "src" {
+			grandparentDir := filepath.Dir(dir)
+			grandparentName := filepath.Base(grandparentDir)
+			if grandparentName != "" && grandparentName != "." {
+				parentName = grandparentName
+			}
+		}
 		// Only use parentName if it's meaningful
 		if parentName != "" && parentName != "." {
 			fallback = parentName
 		}
 	}
 
+	return fallback
+}
+
+// extractTypeScriptAgentName extracts the agent name from mesh(server, { name: "..." })
+func extractTypeScriptAgentName(scriptPath string) string {
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return ""
+	}
+
+	// Match mesh(server, { name: "..." }) or mesh(server, { name: '...' })
+	// This regex handles multi-line mesh() calls
+	meshPattern := regexp.MustCompile(`mesh\s*\(\s*\w+\s*,\s*\{[\s\S]*?name\s*:\s*["']([^"']+)["'][\s\S]*?\}\s*\)`)
+	matches := meshPattern.FindSubmatch(content)
+	if len(matches) >= 2 {
+		return string(matches[1])
+	}
+
+	return ""
+}
+
+// extractPythonAgentName extracts the agent name from @mesh.agent(name="...") decorator
+func extractPythonAgentName(scriptPath string) string {
 	// Python script to extract agent name using AST
 	// Handles all valid Python decorator syntaxes:
 	//   @mesh.agent(name="hello")
@@ -1645,26 +1943,17 @@ except:
 	// Find a Python executable - try .venv first, then system Python
 	pythonExec := findPythonForAST()
 	if pythonExec == "" {
-		agentNameCache.Store(scriptPath, fallback)
-		return fallback
+		return ""
 	}
 
 	// Run Python script to extract agent name
 	cmd := exec.Command(pythonExec, "-c", pythonScript, scriptPath)
 	output, err := cmd.Output()
 	if err != nil {
-		agentNameCache.Store(scriptPath, fallback)
-		return fallback
+		return ""
 	}
 
-	agentName := strings.TrimSpace(string(output))
-	if agentName == "" {
-		agentNameCache.Store(scriptPath, fallback)
-		return fallback
-	}
-
-	agentNameCache.Store(scriptPath, agentName)
-	return agentName
+	return strings.TrimSpace(string(output))
 }
 
 // findPythonForAST finds a Python executable for AST parsing.
