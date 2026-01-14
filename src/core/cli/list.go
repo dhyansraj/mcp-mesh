@@ -16,12 +16,14 @@ import (
 
 // Color constants for beautiful output
 const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorBlue   = "\033[34m"
-	colorGray   = "\033[37m"
+	colorReset   = "\033[0m"
+	colorRed     = "\033[31m"
+	colorGreen   = "\033[32m"
+	colorYellow  = "\033[33m"
+	colorBlue    = "\033[34m"
+	colorMagenta = "\033[35m"
+	colorCyan    = "\033[36m"
+	colorGray    = "\033[37m"
 )
 
 // Display constants
@@ -113,6 +115,7 @@ type EnhancedAgent struct {
 	Name                     string                   `json:"name"`
 	AgentType                string                   `json:"agent_type"`
 	Status                   string                   `json:"status"`
+	Runtime                  string                   `json:"runtime,omitempty"`
 	Endpoint                 string                   `json:"endpoint"`
 	Tools                    []ToolInfo               `json:"tools"`
 	Dependencies             []Dependency             `json:"dependencies"`
@@ -355,6 +358,7 @@ type AgentInfoAPI struct {
 	Name                 string      `json:"name"`
 	AgentType            string      `json:"agent_type"`
 	Status               string      `json:"status"`
+	Runtime              *string     `json:"runtime,omitempty"`
 	Endpoint             string      `json:"endpoint"`
 	Version              *string     `json:"version,omitempty"`
 	LastSeen             *time.Time  `json:"last_seen,omitempty"`
@@ -447,6 +451,10 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 			"endpoint":              agent.Endpoint,
 			"total_dependencies":    agent.TotalDependencies,
 			"dependencies_resolved": agent.DependenciesResolved,
+		}
+
+		if agent.Runtime != nil {
+			agentMap["runtime"] = *agent.Runtime
 		}
 
 		if agent.Version != nil {
@@ -580,6 +588,7 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 		Name:      getString(data, "name"),
 		AgentType: getString(data, "agent_type"),
 		Status:    getString(data, "status"),
+		Runtime:   getString(data, "runtime"),
 		Endpoint:  getString(data, "endpoint"),
 		Version:   getString(data, "version"),
 		Config:    getMapInterface(data, "config"),
@@ -957,15 +966,15 @@ func outputDockerComposeStyle(output ListOutput, verbose, noDeps, wide bool) err
 	}
 
 	// Calculate column widths for beautiful alignment
-	nameWidth, statusWidth, typeWidth, endpointWidth := calculateColumnWidths(output.Agents, wide)
+	nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth := calculateColumnWidths(output.Agents, wide)
 
 	// Print header
-	printTableHeader(nameWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
-	printTableSeparator(nameWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
+	printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
+	printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
 
 	// Print agent rows
 	for _, agent := range output.Agents {
-		printAgentRow(agent, nameWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
+		printAgentRow(agent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
 	}
 
 	// Show additional details if verbose
@@ -1019,8 +1028,9 @@ func formatAgentTypeDisplay(agentType string) string {
 }
 
 // calculateColumnWidths determines optimal column widths for table alignment
-func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, statusWidth, typeWidth, endpointWidth int) {
+func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int) {
 	nameWidth = 15 // minimum width
+	runtimeWidth = 12 // minimum width for "RUNTIME" header + padding (TypeScript = 10 chars)
 	statusWidth = 10
 	typeWidth = 5 // minimum width for "Type"
 	endpointWidth = 20
@@ -1028,6 +1038,11 @@ func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, status
 	for _, agent := range agents {
 		if len(agent.Name) > nameWidth {
 			nameWidth = len(agent.Name)
+		}
+		// Use display format for width calculation (e.g., "TypeScript" not "typescript")
+		runtimeDisplay := formatRuntimeDisplay(agent.Runtime)
+		if len(runtimeDisplay) > runtimeWidth-2 {
+			runtimeWidth = len(runtimeDisplay) + 2
 		}
 		if len(agent.Status) > statusWidth {
 			statusWidth = len(agent.Status)
@@ -1045,17 +1060,18 @@ func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, status
 
 	// Add padding
 	nameWidth += 2
+	runtimeWidth += 2
 	statusWidth += 2
 	typeWidth += 2
 	// Always add endpoint padding for standard view
 	endpointWidth += 2
 
-	return nameWidth, statusWidth, typeWidth, endpointWidth
+	return nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth
 }
 
 // printTableHeader prints the docker-compose-style table header
-func printTableHeader(nameWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
-	fmt.Printf("%-*s %-*s %-*s", nameWidth, "NAME", typeWidth, "TYPE", statusWidth, "STATUS")
+func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
+	fmt.Printf("%-*s %-*s %-*s %-*s", nameWidth, "NAME", runtimeWidth, "RUNTIME", typeWidth, "TYPE", statusWidth, "STATUS")
 
 	if !noDeps {
 		fmt.Printf(" %-8s", "DEPS")
@@ -1080,8 +1096,8 @@ func printTableHeader(nameWidth, statusWidth, typeWidth, endpointWidth int, noDe
 }
 
 // printTableSeparator prints a separator line
-func printTableSeparator(nameWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
-	totalWidth := nameWidth + statusWidth + typeWidth + 13 // base width including TYPE column
+func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
+	totalWidth := nameWidth + runtimeWidth + statusWidth + typeWidth + 13 // base width including TYPE and RUNTIME columns
 	if !noDeps {
 		totalWidth += 9
 	}
@@ -1100,17 +1116,26 @@ func printTableSeparator(nameWidth, statusWidth, typeWidth, endpointWidth int, n
 }
 
 // printAgentRow prints a single agent row in the table
-func printAgentRow(agent EnhancedAgent, nameWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
+func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	// Name column
 	fmt.Printf("%-*s", nameWidth, truncateStringForList(agent.Name, nameWidth-2))
+
+	// Runtime column with color (pad first, then colorize to avoid alignment issues)
+	runtime := agent.Runtime
+	if runtime == "" {
+		runtime = "-"
+	}
+	runtimeDisplay := formatRuntimeDisplay(runtime)
+	runtimePadded := fmt.Sprintf("%-*s", runtimeWidth, runtimeDisplay)
+	fmt.Printf(" %s%s%s", getRuntimeColor(runtime), runtimePadded, colorReset)
 
 	// Type column
 	agentTypeDisplay := formatAgentTypeDisplay(agent.AgentType)
 	fmt.Printf(" %-*s", typeWidth, agentTypeDisplay)
 
-	// Status column with color
-	statusColor := getStatusColor(agent.Status)
-	fmt.Printf(" %s%-*s%s", statusColor, statusWidth-1, agent.Status, colorReset)
+	// Status column with color (pad first, then colorize)
+	statusPadded := fmt.Sprintf("%-*s", statusWidth, agent.Status)
+	fmt.Printf(" %s%s%s", getStatusColor(agent.Status), statusPadded, colorReset)
 
 	// Dependencies column (if not hidden)
 	if !noDeps {
@@ -1160,6 +1185,30 @@ func getStatusColor(status string) string {
 		return colorRed
 	default:
 		return colorReset
+	}
+}
+
+// getRuntimeColor returns the color for a runtime type
+func getRuntimeColor(runtime string) string {
+	switch strings.ToLower(runtime) {
+	case "python":
+		return colorGreen
+	case "typescript":
+		return colorCyan
+	default:
+		return colorReset
+	}
+}
+
+// formatRuntimeDisplay returns the display name for a runtime
+func formatRuntimeDisplay(runtime string) string {
+	switch strings.ToLower(runtime) {
+	case "python":
+		return "Python"
+	case "typescript":
+		return "TypeScript"
+	default:
+		return runtime
 	}
 }
 
@@ -1403,6 +1452,9 @@ func outputAgentDetails(agents []EnhancedAgent, agentID string, jsonOutput bool)
 	// Basic information
 	fmt.Printf("%-20s: %s\n", "Name", targetAgent.Name)
 	fmt.Printf("%-20s: %s\n", "Type", formatAgentTypeDisplay(targetAgent.AgentType))
+	if targetAgent.Runtime != "" {
+		fmt.Printf("%-20s: %s%s%s\n", "Runtime", getRuntimeColor(targetAgent.Runtime), formatRuntimeDisplay(targetAgent.Runtime), colorReset)
+	}
 	fmt.Printf("%-20s: %s%s%s\n", "Status", getStatusColor(targetAgent.Status), targetAgent.Status, colorReset)
 	fmt.Printf("%-20s: %s\n", "Endpoint", targetAgent.Endpoint)
 	if targetAgent.Version != "" {
