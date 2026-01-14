@@ -4,14 +4,15 @@
 
 ## Overview
 
-MCP Mesh supports multiple deployment patterns from local development to production Kubernetes clusters. Use `meshctl scaffold` to generate deployment-ready files automatically.
+MCP Mesh supports multiple deployment patterns from local development to production Kubernetes clusters. Both Python and TypeScript agents can be deployed using the same patterns. Use `meshctl scaffold` to generate deployment-ready files automatically.
 
 ## Official Docker Images
 
-| Image                        | Description                                    |
-| ---------------------------- | ---------------------------------------------- |
-| `mcpmesh/registry:0.7`       | Registry service for agent discovery           |
-| `mcpmesh/python-runtime:0.7` | Python runtime with mcp-mesh SDK pre-installed |
+| Image                            | Description                                        |
+| -------------------------------- | -------------------------------------------------- |
+| `mcpmesh/registry:0.7`           | Registry service for agent discovery               |
+| `mcpmesh/python-runtime:0.7`     | Python runtime with mcp-mesh SDK pre-installed     |
+| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 

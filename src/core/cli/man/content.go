@@ -41,7 +41,7 @@ var guideRegistry = map[string]*Guide{
 		Name:        "decorators",
 		Aliases:     []string{"decorator"},
 		Title:       "MCP Mesh Decorators",
-		Description: "@mesh.tool, @mesh.llm, @mesh.llm_provider, @mesh.agent, @mesh.route",
+		Description: "Python decorators and TypeScript function wrappers for mesh services",
 	},
 	"dependency-injection": {
 		Name:        "dependency-injection",
@@ -93,9 +93,15 @@ var guideRegistry = map[string]*Guide{
 	},
 	"fastapi": {
 		Name:        "fastapi",
-		Aliases:     []string{"route", "routes", "backend"},
+		Aliases:     []string{"backend"},
 		Title:       "FastAPI Integration",
 		Description: "@mesh.route for FastAPI backends consuming mesh capabilities",
+	},
+	"express": {
+		Name:        "express",
+		Aliases:     []string{"route", "routes"},
+		Title:       "Express Integration",
+		Description: "mesh.route() for Express backends consuming mesh capabilities",
 	},
 	"scaffold": {
 		Name:        "scaffold",
@@ -119,7 +125,13 @@ var guideRegistry = map[string]*Guide{
 		Name:        "prerequisites",
 		Aliases:     []string{"prereq", "setup", "install"},
 		Title:       "Prerequisites",
-		Description: "System requirements, Python 3.11+, and environment setup",
+		Description: "System requirements for Python and TypeScript development",
+	},
+	"quickstart": {
+		Name:        "quickstart",
+		Aliases:     []string{"quick", "start", "hello"},
+		Title:       "Quick Start",
+		Description: "Get started with MCP Mesh in minutes",
 	},
 }
 
@@ -136,8 +148,30 @@ func init() {
 	}
 }
 
+// topicsWithTypeScriptVariants lists topics that have TypeScript variant pages.
+// These topics will show "See also: meshctl man <topic> --typescript" footer.
+var topicsWithTypeScriptVariants = map[string]bool{
+	"capabilities":         true,
+	"decorators":           true,
+	"dependency-injection": true,
+	"deployment":           true,
+	"health":               true,
+	"llm":                  true,
+	"proxies":              true,
+	"quickstart":           true,
+	"tags":                 true,
+	"testing":              true,
+}
+
 // GetGuide retrieves a guide by name or alias.
 func GetGuide(name string) (*Guide, string, error) {
+	return GetGuideWithVariant(name, false)
+}
+
+// GetGuideWithVariant retrieves a guide with optional TypeScript variant.
+// If typescript is true and a TypeScript variant exists, it returns that instead.
+// For Python pages with TypeScript variants, appends a footer note.
+func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 
 	canonicalName, ok := aliasMap[name]
@@ -147,13 +181,34 @@ func GetGuide(name string) (*Guide, string, error) {
 
 	guide := guideRegistry[canonicalName]
 
-	// Load content from embedded filesystem
-	content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", canonicalName))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+	// Determine which file to load
+	filename := canonicalName
+	if typescript && topicsWithTypeScriptVariants[canonicalName] {
+		filename = canonicalName + "_typescript"
 	}
 
-	return guide, string(content), nil
+	// Load content from embedded filesystem
+	content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", filename))
+	if err != nil {
+		if typescript {
+			// TypeScript variant not found, fall back to default
+			content, err = guideContent.ReadFile(fmt.Sprintf("content/%s.md", canonicalName))
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+			}
+		} else {
+			return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+		}
+	}
+
+	contentStr := string(content)
+
+	// For Python pages (not TypeScript), append footer if TypeScript variant exists
+	if !typescript && topicsWithTypeScriptVariants[canonicalName] {
+		contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
+	}
+
+	return guide, contentStr, nil
 }
 
 // ListGuides returns all available guides sorted by name.
@@ -161,9 +216,9 @@ func ListGuides() []*Guide {
 	guides := make([]*Guide, 0, len(guideRegistry))
 	// Return in a consistent order
 	order := []string{
-		"prerequisites", "overview", "capabilities", "tags", "decorators",
+		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
-		"proxies", "fastapi", "environment", "deployment", "observability",
+		"proxies", "fastapi", "express", "environment", "deployment", "observability",
 		"testing", "scaffold", "cli",
 	}
 	for _, name := range order {

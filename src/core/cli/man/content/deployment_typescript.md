@@ -1,0 +1,239 @@
+# Deployment Patterns (TypeScript)
+
+> Local, Docker, and Kubernetes deployment for TypeScript agents
+
+## Overview
+
+MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshctl scaffold --lang typescript` to generate deployment-ready files automatically.
+
+## Official Docker Images
+
+| Image                            | Description                                        |
+| -------------------------------- | -------------------------------------------------- |
+| `mcpmesh/registry:0.7`           | Registry service for agent discovery               |
+| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+
+## Local Development
+
+### Setup
+
+```bash
+# Create project
+meshctl scaffold --name my-agent --agent-type tool --lang typescript
+cd my-agent
+
+# Install dependencies
+npm install
+
+# Verify setup
+npx tsx src/index.ts --help
+```
+
+### Quick Start
+
+```bash
+# Terminal 1: Start registry
+meshctl start --registry-only --debug
+
+# Terminal 2: Start agent (uses npx tsx automatically)
+meshctl start src/index.ts --debug
+
+# Terminal 3: Monitor
+watch 'meshctl list'
+```
+
+### Multiple Agents
+
+```bash
+# Start multiple TypeScript agents
+meshctl start agent1/src/index.ts agent2/src/index.ts
+
+# Or with specific ports
+MCP_MESH_HTTP_PORT=9001 npx tsx agent1/src/index.ts &
+MCP_MESH_HTTP_PORT=9002 npx tsx agent2/src/index.ts &
+```
+
+### Development Workflow
+
+```bash
+# Watch mode: auto-restart on file changes
+meshctl start src/index.ts --watch --debug
+
+# Or run in background
+meshctl start src/index.ts --detach
+
+# Stop when done
+meshctl stop my-agent      # Stop specific agent
+meshctl stop               # Stop all
+```
+
+## Docker Deployment
+
+### Generated Dockerfile
+
+`meshctl scaffold --lang typescript` generates a production-ready Dockerfile:
+
+```dockerfile
+FROM mcpmesh/typescript-runtime:0.8
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# Copy source
+COPY . .
+
+EXPOSE 9000
+CMD ["npx", "tsx", "src/index.ts"]
+```
+
+### Generate Docker Compose
+
+```bash
+# Create multiple TypeScript agents
+meshctl scaffold --name agent1 --port 9000 --lang typescript
+meshctl scaffold --name agent2 --port 9001 --lang typescript
+
+# Generate docker-compose.yml for all agents
+meshctl scaffold --compose
+
+# With observability stack (Redis, Tempo, Grafana)
+meshctl scaffold --compose --observability
+```
+
+Generated `docker-compose.yml` includes:
+
+- PostgreSQL database for registry
+- Registry service (`mcpmesh/registry:0.7`)
+- TypeScript agents with `mcpmesh/typescript-runtime:0.8`
+- Health checks and dependency ordering
+- Optional: Redis, Tempo, Grafana (with `--observability`)
+
+### Running
+
+```bash
+docker compose up -d
+docker compose logs -f
+docker compose ps
+```
+
+## Kubernetes Deployment
+
+### Helm Charts
+
+For production Kubernetes deployment:
+
+```bash
+# Install core infrastructure
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.7.21 \
+  -n mcp-mesh --create-namespace
+
+# Deploy TypeScript agent
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.21 \
+  -n mcp-mesh \
+  -f my-agent/helm-values.yaml
+```
+
+### Generated helm-values.yaml
+
+```yaml
+# my-agent/helm-values.yaml (auto-generated for TypeScript)
+image:
+  repository: your-registry/my-agent
+  tag: latest
+
+agent:
+  name: my-agent
+  runtime: typescript
+
+mesh:
+  enabled: true
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+```
+
+### Deployment Workflow
+
+```bash
+# 1. Scaffold TypeScript agent
+meshctl scaffold --name my-agent --agent-type tool --lang typescript
+
+# 2. Build and push Docker image
+cd my-agent
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --push .
+
+# 3. Deploy with Helm
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.7.21 \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/my-agent \
+  --set image.tag=v1.0.0
+```
+
+## Port Strategy
+
+| Environment            | Port Strategy                | Why                                   |
+| ---------------------- | ---------------------------- | ------------------------------------- |
+| Local / docker-compose | Unique ports (9001, 9002...) | All containers share host network     |
+| Kubernetes             | All agents use 8080          | Each pod has its own IP, no conflicts |
+
+## Best Practices
+
+### Health Checks
+
+TypeScript agents automatically expose health endpoints:
+
+```typescript
+// Automatic health check at /health
+// Returns: { status: "healthy", agentId: "my-agent-abc123" }
+```
+
+### Graceful Shutdown
+
+TypeScript SDK handles SIGINT/SIGTERM automatically:
+
+```typescript
+// No code needed - SDK installs handlers automatically
+// Agents deregister cleanly on shutdown
+```
+
+### Logging
+
+```bash
+# Structured logging for production
+export MCP_MESH_LOG_LEVEL=INFO
+export MCP_MESH_DEBUG_MODE=false
+
+# Enable debug logging
+export DEBUG=mcpmesh:*
+```
+
+### Resource Limits
+
+```yaml
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+```
+
+## See Also
+
+- `meshctl scaffold --help` - Generate TypeScript agents
+- `meshctl man environment` - Configuration options
+- `meshctl man health` - Health monitoring
+- `meshctl man express` - Express API integration

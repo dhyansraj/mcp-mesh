@@ -2,9 +2,11 @@
 
 > Core decorators for building distributed agent systems
 
+**Note:** This page shows Python examples. TypeScript uses equivalent function-based APIs (`mesh()`, `mesh.llm()`, `mesh.route()`). See `meshctl man decorators --typescript` for TypeScript examples.
+
 ## Overview
 
-MCP Mesh provides five core decorators that transform regular Python functions and classes into mesh-aware distributed services. These decorators handle registration, dependency injection, and communication automatically.
+MCP Mesh provides core decorators (Python) and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.
 
 | Decorator            | Purpose                         |
 | -------------------- | ------------------------------- |

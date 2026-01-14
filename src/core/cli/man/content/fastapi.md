@@ -2,11 +2,13 @@
 
 > Use mesh dependency injection in FastAPI backends with @mesh.route
 
+**Note:** This page covers Python/FastAPI integration. For TypeScript/Express, use `mesh.route()` middleware. See `meshctl man fastapi --typescript` for Express examples.
+
 ## Overview
 
-MCP Mesh provides `@mesh.route` decorator for FastAPI applications that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
+MCP Mesh provides `@mesh.route` decorator for FastAPI applications (Python) and `mesh.route()` middleware for Express applications (TypeScript) that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
 
-**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
+**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI/Express app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
 
 ## Installation
 
@@ -182,6 +184,7 @@ The backend will:
 
 ## See Also
 
+- `meshctl man express` - TypeScript/Express equivalent
 - `meshctl man decorators` - All mesh decorators
 - `meshctl man dependency-injection` - How DI works
 - `meshctl man proxies` - Proxy configuration
