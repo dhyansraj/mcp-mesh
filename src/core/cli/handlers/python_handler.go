@@ -22,8 +22,8 @@ func (h *PythonHandler) CanHandle(path string) bool {
 
 // DetectInDirectory checks if the directory contains Python markers
 func (h *PythonHandler) DetectInDirectory(dir string) bool {
-	markers := []string{"pyproject.toml", "requirements.txt", ".venv", "setup.py"}
-	for _, marker := range markers {
+	// Use shared LanguageMarkers map
+	for _, marker := range LanguageMarkers["python"] {
 		if fileExists(filepath.Join(dir, marker)) {
 			return true
 		}

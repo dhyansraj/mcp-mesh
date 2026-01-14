@@ -11,10 +11,11 @@ var guideContent embed.FS
 
 // Guide represents a documentation guide topic.
 type Guide struct {
-	Name        string
-	Aliases     []string
-	Title       string
-	Description string
+	Name                 string
+	Aliases              []string
+	Title                string
+	Description          string
+	HasTypeScriptVariant bool // Whether a TypeScript variant page exists
 }
 
 // guideRegistry maps guide names to their metadata.
@@ -26,34 +27,39 @@ var guideRegistry = map[string]*Guide{
 		Description: "Core architecture, agent coordination, and design philosophy",
 	},
 	"capabilities": {
-		Name:        "capabilities",
-		Aliases:     []string{"caps"},
-		Title:       "Capabilities System",
-		Description: "Named services that agents provide",
+		Name:                 "capabilities",
+		Aliases:              []string{"caps"},
+		Title:                "Capabilities System",
+		Description:          "Named services that agents provide",
+		HasTypeScriptVariant: true,
 	},
 	"tags": {
-		Name:        "tags",
-		Aliases:     []string{"tag-matching"},
-		Title:       "Tag Matching System",
-		Description: "Tag system with +/- operators for smart service selection",
+		Name:                 "tags",
+		Aliases:              []string{"tag-matching"},
+		Title:                "Tag Matching System",
+		Description:          "Tag system with +/- operators for smart service selection",
+		HasTypeScriptVariant: true,
 	},
 	"decorators": {
-		Name:        "decorators",
-		Aliases:     []string{"decorator"},
-		Title:       "MCP Mesh Decorators",
-		Description: "Python decorators and TypeScript function wrappers for mesh services",
+		Name:                 "decorators",
+		Aliases:              []string{"decorator"},
+		Title:                "MCP Mesh Decorators",
+		Description:          "Python decorators and TypeScript function wrappers for mesh services",
+		HasTypeScriptVariant: true,
 	},
 	"dependency-injection": {
-		Name:        "dependency-injection",
-		Aliases:     []string{"di", "injection"},
-		Title:       "Dependency Injection",
-		Description: "How DI works, proxy creation, and automatic wiring",
+		Name:                 "dependency-injection",
+		Aliases:              []string{"di", "injection"},
+		Title:                "Dependency Injection",
+		Description:          "How DI works, proxy creation, and automatic wiring",
+		HasTypeScriptVariant: true,
 	},
 	"health": {
-		Name:        "health",
-		Aliases:     []string{"health-checks", "heartbeat"},
-		Title:       "Health Monitoring & Auto-Rewiring",
-		Description: "Heartbeat system, health checks, and automatic topology updates",
+		Name:                 "health",
+		Aliases:              []string{"health-checks", "heartbeat"},
+		Title:                "Health Monitoring & Auto-Rewiring",
+		Description:          "Heartbeat system, health checks, and automatic topology updates",
+		HasTypeScriptVariant: true,
 	},
 	"registry": {
 		Name:        "registry",
@@ -62,16 +68,18 @@ var guideRegistry = map[string]*Guide{
 		Description: "Registry role, agent registration, and dependency resolution",
 	},
 	"llm": {
-		Name:        "llm",
-		Aliases:     []string{"llm-integration"},
-		Title:       "LLM Integration",
-		Description: "LLM agents, @mesh.llm decorator, and tool filtering",
+		Name:                 "llm",
+		Aliases:              []string{"llm-integration"},
+		Title:                "LLM Integration",
+		Description:          "LLM agents, @mesh.llm decorator, and tool filtering",
+		HasTypeScriptVariant: true,
 	},
 	"proxies": {
-		Name:        "proxies",
-		Aliases:     []string{"proxy", "communication"},
-		Title:       "Proxy System & Communication",
-		Description: "Inter-agent communication, proxy types, and configuration",
+		Name:                 "proxies",
+		Aliases:              []string{"proxy", "communication"},
+		Title:                "Proxy System & Communication",
+		Description:          "Inter-agent communication, proxy types, and configuration",
+		HasTypeScriptVariant: true,
 	},
 	"environment": {
 		Name:        "environment",
@@ -80,16 +88,18 @@ var guideRegistry = map[string]*Guide{
 		Description: "Configuration via environment variables",
 	},
 	"deployment": {
-		Name:        "deployment",
-		Aliases:     []string{"deploy"},
-		Title:       "Deployment Patterns",
-		Description: "Local, Docker, and Kubernetes deployment",
+		Name:                 "deployment",
+		Aliases:              []string{"deploy"},
+		Title:                "Deployment Patterns",
+		Description:          "Local, Docker, and Kubernetes deployment",
+		HasTypeScriptVariant: true,
 	},
 	"testing": {
-		Name:        "testing",
-		Aliases:     []string{"curl", "mcp-api"},
-		Title:       "Testing MCP Agents",
-		Description: "Testing agents with curl, MCP JSON-RPC syntax",
+		Name:                 "testing",
+		Aliases:              []string{"curl", "mcp-api"},
+		Title:                "Testing MCP Agents",
+		Description:          "Testing agents with curl, MCP JSON-RPC syntax",
+		HasTypeScriptVariant: true,
 	},
 	"fastapi": {
 		Name:        "fastapi",
@@ -128,10 +138,11 @@ var guideRegistry = map[string]*Guide{
 		Description: "System requirements for Python and TypeScript development",
 	},
 	"quickstart": {
-		Name:        "quickstart",
-		Aliases:     []string{"quick", "start", "hello"},
-		Title:       "Quick Start",
-		Description: "Get started with MCP Mesh in minutes",
+		Name:                 "quickstart",
+		Aliases:              []string{"quick", "start", "hello"},
+		Title:                "Quick Start",
+		Description:          "Get started with MCP Mesh in minutes",
+		HasTypeScriptVariant: true,
 	},
 }
 
@@ -146,21 +157,6 @@ func init() {
 			aliasMap[alias] = name
 		}
 	}
-}
-
-// topicsWithTypeScriptVariants lists topics that have TypeScript variant pages.
-// These topics will show "See also: meshctl man <topic> --typescript" footer.
-var topicsWithTypeScriptVariants = map[string]bool{
-	"capabilities":         true,
-	"decorators":           true,
-	"dependency-injection": true,
-	"deployment":           true,
-	"health":               true,
-	"llm":                  true,
-	"proxies":              true,
-	"quickstart":           true,
-	"tags":                 true,
-	"testing":              true,
 }
 
 // GetGuide retrieves a guide by name or alias.
@@ -181,9 +177,9 @@ func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 
 	guide := guideRegistry[canonicalName]
 
-	// Determine which file to load
+	// Determine which file to load (use HasTypeScriptVariant from Guide struct)
 	filename := canonicalName
-	if typescript && topicsWithTypeScriptVariants[canonicalName] {
+	if typescript && guide.HasTypeScriptVariant {
 		filename = canonicalName + "_typescript"
 	}
 
@@ -204,7 +200,7 @@ func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 	contentStr := string(content)
 
 	// For Python pages (not TypeScript), append footer if TypeScript variant exists
-	if !typescript && topicsWithTypeScriptVariants[canonicalName] {
+	if !typescript && guide.HasTypeScriptVariant {
 		contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
 	}
 

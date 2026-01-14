@@ -17,34 +17,16 @@ import (
 	"syscall"
 	"time"
 
+	"mcp-mesh/src/core/cli/handlers"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-// AgentLanguage represents the programming language of an agent
-type AgentLanguage string
-
+// Language constants for agent detection
 const (
-	LanguagePython     AgentLanguage = "python"
-	LanguageTypeScript AgentLanguage = "typescript"
-	LanguageUnknown    AgentLanguage = "unknown"
+	langPython     = "python"
+	langTypeScript = "typescript"
 )
-
-// detectAgentLanguage determines the language based on file extension
-func detectAgentLanguage(agentPath string) AgentLanguage {
-	ext := filepath.Ext(agentPath)
-	switch ext {
-	case ".py":
-		return LanguagePython
-	case ".ts", ".js":
-		return LanguageTypeScript
-	case ".yaml", ".yml":
-		// YAML configs are Python-based for now
-		return LanguagePython
-	default:
-		return LanguageUnknown
-	}
-}
 
 // isAgentFile returns true if the file is a valid agent file (.py, .ts, .js, .yaml, .yml)
 func isAgentFile(path string) bool {
@@ -576,15 +558,16 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 		fmt.Println("Validating prerequisites...")
 	}
 
-	// Group agents by language
+	// Group agents by language using handlers package
 	pythonAgents := []string{}
 	tsAgents := []string{}
 	for _, agentPath := range agentPaths {
-		lang := detectAgentLanguage(agentPath)
+		handler := handlers.DetectLanguage(agentPath)
+		lang := handler.Language()
 		switch lang {
-		case LanguagePython:
+		case langPython:
 			pythonAgents = append(pythonAgents, agentPath)
-		case LanguageTypeScript:
+		case langTypeScript:
 			tsAgents = append(tsAgents, agentPath)
 		default:
 			return &PrerequisiteError{
@@ -1353,12 +1336,13 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 
 // Create agent command with language detection and environment setup
 func createAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
-	lang := detectAgentLanguage(agentPath)
+	handler := handlers.DetectLanguage(agentPath)
+	lang := handler.Language()
 
 	switch lang {
-	case LanguageTypeScript:
+	case langTypeScript:
 		return createTypeScriptAgentCommand(agentPath, env, workingDir, user, group, watch)
-	case LanguagePython:
+	case langPython:
 		return createPythonAgentCommand(agentPath, env, workingDir, user, group, watch)
 	default:
 		return nil, fmt.Errorf("unsupported file type: %s (use .py, .ts, or .js)", agentPath)
@@ -1842,13 +1826,14 @@ func extractAgentName(scriptPath string) string {
 		return cached.(string)
 	}
 
-	lang := detectAgentLanguage(scriptPath)
+	handler := handlers.DetectLanguage(scriptPath)
+	lang := handler.Language()
 
 	var agentName string
 	switch lang {
-	case LanguageTypeScript:
+	case langTypeScript:
 		agentName = extractTypeScriptAgentName(scriptPath)
-	case LanguagePython:
+	case langPython:
 		agentName = extractPythonAgentName(scriptPath)
 	}
 

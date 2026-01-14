@@ -25,8 +25,8 @@ func (h *TypeScriptHandler) CanHandle(path string) bool {
 
 // DetectInDirectory checks if the directory contains TypeScript/JavaScript markers
 func (h *TypeScriptHandler) DetectInDirectory(dir string) bool {
-	markers := []string{"package.json", "tsconfig.json", "node_modules"}
-	for _, marker := range markers {
+	// Use shared LanguageMarkers map
+	for _, marker := range LanguageMarkers["typescript"] {
 		if fileExists(filepath.Join(dir, marker)) {
 			return true
 		}
@@ -169,35 +169,37 @@ func (h *TypeScriptHandler) ValidatePrerequisites(dir string) error {
 
 	// Check for @mcpmesh/sdk in package.json
 	pkgJson := filepath.Join(dir, "package.json")
-	if fileExists(pkgJson) {
-		content, err := os.ReadFile(pkgJson)
-		if err == nil {
-			var pkg map[string]interface{}
-			if json.Unmarshal(content, &pkg) == nil {
-				// Check dependencies and devDependencies
-				deps, _ := pkg["dependencies"].(map[string]interface{})
-				devDeps, _ := pkg["devDependencies"].(map[string]interface{})
+	if !fileExists(pkgJson) {
+		return nil // No package.json to check
+	}
 
-				hasMeshSDK := false
-				if deps != nil {
-					if _, ok := deps["@mcpmesh/sdk"]; ok {
-						hasMeshSDK = true
-					}
-				}
-				if devDeps != nil {
-					if _, ok := devDeps["@mcpmesh/sdk"]; ok {
-						hasMeshSDK = true
-					}
-				}
+	content, err := os.ReadFile(pkgJson)
+	if err != nil {
+		return nil // Can't read, skip check
+	}
 
-				if !hasMeshSDK {
-					return fmt.Errorf("@mcpmesh/sdk not found in package.json. Run: npm install @mcpmesh/sdk")
-				}
-			}
-		}
+	var pkg map[string]interface{}
+	if err := json.Unmarshal(content, &pkg); err != nil {
+		return nil // Invalid JSON, skip check
+	}
+
+	if !h.hasMeshSDK(pkg) {
+		return fmt.Errorf("@mcpmesh/sdk not found in package.json. Run: npm install @mcpmesh/sdk")
 	}
 
 	return nil
+}
+
+// hasMeshSDK checks if @mcpmesh/sdk is in dependencies or devDependencies
+func (h *TypeScriptHandler) hasMeshSDK(pkg map[string]interface{}) bool {
+	for _, depType := range []string{"dependencies", "devDependencies"} {
+		if deps, ok := pkg[depType].(map[string]interface{}); ok {
+			if _, hasSdk := deps["@mcpmesh/sdk"]; hasSdk {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GetStartCommand returns the command to start a TypeScript/JavaScript agent

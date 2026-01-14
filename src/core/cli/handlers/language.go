@@ -9,6 +9,13 @@ import (
 	"strings"
 )
 
+// LanguageMarkers defines directory markers for detecting language.
+// Shared across DetectLanguage() and handler DetectInDirectory() methods.
+var LanguageMarkers = map[string][]string{
+	"python":     {"pyproject.toml", "requirements.txt", ".venv", "setup.py"},
+	"typescript": {"package.json", "tsconfig.json", "node_modules"},
+}
+
 // ScaffoldConfig contains configuration for generating agent files
 type ScaffoldConfig struct {
 	Name        string
@@ -94,20 +101,18 @@ func DetectLanguage(path string) LanguageHandler {
 		return &TypeScriptHandler{}
 	}
 
-	// 2. Directory detection - check for language markers
+	// 2. Directory detection - check for language markers (using shared map)
 	info, err := os.Stat(path)
 	if err == nil && info.IsDir() {
 		// Python markers
-		pythonMarkers := []string{"pyproject.toml", "requirements.txt", ".venv", "setup.py"}
-		for _, marker := range pythonMarkers {
+		for _, marker := range LanguageMarkers["python"] {
 			if fileExists(filepath.Join(path, marker)) {
 				return &PythonHandler{}
 			}
 		}
 
 		// TypeScript/JavaScript markers
-		tsMarkers := []string{"package.json", "tsconfig.json", "node_modules"}
-		for _, marker := range tsMarkers {
+		for _, marker := range LanguageMarkers["typescript"] {
 			if fileExists(filepath.Join(path, marker)) {
 				return &TypeScriptHandler{}
 			}
