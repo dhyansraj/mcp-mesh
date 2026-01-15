@@ -20,27 +20,27 @@ func init() {
 	agentFields := schema.Agent{}.Fields()
 	_ = agentFields
 	// agentDescNamespace is the schema descriptor for namespace field.
-	agentDescNamespace := agentFields[6].Descriptor()
+	agentDescNamespace := agentFields[7].Descriptor()
 	// agent.DefaultNamespace holds the default value on creation for the namespace field.
 	agent.DefaultNamespace = agentDescNamespace.Default.(string)
 	// agentDescTotalDependencies is the schema descriptor for total_dependencies field.
-	agentDescTotalDependencies := agentFields[8].Descriptor()
+	agentDescTotalDependencies := agentFields[9].Descriptor()
 	// agent.DefaultTotalDependencies holds the default value on creation for the total_dependencies field.
 	agent.DefaultTotalDependencies = agentDescTotalDependencies.Default.(int)
 	// agentDescDependenciesResolved is the schema descriptor for dependencies_resolved field.
-	agentDescDependenciesResolved := agentFields[9].Descriptor()
+	agentDescDependenciesResolved := agentFields[10].Descriptor()
 	// agent.DefaultDependenciesResolved holds the default value on creation for the dependencies_resolved field.
 	agent.DefaultDependenciesResolved = agentDescDependenciesResolved.Default.(int)
 	// agentDescCreatedAt is the schema descriptor for created_at field.
-	agentDescCreatedAt := agentFields[10].Descriptor()
+	agentDescCreatedAt := agentFields[11].Descriptor()
 	// agent.DefaultCreatedAt holds the default value on creation for the created_at field.
 	agent.DefaultCreatedAt = agentDescCreatedAt.Default.(func() time.Time)
 	// agentDescUpdatedAt is the schema descriptor for updated_at field.
-	agentDescUpdatedAt := agentFields[11].Descriptor()
+	agentDescUpdatedAt := agentFields[12].Descriptor()
 	// agent.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	agent.DefaultUpdatedAt = agentDescUpdatedAt.Default.(func() time.Time)
 	// agentDescLastFullRefresh is the schema descriptor for last_full_refresh field.
-	agentDescLastFullRefresh := agentFields[12].Descriptor()
+	agentDescLastFullRefresh := agentFields[13].Descriptor()
 	// agent.DefaultLastFullRefresh holds the default value on creation for the last_full_refresh field.
 	agent.DefaultLastFullRefresh = agentDescLastFullRefresh.Default.(func() time.Time)
 	capabilityFields := schema.Capability{}.Fields()

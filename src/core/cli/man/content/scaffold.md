@@ -2,6 +2,8 @@
 
 > Generate MCP Mesh agents from templates
 
+Scaffold supports both **Python** and **TypeScript** agents. Use `--lang typescript` for TypeScript.
+
 ## Input Modes
 
 | Mode        | Usage                                                | Best For         |
@@ -21,8 +23,11 @@
 ## Quick Examples
 
 ```bash
-# Basic tool agent
+# Basic tool agent (Python - default)
 meshctl scaffold --name my-agent --agent-type tool
+
+# Basic tool agent (TypeScript)
+meshctl scaffold --name my-agent --agent-type tool --lang typescript
 
 # LLM agent using Claude
 meshctl scaffold --name analyzer --agent-type llm-agent --llm-selector claude
@@ -66,6 +71,7 @@ meshctl scaffold --compose --project-name my-project
 | ------------------ | ---------------------------------------------------- |
 | `--name`           | Agent name (required for non-interactive)            |
 | `--agent-type`     | `tool`, `llm-agent`, or `llm-provider`               |
+| `--lang`           | Language: `python` (default) or `typescript`         |
 | `--dry-run`        | Preview generated code                               |
 | `--no-interactive` | Disable prompts (for scripting)                      |
 | `--output`         | Output directory (default: `.`)                      |

@@ -1,0 +1,106 @@
+#!/usr/bin/env npx tsx
+/**
+ * {{ .Name }} - MCP Mesh LLM Agent
+ *
+ * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM agent generated using meshctl scaffold.{{ end }}
+ */
+
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { z } from "zod";
+
+// FastMCP server instance
+const server = new FastMCP({
+  name: "{{ toPascalCase .Name }} Service",
+  version: "1.0.0",
+});
+
+// ===== CONTEXT SCHEMA =====
+
+const {{ toPascalCase .Name }}Context = z.object({
+  inputText: z.string().describe("Input text to process"),
+  // Add your context fields here
+  // userId: z.string().describe("User identifier"),
+  // metadata: z.record(z.any()).optional().describe("Additional metadata"),
+});
+
+{{ if eq .ResponseFormat "json" }}
+// ===== RESPONSE SCHEMA =====
+
+const {{ toPascalCase .Name }}Response = z.object({
+  result: z.string().describe("Processing result"),
+  // Add additional response fields as needed
+  // confidence: z.number().min(0).max(1).describe("Confidence score"),
+  // reasoning: z.string().describe("Explanation of the result"),
+});
+{{ end }}
+
+// ===== LLM TOOL =====
+
+/**
+ * LLM-powered tool configuration.
+ *
+ * This tool uses mesh.llm() to:
+ * - Discover LLM provider via mesh (capability: "llm")
+ * - Access tools matching the filter (e.g., tags: ["math"])
+ * - Run an agentic loop with up to {{ .MaxIterations }} iterations
+ * - Use a Handlebars template for the system prompt
+ */
+const llmTool = mesh.llm({
+  name: "{{ toSnakeCase .Name }}",
+  capability: "{{ toSnakeCase .Name }}",
+  description: "{{ if .Description }}{{ .Description }}{{ else }}Process input using LLM{{ end }}",
+  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else }}["llm"]{{ end }},
+
+  // LLM Configuration
+  provider: { capability: "llm", tags: {{ toJSON .ProviderTags }} },
+  maxIterations: {{ .MaxIterations }},
+  systemPrompt: "file://prompts/{{ .Name }}.hbs",
+  contextParam: "{{ .ContextParam }}",
+
+  // Tool filtering - which mesh tools the LLM can access
+  filter: {{ if .ToolFilter }}{{ toJSON .ToolFilter }}{{ else }}[]{{ end }},
+  filterMode: "{{ .FilterMode }}",
+
+  // Input/output schemas
+  parameters: z.object({
+    {{ .ContextParam }}: {{ toPascalCase .Name }}Context,
+  }),
+{{ if eq .ResponseFormat "json" }}
+  returns: {{ toPascalCase .Name }}Response,
+{{ end }}
+
+  // Handler receives injected LLM agent
+  execute: async ({ {{ .ContextParam }} }, { llm }) => {
+    return await llm("Process the input based on the context provided");
+  },
+});
+
+// Add LLM tool to server
+server.addTool(llmTool);
+
+// ===== AGENT CONFIGURATION =====
+
+/**
+ * Create the mesh agent.
+ *
+ * The mesh agent will:
+ * 1. Start the FastMCP HTTP server on port {{ .Port }}
+ * 2. Register capabilities with the mesh registry
+ * 3. Handle LLM tool resolution (llm_tools_updated events)
+ * 4. Handle LLM provider resolution (llm_provider_available events)
+ */
+const agent = mesh(server, {
+  name: "{{ .Name }}",
+  version: "1.0.0",
+  description: "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent{{ end }}",
+  port: {{ .Port }},
+});
+
+// No explicit start needed - auto-starts via process.nextTick()!
+// Mesh processor automatically handles:
+// - FastMCP server startup
+// - LLM provider discovery and injection
+// - Tool discovery and injection
+// - Service registration with mesh registry
+
+console.log("{{ .Name }} agent initialized. Waiting for mesh connections...");

@@ -34,6 +34,15 @@ const (
 	bgGray    = "\033[100m"
 )
 
+// Pre-compiled regex patterns for inline styling (avoids recompilation per line)
+var (
+	inlineCodeRe   = regexp.MustCompile("`([^`]+)`")
+	inlineBoldRe   = regexp.MustCompile(`\*\*([^*]+)\*\*|__([^_]+)__`)
+	inlineItalicRe = regexp.MustCompile(`\*([^*]+)\*|_([^_]+)_`)
+	inlineLinkRe   = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	numberedListRe = regexp.MustCompile(`^\d+\. `)
+)
+
 // Renderer handles guide content rendering.
 type Renderer struct {
 	Raw bool // Output raw markdown instead of styled
@@ -128,7 +137,7 @@ func (r *Renderer) renderStyled(guide *Guide, content string) string {
 		}
 
 		// Handle numbered lists
-		if matched, _ := regexp.MatchString(`^\d+\. `, line); matched {
+		if numberedListRe.MatchString(line) {
 			sb.WriteString(yellow + "  " + reset + line + "\n")
 			continue
 		}
@@ -148,22 +157,19 @@ func (r *Renderer) renderStyled(guide *Guide, content string) string {
 }
 
 // styleInline applies inline styling for bold, italic, code, etc.
+// Uses pre-compiled regex patterns for performance.
 func (r *Renderer) styleInline(line string) string {
 	// Inline code: `code`
-	codeRe := regexp.MustCompile("`([^`]+)`")
-	line = codeRe.ReplaceAllString(line, green+"$1"+reset)
+	line = inlineCodeRe.ReplaceAllString(line, green+"$1"+reset)
 
 	// Bold: **text** or __text__
-	boldRe := regexp.MustCompile(`\*\*([^*]+)\*\*|__([^_]+)__`)
-	line = boldRe.ReplaceAllString(line, bold+"$1$2"+reset)
+	line = inlineBoldRe.ReplaceAllString(line, bold+"$1$2"+reset)
 
 	// Italic: *text* or _text_
-	italicRe := regexp.MustCompile(`\*([^*]+)\*|_([^_]+)_`)
-	line = italicRe.ReplaceAllString(line, italic+"$1$2"+reset)
+	line = inlineItalicRe.ReplaceAllString(line, italic+"$1$2"+reset)
 
 	// Links: [text](url) - show as underlined text
-	linkRe := regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
-	line = linkRe.ReplaceAllString(line, underline+cyan+"$1"+reset)
+	line = inlineLinkRe.ReplaceAllString(line, underline+cyan+"$1"+reset)
 
 	return line
 }

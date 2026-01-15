@@ -2,6 +2,8 @@
 
 > Production-grade distributed mesh for intelligent agents
 
+**Supported Languages:** Python and TypeScript
+
 ## Why MCP Mesh?
 
 Traditional frameworks treat AI agents like dumb microservices—central orchestrators create them, control them, wire them together.
@@ -32,7 +34,7 @@ The central coordination service that:
 
 ### 2. Agents
 
-Python services decorated with `@mesh.agent` that:
+Python or TypeScript services using the MCP Mesh SDK that:
 
 - Register capabilities with the registry on startup
 - Send periodic heartbeats to maintain registration

@@ -11,8 +11,7 @@ import (
 )
 
 // supportedLanguages defines the languages supported for scaffold generation
-// Currently only Python is supported; TypeScript and Rust coming soon
-var supportedLanguages = []string{"python"}
+var supportedLanguages = []string{"python", "typescript"}
 
 // supportedAgentTypes defines the agent types that can be scaffolded
 var supportedAgentTypes = []string{"tool", "llm-agent", "llm-provider"}
@@ -130,10 +129,13 @@ func (ctx *ScaffoldContext) Validate() error {
 		return fmt.Errorf("invalid agent name: must start with a letter and contain only letters, numbers, hyphens, and underscores")
 	}
 
+	// Normalize language (ts -> typescript, py -> python)
+	ctx.Language = NormalizeLanguage(ctx.Language)
+
 	// Validate language
 	if !IsValidLanguage(ctx.Language) {
-		if ctx.Language == "typescript" || ctx.Language == "rust" {
-			return fmt.Errorf("language '%s' support coming soon; currently only 'python' is supported", ctx.Language)
+		if ctx.Language == "rust" {
+			return fmt.Errorf("language '%s' support coming soon; currently supported: %v", ctx.Language, supportedLanguages)
 		}
 		return fmt.Errorf("unsupported language: %s (supported: %v)", ctx.Language, supportedLanguages)
 	}
@@ -179,4 +181,19 @@ func IsValidAgentType(agentType string) bool {
 		}
 	}
 	return false
+}
+
+// NormalizeLanguage converts shorthand language names to canonical form.
+// "py" or "python" -> "python"
+// "ts" or "typescript" -> "typescript"
+// Empty string defaults to "python" for backwards compatibility.
+func NormalizeLanguage(lang string) string {
+	switch lang {
+	case "py", "python", "":
+		return "python"
+	case "ts", "typescript":
+		return "typescript"
+	default:
+		return lang
+	}
 }

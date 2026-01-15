@@ -263,6 +263,50 @@ impl AgentType {
     }
 }
 
+/// SDK runtime language type.
+#[cfg_attr(feature = "python", pyclass(eq, eq_int))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RuntimeType {
+    /// Python SDK (default for backwards compatibility)
+    #[default]
+    #[serde(rename = "python")]
+    Python = 0,
+    /// TypeScript SDK
+    #[serde(rename = "typescript")]
+    TypeScript = 1,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl RuntimeType {
+    /// String representation of the runtime type
+    fn __str__(&self) -> &'static str {
+        self.as_api_str()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RuntimeType.{:?}", self)
+    }
+}
+
+impl RuntimeType {
+    /// Convert to registry API string format.
+    pub fn as_api_str(&self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::TypeScript => "typescript",
+        }
+    }
+
+    /// Create from string (for Python/TypeScript bindings).
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "typescript" | "ts" => Self::TypeScript,
+            _ => Self::Python,
+        }
+    }
+}
+
 /// Complete specification for an MCP Mesh agent.
 ///
 /// This is the primary configuration passed from language SDKs to start the agent runtime.
@@ -294,6 +338,10 @@ pub struct AgentSpec {
     #[serde(default)]
     pub agent_type: AgentType,
 
+    /// SDK runtime type (python or typescript)
+    #[serde(default)]
+    pub runtime: RuntimeType,
+
     /// Tools/capabilities provided by this agent
     pub tools: Vec<ToolSpec>,
 
@@ -317,6 +365,7 @@ impl AgentSpec {
         http_host="localhost".to_string(),
         namespace="default".to_string(),
         agent_type=None,
+        runtime=None,
         tools=None,
         llm_agents=None,
         heartbeat_interval=5
@@ -331,6 +380,7 @@ impl AgentSpec {
         http_host: String,
         namespace: String,
         agent_type: Option<String>,
+        runtime: Option<String>,
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
@@ -344,6 +394,7 @@ impl AgentSpec {
             http_host,
             namespace,
             agent_type,
+            runtime,
             tools,
             llm_agents,
             heartbeat_interval,
@@ -373,6 +424,7 @@ impl AgentSpec {
         http_host: String,
         namespace: String,
         agent_type: Option<String>,
+        runtime: Option<String>,
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
@@ -387,6 +439,9 @@ impl AgentSpec {
             namespace,
             agent_type: agent_type
                 .map(|s| AgentType::from_str(&s))
+                .unwrap_or_default(),
+            runtime: runtime
+                .map(|s| RuntimeType::from_str(&s))
                 .unwrap_or_default(),
             tools: tools.unwrap_or_default(),
             llm_agents: llm_agents.unwrap_or_default(),
@@ -476,6 +531,7 @@ mod tests {
             "localhost".to_string(),
             "default".to_string(),
             None, // agent_type defaults to mcp_agent
+            None, // runtime defaults to python
             None,
             None,
             5,
@@ -485,6 +541,7 @@ mod tests {
         assert_eq!(spec.agent_id(), "test-agent");
         assert!(spec.tools.is_empty());
         assert_eq!(spec.agent_type, AgentType::McpAgent);
+        assert_eq!(spec.runtime, RuntimeType::Python);
     }
 
     #[test]
@@ -498,6 +555,7 @@ mod tests {
             "localhost".to_string(),
             "default".to_string(),
             Some("api".to_string()), // API agent type
+            Some("typescript".to_string()), // TypeScript runtime
             None,
             None,
             5,
@@ -505,6 +563,8 @@ mod tests {
 
         assert_eq!(spec.agent_type, AgentType::Api);
         assert_eq!(spec.agent_type.as_api_str(), "api");
+        assert_eq!(spec.runtime, RuntimeType::TypeScript);
+        assert_eq!(spec.runtime.as_api_str(), "typescript");
     }
 
     #[test]
@@ -518,6 +578,7 @@ mod tests {
             "localhost".to_string(),
             "default".to_string(),
             None,
+            None, // runtime
             None,
             None,
             5,

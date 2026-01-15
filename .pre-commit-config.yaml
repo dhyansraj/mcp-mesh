@@ -116,8 +116,7 @@ repos:
           - >-
             echo "Checking if generated code is up to date...";
             make generate > /dev/null 2>&1;
-            if ! git diff --exit-code src/core/registry/generated/
-            src/runtime/python/_mcp_mesh/generated/ > /dev/null 2>&1;
+            if ! git diff --exit-code src/core/registry/generated/ > /dev/null 2>&1;
             then echo "Generated code is out of date!";
             echo "Run: make generate"; exit 1;
             fi; echo "Generated code is up to date"
@@ -138,7 +137,7 @@ repos:
             echo "To make changes:";
             echo "1. Update api/mcp-mesh-registry.openapi.yaml";
             echo "2. Run: make generate";
-            echo "3. Implement business logic in handlers_impl.go";
+            echo "3. Implement business logic in ent_handlers.go";
             exit 1
         language: system
         files: ^src/core/registry/generated/.*$

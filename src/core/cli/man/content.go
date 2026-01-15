@@ -11,10 +11,11 @@ var guideContent embed.FS
 
 // Guide represents a documentation guide topic.
 type Guide struct {
-	Name        string
-	Aliases     []string
-	Title       string
-	Description string
+	Name                 string
+	Aliases              []string
+	Title                string
+	Description          string
+	HasTypeScriptVariant bool // Whether a TypeScript variant page exists
 }
 
 // guideRegistry maps guide names to their metadata.
@@ -26,34 +27,39 @@ var guideRegistry = map[string]*Guide{
 		Description: "Core architecture, agent coordination, and design philosophy",
 	},
 	"capabilities": {
-		Name:        "capabilities",
-		Aliases:     []string{"caps"},
-		Title:       "Capabilities System",
-		Description: "Named services that agents provide",
+		Name:                 "capabilities",
+		Aliases:              []string{"caps"},
+		Title:                "Capabilities System",
+		Description:          "Named services that agents provide",
+		HasTypeScriptVariant: true,
 	},
 	"tags": {
-		Name:        "tags",
-		Aliases:     []string{"tag-matching"},
-		Title:       "Tag Matching System",
-		Description: "Tag system with +/- operators for smart service selection",
+		Name:                 "tags",
+		Aliases:              []string{"tag-matching"},
+		Title:                "Tag Matching System",
+		Description:          "Tag system with +/- operators for smart service selection",
+		HasTypeScriptVariant: true,
 	},
 	"decorators": {
-		Name:        "decorators",
-		Aliases:     []string{"decorator"},
-		Title:       "MCP Mesh Decorators",
-		Description: "@mesh.tool, @mesh.llm, @mesh.llm_provider, @mesh.agent, @mesh.route",
+		Name:                 "decorators",
+		Aliases:              []string{"decorator"},
+		Title:                "MCP Mesh Decorators",
+		Description:          "Python decorators and TypeScript function wrappers for mesh services",
+		HasTypeScriptVariant: true,
 	},
 	"dependency-injection": {
-		Name:        "dependency-injection",
-		Aliases:     []string{"di", "injection"},
-		Title:       "Dependency Injection",
-		Description: "How DI works, proxy creation, and automatic wiring",
+		Name:                 "dependency-injection",
+		Aliases:              []string{"di", "injection"},
+		Title:                "Dependency Injection",
+		Description:          "How DI works, proxy creation, and automatic wiring",
+		HasTypeScriptVariant: true,
 	},
 	"health": {
-		Name:        "health",
-		Aliases:     []string{"health-checks", "heartbeat"},
-		Title:       "Health Monitoring & Auto-Rewiring",
-		Description: "Heartbeat system, health checks, and automatic topology updates",
+		Name:                 "health",
+		Aliases:              []string{"health-checks", "heartbeat"},
+		Title:                "Health Monitoring & Auto-Rewiring",
+		Description:          "Heartbeat system, health checks, and automatic topology updates",
+		HasTypeScriptVariant: true,
 	},
 	"registry": {
 		Name:        "registry",
@@ -62,16 +68,18 @@ var guideRegistry = map[string]*Guide{
 		Description: "Registry role, agent registration, and dependency resolution",
 	},
 	"llm": {
-		Name:        "llm",
-		Aliases:     []string{"llm-integration"},
-		Title:       "LLM Integration",
-		Description: "LLM agents, @mesh.llm decorator, and tool filtering",
+		Name:                 "llm",
+		Aliases:              []string{"llm-integration"},
+		Title:                "LLM Integration",
+		Description:          "LLM agents, @mesh.llm decorator, and tool filtering",
+		HasTypeScriptVariant: true,
 	},
 	"proxies": {
-		Name:        "proxies",
-		Aliases:     []string{"proxy", "communication"},
-		Title:       "Proxy System & Communication",
-		Description: "Inter-agent communication, proxy types, and configuration",
+		Name:                 "proxies",
+		Aliases:              []string{"proxy", "communication"},
+		Title:                "Proxy System & Communication",
+		Description:          "Inter-agent communication, proxy types, and configuration",
+		HasTypeScriptVariant: true,
 	},
 	"environment": {
 		Name:        "environment",
@@ -80,22 +88,30 @@ var guideRegistry = map[string]*Guide{
 		Description: "Configuration via environment variables",
 	},
 	"deployment": {
-		Name:        "deployment",
-		Aliases:     []string{"deploy"},
-		Title:       "Deployment Patterns",
-		Description: "Local, Docker, and Kubernetes deployment",
+		Name:                 "deployment",
+		Aliases:              []string{"deploy"},
+		Title:                "Deployment Patterns",
+		Description:          "Local, Docker, and Kubernetes deployment",
+		HasTypeScriptVariant: true,
 	},
 	"testing": {
-		Name:        "testing",
-		Aliases:     []string{"curl", "mcp-api"},
-		Title:       "Testing MCP Agents",
-		Description: "Testing agents with curl, MCP JSON-RPC syntax",
+		Name:                 "testing",
+		Aliases:              []string{"curl", "mcp-api"},
+		Title:                "Testing MCP Agents",
+		Description:          "Testing agents with curl, MCP JSON-RPC syntax",
+		HasTypeScriptVariant: true,
 	},
 	"fastapi": {
 		Name:        "fastapi",
-		Aliases:     []string{"route", "routes", "backend"},
+		Aliases:     []string{"backend"},
 		Title:       "FastAPI Integration",
 		Description: "@mesh.route for FastAPI backends consuming mesh capabilities",
+	},
+	"express": {
+		Name:        "express",
+		Aliases:     []string{"route", "routes"},
+		Title:       "Express Integration",
+		Description: "mesh.route() for Express backends consuming mesh capabilities",
 	},
 	"scaffold": {
 		Name:        "scaffold",
@@ -119,7 +135,14 @@ var guideRegistry = map[string]*Guide{
 		Name:        "prerequisites",
 		Aliases:     []string{"prereq", "setup", "install"},
 		Title:       "Prerequisites",
-		Description: "System requirements, Python 3.11+, and environment setup",
+		Description: "System requirements for Python and TypeScript development",
+	},
+	"quickstart": {
+		Name:                 "quickstart",
+		Aliases:              []string{"quick", "start", "hello"},
+		Title:                "Quick Start",
+		Description:          "Get started with MCP Mesh in minutes",
+		HasTypeScriptVariant: true,
 	},
 }
 
@@ -138,6 +161,13 @@ func init() {
 
 // GetGuide retrieves a guide by name or alias.
 func GetGuide(name string) (*Guide, string, error) {
+	return GetGuideWithVariant(name, false)
+}
+
+// GetGuideWithVariant retrieves a guide with optional TypeScript variant.
+// If typescript is true and a TypeScript variant exists, it returns that instead.
+// For Python pages with TypeScript variants, appends a footer note.
+func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 
 	canonicalName, ok := aliasMap[name]
@@ -147,13 +177,34 @@ func GetGuide(name string) (*Guide, string, error) {
 
 	guide := guideRegistry[canonicalName]
 
-	// Load content from embedded filesystem
-	content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", canonicalName))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+	// Determine which file to load (use HasTypeScriptVariant from Guide struct)
+	filename := canonicalName
+	if typescript && guide.HasTypeScriptVariant {
+		filename = canonicalName + "_typescript"
 	}
 
-	return guide, string(content), nil
+	// Load content from embedded filesystem
+	content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", filename))
+	if err != nil {
+		if typescript {
+			// TypeScript variant not found, fall back to default
+			content, err = guideContent.ReadFile(fmt.Sprintf("content/%s.md", canonicalName))
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+			}
+		} else {
+			return nil, "", fmt.Errorf("failed to load guide content: %w", err)
+		}
+	}
+
+	contentStr := string(content)
+
+	// For Python pages (not TypeScript), append footer if TypeScript variant exists
+	if !typescript && guide.HasTypeScriptVariant {
+		contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
+	}
+
+	return guide, contentStr, nil
 }
 
 // ListGuides returns all available guides sorted by name.
@@ -161,9 +212,9 @@ func ListGuides() []*Guide {
 	guides := make([]*Guide, 0, len(guideRegistry))
 	// Return in a consistent order
 	order := []string{
-		"prerequisites", "overview", "capabilities", "tags", "decorators",
+		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
-		"proxies", "fastapi", "environment", "deployment", "observability",
+		"proxies", "fastapi", "express", "environment", "deployment", "observability",
 		"testing", "scaffold", "cli",
 	}
 	for _, name := range order {

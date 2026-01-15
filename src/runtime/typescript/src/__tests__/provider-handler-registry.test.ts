@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { ProviderHandler, VendorCapabilities, OutputMode, OutputSchema, ToolSchema, PreparedRequest } from "../provider-handlers/provider-handler.js";
+import type { ProviderHandler, VendorCapabilities, OutputMode, PreparedRequest } from "../provider-handlers/provider-handler.js";
 import { ProviderHandlerRegistry } from "../provider-handlers/provider-handler-registry.js";
 import { ClaudeHandler } from "../provider-handlers/claude-handler.js";
 
@@ -51,7 +51,7 @@ describe("ProviderHandlerRegistry", () => {
     });
 
     it("should return GenericHandler for undefined vendor", () => {
-      const handler = ProviderHandlerRegistry.getHandler(undefined);
+      const handler = ProviderHandlerRegistry.getHandler(undefined as unknown as string | null);
 
       expect(handler).toBeDefined();
       expect(handler.constructor.name).toBe("GenericHandler");

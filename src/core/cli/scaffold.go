@@ -69,8 +69,9 @@ Documentation:
 
 Infrastructure:
   Docker Images:
-    mcpmesh/registry:0.7        - Registry service
-    mcpmesh/python-runtime:0.7  - Python agent runtime (has mcp-mesh SDK)
+    mcpmesh/registry:0.8            - Registry service
+    mcpmesh/python-runtime:0.8      - Python agent runtime (has mcp-mesh SDK)
+    mcpmesh/typescript-runtime:0.8  - TypeScript agent runtime (has @mcpmesh/sdk)
 
   Helm Charts (for Kubernetes - OCI registry, no helm repo add needed):
     oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core   - Registry + PostgreSQL + observability
@@ -81,7 +82,7 @@ Infrastructure:
 	// Common flags
 	cmd.Flags().String("mode", "static", "Generation mode: static, llm")
 	cmd.Flags().StringP("name", "n", "", "Agent name (required unless interactive or config)")
-	cmd.Flags().StringP("lang", "l", "python", "Language: python (typescript, rust coming soon)")
+	cmd.Flags().StringP("lang", "l", "python", "Language: python, typescript (or py, ts)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
 	cmd.Flags().IntP("port", "p", 9000, "HTTP port for the agent")
 	cmd.Flags().String("description", "", "Agent description")

@@ -299,6 +299,12 @@ components:
           default: "mcp_agent"
           example: "mcp_agent"
           description: Type of service - mcp_agent provides capabilities, api consumes them
+        runtime:
+          type: string
+          enum: [python, typescript]
+          default: "python"
+          example: "python"
+          description: SDK runtime language (python or typescript)
         name:
           type: string
           minLength: 1
@@ -1138,6 +1144,11 @@ components:
           enum: [mcp_agent, api]
           example: "mcp_agent"
           description: Type of service - mcp_agent provides capabilities, api consumes them
+        runtime:
+          type: string
+          enum: [python, typescript]
+          example: "python"
+          description: SDK runtime language (python or typescript)
         status:
           type: string
           enum: [healthy, degraded, unhealthy, offline]

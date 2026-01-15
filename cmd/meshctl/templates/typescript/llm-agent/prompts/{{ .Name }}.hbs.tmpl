@@ -1,0 +1,31 @@
+{{ "{{!-- Handlebars prompt template for " }}{{ .Name }}{{ " --}}" }}
+{{ "{{!-- Context fields are available directly (e.g., inputText, not ctx.inputText) --}}" }}
+
+You are {{ toPascalCase .Name }}, an AI assistant.
+
+{{ if .Description }}{{ .Description }}{{ end }}
+
+## Instructions
+
+Analyze the following input and provide a {{ if eq .ResponseFormat "json" }}structured JSON{{ else }}text{{ end }} response.
+
+## Input
+
+{{ "{{" }}inputText{{ "}}" }}
+
+{{ if eq .ResponseFormat "json" }}
+## Response Format
+
+Respond with valid JSON matching this schema:
+```json
+{
+    "result": "your analysis result",
+    "confidence": 0.95,
+    "reasoning": "explanation of your analysis"
+}
+```
+{{ else }}
+## Response
+
+Provide a clear and concise response.
+{{ end }}

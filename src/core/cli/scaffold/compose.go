@@ -14,12 +14,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DetectedAgent represents an agent discovered from main.py
+// DetectedAgent represents an agent discovered from main.py or src/index.ts
 type DetectedAgent struct {
-	Name     string // From @mesh.agent(name="...")
-	Port     int    // From http_port=...
-	Dir      string // Directory containing main.py (relative to scan root)
-	MainFile string // Full path to main.py
+	Name     string // From @mesh.agent(name="...") or mesh(server, {name: "..."})
+	Port     int    // From http_port=... or port: ...
+	Dir      string // Directory containing main.py or src/index.ts (relative to scan root)
+	MainFile string // Full path to main.py or src/index.ts
+	Language string // "python" or "typescript"
 }
 
 // ComposeConfig holds configuration for docker-compose generation
@@ -38,7 +39,9 @@ type GenerateResult struct {
 	SkippedAgents []string // Names of agents that already existed (preserved)
 }
 
-// ScanForAgents walks the directory tree looking for main.py files with @mesh.agent decorator
+// ScanForAgents walks the directory tree looking for Python and TypeScript agent files
+// Python: main.py with @mesh.agent decorator
+// TypeScript: src/index.ts with mesh(server, {...}) call
 func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	var agents []DetectedAgent
 
@@ -66,7 +69,7 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 			}
 		}
 
-		// Look for main.py files
+		// Look for Python agents (main.py with @mesh.agent)
 		if d.Name() == "main.py" {
 			content, err := os.ReadFile(path)
 			if err != nil {
@@ -82,6 +85,31 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 			relDir, err := filepath.Rel(absDir, filepath.Dir(path))
 			if err != nil {
 				relDir = filepath.Dir(path)
+			}
+			agent.Dir = relDir
+			agent.MainFile = path
+
+			agents = append(agents, *agent)
+		}
+
+		// Look for TypeScript agents (src/index.ts with mesh(...))
+		if d.Name() == "index.ts" && strings.HasSuffix(filepath.Dir(path), "src") {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil // Skip unreadable files
+			}
+
+			agent, err := parseTypeScriptAgent(string(content))
+			if err != nil || agent == nil {
+				return nil // Skip files without mesh() call
+			}
+
+			// For TypeScript, the agent dir is parent of 'src' (where package.json lives)
+			srcDir := filepath.Dir(path)
+			agentDir := filepath.Dir(srcDir)
+			relDir, err := filepath.Rel(absDir, agentDir)
+			if err != nil {
+				relDir = agentDir
 			}
 			agent.Dir = relDir
 			agent.MainFile = path
@@ -124,8 +152,41 @@ func parseAgentDecorator(content string) (*DetectedAgent, error) {
 	}
 
 	return &DetectedAgent{
-		Name: nameMatch[1],
-		Port: port,
+		Name:     nameMatch[1],
+		Port:     port,
+		Language: "python",
+	}, nil
+}
+
+// parseTypeScriptAgent extracts name and port from TypeScript mesh() call
+func parseTypeScriptAgent(content string) (*DetectedAgent, error) {
+	// Pattern to match mesh(server, { ... }) call (handles multiline)
+	// TypeScript SDK uses: mesh(server, { name: "...", port: ... })
+	meshPattern := regexp.MustCompile(`mesh\s*\(\s*\w+\s*,\s*\{[\s\S]*?\}\s*\)`)
+	match := meshPattern.FindString(content)
+	if match == "" {
+		return nil, nil // Not an agent file
+	}
+
+	// Extract name - handles both single and double quotes
+	namePattern := regexp.MustCompile(`name\s*:\s*["']([^"']+)["']`)
+	nameMatch := namePattern.FindStringSubmatch(match)
+	if len(nameMatch) < 2 {
+		return nil, fmt.Errorf("could not extract agent name from mesh() call")
+	}
+
+	// Extract port (optional, default 9000)
+	portPattern := regexp.MustCompile(`port\s*:\s*(\d+)`)
+	portMatch := portPattern.FindStringSubmatch(match)
+	port := 9000 // Default
+	if len(portMatch) >= 2 {
+		port, _ = strconv.Atoi(portMatch[1])
+	}
+
+	return &DetectedAgent{
+		Name:     nameMatch[1],
+		Port:     port,
+		Language: "typescript",
 	}, nil
 }
 
@@ -725,17 +786,22 @@ func addVolumesForAgents(doc *yaml.Node, agents []DetectedAgent) {
 		}
 	}
 
-	// Add new agent volumes
+	// Add new agent volumes (language-specific)
 	for _, agent := range agents {
-		volumeName := agent.Name + "-packages"
+		var volumeName string
+		if agent.Language == "typescript" {
+			volumeName = agent.Name + "-node_modules"
+		} else {
+			volumeName = agent.Name + "-packages"
+		}
 		if !existingVolumes[volumeName] {
 			keyNode := &yaml.Node{
 				Kind:  yaml.ScalarNode,
 				Value: volumeName,
 			}
 			valueNode := &yaml.Node{
-				Kind:  yaml.MappingNode,
-				Tag:   "!!map",
+				Kind:    yaml.MappingNode,
+				Tag:     "!!map",
 				Content: []*yaml.Node{},
 			}
 			volumesNode.Content = append(volumesNode.Content, keyNode, valueNode)
@@ -803,11 +869,12 @@ func generateAgentServicesYAML(agents []DetectedAgent, config *ComposeConfig) (s
 
 // agentServicesTemplate generates only the agent service definitions
 const agentServicesTemplate = `{{- range .Agents }}
-# Agent: {{ .Name }}
+{{- if eq .Language "python" }}
+# Agent: {{ .Name }} (Python)
 # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
 #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{ .Name }}:
-  image: mcpmesh/python-runtime:0.7
+  image: mcpmesh/python-runtime:0.8
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -847,6 +914,51 @@ const agentServicesTemplate = `{{- range .Agents }}
     start_period: 30s
   networks:
     - {{ $.NetworkName }}
+{{- else if eq .Language "typescript" }}
+# Agent: {{ .Name }} (TypeScript)
+# NOTE: In dev mode, npm install runs on startup and source is mounted.
+#       In production (Dockerfile), dependencies are pre-installed in the image.
+{{ .Name }}:
+  image: mcpmesh/typescript-runtime:0.8
+  container_name: {{ $.ProjectName }}-{{ .Name }}
+  hostname: {{ .Name }}
+  user: root
+  ports:
+    - "{{ .Port }}:{{ .Port }}"
+  volumes:
+    - ./{{ .Dir }}:/app:ro
+    - {{ .Name }}-node_modules:/app/node_modules
+  working_dir: /app
+  entrypoint: ["sh", "-c"]
+  command: ["chown -R mcp-mesh:mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
+  environment:
+    NODE_ENV: development
+    MCP_MESH_REGISTRY_URL: http://registry:8000
+    AGENT_NAME: {{ .Name }}
+    AGENT_PORT: "{{ .Port }}"
+    HOST: "0.0.0.0"
+    MCP_MESH_HTTP_HOST: {{ .Name }}
+    MCP_MESH_HTTP_PORT: "{{ .Port }}"
+    POD_IP: {{ .Name }}
+    MCP_MESH_HTTP_ENABLED: "true"
+    MCP_MESH_AGENT_NAME: {{ .Name }}
+    MCP_MESH_ENABLED: "true"
+    MCP_MESH_AUTO_RUN: "true"
+    MCP_MESH_LOG_LEVEL: DEBUG
+    MCP_MESH_DEBUG_MODE: "true"
+{{- if $.Observability }}
+    REDIS_URL: redis://redis:6379
+    MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+{{- end }}
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:{{ .Port }}/health"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 45s
+  networks:
+    - {{ $.NetworkName }}
+{{- end }}
 {{- end }}`
 
 // generateTempoConfig creates the tempo.yaml configuration file
@@ -1394,7 +1506,7 @@ services:
       - {{ .NetworkName }}
 
   registry:
-    image: mcpmesh/registry:0.7
+    image: mcpmesh/registry:0.8
     container_name: {{ .ProjectName }}-registry
     hostname: registry
     ports:
@@ -1496,12 +1608,14 @@ services:
 {{- if .Agents }}
 
   # ===== AGENTS =====
+{{- range .Agents }}
+{{- if eq .Language "python" }}
+
+  # Python Agent: {{ .Name }}
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
-{{- range .Agents }}
-
   {{ .Name }}:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -1541,6 +1655,52 @@ services:
       start_period: 30s
     networks:
       - {{ $.NetworkName }}
+{{- else if eq .Language "typescript" }}
+
+  # TypeScript Agent: {{ .Name }}
+  # NOTE: In dev mode, npm install runs on startup and source is mounted.
+  #       In production (Dockerfile), dependencies are pre-installed in the image.
+  {{ .Name }}:
+    image: mcpmesh/typescript-runtime:0.8
+    container_name: {{ $.ProjectName }}-{{ .Name }}
+    hostname: {{ .Name }}
+    user: root
+    ports:
+      - "{{ .Port }}:{{ .Port }}"
+    volumes:
+      - ./{{ .Dir }}:/app:ro
+      - {{ .Name }}-node_modules:/app/node_modules
+    working_dir: /app
+    entrypoint: ["sh", "-c"]
+    command: ["chown -R mcp-mesh:mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
+    environment:
+      NODE_ENV: development
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: {{ .Name }}
+      AGENT_PORT: "{{ .Port }}"
+      HOST: "0.0.0.0"
+      MCP_MESH_HTTP_HOST: {{ .Name }}
+      MCP_MESH_HTTP_PORT: "{{ .Port }}"
+      POD_IP: {{ .Name }}
+      MCP_MESH_HTTP_ENABLED: "true"
+      MCP_MESH_AGENT_NAME: {{ .Name }}
+      MCP_MESH_ENABLED: "true"
+      MCP_MESH_AUTO_RUN: "true"
+      MCP_MESH_LOG_LEVEL: DEBUG
+      MCP_MESH_DEBUG_MODE: "true"
+{{- if $.Observability }}
+      REDIS_URL: redis://redis:6379
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+{{- end }}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:{{ .Port }}/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 45s
+    networks:
+      - {{ $.NetworkName }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if or .Agents .Observability }}
@@ -1551,7 +1711,11 @@ volumes:
   grafana-data:
 {{- end }}
 {{- range .Agents }}
+{{- if eq .Language "python" }}
   {{ .Name }}-packages:
+{{- else if eq .Language "typescript" }}
+  {{ .Name }}-node_modules:
+{{- end }}
 {{- end }}
 {{- end }}
 

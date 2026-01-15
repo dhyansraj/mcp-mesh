@@ -1,0 +1,39 @@
+#!/usr/bin/env npx tsx
+/**
+ * {{ .Name }} - MCP Mesh Agent
+ *
+ * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh agent generated using meshctl scaffold.{{ end }}
+ */
+
+import { FastMCP, mesh } from "@mcpmesh/sdk";
+import { z } from "zod";
+
+// FastMCP server instance
+const server = new FastMCP({
+  name: "{{ toPascalCase .Name }} Service",
+  version: "1.0.0",
+});
+
+// Wrap with MCP Mesh
+const agent = mesh(server, {
+  name: "{{ .Name }}",
+  port: {{ .Port }},
+});
+
+// ===== TOOLS =====
+
+agent.addTool({
+  name: "{{ .ToolName | default "hello" }}",
+  capability: "{{ .ToolName | default "hello" }}",
+  description: "{{ .ToolDescription | default "A sample tool" }}",
+  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else }}["tools"]{{ end }},
+  parameters: z.object({
+    // TODO: Define your input parameters
+  }),
+  execute: async (args) => {
+    // TODO: Implement tool logic
+    return "Not implemented";
+  },
+});
+
+console.log("{{ .Name }} agent defined. Waiting for auto-start...");

@@ -293,6 +293,11 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		result["version"] = *reg.Version
 	}
 
+	// Include runtime if provided
+	if reg.Runtime != nil {
+		result["runtime"] = string(*reg.Runtime)
+	}
+
 	// Include HTTP host and port as separate fields for the service layer
 	if reg.HttpHost != nil {
 		result["http_host"] = *reg.HttpHost

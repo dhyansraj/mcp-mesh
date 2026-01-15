@@ -2,6 +2,8 @@
 
 > What you need before building MCP Mesh agents
 
+**MCP Mesh supports both Python and TypeScript.** Choose the language that fits your needs—or use both in the same mesh.
+
 ## Windows Users
 
 `meshctl` and `mcp-mesh-registry` require a Unix-like environment on Windows:
@@ -13,7 +15,7 @@ Alternatively, use Docker Desktop for containerized development.
 
 ## Local Development
 
-For developing and testing agents locally.
+For developing and testing agents locally. Choose your preferred language:
 
 ### Python 3.11+
 
@@ -53,7 +55,7 @@ pip install "mcp-mesh>=0.7,<0.8"
 python -c "import mesh; print('Ready!')"
 ```
 
-### Quick Start
+### Quick Start (Python)
 
 ```bash
 # 1. Create venv and install SDK (one-time setup)
@@ -71,6 +73,43 @@ meshctl scaffold --name assistant --agent-type llm-agent
 meshctl start hello/main.py --debug
 ```
 
+### Node.js 18+ (for TypeScript)
+
+```bash
+# Check version
+node --version   # Need 18+
+npm --version
+
+# Install if needed
+brew install node          # macOS
+sudo apt install nodejs    # Ubuntu/Debian
+```
+
+### TypeScript SDK
+
+```bash
+# In your agent directory
+npm init -y
+npm install @mcpmesh/sdk
+
+# Verify
+npx tsx -e "import { mesh } from '@mcpmesh/sdk'; console.log('Ready!')"
+```
+
+### Quick Start (TypeScript)
+
+```bash
+# 1. Scaffold TypeScript agent
+meshctl scaffold --name hello --agent-type basic --lang typescript
+
+# 2. Install dependencies
+cd hello
+npm install
+
+# 3. Run agent - meshctl uses npx tsx automatically
+meshctl start src/index.ts --debug
+```
+
 ## Docker Deployment
 
 For containerized deployments.
@@ -85,15 +124,17 @@ docker compose version
 
 ### MCP Mesh Images
 
-| Image                        | Description             |
-| ---------------------------- | ----------------------- |
-| `mcpmesh/registry:0.7`       | Registry service        |
-| `mcpmesh/python-runtime:0.7` | Python runtime with SDK |
+| Image                            | Description                 |
+| -------------------------------- | --------------------------- |
+| `mcpmesh/registry:0.7`           | Registry service            |
+| `mcpmesh/python-runtime:0.7`     | Python runtime with SDK     |
+| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
 docker pull mcpmesh/registry:0.7
 docker pull mcpmesh/python-runtime:0.7
+docker pull mcpmesh/typescript-runtime:0.8
 ```
 
 ### Generate Docker Compose
@@ -152,6 +193,7 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 | Component  | Minimum | Recommended |
 | ---------- | ------- | ----------- |
 | Python     | 3.11    | 3.12        |
+| Node.js    | 18      | 20+         |
 | Docker     | 20.10   | Latest      |
 | Kubernetes | 1.25    | 1.28+       |
 | Helm       | 3.10    | 3.14+       |

@@ -185,6 +185,9 @@ pub struct JsAgentSpec {
     /// Agent type: "mcp_agent" (provides capabilities) or "api" (only consumes)
     /// Defaults to "mcp_agent" if not specified
     pub agent_type: Option<String>,
+    /// SDK runtime type: "python" or "typescript"
+    /// Defaults to "typescript" for TypeScript SDK
+    pub runtime: Option<String>,
     /// Tools/capabilities provided by this agent
     pub tools: Vec<JsToolSpec>,
     /// LLM agent specifications for tools using mesh.llm()
@@ -204,6 +207,8 @@ impl From<JsAgentSpec> for RustAgentSpec {
             js.http_host,
             js.namespace,
             js.agent_type, // "mcp_agent" or "api", defaults to "mcp_agent"
+            // Default to "typescript" for TypeScript SDK
+            Some(js.runtime.unwrap_or_else(|| "typescript".to_string())),
             Some(js.tools.into_iter().map(|t| t.into()).collect()),
             js.llm_agents.map(|agents| agents.into_iter().map(|a| a.into()).collect()),
             js.heartbeat_interval as u64,
