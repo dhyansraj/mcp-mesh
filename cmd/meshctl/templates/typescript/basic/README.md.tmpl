@@ -52,21 +52,19 @@ helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 Add new tools in `src/index.ts`:
 
 ```typescript
-server.addTool(
-  mesh.tool({
-    name: "my_tool",
-    capability: "my_capability",
-    description: "What this tool does",
-    tags: ["tools"],
-    parameters: z.object({
-      input: z.string().describe("Input parameter"),
-    }),
-    execute: async ({ input }) => {
-      // Implement your tool logic
-      return `Result: ${input}`;
-    },
-  })
-);
+agent.addTool({
+  name: "my_tool",
+  capability: "my_capability",
+  description: "What this tool does",
+  tags: ["tools"],
+  parameters: z.object({
+    input: z.string().describe("Input parameter"),
+  }),
+  execute: async ({ input }) => {
+    // Implement your tool logic
+    return `Result: ${input}`;
+  },
+});
 ```
 
 ## Documentation
