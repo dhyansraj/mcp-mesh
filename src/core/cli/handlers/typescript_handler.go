@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"mcp-mesh/src/core/cli/scaffold"
 )
 
 // TypeScriptHandler implements LanguageHandler for TypeScript/JavaScript agents
@@ -63,15 +65,24 @@ func (h *TypeScriptHandler) GenerateAgent(config ScaffoldConfig) error {
 		return fmt.Errorf("failed to create src directory: %w", err)
 	}
 
+	// Build template data from config
+	data := map[string]interface{}{
+		"Name":        config.Name,
+		"Port":        config.Port,
+		"Version":     config.Version,
+		"Description": config.Description,
+		"Capability":  config.Name, // Default capability to agent name
+	}
+
+	// Create renderer and render templates
+	renderer := scaffold.NewTemplateRenderer()
 	templates := h.GetTemplates()
-	for filename, content := range templates {
+
+	for filename, templateContent := range templates {
 		filePath := filepath.Join(config.OutputDir, filename)
-		// Ensure parent directory exists
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return fmt.Errorf("failed to create directory for %s: %w", filename, err)
-		}
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-			return fmt.Errorf("failed to write %s: %w", filename, err)
+		// RenderToFile creates parent directories automatically
+		if err := renderer.RenderToFile(templateContent, data, filePath); err != nil {
+			return fmt.Errorf("failed to render %s: %w", filename, err)
 		}
 	}
 
