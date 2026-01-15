@@ -15,8 +15,8 @@ func TestGenerateDockerCompose_NewFile(t *testing.T) {
 
 	config := &ComposeConfig{
 		Agents: []DetectedAgent{
-			{Name: "agent1", Port: 9001, Dir: "agent1"},
-			{Name: "agent2", Port: 9002, Dir: "agent2"},
+			{Name: "agent1", Port: 9001, Dir: "agent1", Language: "python"},
+			{Name: "agent2", Port: 9002, Dir: "agent2", Language: "python"},
 		},
 		Observability: false,
 		ProjectName:   "test-project",
@@ -70,8 +70,8 @@ networks:
 	// Now run compose with agent1 (existing) and agent2 (new)
 	config := &ComposeConfig{
 		Agents: []DetectedAgent{
-			{Name: "agent1", Port: 9001, Dir: "agent1"},
-			{Name: "agent2", Port: 9002, Dir: "agent2"},
+			{Name: "agent1", Port: 9001, Dir: "agent1", Language: "python"},
+			{Name: "agent2", Port: 9002, Dir: "agent2", Language: "python"},
 		},
 		Observability: false,
 		ProjectName:   "test",
@@ -125,7 +125,7 @@ networks:
 	// Run with force flag
 	config := &ComposeConfig{
 		Agents: []DetectedAgent{
-			{Name: "agent1", Port: 9001, Dir: "agent1"},
+			{Name: "agent1", Port: 9001, Dir: "agent1", Language: "python"},
 		},
 		Observability: false,
 		ProjectName:   "test",
@@ -217,7 +217,7 @@ networks:
 	// Add a new agent
 	config := &ComposeConfig{
 		Agents: []DetectedAgent{
-			{Name: "new-agent", Port: 9001, Dir: "new-agent"},
+			{Name: "new-agent", Port: 9001, Dir: "new-agent", Language: "python"},
 		},
 		Observability: false,
 		ProjectName:   "test",
@@ -311,7 +311,7 @@ func TestGetExistingServiceNames(t *testing.T) {
 
 func TestGenerateAgentServicesYAML(t *testing.T) {
 	agents := []DetectedAgent{
-		{Name: "test-agent", Port: 9001, Dir: "test-agent"},
+		{Name: "test-agent", Port: 9001, Dir: "test-agent", Language: "python"},
 	}
 
 	config := &ComposeConfig{
@@ -331,7 +331,7 @@ func TestGenerateAgentServicesYAML(t *testing.T) {
 
 func TestGenerateAgentServicesYAML_WithObservability(t *testing.T) {
 	agents := []DetectedAgent{
-		{Name: "test-agent", Port: 9001, Dir: "test-agent"},
+		{Name: "test-agent", Port: 9001, Dir: "test-agent", Language: "python"},
 	}
 
 	config := &ComposeConfig{
