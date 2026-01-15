@@ -55,6 +55,19 @@ check_prerequisites() {
         exit 1
     fi
 
+    # Check if python3 is available (required for YAML validation)
+    if ! command -v python3 &> /dev/null; then
+        log_error "python3 not found. Install Python 3 to validate OpenAPI specs."
+        exit 1
+    fi
+
+    # Check if PyYAML module is available (required for YAML parsing)
+    if ! python3 -c 'import yaml' &> /dev/null; then
+        log_error "PyYAML module not found. Install with:"
+        log_error "pip install pyyaml"
+        exit 1
+    fi
+
     # Check if jq is available for JSON processing
     if ! command -v jq &> /dev/null; then
         log_warning "jq not found. Some validation features may be limited."
@@ -134,7 +147,7 @@ generate_go_registry_server() {
 // TO ADD NEW REGISTRY ENDPOINTS:
 // 1. Update api/mcp-mesh-registry.openapi.yaml
 // 2. Run: make generate
-// 3. Implement business logic in handlers_impl.go
+// 3. Implement business logic in ent_handlers.go
 //
 // GENERATED FROM: api/mcp-mesh-registry.openapi.yaml
 // CONTRACT: Registry service endpoints only
@@ -161,7 +174,7 @@ validate_generated_code() {
         log_info "Checking Go registry code compilation..."
         if ! go build -o /dev/null "$PROJECT_ROOT/src/core/registry/..." 2>/dev/null; then
             log_error "Generated Go registry code does not compile"
-            log_error "Check the business logic implementation in handlers_impl.go"
+            log_error "Check the business logic implementation in ent_handlers.go"
             exit 1
         fi
         log_success "Go registry code compilation check passed"
@@ -185,7 +198,7 @@ update_dependencies() {
 
 # Main execution function
 main() {
-    local target="${1:-all}"
+    local target="${1:-go}"
 
     log_info "Starting code generation for MCP Mesh (target: $target)"
     log_info "Project root: $PROJECT_ROOT"

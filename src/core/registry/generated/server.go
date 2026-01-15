@@ -7,7 +7,7 @@
 // TO ADD NEW REGISTRY ENDPOINTS:
 // 1. Update api/mcp-mesh-registry.openapi.yaml
 // 2. Run: make generate
-// 3. Implement business logic in handlers_impl.go
+// 3. Implement business logic in ent_handlers.go
 //
 // GENERATED FROM: api/mcp-mesh-registry.openapi.yaml
 // CONTRACT: Registry service endpoints only

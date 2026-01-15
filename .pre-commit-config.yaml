@@ -137,7 +137,7 @@ repos:
             echo "To make changes:";
             echo "1. Update api/mcp-mesh-registry.openapi.yaml";
             echo "2. Run: make generate";
-            echo "3. Implement business logic in handlers_impl.go";
+            echo "3. Implement business logic in ent_handlers.go";
             exit 1
         language: system
         files: ^src/core/registry/generated/.*$

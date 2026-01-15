@@ -188,11 +188,24 @@ func (h *PythonHandler) ValidatePrerequisites(dir string) error {
 
 // GetStartCommand returns the command to start a Python agent
 func (h *PythonHandler) GetStartCommand(file string) []string {
-	// Use .venv/bin/python if available
-	venvPython := filepath.Join(filepath.Dir(file), ".venv", "bin", "python")
-	if fileExists(venvPython) {
-		return []string{venvPython, file}
+	// Walk upward from file directory to find .venv/bin/python
+	// This handles nested sources where .venv is at project root
+	currentDir := filepath.Dir(file)
+	for {
+		venvPython := filepath.Join(currentDir, ".venv", "bin", "python")
+		if fileExists(venvPython) {
+			return []string{venvPython, file}
+		}
+
+		// Move to parent directory
+		parentDir := filepath.Dir(currentDir)
+		// Stop if we've reached the filesystem root
+		if parentDir == currentDir {
+			break
+		}
+		currentDir = parentDir
 	}
+
 	// Fall back to system python
 	return []string{"python3", file}
 }

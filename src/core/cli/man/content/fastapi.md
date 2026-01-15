@@ -2,7 +2,7 @@
 
 > Use mesh dependency injection in FastAPI backends with @mesh.route
 
-**Note:** This page covers Python/FastAPI integration. For TypeScript/Express, use `mesh.route()` middleware. See `meshctl man fastapi --typescript` for Express examples.
+**Note:** This page covers Python/FastAPI integration. For TypeScript/Express, use `mesh.route()` middleware. See `meshctl man express` for Express examples.
 
 ## Overview
 
