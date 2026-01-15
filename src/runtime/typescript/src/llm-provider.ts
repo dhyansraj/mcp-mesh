@@ -276,7 +276,7 @@ export function llmProvider(config: LlmProviderConfig): {
     maxTokens,
     temperature,
     topP,
-    toolName = "process_chat",
+    name = "process_chat",
     description = `LLM provider using ${model}`,
   } = config;
 
@@ -511,7 +511,7 @@ export function llmProvider(config: LlmProviderConfig): {
 
   // Build the tool definition
   const toolDef = {
-    name: toolName,
+    name,
     description,
     parameters: MeshLlmRequestSchema,
     execute,
@@ -525,7 +525,7 @@ export function llmProvider(config: LlmProviderConfig): {
   };
 
   debug(
-    `Created LLM provider '${toolName}' ` +
+    `Created LLM provider '${name}' ` +
       `(model=${model}, capability=${capability}, tags=${JSON.stringify(tags)}, vendor=${vendor})`
   );
 

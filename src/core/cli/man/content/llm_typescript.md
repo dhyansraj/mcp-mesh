@@ -153,25 +153,50 @@ filter: [
 
 ## Creating LLM Providers
 
-Create zero-code LLM providers with `mesh.llmProvider()`:
+Create zero-code LLM providers with `agent.addLlmProviderTool()`:
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 
 const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
 const agent = mesh(server, { name: "claude-provider", port: 9001 });
 
-agent.addTool({
-  name: "process_chat",
-  ...mesh.llmProvider({
-    model: "anthropic/claude-sonnet-4-5",
-    capability: "llm",
-    tags: ["llm", "claude", "provider"],
-    version: "1.0.0",
-  }),
+// Single provider (default name: "process_chat")
+agent.addLlmProviderTool({
+  model: "anthropic/claude-sonnet-4-5",
+  capability: "llm",
+  tags: ["llm", "claude", "provider"],
+});
+
+// Multiple providers in one agent (use custom names)
+agent.addLlmProviderTool({
+  name: "sonnet_chat",  // Custom tool name
+  model: "anthropic/claude-sonnet-4-5",
+  capability: "llm",
+  tags: ["llm", "claude", "sonnet"],
+});
+
+agent.addLlmProviderTool({
+  name: "opus_chat",    // Different tool name
+  model: "anthropic/claude-opus-4",
+  capability: "llm",
+  tags: ["llm", "claude", "opus"],
 });
 ```
+
+### LLM Provider Parameters
+
+| Parameter     | Type       | Default          | Description                              |
+| ------------- | ---------- | ---------------- | ---------------------------------------- |
+| `model`       | `string`   | (required)       | LiteLLM model format (e.g., "anthropic/claude-sonnet-4-5") |
+| `name`        | `string`   | `"process_chat"` | Tool name for MCP registration           |
+| `capability`  | `string`   | `"llm"`          | Capability name for mesh discovery       |
+| `tags`        | `string[]` | `[]`             | Tags for provider selection              |
+| `version`     | `string`   | `"1.0.0"`        | Version for mesh registration            |
+| `maxTokens`   | `number`   | (model default)  | Maximum tokens to generate               |
+| `temperature` | `number`   | (model default)  | Sampling temperature                     |
+| `topP`        | `number`   | (model default)  | Top-p sampling                           |
+| `description` | `string`   | (auto-generated) | Tool description                         |
 
 ### Supported Models
 
@@ -188,21 +213,18 @@ Uses LiteLLM model format:
 ## Complete Example
 
 ```typescript
-import { FastMCP } from "fastmcp";
-import { mesh } from "@mcpmesh/sdk";
+import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 // 1. Create LLM Provider
 const providerServer = new FastMCP({ name: "Claude", version: "1.0.0" });
 const provider = mesh(providerServer, { name: "claude-provider", port: 9001 });
 
-provider.addTool({
+provider.addLlmProviderTool({
   name: "chat",
-  ...mesh.llmProvider({
-    model: "anthropic/claude-sonnet-4-5",
-    capability: "llm",
-    tags: ["llm", "claude"],
-  }),
+  model: "anthropic/claude-sonnet-4-5",
+  capability: "llm",
+  tags: ["llm", "claude"],
 });
 
 // 2. Create Tool Agent

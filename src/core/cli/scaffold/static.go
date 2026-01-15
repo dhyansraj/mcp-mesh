@@ -219,6 +219,48 @@ func detectAgentType(agentFilePath string) (DetectedAgentType, error) {
 	return DetectedUnknown, nil
 }
 
+// toolExistsInFile checks if a tool with the given name already exists in the file.
+// For Python: looks for "def tool_name(" or "async def tool_name("
+// For TypeScript: looks for 'name: "tool_name"' in tool definitions
+func toolExistsInFile(filePath, toolName string) (bool, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	contentStr := string(content)
+
+	// Python detection
+	if strings.HasSuffix(filePath, ".py") {
+		// Check for function definitions with this name
+		patterns := []string{
+			fmt.Sprintf("def %s(", toolName),
+			fmt.Sprintf("async def %s(", toolName),
+		}
+		for _, pattern := range patterns {
+			if strings.Contains(contentStr, pattern) {
+				return true, nil
+			}
+		}
+	}
+
+	// TypeScript detection
+	if strings.HasSuffix(filePath, ".ts") || strings.HasSuffix(filePath, ".js") {
+		// Check for name: "toolName" or name: 'toolName' in tool definitions
+		patterns := []string{
+			fmt.Sprintf(`name: "%s"`, toolName),
+			fmt.Sprintf(`name: '%s'`, toolName),
+		}
+		for _, pattern := range patterns {
+			if strings.Contains(contentStr, pattern) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 // getAgentEntryFile returns the entry file path for an agent based on language.
 // Python uses main.py, TypeScript uses src/index.ts
 func getAgentEntryFile(outputDir, language string) string {
@@ -414,6 +456,15 @@ func (p *StaticProvider) executeAddTool(ctx *ScaffoldContext, outputDir string) 
 	// Reject adding tools to llm-provider agents
 	if detectedType == DetectedLLMProvider {
 		return fmt.Errorf("cannot add tools to llm-provider agents; LLM providers only expose the @mesh.llm_provider capability")
+	}
+
+	// Check for duplicate tool name
+	exists, err := toolExistsInFile(mainPyPath, ctx.ToolName)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing tool: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("tool '%s' already exists in agent '%s'; choose a different name", ctx.ToolName, ctx.Name)
 	}
 
 	// Create template renderer
