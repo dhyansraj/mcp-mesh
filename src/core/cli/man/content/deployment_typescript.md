@@ -159,16 +159,18 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 ```yaml
 # my-agent/helm-values.yaml (auto-generated for TypeScript)
 image:
+  # Override with your built agent image
   repository: your-registry/my-agent
   tag: latest
 
 agent:
   name: my-agent
-  runtime: typescript
+  # No script needed - TypeScript agents use Docker CMD from Dockerfile
+  # The scaffolded Dockerfile includes: CMD ["npx", "tsx", "src/index.ts"]
+  command: []  # Empty = use Docker image's CMD (recommended)
 
 mesh:
   enabled: true
-  registryUrl: http://mcp-core-mcp-mesh-registry:8000
 
 resources:
   limits:
@@ -178,6 +180,8 @@ resources:
     cpu: 100m
     memory: 128Mi
 ```
+
+**Note:** Unlike Python agents which may use `agent.script`, TypeScript agents rely on the Docker image's CMD. The runtime is baked into your image when you build from the scaffolded Dockerfile.
 
 ### Deployment Workflow
 
@@ -232,8 +236,10 @@ TypeScript SDK handles SIGINT/SIGTERM automatically:
 export MCP_MESH_LOG_LEVEL=INFO
 export MCP_MESH_DEBUG_MODE=false
 
-# Enable debug logging
-export DEBUG=mcpmesh:*
+# Enable debug logging (either option works)
+export MCP_MESH_LOG_LEVEL=DEBUG
+# or
+export MCP_MESH_DEBUG_MODE=true
 ```
 
 ### Resource Limits

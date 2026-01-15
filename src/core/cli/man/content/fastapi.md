@@ -6,9 +6,11 @@
 
 ## Overview
 
-MCP Mesh provides `@mesh.route` decorator for FastAPI applications (Python) and `mesh.route()` middleware for Express applications (TypeScript) that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
+MCP Mesh provides the `@mesh.route` decorator for FastAPI applications that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
 
-**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI/Express app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
+**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
+
+> **TypeScript/Express**: A similar `mesh.route()` middleware exists for Express applications. See `meshctl man express` for details.
 
 ## Installation
 
