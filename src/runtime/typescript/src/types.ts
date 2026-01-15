@@ -682,8 +682,8 @@ export interface LlmProviderConfig {
   temperature?: number;
   /** Top-p sampling. Passed to Vercel AI SDK */
   topP?: number;
-  /** Custom tool name. Defaults to "process_chat" */
-  toolName?: string;
+  /** Tool name for MCP registration. Defaults to "process_chat" */
+  name?: string;
   /** Description for the tool */
   description?: string;
 }

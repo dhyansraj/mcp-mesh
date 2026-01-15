@@ -85,7 +85,7 @@ describe("llmProvider", () => {
     it("should use custom tool name", () => {
       const tool = llmProvider({
         model: "openai/gpt-4o",
-        toolName: "custom_chat",
+        name: "custom_chat",
       });
 
       expect(tool.name).toBe("custom_chat");
@@ -254,7 +254,7 @@ describe("LLM provider configurations", () => {
       capability: "custom-llm",
       tags: ["production", "fast"],
       version: "3.0.0",
-      toolName: "production_chat",
+      name: "production_chat",
       description: "Production LLM endpoint with Claude",
       maxTokens: 8192,
       temperature: 0.5,
