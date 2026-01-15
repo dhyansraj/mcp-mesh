@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent for {{ .Name }}{{ end }}",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
