@@ -311,6 +311,30 @@ type AgentWithCapabilities struct {
 	Capabilities []ToolInfo `json:"capabilities"`
 }
 
+// resolveAgentPrefix resolves an agent name/prefix to a specific agent ID using prefix matching.
+func resolveAgentPrefix(agents []AgentWithCapabilities, agentName string, healthyOnly bool) (string, error) {
+	if agentName == "" {
+		return "", nil
+	}
+
+	// Convert to EnhancedAgent format for prefix matching
+	enhancedAgents := make([]EnhancedAgent, 0, len(agents))
+	for _, agent := range agents {
+		enhancedAgents = append(enhancedAgents, EnhancedAgent{
+			ID:       agent.ID,
+			Name:     agent.Name,
+			Status:   agent.Status,
+			Endpoint: agent.Endpoint,
+		})
+	}
+
+	matchResult := ResolveAgentByPrefix(enhancedAgents, agentName, healthyOnly)
+	if err := matchResult.FormattedError(); err != nil {
+		return "", err
+	}
+	return matchResult.Agent.ID, nil
+}
+
 // findAgentWithTool queries the registry to find an agent with the specified tool
 func findAgentWithTool(client *http.Client, registryURL, agentName, toolName string) (string, error) {
 	// Get all agents from registry
@@ -333,6 +357,12 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 		return "", fmt.Errorf("failed to parse registry response: %w", err)
 	}
 
+	// Resolve agent name/prefix to specific agent ID
+	targetAgentID, err := resolveAgentPrefix(agentsResp.Agents, agentName, true)
+	if err != nil {
+		return "", err
+	}
+
 	// Find agent with matching tool (prefer healthy agents)
 	for _, agent := range agentsResp.Agents {
 		// Skip unhealthy agents
@@ -340,8 +370,8 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 			continue
 		}
 
-		// If agent name is specified, filter by it
-		if agentName != "" && agent.Name != agentName && agent.ID != agentName {
+		// If agent was resolved via prefix, use that specific agent
+		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
 
@@ -405,6 +435,12 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 		return "", "", fmt.Errorf("failed to parse registry response: %w", err)
 	}
 
+	// Resolve agent name/prefix to specific agent ID
+	targetAgentID, err := resolveAgentPrefix(agentsResp.Agents, agentName, true)
+	if err != nil {
+		return "", "", err
+	}
+
 	// Find agent with matching tool (prefer healthy agents)
 	for _, agent := range agentsResp.Agents {
 		// Skip unhealthy agents
@@ -412,8 +448,8 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 			continue
 		}
 
-		// If agent name is specified, filter by it
-		if agentName != "" && agent.Name != agentName && agent.ID != agentName {
+		// If agent was resolved via prefix, use that specific agent
+		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
 

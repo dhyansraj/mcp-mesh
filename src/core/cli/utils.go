@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -321,4 +322,97 @@ func ParsePort(portStr string) (int, error) {
 		return 0, fmt.Errorf("port must be between 1 and 65535, got %d", port)
 	}
 	return port, nil
+}
+
+// AgentMatchResult represents the result of prefix matching for agent resolution
+type AgentMatchResult struct {
+	Agent   *EnhancedAgent  // Matched agent (if unique)
+	Matches []EnhancedAgent // All matching agents (for disambiguation)
+	Error   error           // Error if no match
+	IsExact bool            // True if exact match (not prefix)
+}
+
+// FormattedError returns a user-friendly error message including matching options
+// if there are multiple matches. Returns nil if there's no error.
+func (r *AgentMatchResult) FormattedError() error {
+	if r.Error == nil {
+		return nil
+	}
+	if len(r.Matches) > 1 {
+		return fmt.Errorf("%s%s", r.Error.Error(), FormatAgentMatchOptions(r.Matches))
+	}
+	return r.Error
+}
+
+// ResolveAgentByPrefix finds agents matching the given name or ID prefix.
+// It first checks for exact matches (Name or ID), then falls back to
+// case-insensitive prefix matching.
+func ResolveAgentByPrefix(agents []EnhancedAgent, prefix string, healthyOnly bool) *AgentMatchResult {
+	result := &AgentMatchResult{}
+
+	// Filter agents based on health status first
+	var candidateAgents []EnhancedAgent
+	for _, agent := range agents {
+		if healthyOnly && strings.ToLower(agent.Status) != "healthy" {
+			continue
+		}
+		candidateAgents = append(candidateAgents, agent)
+	}
+
+	// First, check for exact match (prioritize exact matches)
+	for i := range candidateAgents {
+		agent := candidateAgents[i]
+		if agent.Name == prefix || agent.ID == prefix {
+			result.Agent = &candidateAgents[i]
+			result.IsExact = true
+			return result
+		}
+	}
+
+	// If no exact match, try case-insensitive prefix matching
+	var matches []EnhancedAgent
+	prefixLower := strings.ToLower(prefix)
+
+	for _, agent := range candidateAgents {
+		nameLower := strings.ToLower(agent.Name)
+		idLower := strings.ToLower(agent.ID)
+
+		if strings.HasPrefix(nameLower, prefixLower) ||
+			strings.HasPrefix(idLower, prefixLower) {
+			matches = append(matches, agent)
+		}
+	}
+
+	// Evaluate results
+	switch len(matches) {
+	case 0:
+		if healthyOnly {
+			result.Error = fmt.Errorf("no healthy agent found matching '%s'", prefix)
+		} else {
+			result.Error = fmt.Errorf("no agent found matching '%s'", prefix)
+		}
+	case 1:
+		result.Agent = &matches[0]
+		result.IsExact = false
+		result.Matches = matches
+	default:
+		result.Matches = matches
+		result.Error = fmt.Errorf("multiple agents match '%s'", prefix)
+	}
+
+	return result
+}
+
+// FormatAgentMatchOptions formats multiple matching agents for display to the user.
+func FormatAgentMatchOptions(matches []EnhancedAgent) string {
+	var sb strings.Builder
+	sb.WriteString("\nMatching agents:\n")
+
+	for _, agent := range matches {
+		sb.WriteString(fmt.Sprintf("  - %s (ID: %s, Status: %s)\n",
+			agent.Name, agent.ID, agent.Status))
+	}
+
+	sb.WriteString("\nPlease specify a more precise agent name or ID.")
+	return sb.String()
 }
