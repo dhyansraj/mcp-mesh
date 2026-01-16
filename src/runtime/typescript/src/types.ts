@@ -446,7 +446,7 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
 
   // LiteLLM parameters
   /** Maximum tokens to generate */
-  maxTokens?: number;
+  maxOutputTokens?: number;
   /** Sampling temperature */
   temperature?: number;
   /** Top-p sampling */
@@ -551,7 +551,7 @@ export interface LlmCallOptions {
   /** Context merge mode: "merge" (default) adds to base context, "replace" overrides entirely */
   contextMode?: LlmContextMode;
   /** Override max tokens */
-  maxTokens?: number;
+  maxOutputTokens?: number;
   /** Override temperature */
   temperature?: number;
   /** Override max iterations */
@@ -662,7 +662,7 @@ export interface MeshLlmResponse {
  *   model: "anthropic/claude-sonnet-4-5",
  *   capability: "llm",
  *   tags: ["llm", "claude", "anthropic", "provider"],
- *   maxTokens: 4096,
+ *   maxOutputTokens: 4096,
  *   temperature: 0.7,
  * }));
  * ```
@@ -677,7 +677,7 @@ export interface LlmProviderConfig {
   /** Version string for mesh registration. Defaults to "1.0.0" */
   version?: string;
   /** Maximum tokens to generate. Passed to Vercel AI SDK */
-  maxTokens?: number;
+  maxOutputTokens?: number;
   /** Sampling temperature. Passed to Vercel AI SDK */
   temperature?: number;
   /** Top-p sampling. Passed to Vercel AI SDK */

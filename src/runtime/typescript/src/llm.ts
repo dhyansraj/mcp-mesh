@@ -162,7 +162,7 @@ export interface LlmToolConfig {
   contextParam?: string;
   filter?: LlmFilterSpec[];
   filterMode: LlmFilterMode;
-  maxTokens?: number;
+  maxOutputTokens?: number;
   temperature?: number;
   topP?: number;
   stop?: string[];
@@ -229,7 +229,7 @@ export function llm<
     contextParam: config.contextParam,
     filter: config.filter,
     filterMode: config.filterMode ?? "all",
-    maxTokens: config.maxTokens,
+    maxOutputTokens: config.maxOutputTokens,
     temperature: config.temperature,
     topP: config.topP,
     stop: config.stop,
@@ -250,7 +250,7 @@ export function llm<
     systemPrompt: llmConfig.systemPrompt,
     contextParam: llmConfig.contextParam,
     maxIterations: llmConfig.maxIterations,
-    maxTokens: llmConfig.maxTokens,
+    maxOutputTokens: llmConfig.maxOutputTokens,
     temperature: llmConfig.temperature,
     topP: llmConfig.topP,
     stop: llmConfig.stop,

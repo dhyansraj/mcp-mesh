@@ -67,7 +67,7 @@ export interface MeshLlmAgentConfig {
   /** Max agentic loop iterations */
   maxIterations: number;
   /** Max tokens */
-  maxTokens?: number;
+  maxOutputTokens?: number;
   /** Temperature */
   temperature?: number;
   /** Top-p */
@@ -107,7 +107,7 @@ export interface LlmProvider {
     messages: LlmMessage[],
     tools?: LlmToolDefinition[],
     options?: {
-      maxTokens?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
       stop?: string[];
@@ -131,7 +131,7 @@ export class LiteLLMProvider implements LlmProvider {
     messages: LlmMessage[],
     tools?: LlmToolDefinition[],
     options?: {
-      maxTokens?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
       stop?: string[];
@@ -147,7 +147,7 @@ export class LiteLLMProvider implements LlmProvider {
       body.tool_choice = "auto";
     }
 
-    if (options?.maxTokens) body.max_tokens = options.maxTokens;
+    if (options?.maxOutputTokens) body.max_tokens = options.maxOutputTokens;
     if (options?.temperature !== undefined) body.temperature = options.temperature;
     if (options?.topP !== undefined) body.top_p = options.topP;
     if (options?.stop) body.stop = options.stop;
@@ -202,7 +202,7 @@ export class MeshDelegatedProvider implements LlmProvider {
     messages: LlmMessage[],
     tools?: LlmToolDefinition[],
     options?: {
-      maxTokens?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
       stop?: string[];
@@ -214,7 +214,7 @@ export class MeshDelegatedProvider implements LlmProvider {
     if (model && model !== "default") {
       modelParams.model = model;
     }
-    if (options?.maxTokens) modelParams.max_tokens = options.maxTokens;
+    if (options?.maxOutputTokens) modelParams.max_tokens = options.maxOutputTokens;
     if (options?.temperature !== undefined) modelParams.temperature = options.temperature;
     if (options?.topP !== undefined) modelParams.top_p = options.topP;
     if (options?.stop) modelParams.stop = options.stop;
@@ -444,7 +444,7 @@ export class MeshLlmAgent<T = string> {
 
     // Get effective options
     const maxIterations = context.options?.maxIterations ?? this.config.maxIterations;
-    const maxTokens = context.options?.maxTokens ?? this.config.maxTokens;
+    const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
     // Determine model
@@ -462,7 +462,7 @@ export class MeshLlmAgent<T = string> {
         model,
         messages,
         toolDefs.length > 0 ? toolDefs : undefined,
-        { maxTokens, temperature, topP: this.config.topP, stop: this.config.stop }
+        { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop }
       );
 
       // Track tokens

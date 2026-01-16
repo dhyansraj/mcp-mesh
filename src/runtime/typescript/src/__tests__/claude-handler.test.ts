@@ -31,7 +31,7 @@ describe("ClaudeHandler", () => {
       expect(capabilities.streaming).toBe(true);
       expect(capabilities.vision).toBe(true);
       expect(capabilities.jsonMode).toBe(true);
-      expect(capabilities.promptCaching).toBe(true);
+      expect(capabilities.promptCaching).toBe(false); // Disabled for AI SDK v6
     });
   });
 
@@ -179,7 +179,7 @@ describe("ClaudeHandler", () => {
       expect(request.messages).toHaveLength(3);
     });
 
-    it("should apply prompt caching to system messages", () => {
+    it("should keep system messages as strings (prompt caching disabled for AI SDK v6)", () => {
       const messages: LlmMessage[] = [
         { role: "system", content: "You are a helpful assistant." },
         { role: "user", content: "Hello" },
@@ -187,14 +187,12 @@ describe("ClaudeHandler", () => {
 
       const request = handler.prepareRequest(messages, null, null);
 
-      // System message should be converted to cached format
+      // System message should remain as string content (AI SDK v6 requires string, not array)
+      // Prompt caching is disabled to maintain compatibility with AI SDK v6
       const systemMsg = request.messages[0];
       expect(systemMsg.role).toBe("system");
-      // Content should be an array with cache_control
-      expect(Array.isArray(systemMsg.content)).toBe(true);
-      const content = systemMsg.content as unknown as Array<{ type: string; text: string; cache_control: { type: string } }>;
-      expect(content[0].type).toBe("text");
-      expect(content[0].cache_control.type).toBe("ephemeral");
+      expect(typeof systemMsg.content).toBe("string");
+      expect(systemMsg.content).toBe("You are a helpful assistant.");
     });
 
     it("should include tools when provided", () => {
@@ -279,17 +277,17 @@ describe("ClaudeHandler", () => {
       expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
     });
 
-    it("should pass through temperature, maxTokens, and topP", () => {
+    it("should pass through temperature, maxOutputTokens, and topP", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
 
       const request = handler.prepareRequest(messages, null, null, {
         temperature: 0.7,
-        maxTokens: 1000,
+        maxOutputTokens: 1000,
         topP: 0.9,
       });
 
       expect(request.temperature).toBe(0.7);
-      expect(request.maxTokens).toBe(1000);
+      expect(request.maxOutputTokens).toBe(1000);
       expect(request.topP).toBe(0.9);
     });
 
@@ -313,11 +311,11 @@ describe("ClaudeHandler", () => {
 
       const assistantMsg = request.messages[1];
       expect(Array.isArray(assistantMsg.content)).toBe(true);
-      const content = assistantMsg.content as unknown as Array<{ type: string; toolCallId?: string; toolName?: string; args?: unknown }>;
+      const content = assistantMsg.content as unknown as Array<{ type: string; toolCallId?: string; toolName?: string; input?: unknown }>;
       expect(content[0].type).toBe("tool-call");
       expect(content[0].toolCallId).toBe("call_123");
       expect(content[0].toolName).toBe("get_weather");
-      expect(content[0].args).toEqual({ city: "NYC" });
+      expect(content[0].input).toEqual({ city: "NYC" });
     });
 
     it("should convert tool result messages to Vercel format", () => {
@@ -335,11 +333,13 @@ describe("ClaudeHandler", () => {
       const toolMsg = request.messages[0];
       expect(toolMsg.role).toBe("tool");
       expect(Array.isArray(toolMsg.content)).toBe(true);
-      const content = toolMsg.content as unknown as Array<{ type: string; toolCallId: string; toolName: string; result: string }>;
+      const content = toolMsg.content as unknown as Array<{ type: string; toolCallId: string; toolName: string; output: { type: string; value: unknown } }>;
       expect(content[0].type).toBe("tool-result");
       expect(content[0].toolCallId).toBe("call_123");
       expect(content[0].toolName).toBe("get_weather");
-      expect(content[0].result).toBe("Sunny, 75°F");
+      // AI SDK v6 expects output as { type: 'text' | 'json', value: ... }
+      expect(content[0].output.type).toBe("text");
+      expect(content[0].output.value).toBe("Sunny, 75°F");
     });
 
     it("should handle malformed tool_call arguments gracefully", () => {
@@ -361,9 +361,9 @@ describe("ClaudeHandler", () => {
       const request = handler.prepareRequest(messages, null, null);
 
       const assistantMsg = request.messages[0];
-      const content = assistantMsg.content as unknown as Array<{ args: unknown }>;
-      // Should fallback to empty object
-      expect(content[0].args).toEqual({});
+      const content = assistantMsg.content as unknown as Array<{ input: unknown }>;
+      // Should fallback to empty object (AI SDK v6 uses 'input' instead of 'args')
+      expect(content[0].input).toEqual({});
     });
   });
 

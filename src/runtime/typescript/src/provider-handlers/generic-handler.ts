@@ -62,12 +62,12 @@ export class GenericHandler implements ProviderHandler {
     options?: {
       outputMode?: OutputMode;
       temperature?: number;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       topP?: number;
       [key: string]: unknown;
     }
   ): PreparedRequest {
-    const { outputMode, temperature, maxTokens, topP, ...rest } = options ?? {};
+    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
 
     const request: PreparedRequest = {
       messages: [...messages],
@@ -84,7 +84,7 @@ export class GenericHandler implements ProviderHandler {
       request.temperature = temperature;
     }
     if (maxTokens !== undefined) {
-      request.maxTokens = maxTokens;
+      request.maxOutputTokens = maxTokens;
     }
     if (topP !== undefined) {
       request.topP = topP;

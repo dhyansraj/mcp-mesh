@@ -210,7 +210,7 @@ describe("getLlmProviderMeta", () => {
     const fakeTool = {
       name: "test",
       execute: () => Promise.resolve(""),
-      parameters: {},
+      inputSchema: {},
     } as unknown as ReturnType<typeof llmProvider>;
 
     const meta = getLlmProviderMeta(fakeTool);
@@ -220,14 +220,14 @@ describe("getLlmProviderMeta", () => {
 });
 
 describe("LLM provider configurations", () => {
-  it("should accept maxTokens configuration", () => {
+  it("should accept maxOutputTokens configuration", () => {
     const tool = llmProvider({
       model: "anthropic/claude-sonnet-4-5",
-      maxTokens: 4096,
+      maxOutputTokens: 4096,
     });
 
     expect(tool).toBeDefined();
-    // maxTokens is used internally in execute, verified via integration tests
+    // maxOutputTokens is used internally in execute, verified via integration tests
   });
 
   it("should accept temperature configuration", () => {
@@ -256,7 +256,7 @@ describe("LLM provider configurations", () => {
       version: "3.0.0",
       name: "production_chat",
       description: "Production LLM endpoint with Claude",
-      maxTokens: 8192,
+      maxOutputTokens: 8192,
       temperature: 0.5,
       topP: 0.95,
     });

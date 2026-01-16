@@ -96,6 +96,47 @@ export interface OutputSchema {
 // ============================================================================
 
 /**
+ * AI SDK v6 tool result output format.
+ */
+export interface ToolResultOutput {
+  type: "text" | "json";
+  value: unknown;
+}
+
+/**
+ * Wrap tool result content in AI SDK v6 ToolResultOutput format.
+ *
+ * AI SDK v6 requires tool result output to be structured as:
+ * - { type: 'text', value: string } for text content
+ * - { type: 'json', value: JSONValue } for JSON content
+ *
+ * @param content - Raw tool result content (string)
+ * @returns Properly formatted ToolResultOutput
+ */
+export function wrapToolResultOutput(content: string | null | undefined): ToolResultOutput {
+  if (content === null || content === undefined || content === "") {
+    return { type: "text", value: "" };
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    // JSON-parsed strings should use text type
+    if (typeof parsed === "string") {
+      return { type: "text", value: parsed };
+    }
+    // null/undefined from JSON.parse should use text
+    if (parsed === null || parsed === undefined) {
+      return { type: "text", value: content };
+    }
+    // Objects, arrays, numbers, booleans use json type
+    return { type: "json", value: parsed };
+  } catch {
+    // Not valid JSON - treat as text
+    return { type: "text", value: content };
+  }
+}
+
+/**
  * Convert messages to Vercel AI SDK format for multi-turn tool conversations.
  *
  * Both Anthropic and OpenAI require specific message formats for tool calls:
@@ -139,11 +180,12 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
       }
 
       // Add tool calls as content blocks
+      // AI SDK v6 uses 'input' instead of 'args' for tool call parameters
       for (const tc of msg.tool_calls!) {
         // Parse arguments with fallback for malformed JSON
-        let args: unknown = {};
+        let input: unknown = {};
         try {
-          args = JSON.parse(tc.function.arguments);
+          input = JSON.parse(tc.function.arguments);
         } catch (err) {
           debug(
             `Failed to parse tool call arguments for ${tc.function.name}: ${err}. Using empty object.`
@@ -154,7 +196,7 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
           type: "tool-call",
           toolCallId: tc.id,
           toolName: tc.function.name,
-          args,
+          input,
         });
       }
 
@@ -172,7 +214,7 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
           type: "tool-result",
           toolCallId: msg.tool_call_id ?? "",
           toolName: msg.name ?? "",
-          result: msg.content ?? "",
+          output: wrapToolResultOutput(msg.content),
         }],
       } as unknown as LlmMessage;
     }
@@ -247,7 +289,7 @@ export interface ProviderHandler {
     options?: {
       outputMode?: OutputMode;
       temperature?: number;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       topP?: number;
       [key: string]: unknown;
     }
