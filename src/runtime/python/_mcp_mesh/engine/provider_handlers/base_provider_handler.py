@@ -137,11 +137,11 @@ class BaseProviderHandler(ABC):
     @abstractmethod
     def prepare_request(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]],
+        messages: list[dict[str, Any]],
+        tools: Optional[list[dict[str, Any]]],
         output_type: type[BaseModel],
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Prepare vendor-specific request parameters.
 
@@ -168,7 +168,7 @@ class BaseProviderHandler(ABC):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[List[Dict[str, Any]]],
+        tool_schemas: Optional[list[dict[str, Any]]],
         output_type: type[BaseModel],
     ) -> str:
         """
@@ -189,7 +189,7 @@ class BaseProviderHandler(ABC):
         """
         pass
 
-    def get_vendor_capabilities(self) -> Dict[str, bool]:
+    def get_vendor_capabilities(self) -> dict[str, bool]:
         """
         Return vendor-specific capability flags.
 
