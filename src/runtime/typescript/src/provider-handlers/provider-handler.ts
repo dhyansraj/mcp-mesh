@@ -323,8 +323,22 @@ function addStrictConstraintsRecursive(obj: unknown, addAllRequired: boolean): v
   }
 
   // Process items (for arrays)
+  // items can be an object (single schema) or an array (tuple validation in older drafts)
   if (record.items) {
-    addStrictConstraintsRecursive(record.items, addAllRequired);
+    if (Array.isArray(record.items)) {
+      for (const item of record.items as unknown[]) {
+        addStrictConstraintsRecursive(item, addAllRequired);
+      }
+    } else {
+      addStrictConstraintsRecursive(record.items, addAllRequired);
+    }
+  }
+
+  // Process prefixItems (tuple validation in JSON Schema draft 2020-12)
+  if (Array.isArray(record.prefixItems)) {
+    for (const item of record.prefixItems as unknown[]) {
+      addStrictConstraintsRecursive(item, addAllRequired);
+    }
   }
 
   // Process anyOf, oneOf, allOf

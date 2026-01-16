@@ -11,7 +11,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-
 # ============================================================================
 # Shared Constants
 # ============================================================================
@@ -27,7 +26,9 @@ IMPORTANT TOOL CALLING RULES:
 """
 
 # Anti-XML instruction for Claude (prevents <invoke> style tool calls).
-CLAUDE_ANTI_XML_INSTRUCTION = "- NEVER use XML-style syntax like <invoke name=\"tool_name\"/>"
+CLAUDE_ANTI_XML_INSTRUCTION = (
+    '- NEVER use XML-style syntax like <invoke name="tool_name"/>'
+)
 
 
 # ============================================================================
@@ -90,8 +91,19 @@ def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
             _add_strict_constraints_recursive(prop_schema, add_all_required)
 
     # Process items (for arrays)
+    # items can be an object (single schema) or a list (tuple validation in older drafts)
     if "items" in obj:
-        _add_strict_constraints_recursive(obj["items"], add_all_required)
+        items = obj["items"]
+        if isinstance(items, dict):
+            _add_strict_constraints_recursive(items, add_all_required)
+        elif isinstance(items, list):
+            for item in items:
+                _add_strict_constraints_recursive(item, add_all_required)
+
+    # Process prefixItems (tuple validation in JSON Schema draft 2020-12)
+    if "prefixItems" in obj:
+        for item in obj["prefixItems"]:
+            _add_strict_constraints_recursive(item, add_all_required)
 
     # Process anyOf, oneOf, allOf
     for key in ("anyOf", "oneOf", "allOf"):

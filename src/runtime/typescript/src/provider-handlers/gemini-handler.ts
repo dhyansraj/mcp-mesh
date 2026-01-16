@@ -109,25 +109,28 @@ export class GeminiHandler implements ProviderHandler {
       request.topP = topP;
     }
 
-    // Skip structured output for text mode
+    // Skip structured output for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
       return request;
     }
 
-    // Add response_format for structured output
-    // Vercel AI SDK translates this to Gemini's native format
-    const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
+    // Only add response_format in "strict" mode
+    // Hint mode relies on prompt instructions instead
+    if (determinedMode === "strict") {
+      // Vercel AI SDK translates this to Gemini's native format
+      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
 
-    request.responseFormat = {
-      type: "json_schema",
-      jsonSchema: {
-        name: outputSchema.name,
-        schema: strictSchema,
-        strict: true, // Enforce schema compliance
-      },
-    };
+      request.responseFormat = {
+        type: "json_schema",
+        jsonSchema: {
+          name: outputSchema.name,
+          schema: strictSchema,
+          strict: true, // Enforce schema compliance
+        },
+      };
 
-    debug(`Using response_format with strict schema: ${outputSchema.name}`);
+      debug(`Using response_format with strict schema: ${outputSchema.name}`);
+    }
 
     return request;
   }

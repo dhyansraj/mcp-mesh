@@ -106,31 +106,31 @@ export class OpenAIHandler implements ProviderHandler {
       request.topP = topP;
     }
 
-    // Skip structured output for text mode
+    // Skip structured output for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
       return request;
     }
 
-    // CRITICAL: Add response_format for structured output
-    // This is what makes OpenAI construct responses according to schema
-    // rather than relying on prompt instructions alone
+    // Only add response_format in "strict" mode
+    // Hint mode relies on prompt instructions instead
+    if (determinedMode === "strict") {
+      // Transform schema for OpenAI strict mode
+      // OpenAI requires additionalProperties: false and all properties in required
+      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
 
-    // Transform schema for OpenAI strict mode
-    // OpenAI requires additionalProperties: false and all properties in required
-    const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
+      // OpenAI structured output format
+      // See: https://platform.openai.com/docs/guides/structured-outputs
+      request.responseFormat = {
+        type: "json_schema",
+        jsonSchema: {
+          name: outputSchema.name,
+          schema: strictSchema,
+          strict: true, // Enforce schema compliance
+        },
+      };
 
-    // OpenAI structured output format
-    // See: https://platform.openai.com/docs/guides/structured-outputs
-    request.responseFormat = {
-      type: "json_schema",
-      jsonSchema: {
-        name: outputSchema.name,
-        schema: strictSchema,
-        strict: true, // Enforce schema compliance
-      },
-    };
-
-    debug(`Using response_format with strict schema: ${outputSchema.name}`);
+      debug(`Using response_format with strict schema: ${outputSchema.name}`);
+    }
 
     return request;
   }
