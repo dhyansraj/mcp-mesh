@@ -5,12 +5,15 @@ Optimized for OpenAI models (GPT-4, GPT-4 Turbo, GPT-3.5-turbo)
 using OpenAI's native structured output capabilities.
 """
 
-import json
 from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from .base_provider_handler import BaseProviderHandler
+from .base_provider_handler import (
+    BASE_TOOL_INSTRUCTIONS,
+    BaseProviderHandler,
+    make_schema_strict,
+)
 
 
 class OpenAIHandler(BaseProviderHandler):
@@ -94,8 +97,8 @@ class OpenAIHandler(BaseProviderHandler):
             schema = output_type.model_json_schema()
 
             # Transform schema for OpenAI strict mode
-            # OpenAI requires additionalProperties: false on all object schemas
-            schema = self._add_additional_properties_false(schema)
+            # OpenAI requires additionalProperties: false and all properties in required
+            schema = make_schema_strict(schema, add_all_required=True)
 
             # OpenAI structured output format
             # See: https://platform.openai.com/docs/guides/structured-outputs
@@ -143,14 +146,7 @@ class OpenAIHandler(BaseProviderHandler):
 
         # Add tool calling instructions if tools available
         if tool_schemas:
-            system_content += """
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-"""
+            system_content += BASE_TOOL_INSTRUCTIONS
 
         # Skip JSON note for str return type (text mode)
         if output_type is str:
@@ -181,54 +177,3 @@ IMPORTANT TOOL CALLING RULES:
             "json_mode": True,  # Has dedicated JSON mode via response_format
         }
 
-    def _add_additional_properties_false(
-        self, schema: dict[str, Any]
-    ) -> dict[str, Any]:
-        """
-        Recursively add additionalProperties: false to all object schemas.
-
-        OpenAI strict mode requires this for all object schemas.
-        See: https://platform.openai.com/docs/guides/structured-outputs
-
-        Args:
-            schema: JSON schema from Pydantic model
-
-        Returns:
-            Modified schema with additionalProperties: false on all objects
-        """
-        import copy
-
-        schema = copy.deepcopy(schema)
-        self._add_additional_properties_recursive(schema)
-        return schema
-
-    def _add_additional_properties_recursive(self, obj: Any) -> None:
-        """Recursively process schema for OpenAI strict mode compliance."""
-        if isinstance(obj, dict):
-            # If this is an object type, add additionalProperties: false
-            # and ensure required includes all properties
-            if obj.get("type") == "object":
-                obj["additionalProperties"] = False
-                # OpenAI strict mode: required must include ALL property keys
-                if "properties" in obj:
-                    obj["required"] = list(obj["properties"].keys())
-
-            # Process $defs (Pydantic uses this for nested models)
-            if "$defs" in obj:
-                for def_schema in obj["$defs"].values():
-                    self._add_additional_properties_recursive(def_schema)
-
-            # Process properties
-            if "properties" in obj:
-                for prop_schema in obj["properties"].values():
-                    self._add_additional_properties_recursive(prop_schema)
-
-            # Process items (for arrays)
-            if "items" in obj:
-                self._add_additional_properties_recursive(obj["items"])
-
-            # Process anyOf, oneOf, allOf
-            for key in ("anyOf", "oneOf", "allOf"):
-                if key in obj:
-                    for item in obj[key]:
-                        self._add_additional_properties_recursive(item)

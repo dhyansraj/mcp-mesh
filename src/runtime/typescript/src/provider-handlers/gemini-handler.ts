@@ -21,6 +21,9 @@ import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
+  makeSchemaStrict,
+  defaultDetermineOutputMode,
+  BASE_TOOL_INSTRUCTIONS,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -113,7 +116,7 @@ export class GeminiHandler implements ProviderHandler {
 
     // Add response_format for structured output
     // Vercel AI SDK translates this to Gemini's native format
-    const strictSchema = this.makeSchemaStrict(outputSchema.schema);
+    const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
 
     request.responseFormat = {
       type: "json_schema",
@@ -149,14 +152,7 @@ export class GeminiHandler implements ProviderHandler {
 
     // Add tool calling instructions if tools available
     if (toolSchemas && toolSchemas.length > 0) {
-      systemContent += `
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools (functions) that you can call to gather information
-- Make ONE tool call at a time
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-`;
+      systemContent += BASE_TOOL_INSTRUCTIONS;
     }
 
     // Skip JSON note for text mode
@@ -188,92 +184,13 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
   /**
    * Determine output mode - Gemini uses strict mode for schemas.
    *
-   * Since Gemini has good structured output support via Vercel AI SDK,
-   * we use strict mode by default for schemas.
+   * Uses the default implementation since Gemini has good structured output support.
    */
   determineOutputMode(
     outputSchema: OutputSchema | null,
     overrideMode?: OutputMode
   ): OutputMode {
-    // Allow explicit override
-    if (overrideMode) {
-      return overrideMode;
-    }
-
-    // No schema means text mode
-    if (!outputSchema) {
-      return "text";
-    }
-
-    // Gemini supports structured output - use strict
-    return "strict";
-  }
-
-  // ==========================================================================
-  // Private Helper Methods
-  // ==========================================================================
-
-  /**
-   * Make a JSON schema strict for Gemini's structured output.
-   *
-   * Adds additionalProperties: false and ensures required fields
-   * for proper schema enforcement.
-   */
-  private makeSchemaStrict(schema: Record<string, unknown>): Record<string, unknown> {
-    // Deep clone to avoid mutating original
-    const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-    this.addStrictConstraintsRecursive(result);
-    return result;
-  }
-
-  /**
-   * Recursively process schema for strict mode compliance.
-   */
-  private addStrictConstraintsRecursive(obj: unknown): void {
-    if (typeof obj !== "object" || obj === null) {
-      return;
-    }
-
-    const record = obj as Record<string, unknown>;
-
-    // If this is an object type, add additionalProperties: false
-    // and ensure required includes all properties
-    if (record.type === "object") {
-      record.additionalProperties = false;
-
-      // Strict mode: required should include all property keys
-      if (record.properties && typeof record.properties === "object") {
-        record.required = Object.keys(record.properties as Record<string, unknown>);
-      }
-    }
-
-    // Process $defs (used for nested models)
-    if (record.$defs && typeof record.$defs === "object") {
-      for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
-        this.addStrictConstraintsRecursive(defSchema);
-      }
-    }
-
-    // Process properties
-    if (record.properties && typeof record.properties === "object") {
-      for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
-        this.addStrictConstraintsRecursive(propSchema);
-      }
-    }
-
-    // Process items (for arrays)
-    if (record.items) {
-      this.addStrictConstraintsRecursive(record.items);
-    }
-
-    // Process anyOf, oneOf, allOf
-    for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-      if (Array.isArray(record[key])) {
-        for (const item of record[key] as unknown[]) {
-          this.addStrictConstraintsRecursive(item);
-        }
-      }
-    }
+    return defaultDetermineOutputMode(outputSchema, overrideMode);
   }
 }
 

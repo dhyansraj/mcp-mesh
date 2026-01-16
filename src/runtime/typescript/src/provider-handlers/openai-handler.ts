@@ -12,6 +12,9 @@ import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
+  makeSchemaStrict,
+  defaultDetermineOutputMode,
+  BASE_TOOL_INSTRUCTIONS,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -113,8 +116,8 @@ export class OpenAIHandler implements ProviderHandler {
     // rather than relying on prompt instructions alone
 
     // Transform schema for OpenAI strict mode
-    // OpenAI requires additionalProperties: false on all object schemas
-    const strictSchema = this.addAdditionalPropertiesFalse(outputSchema.schema);
+    // OpenAI requires additionalProperties: false and all properties in required
+    const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
 
     // OpenAI structured output format
     // See: https://platform.openai.com/docs/guides/structured-outputs
@@ -158,14 +161,7 @@ export class OpenAIHandler implements ProviderHandler {
 
     // Add tool calling instructions if tools available
     if (toolSchemas && toolSchemas.length > 0) {
-      systemContent += `
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-`;
+      systemContent += BASE_TOOL_INSTRUCTIONS;
     }
 
     // Skip JSON note for text mode
@@ -202,96 +198,13 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
   /**
    * Determine output mode - OpenAI always uses strict mode for schemas.
    *
-   * Since OpenAI has excellent structured output support via response_format,
-   * we use strict mode by default for all schemas.
+   * Uses the default implementation since OpenAI has excellent structured output support.
    */
   determineOutputMode(
     outputSchema: OutputSchema | null,
     overrideMode?: OutputMode
   ): OutputMode {
-    // Allow explicit override
-    if (overrideMode) {
-      return overrideMode;
-    }
-
-    // No schema means text mode
-    if (!outputSchema) {
-      return "text";
-    }
-
-    // OpenAI has excellent structured output - always use strict
-    return "strict";
-  }
-
-  // ==========================================================================
-  // Private Helper Methods
-  // ==========================================================================
-
-  /**
-   * Recursively add additionalProperties: false to all object schemas.
-   *
-   * OpenAI strict mode requires this for all object schemas.
-   * Also ensures 'required' includes ALL property keys.
-   *
-   * See: https://platform.openai.com/docs/guides/structured-outputs
-   */
-  private addAdditionalPropertiesFalse(
-    schema: Record<string, unknown>
-  ): Record<string, unknown> {
-    // Deep clone to avoid mutating original
-    const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-    this.addAdditionalPropertiesRecursive(result);
-    return result;
-  }
-
-  /**
-   * Recursively process schema for OpenAI strict mode compliance.
-   */
-  private addAdditionalPropertiesRecursive(obj: unknown): void {
-    if (typeof obj !== "object" || obj === null) {
-      return;
-    }
-
-    const record = obj as Record<string, unknown>;
-
-    // If this is an object type, add additionalProperties: false
-    // and ensure required includes all properties
-    if (record.type === "object") {
-      record.additionalProperties = false;
-
-      // OpenAI strict mode: required must include ALL property keys
-      if (record.properties && typeof record.properties === "object") {
-        record.required = Object.keys(record.properties as Record<string, unknown>);
-      }
-    }
-
-    // Process $defs (used for nested models)
-    if (record.$defs && typeof record.$defs === "object") {
-      for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
-        this.addAdditionalPropertiesRecursive(defSchema);
-      }
-    }
-
-    // Process properties
-    if (record.properties && typeof record.properties === "object") {
-      for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
-        this.addAdditionalPropertiesRecursive(propSchema);
-      }
-    }
-
-    // Process items (for arrays)
-    if (record.items) {
-      this.addAdditionalPropertiesRecursive(record.items);
-    }
-
-    // Process anyOf, oneOf, allOf
-    for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-      if (Array.isArray(record[key])) {
-        for (const item of record[key] as unknown[]) {
-          this.addAdditionalPropertiesRecursive(item);
-        }
-      }
-    }
+    return defaultDetermineOutputMode(outputSchema, overrideMode);
   }
 }
 

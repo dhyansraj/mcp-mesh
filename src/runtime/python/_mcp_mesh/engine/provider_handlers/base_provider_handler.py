@@ -5,10 +5,104 @@ This module defines the abstract base class for provider-specific handlers
 that customize how different LLM vendors (Claude, OpenAI, Gemini, etc.) are called.
 """
 
+import copy
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
+
+
+# ============================================================================
+# Shared Constants
+# ============================================================================
+
+# Base tool calling instructions shared across all providers.
+# Claude handler adds anti-XML instruction on top of this.
+BASE_TOOL_INSTRUCTIONS = """
+IMPORTANT TOOL CALLING RULES:
+- You have access to tools that you can call to gather information
+- Make ONE tool call at a time
+- After receiving tool results, you can make additional calls if needed
+- Once you have all needed information, provide your final response
+"""
+
+# Anti-XML instruction for Claude (prevents <invoke> style tool calls).
+CLAUDE_ANTI_XML_INSTRUCTION = "- NEVER use XML-style syntax like <invoke name=\"tool_name\"/>"
+
+
+# ============================================================================
+# Shared Schema Utilities
+# ============================================================================
+
+
+def make_schema_strict(
+    schema: dict[str, Any],
+    add_all_required: bool = True,
+) -> dict[str, Any]:
+    """
+    Make a JSON schema strict for structured output.
+
+    This is a shared utility used by OpenAI, Gemini, and Claude handlers.
+    Adds additionalProperties: false to all object types and optionally
+    ensures 'required' includes all property keys.
+
+    Args:
+        schema: JSON schema to make strict
+        add_all_required: If True, set 'required' to include ALL property keys.
+                         OpenAI and Gemini require this; Claude does not.
+                         Default: True
+
+    Returns:
+        New schema with strict constraints (original not mutated)
+    """
+    result = copy.deepcopy(schema)
+    _add_strict_constraints_recursive(result, add_all_required)
+    return result
+
+
+def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
+    """
+    Recursively add strict constraints to a schema object.
+
+    Args:
+        obj: Schema object to process (mutated in place)
+        add_all_required: Whether to set required to all property keys
+    """
+    if not isinstance(obj, dict):
+        return
+
+    # If this is an object type, add additionalProperties: false
+    if obj.get("type") == "object":
+        obj["additionalProperties"] = False
+
+        # Optionally set required to include all property keys
+        if add_all_required and "properties" in obj:
+            obj["required"] = list(obj["properties"].keys())
+
+    # Process $defs (Pydantic uses this for nested models)
+    if "$defs" in obj:
+        for def_schema in obj["$defs"].values():
+            _add_strict_constraints_recursive(def_schema, add_all_required)
+
+    # Process properties
+    if "properties" in obj:
+        for prop_schema in obj["properties"].values():
+            _add_strict_constraints_recursive(prop_schema, add_all_required)
+
+    # Process items (for arrays)
+    if "items" in obj:
+        _add_strict_constraints_recursive(obj["items"], add_all_required)
+
+    # Process anyOf, oneOf, allOf
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in obj:
+            for item in obj[key]:
+                _add_strict_constraints_recursive(item, add_all_required)
+
+
+# ============================================================================
+# Base Provider Handler
+# ============================================================================
 
 
 class BaseProviderHandler(ABC):

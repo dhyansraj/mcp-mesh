@@ -15,13 +15,16 @@ Reference:
 - https://ai.google.dev/gemini-api/docs
 """
 
-import copy
 import logging
 from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from .base_provider_handler import BaseProviderHandler
+from .base_provider_handler import (
+    BASE_TOOL_INSTRUCTIONS,
+    BaseProviderHandler,
+    make_schema_strict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +109,8 @@ class GeminiHandler(BaseProviderHandler):
         schema = output_type.model_json_schema()
 
         # Transform schema for strict mode compliance
-        schema = self._make_schema_strict(schema)
+        # Gemini requires additionalProperties: false and all properties in required
+        schema = make_schema_strict(schema, add_all_required=True)
 
         # Gemini structured output format (via LiteLLM)
         request_params["response_format"] = {
@@ -147,14 +151,7 @@ class GeminiHandler(BaseProviderHandler):
 
         # Add tool calling instructions if tools available
         if tool_schemas:
-            system_content += """
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools (functions) that you can call to gather information
-- Make ONE tool call at a time
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-"""
+            system_content += BASE_TOOL_INSTRUCTIONS
 
         # Skip JSON note for str return type (text mode)
         if output_type is str:
@@ -182,50 +179,3 @@ IMPORTANT TOOL CALLING RULES:
             "large_context": True,  # Up to 2M tokens context window
         }
 
-    def _make_schema_strict(self, schema: dict[str, Any]) -> dict[str, Any]:
-        """
-        Make a JSON schema strict for Gemini's structured output.
-
-        Adds additionalProperties: false and ensures required fields
-        for proper schema enforcement.
-
-        Args:
-            schema: JSON schema from Pydantic model
-
-        Returns:
-            Modified schema with strict constraints
-        """
-        schema = copy.deepcopy(schema)
-        self._add_strict_constraints_recursive(schema)
-        return schema
-
-    def _add_strict_constraints_recursive(self, obj: Any) -> None:
-        """Recursively process schema for strict mode compliance."""
-        if isinstance(obj, dict):
-            # If this is an object type, add additionalProperties: false
-            # and ensure required includes all properties
-            if obj.get("type") == "object":
-                obj["additionalProperties"] = False
-                # Strict mode: required should include all property keys
-                if "properties" in obj:
-                    obj["required"] = list(obj["properties"].keys())
-
-            # Process $defs (Pydantic uses this for nested models)
-            if "$defs" in obj:
-                for def_schema in obj["$defs"].values():
-                    self._add_strict_constraints_recursive(def_schema)
-
-            # Process properties
-            if "properties" in obj:
-                for prop_schema in obj["properties"].values():
-                    self._add_strict_constraints_recursive(prop_schema)
-
-            # Process items (for arrays)
-            if "items" in obj:
-                self._add_strict_constraints_recursive(obj["items"])
-
-            # Process anyOf, oneOf, allOf
-            for key in ("anyOf", "oneOf", "allOf"):
-                if key in obj:
-                    for item in obj[key]:
-                        self._add_strict_constraints_recursive(item)

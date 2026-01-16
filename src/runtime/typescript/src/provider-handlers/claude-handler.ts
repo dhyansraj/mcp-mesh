@@ -24,6 +24,9 @@ import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
+  makeSchemaStrict,
+  BASE_TOOL_INSTRUCTIONS,
+  CLAUDE_ANTI_XML_INSTRUCTION,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -125,7 +128,8 @@ export class ClaudeHandler implements ProviderHandler {
     // Only add response_format in "strict" mode
     if (determinedMode === "strict" && outputSchema) {
       // Claude requires additionalProperties: false on all object types
-      const strictSchema = this.makeSchemaStrict(outputSchema.schema);
+      // Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
+      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: false });
       request.responseFormat = {
         type: "json_schema",
         jsonSchema: {
@@ -160,15 +164,12 @@ export class ClaudeHandler implements ProviderHandler {
     // Add tool calling instructions if tools available
     // These prevent Claude from using XML-style <invoke> syntax
     if (toolSchemas && toolSchemas.length > 0) {
-      systemContent += `
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time
-- NEVER use XML-style syntax like <invoke name="tool_name"/>
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-`;
+      // Use base instructions but insert anti-XML rule for Claude
+      const instructions = BASE_TOOL_INSTRUCTIONS.replace(
+        "- Make ONE tool call at a time",
+        `- Make ONE tool call at a time\n${CLAUDE_ANTI_XML_INSTRUCTION}`
+      );
+      systemContent += instructions;
     }
 
     // Add output format instructions based on mode
@@ -332,62 +333,6 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
 
     return true;
   }
-
-  /**
-   * Make a JSON schema strict for Claude's structured output.
-   *
-   * Claude requires additionalProperties: false on all object types.
-   * This recursively processes the schema to add this constraint.
-   */
-  private makeSchemaStrict(schema: Record<string, unknown>): Record<string, unknown> {
-    if (typeof schema !== "object" || schema === null) {
-      return schema;
-    }
-
-    const result = { ...schema };
-
-    // If this is an object type, add additionalProperties: false
-    if (result.type === "object") {
-      result.additionalProperties = false;
-    }
-
-    // Recursively process nested schemas
-    if (result.properties && typeof result.properties === "object") {
-      result.properties = Object.fromEntries(
-        Object.entries(result.properties as Record<string, unknown>).map(([k, v]) => [
-          k,
-          this.makeSchemaStrict(v as Record<string, unknown>),
-        ])
-      );
-    }
-
-    // Process $defs (used for nested models)
-    if (result.$defs && typeof result.$defs === "object") {
-      result.$defs = Object.fromEntries(
-        Object.entries(result.$defs as Record<string, unknown>).map(([k, v]) => [
-          k,
-          this.makeSchemaStrict(v as Record<string, unknown>),
-        ])
-      );
-    }
-
-    // Process items for arrays
-    if (result.items && typeof result.items === "object") {
-      result.items = this.makeSchemaStrict(result.items as Record<string, unknown>);
-    }
-
-    // Process anyOf, oneOf, allOf
-    for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-      if (Array.isArray(result[key])) {
-        result[key] = (result[key] as Record<string, unknown>[]).map((s) =>
-          this.makeSchemaStrict(s)
-        );
-      }
-    }
-
-    return result;
-  }
-
 }
 
 // Register with the registry

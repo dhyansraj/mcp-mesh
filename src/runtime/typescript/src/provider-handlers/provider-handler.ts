@@ -225,6 +225,147 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
 }
 
 // ============================================================================
+// Shared Constants
+// ============================================================================
+
+/**
+ * Base tool calling instructions shared across all providers.
+ *
+ * Claude handler adds anti-XML instruction on top of this.
+ */
+export const BASE_TOOL_INSTRUCTIONS = `
+IMPORTANT TOOL CALLING RULES:
+- You have access to tools that you can call to gather information
+- Make ONE tool call at a time
+- After receiving tool results, you can make additional calls if needed
+- Once you have all needed information, provide your final response
+`;
+
+/**
+ * Anti-XML instruction for Claude (prevents <invoke> style tool calls).
+ */
+export const CLAUDE_ANTI_XML_INSTRUCTION = `- NEVER use XML-style syntax like <invoke name="tool_name"/>`;
+
+// ============================================================================
+// Shared Schema Utilities
+// ============================================================================
+
+/**
+ * Options for making a schema strict.
+ */
+export interface MakeSchemaStrictOptions {
+  /**
+   * If true, set 'required' to include ALL property keys.
+   * OpenAI and Gemini require this; Claude does not.
+   * Default: true
+   */
+  addAllRequired?: boolean;
+}
+
+/**
+ * Make a JSON schema strict for structured output.
+ *
+ * This is a shared utility used by OpenAI, Gemini, and Claude handlers.
+ * Adds additionalProperties: false to all object types and optionally
+ * ensures 'required' includes all property keys.
+ *
+ * @param schema - JSON schema to make strict
+ * @param options - Configuration options
+ * @returns New schema with strict constraints (original not mutated)
+ */
+export function makeSchemaStrict(
+  schema: Record<string, unknown>,
+  options: MakeSchemaStrictOptions = {}
+): Record<string, unknown> {
+  const { addAllRequired = true } = options;
+
+  // Deep clone to avoid mutating original
+  const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  addStrictConstraintsRecursive(result, addAllRequired);
+  return result;
+}
+
+/**
+ * Recursively add strict constraints to a schema object.
+ *
+ * @param obj - Schema object to process (mutated in place)
+ * @param addAllRequired - Whether to set required to all property keys
+ */
+function addStrictConstraintsRecursive(obj: unknown, addAllRequired: boolean): void {
+  if (typeof obj !== "object" || obj === null) {
+    return;
+  }
+
+  const record = obj as Record<string, unknown>;
+
+  // If this is an object type, add additionalProperties: false
+  if (record.type === "object") {
+    record.additionalProperties = false;
+
+    // Optionally set required to include all property keys
+    if (addAllRequired && record.properties && typeof record.properties === "object") {
+      record.required = Object.keys(record.properties as Record<string, unknown>);
+    }
+  }
+
+  // Process $defs (used for nested models)
+  if (record.$defs && typeof record.$defs === "object") {
+    for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
+      addStrictConstraintsRecursive(defSchema, addAllRequired);
+    }
+  }
+
+  // Process properties
+  if (record.properties && typeof record.properties === "object") {
+    for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
+      addStrictConstraintsRecursive(propSchema, addAllRequired);
+    }
+  }
+
+  // Process items (for arrays)
+  if (record.items) {
+    addStrictConstraintsRecursive(record.items, addAllRequired);
+  }
+
+  // Process anyOf, oneOf, allOf
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    if (Array.isArray(record[key])) {
+      for (const item of record[key] as unknown[]) {
+        addStrictConstraintsRecursive(item, addAllRequired);
+      }
+    }
+  }
+}
+
+/**
+ * Default implementation of determineOutputMode.
+ *
+ * Most providers (OpenAI, Gemini) use strict mode for schemas.
+ * Claude overrides this with more sophisticated logic.
+ *
+ * @param outputSchema - The output schema (null for string return type)
+ * @param overrideMode - Optional explicit mode override
+ * @returns The determined output mode
+ */
+export function defaultDetermineOutputMode(
+  outputSchema: OutputSchema | null,
+  overrideMode?: OutputMode
+): OutputMode {
+  // Allow explicit override
+  if (overrideMode) {
+    return overrideMode;
+  }
+
+  // No schema means text mode
+  if (!outputSchema) {
+    return "text";
+  }
+
+  // Default: use strict mode for schemas
+  return "strict";
+}
+
+// ============================================================================
 // Provider Handler Interface
 // ============================================================================
 
