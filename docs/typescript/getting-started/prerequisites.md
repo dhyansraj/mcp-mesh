@@ -54,7 +54,7 @@ pip install --upgrade pip
 ### MCP Mesh SDK
 
 ```bash
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 
 # Verify
 python -c "import mesh; print('Ready!')"
@@ -67,7 +67,7 @@ python -c "import mesh; print('Ready!')"
 python3.11 -m venv .venv
 source .venv/bin/activate    # Only needed for pip
 pip install --upgrade pip
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 deactivate                   # Can deactivate after pip install
 
 # 2. Scaffold agents - meshctl auto-detects .venv (no activation needed)
@@ -131,14 +131,14 @@ docker compose version
 
 | Image                            | Description                 |
 | -------------------------------- | --------------------------- |
-| `mcpmesh/registry:0.7`           | Registry service            |
-| `mcpmesh/python-runtime:0.7`     | Python runtime with SDK     |
+| `mcpmesh/registry:0.8`           | Registry service            |
+| `mcpmesh/python-runtime:0.8`     | Python runtime with SDK     |
 | `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
-docker pull mcpmesh/registry:0.7
-docker pull mcpmesh/python-runtime:0.7
+docker pull mcpmesh/registry:0.8
+docker pull mcpmesh/python-runtime:0.8
 docker pull mcpmesh/typescript-runtime:0.8
 ```
 
@@ -177,12 +177,12 @@ Available from OCI registry (no `helm repo add` needed):
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.21 \
+  --version 0.8.0-beta.1 \
   -n mcp-mesh --create-namespace
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.21 \
+  --version 0.8.0-beta.1 \
   -n mcp-mesh \
   -f helm-values.yaml
 ```

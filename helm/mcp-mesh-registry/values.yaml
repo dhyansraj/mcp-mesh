@@ -9,8 +9,8 @@ workloadType: "Deployment" # Registry is stateless
 image:
   repository: mcpmesh/registry
   pullPolicy: IfNotPresent
-  # Minor version tag tracks latest patch (0.7 → 0.7.x)
-  tag: "0.7"
+  # Minor version tag tracks latest patch (0.8 → 0.8.x)
+  tag: "0.8"
 
 imagePullSecrets: []
 nameOverride: ""

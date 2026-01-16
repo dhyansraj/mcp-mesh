@@ -40,7 +40,7 @@ graph LR
 === "Python Runtime"
 
     ```bash
-    pip install "mcp-mesh>=0.7,<0.8"
+    pip install "mcp-mesh>=0.8,<0.9"
     ```
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
@@ -57,7 +57,7 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install MCP Mesh SDK (if not done above)
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 ```
 
 ### 3. Scaffold Your Agent

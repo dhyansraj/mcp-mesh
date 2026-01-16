@@ -24,8 +24,8 @@ MCP Mesh publishes official images to Docker Hub:
 
 | Image                        | Purpose                                      |
 | ---------------------------- | -------------------------------------------- |
-| `mcpmesh/registry:0.7`       | Go-based registry service                    |
-| `mcpmesh/python-runtime:0.7` | Python agent runtime (includes mcp-mesh SDK) |
+| `mcpmesh/registry:0.8`       | Go-based registry service                    |
+| `mcpmesh/python-runtime:0.8` | Python agent runtime (includes mcp-mesh SDK) |
 
 ## Using Scaffold to Generate Compose Files
 
@@ -49,7 +49,7 @@ version: "3.8"
 
 services:
   registry:
-    image: mcpmesh/registry:0.7
+    image: mcpmesh/registry:0.8
     ports:
       - "8000:8000"
     environment:
@@ -62,7 +62,7 @@ services:
       retries: 3
 
   my-agent:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     ports:
       - "8080:8080"
     volumes:
@@ -89,12 +89,12 @@ version: "3.8"
 
 services:
   registry:
-    image: mcpmesh/registry:0.7
+    image: mcpmesh/registry:0.8
     ports:
       - "8000:8000"
 
   my-agent:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     volumes:
       - ./agent.py:/app/agent.py:ro
     command: ["python", "/app/agent.py"]
@@ -114,7 +114,7 @@ If you didn't use scaffold, here's a sample Dockerfile:
 
 ```dockerfile
 # Dockerfile
-FROM mcpmesh/python-runtime:0.7
+FROM mcpmesh/python-runtime:0.8
 
 # Copy your agent code
 COPY ./my-agent /app/agent
@@ -142,12 +142,12 @@ version: "3.8"
 
 services:
   registry:
-    image: mcpmesh/registry:0.7
+    image: mcpmesh/registry:0.8
     ports:
       - "8000:8000"
 
   auth-agent:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     volumes:
       - ./agents/auth:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -156,7 +156,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   data-agent:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     volumes:
       - ./agents/data:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -165,7 +165,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   api-agent:
-    image: mcpmesh/python-runtime:0.7
+    image: mcpmesh/python-runtime:0.8
     volumes:
       - ./agents/api:/app/agent:ro
     command: ["python", "/app/agent/main.py"]

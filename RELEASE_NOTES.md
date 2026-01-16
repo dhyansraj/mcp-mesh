@@ -1,5 +1,32 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.1)
+
+## v0.8.0-beta.1 (2026-01-16)
+
+### 🎯 TypeScript SDK (Major)
+
+- **Full TypeScript support** with `@mcpmesh/sdk` npm package (#391, #398, #400, #403, #406)
+- **Rust core runtime** for multi-language FFI support (#388, #394)
+- **Express integration** via `mesh.route()` for dependency injection (#396)
+- **LLM agent support** with `mesh.llm()` and provider plugin architecture (#398, #400)
+- **Vercel AI SDK v6 compatibility** (#412)
+- **meshctl TypeScript support** - start, watch, and manage TS agents (#406)
+
+### ✨ New Features
+
+- **Gemini (Google AI) support** - New LLM provider alongside Claude/OpenAI (#416)
+- **Agent name prefix matching** - `meshctl call calc` matches `calculator-agent` (#417)
+
+### 🐛 Bug Fixes
+
+- **addLlmProviderTool** now respects the `name` parameter (#407)
+
+### 📚 Documentation
+
+- README refresh with Python/TypeScript dual-language examples (#410)
+- Feature comparison table and proxy/LLM documentation updates (#410)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.20...v0.7.21)
 
 ## v0.7.21 (2026-01-07)

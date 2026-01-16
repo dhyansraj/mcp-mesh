@@ -254,3 +254,4 @@ rust-core-implementation.org
 # NAPI-RS auto-generated build artifacts
 src/runtime/core/index.js
 src/runtime/core/index.d.ts
+test/

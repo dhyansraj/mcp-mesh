@@ -10,7 +10,7 @@ MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshc
 
 | Image                            | Description                                        |
 | -------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:0.7`           | Registry service for agent discovery               |
+| `mcpmesh/registry:0.8`           | Registry service for agent discovery               |
 | `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
@@ -101,6 +101,7 @@ CMD ["npx", "tsx", "src/index.ts"]
 ```
 
 **Security notes:**
+
 - **USER root / USER mcp-mesh**: The base image runs as the non-root `mcp-mesh` user by default. We temporarily switch to root for file operations, then drop privileges back to `mcp-mesh` for runtime security.
 - **COPY --chmod=755 / chown**: Ensures files have correct permissions and ownership for the `mcp-mesh` user to execute.
 - **EXPOSE**: The port is configured via `--port` flag during scaffold (defaults to 9000).
@@ -122,7 +123,7 @@ meshctl scaffold --compose --observability
 Generated `docker-compose.yml` includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:0.7`)
+- Registry service (`mcpmesh/registry:0.8`)
 - TypeScript agents with `mcpmesh/typescript-runtime:0.8`
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
@@ -144,12 +145,12 @@ For production Kubernetes deployment:
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.7.21 \
+  --version 0.8.0-beta.1 \
   -n mcp-mesh --create-namespace
 
 # Deploy TypeScript agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.21 \
+  --version 0.8.0-beta.1 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -167,7 +168,7 @@ agent:
   name: my-agent
   # No script needed - TypeScript agents use Docker CMD from Dockerfile
   # The scaffolded Dockerfile includes: CMD ["npx", "tsx", "src/index.ts"]
-  command: []  # Empty = use Docker image's CMD (recommended)
+  command: [] # Empty = use Docker image's CMD (recommended)
 
 mesh:
   enabled: true
@@ -195,7 +196,7 @@ docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --pu
 
 # 3. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.7.21 \
+  --version 0.8.0-beta.1 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
