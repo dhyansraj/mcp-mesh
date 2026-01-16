@@ -61,7 +61,7 @@ helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
 | **Setup Complexity** | :material-star: Easy     | :material-star::material-star: Medium |
 | **Production Ready** | :material-close: Limited | :material-check-all: Yes              |
 | **Scaling**          | Manual                   | Automatic (HPA)                       |
-| **Observability**    | Optional                 | Built-in                              |
+| **Observability**    | Built-in (opt-in)        | Built-in (opt-in)                     |
 | **Best Use Case**    | Development              | Production                            |
 
 ---

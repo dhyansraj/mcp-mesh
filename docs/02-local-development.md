@@ -4,7 +4,7 @@
 
 ## Overview
 
-This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine.
+This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine using **Python** or **TypeScript**.
 
 ## Development Workflow
 
@@ -13,7 +13,7 @@ graph LR
     A[Install Tools] --> B[Scaffold Agent]
     B --> C[Write Code]
     C --> D[Start Agents]
-    D --> E[Test with curl]
+    D --> E[Test with meshctl]
     E --> C
 ```
 
@@ -45,67 +45,160 @@ graph LR
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
 
+=== "TypeScript Runtime"
+
+    ```bash
+    npm install @mcpmesh/sdk
+    ```
+
+    Runtime for building agents with `mesh()` and `agent.addTool()` functions.
+
 ### 2. Set Up Your Project
 
-```bash
-# Create project directory
-mkdir my-agent-project
-cd my-agent-project
+=== "Python"
 
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```bash
+    # Create project directory
+    mkdir my-agent-project
+    cd my-agent-project
 
-# Install MCP Mesh SDK (if not done above)
-pip install "mcp-mesh>=0.8,<0.9"
-```
+    # Create and activate virtual environment
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+    # Install MCP Mesh SDK
+    pip install "mcp-mesh>=0.8,<0.9"
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    # Create project directory
+    mkdir my-agent-project
+    cd my-agent-project
+
+    # Initialize npm project
+    npm init -y
+
+    # Install MCP Mesh SDK and dependencies
+    npm install @mcpmesh/sdk zod
+    npm install -D typescript tsx @types/node
+
+    # Create src directory
+    mkdir src
+    ```
 
 ### 3. Scaffold Your Agent
 
-```bash
-# Generate a new agent
-meshctl scaffold --name my-agent --capability my_service
+=== "Python"
 
-# Or with Docker Compose for deployment
-meshctl scaffold --name my-agent --compose
-```
+    ```bash
+    # Generate a new agent
+    meshctl scaffold --name my-agent --capability my_service
 
-This creates:
+    # Or with Docker Compose for deployment
+    meshctl scaffold --name my-agent --compose
+    ```
 
-```
-my-agent/
-├── main.py           # Your agent code
-├── requirements.txt  # Dependencies
-└── README.md         # Documentation
-```
+    This creates:
+
+    ```
+    my-agent/
+    ├── main.py           # Your agent code
+    ├── requirements.txt  # Dependencies
+    └── README.md         # Documentation
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    # Generate a new TypeScript agent
+    meshctl scaffold --name my-agent --capability my_service --lang typescript
+
+    # Or with Docker Compose for deployment
+    meshctl scaffold --name my-agent --lang typescript --compose
+    ```
+
+    This creates:
+
+    ```
+    my-agent/
+    ├── src/
+    │   └── index.ts      # Your agent code
+    ├── package.json      # Dependencies
+    ├── tsconfig.json     # TypeScript config
+    └── README.md         # Documentation
+    ```
 
 ### 4. Develop Your Agent
 
-Edit `main.py` to add your functionality:
+=== "Python"
 
-```python
-import mesh
-from fastmcp import FastMCP
+    Edit `main.py` to add your functionality:
 
-app = FastMCP("My Agent")
+    ```python
+    import mesh
+    from fastmcp import FastMCP
 
-@app.tool()
-@mesh.tool(capability="my_service")
-def my_function(data: str) -> str:
-    """Your custom functionality."""
-    return f"Processed: {data}"
+    app = FastMCP("My Agent")
 
-@mesh.agent(name="my-agent", http_port=8080, auto_run=True)
-class MyAgent:
-    pass
-```
+    @app.tool()
+    @mesh.tool(capability="my_service")
+    def my_function(data: str) -> str:
+        """Your custom functionality."""
+        return f"Processed: {data}"
+
+    @mesh.agent(name="my-agent", http_port=8080, auto_run=True)
+    class MyAgent:
+        pass
+    ```
+
+=== "TypeScript"
+
+    Edit `src/index.ts` to add your functionality:
+
+    ```typescript
+    import { FastMCP, mesh } from "@mcpmesh/sdk";
+    import { z } from "zod";
+
+    const server = new FastMCP({
+      name: "My Agent",
+      version: "1.0.0",
+    });
+
+    const agent = mesh(server, {
+      name: "my-agent",
+      port: 8080,
+    });
+
+    agent.addTool({
+      name: "my_function",
+      capability: "my_service",
+      description: "Your custom functionality",
+      parameters: z.object({
+        data: z.string().describe("Input data"),
+      }),
+      execute: async ({ data }) => {
+        return `Processed: ${data}`;
+      },
+    });
+    ```
 
 ### 5. Start Your Agent
 
-```bash
-# Start your agent (registry auto-starts if not running)
-meshctl start main.py
-```
+=== "Python"
+
+    ```bash
+    # Start your agent (registry auto-starts if not running)
+    meshctl start main.py
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    # Start your agent (registry auto-starts if not running)
+    meshctl start src/index.ts
+    ```
 
 ### 6. Test Your Agent
 
@@ -143,38 +236,74 @@ MCP Mesh uses Server-Sent Events (SSE) format. `meshctl call` handles this autom
 
 Develop multiple agents that work together:
 
-```bash
-# Terminal 1: Start first agent
-meshctl start agents/auth_agent.py
+=== "Python"
 
-# Terminal 2: Start second agent (depends on first)
-meshctl start agents/api_agent.py
+    ```bash
+    # Terminal 1: Start first agent
+    meshctl start agents/auth_agent.py
 
-# Test dependency injection
-meshctl call secure_operation
-```
+    # Terminal 2: Start second agent (depends on first)
+    meshctl start agents/api_agent.py
+
+    # Test dependency injection
+    meshctl call secure_operation
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    # Terminal 1: Start first agent
+    meshctl start agents/auth-agent/src/index.ts
+
+    # Terminal 2: Start second agent (depends on first)
+    meshctl start agents/api-agent/src/index.ts
+
+    # Test dependency injection
+    meshctl call secure_operation
+    ```
 
 ## Project Structure
 
 Each scaffolded agent gets its own directory:
 
-```
-my-project/
-├── my-agent/
-│   ├── main.py           # Agent code
-│   ├── requirements.txt  # Dependencies
-│   ├── Dockerfile        # Container build
-│   ├── helm-values.yaml  # Kubernetes config
-│   ├── __init__.py
-│   ├── __main__.py
-│   └── README.md
-├── another-agent/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── ...
-└── docker-compose.yml    # Generated with --compose
-```
+=== "Python"
+
+    ```
+    my-project/
+    ├── my-agent/
+    │   ├── main.py           # Agent code
+    │   ├── requirements.txt  # Dependencies
+    │   ├── Dockerfile        # Container build
+    │   ├── helm-values.yaml  # Kubernetes config
+    │   └── README.md
+    ├── another-agent/
+    │   ├── main.py
+    │   ├── requirements.txt
+    │   ├── Dockerfile
+    │   └── ...
+    └── docker-compose.yml    # Generated with --compose
+    ```
+
+=== "TypeScript"
+
+    ```
+    my-project/
+    ├── my-agent/
+    │   ├── src/
+    │   │   └── index.ts      # Agent code
+    │   ├── package.json      # Dependencies
+    │   ├── tsconfig.json     # TypeScript config
+    │   ├── Dockerfile        # Container build
+    │   ├── helm-values.yaml  # Kubernetes config
+    │   └── README.md
+    ├── another-agent/
+    │   ├── src/
+    │   │   └── index.ts
+    │   ├── package.json
+    │   ├── Dockerfile
+    │   └── ...
+    └── docker-compose.yml    # Generated with --compose
+    ```
 
 ## Environment Variables
 
@@ -207,9 +336,17 @@ meshctl stop --all
 
 ### Enable Debug Logging
 
-```bash
-meshctl start --debug main.py
-```
+=== "Python"
+
+    ```bash
+    meshctl start --debug main.py
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    meshctl start --debug src/index.ts
+    ```
 
 ### Check Registry Connection
 
@@ -223,56 +360,117 @@ meshctl status
 
 ### VS Code Configuration
 
-Create `.vscode/launch.json`:
+=== "Python"
 
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
+    Create `.vscode/launch.json`:
+
+    ```json
     {
-      "name": "Debug Agent",
-      "type": "python",
-      "request": "launch",
-      "module": "mesh",
-      "args": ["start", "main.py"],
-      "env": {
-        "MCP_MESH_LOG_LEVEL": "DEBUG"
-      }
+      "version": "0.2.0",
+      "configurations": [
+        {
+          "name": "Debug Agent",
+          "type": "python",
+          "request": "launch",
+          "module": "mesh",
+          "args": ["start", "main.py"],
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG"
+          }
+        }
+      ]
     }
-  ]
-}
-```
+    ```
+
+=== "TypeScript"
+
+    Create `.vscode/launch.json`:
+
+    ```json
+    {
+      "version": "0.2.0",
+      "configurations": [
+        {
+          "name": "Debug Agent",
+          "type": "node",
+          "request": "launch",
+          "runtimeExecutable": "npx",
+          "runtimeArgs": ["tsx", "src/index.ts"],
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG"
+          },
+          "console": "integratedTerminal"
+        }
+      ]
+    }
+    ```
 
 ## Testing Your Agents
 
-```python
-# tests/test_agents.py
-import pytest
-import requests
+=== "Python"
 
-def test_my_function():
-    response = requests.post(
-        "http://localhost:8080/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "my_function",
-                "arguments": {"data": "test"}
+    ```python
+    # tests/test_agents.py
+    import pytest
+    import requests
+
+    def test_my_function():
+        response = requests.post(
+            "http://localhost:8080/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "my_function",
+                    "arguments": {"data": "test"}
+                }
             }
-        }
-    )
-    assert response.status_code == 200
-    result = response.json()
-    assert "Processed: test" in str(result)
-```
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert "Processed: test" in str(result)
+    ```
 
-Run tests:
+    Run tests:
 
-```bash
-pytest tests/
-```
+    ```bash
+    pytest tests/
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    // src/index.test.ts
+    import { describe, it, expect } from "vitest";
+
+    describe("my_function", () => {
+      it("should process data correctly", async () => {
+        const response = await fetch("http://localhost:8080/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "my_function",
+              arguments: { data: "test" }
+            }
+          })
+        });
+        expect(response.ok).toBe(true);
+        const result = await response.json();
+        expect(JSON.stringify(result)).toContain("Processed: test");
+      });
+    });
+    ```
+
+    Run tests:
+
+    ```bash
+    npx vitest
+    ```
 
 ## Troubleshooting
 
@@ -309,4 +507,5 @@ meshctl status
 
 - [Docker Deployment](03-docker-deployment.md) - Package and deploy your agents
 - [Kubernetes Deployment](06-helm-deployment.md) - Scale to production
-- [Mesh Decorators Reference](mesh-decorators.md) - All decorator options
+- [Python Decorators](../python/decorators.md) - Python `@mesh.tool`, `@mesh.agent`, `@mesh.llm`
+- [TypeScript Functions](../typescript/mesh-functions.md) - TypeScript `mesh()`, `addTool()`, `mesh.llm()`

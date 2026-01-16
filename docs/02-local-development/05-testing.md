@@ -20,141 +20,305 @@ We'll explore unit testing individual functions, integration testing with real d
 
 ### Step 1: Set Up Testing Framework
 
-Install testing dependencies:
+=== "Python"
 
-```bash
-# Core testing tools
-pip install pytest pytest-asyncio pytest-cov pytest-mock
+    Install testing dependencies:
 
-# Additional helpful tools
-pip install pytest-timeout pytest-xdist httpx
+    ```bash
+    # Core testing tools
+    pip install pytest pytest-asyncio pytest-cov pytest-mock
 
-# Development dependencies
-pip install -e ".[test]"  # If your package has test extras
-```
+    # Additional helpful tools
+    pip install pytest-timeout pytest-xdist httpx
 
-Create `pytest.ini` configuration:
+    # Development dependencies
+    pip install -e ".[test]"  # If your package has test extras
+    ```
 
-```ini
-[tool:pytest]
-testpaths = tests
-python_files = test_*.py
-python_classes = Test*
-python_functions = test_*
-addopts =
-    -v
-    --tb=short
-    --strict-markers
-    --cov=agents
-    --cov-report=term-missing
-    --cov-report=html
-markers =
-    unit: Unit tests (fast)
-    integration: Integration tests (slower)
-    e2e: End-to-end tests (slowest)
-asyncio_mode = auto
-```
+    Create `pytest.ini` configuration:
+
+    ```ini
+    [tool:pytest]
+    testpaths = tests
+    python_files = test_*.py
+    python_classes = Test*
+    python_functions = test_*
+    addopts =
+        -v
+        --tb=short
+        --strict-markers
+        --cov=agents
+        --cov-report=term-missing
+        --cov-report=html
+    markers =
+        unit: Unit tests (fast)
+        integration: Integration tests (slower)
+        e2e: End-to-end tests (slowest)
+    asyncio_mode = auto
+    ```
+
+=== "TypeScript"
+
+    Install testing dependencies:
+
+    ```bash
+    # Core testing tools
+    npm install -D vitest @vitest/coverage-v8
+
+    # Additional helpful tools (optional)
+    npm install -D msw  # Mock Service Worker for API mocking
+    ```
+
+    Create `vitest.config.ts`:
+
+    ```typescript
+    import { defineConfig } from "vitest/config";
+
+    export default defineConfig({
+      test: {
+        globals: true,
+        environment: "node",
+        coverage: {
+          provider: "v8",
+          reporter: ["text", "html"],
+          include: ["src/**/*.ts"],
+          exclude: ["**/*.test.ts", "**/*.d.ts"],
+        },
+        testTimeout: 10000,
+        hookTimeout: 10000,
+      },
+    });
+    ```
+
+    Update `package.json`:
+
+    ```json
+    {
+      "scripts": {
+        "test": "vitest",
+        "test:coverage": "vitest --coverage",
+        "test:watch": "vitest --watch"
+      }
+    }
+    ```
 
 ### Step 2: Unit Test Agent Functions
 
-Create test structure:
+=== "Python"
 
-```python
-# tests/test_weather_agent.py
-import pytest
-from unittest.mock import Mock, patch
-from examples.simple.weather_agent import get_weather, process_forecast
+    Create test structure:
 
-class TestWeatherAgent:
-    """Unit tests for weather agent functions"""
+    ```python
+    # tests/test_weather_agent.py
+    import pytest
+    from unittest.mock import Mock, patch
+    from examples.simple.weather_agent import get_weather, process_forecast
 
-    @pytest.fixture
-    def mock_context(self):
-        """Mock MCP context"""
-        context = Mock()
-        context.request_id = "test-123"
-        return context
+    class TestWeatherAgent:
+        """Unit tests for weather agent functions"""
 
-    def test_get_weather_success(self, mock_context):
-        """Test successful weather retrieval"""
-        result = get_weather(mock_context, city="London")
+        @pytest.fixture
+        def mock_context(self):
+            """Mock MCP context"""
+            context = Mock()
+            context.request_id = "test-123"
+            return context
 
-        assert result is not None
-        assert "temperature" in result
-        assert result["city"] == "London"
+        def test_get_weather_success(self, mock_context):
+            """Test successful weather retrieval"""
+            result = get_weather(mock_context, city="London")
 
-    def test_get_weather_invalid_city(self, mock_context):
-        """Test handling of invalid city"""
-        with pytest.raises(ValueError, match="Invalid city"):
-            get_weather(mock_context, city="")
+            assert result is not None
+            assert "temperature" in result
+            assert result["city"] == "London"
 
-    @patch('agents.weather_agent.fetch_external_api')
-    def test_get_weather_api_failure(self, mock_fetch, mock_context):
-        """Test handling of API failures"""
-        mock_fetch.side_effect = Exception("API Error")
+        def test_get_weather_invalid_city(self, mock_context):
+            """Test handling of invalid city"""
+            with pytest.raises(ValueError, match="Invalid city"):
+                get_weather(mock_context, city="")
 
-        result = get_weather(mock_context, city="Paris")
-        assert result["error"] == "Unable to fetch weather"
-```
+        @patch('agents.weather_agent.fetch_external_api')
+        def test_get_weather_api_failure(self, mock_fetch, mock_context):
+            """Test handling of API failures"""
+            mock_fetch.side_effect = Exception("API Error")
+
+            result = get_weather(mock_context, city="Paris")
+            assert result["error"] == "Unable to fetch weather"
+    ```
+
+=== "TypeScript"
+
+    Create test structure:
+
+    ```typescript
+    // src/weather-agent.test.ts
+    import { describe, it, expect, vi, beforeEach } from "vitest";
+    import { z } from "zod";
+
+    // Mock the external API
+    vi.mock("./external-api", () => ({
+      fetchExternalApi: vi.fn(),
+    }));
+
+    import { fetchExternalApi } from "./external-api";
+
+    describe("WeatherAgent", () => {
+      beforeEach(() => {
+        vi.clearAllMocks();
+      });
+
+      it("should get weather successfully", async () => {
+        vi.mocked(fetchExternalApi).mockResolvedValue({
+          temperature: 20,
+          city: "London",
+        });
+
+        const result = await getWeather({ city: "London" });
+
+        expect(result).not.toBeNull();
+        expect(result).toHaveProperty("temperature");
+        expect(result.city).toBe("London");
+      });
+
+      it("should throw on invalid city", async () => {
+        await expect(getWeather({ city: "" })).rejects.toThrow("Invalid city");
+      });
+
+      it("should handle API failures gracefully", async () => {
+        vi.mocked(fetchExternalApi).mockRejectedValue(new Error("API Error"));
+
+        const result = await getWeather({ city: "Paris" });
+        expect(result.error).toBe("Unable to fetch weather");
+      });
+    });
+    ```
 
 ### Step 3: Test Dependency Injection
 
-Mock injected dependencies:
+=== "Python"
 
-```python
-# tests/test_dependency_injection.py
-import pytest
-from unittest.mock import Mock, AsyncMock
-from examples.simple.analytics_agent import analyze_data
+    Mock injected dependencies:
 
-class TestDependencyInjection:
-    """Test agents with dependency injection"""
+    ```python
+    # tests/test_dependency_injection.py
+    import pytest
+    from unittest.mock import Mock, AsyncMock
+    from examples.simple.analytics_agent import analyze_data
 
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Create mock dependencies"""
-        return {
-            'database_query': Mock(return_value={"count": 42}),
-            'cache_get': Mock(return_value=None),
-            'cache_set': Mock(return_value=True)
-        }
+    class TestDependencyInjection:
+        """Test agents with dependency injection"""
 
-    def test_analyze_with_all_dependencies(self, mock_dependencies):
-        """Test when all dependencies are available"""
-        result = analyze_data(
-            dataset="sales",
-            **mock_dependencies
-        )
+        @pytest.fixture
+        def mock_dependencies(self):
+            """Create mock dependencies"""
+            return {
+                'database_query': Mock(return_value={"count": 42}),
+                'cache_get': Mock(return_value=None),
+                'cache_set': Mock(return_value=True)
+            }
 
-        # Verify dependency calls
-        mock_dependencies['database_query'].assert_called_once_with("sales")
-        mock_dependencies['cache_get'].assert_called_once()
+        def test_analyze_with_all_dependencies(self, mock_dependencies):
+            """Test when all dependencies are available"""
+            result = analyze_data(
+                dataset="sales",
+                **mock_dependencies
+            )
 
-        assert result["source"] == "database"
-        assert result["count"] == 42
+            # Verify dependency calls
+            mock_dependencies['database_query'].assert_called_once_with("sales")
+            mock_dependencies['cache_get'].assert_called_once()
 
-    def test_analyze_with_cache_hit(self, mock_dependencies):
-        """Test when cache has data"""
-        mock_dependencies['cache_get'].return_value = {"cached": True}
+            assert result["source"] == "database"
+            assert result["count"] == 42
 
-        result = analyze_data(dataset="sales", **mock_dependencies)
+        def test_analyze_with_cache_hit(self, mock_dependencies):
+            """Test when cache has data"""
+            mock_dependencies['cache_get'].return_value = {"cached": True}
 
-        # Should not query database on cache hit
-        mock_dependencies['database_query'].assert_not_called()
-        assert result["source"] == "cache"
+            result = analyze_data(dataset="sales", **mock_dependencies)
 
-    def test_analyze_graceful_degradation(self):
-        """Test when dependencies are unavailable"""
-        # Call with no dependencies
-        result = analyze_data(
-            dataset="sales",
-            database_query=None,
-            cache_get=None,
-            cache_set=None
-        )
+            # Should not query database on cache hit
+            mock_dependencies['database_query'].assert_not_called()
+            assert result["source"] == "cache"
 
-        assert result["error"] == "No data sources available"
-```
+        def test_analyze_graceful_degradation(self):
+            """Test when dependencies are unavailable"""
+            # Call with no dependencies
+            result = analyze_data(
+                dataset="sales",
+                database_query=None,
+                cache_get=None,
+                cache_set=None
+            )
+
+            assert result["error"] == "No data sources available"
+    ```
+
+=== "TypeScript"
+
+    Mock injected dependencies:
+
+    ```typescript
+    // src/analytics-agent.test.ts
+    import { describe, it, expect, vi, beforeEach } from "vitest";
+
+    describe("AnalyticsAgent Dependency Injection", () => {
+      const mockDependencies = {
+        database_query: vi.fn(),
+        cache_get: vi.fn(),
+        cache_set: vi.fn(),
+      };
+
+      beforeEach(() => {
+        vi.clearAllMocks();
+        mockDependencies.database_query.mockResolvedValue({ count: 42 });
+        mockDependencies.cache_get.mockResolvedValue(null);
+        mockDependencies.cache_set.mockResolvedValue(true);
+      });
+
+      it("should analyze with all dependencies", async () => {
+        const result = await analyzeData(
+          { dataset: "sales" },
+          mockDependencies
+        );
+
+        // Verify dependency calls
+        expect(mockDependencies.database_query).toHaveBeenCalledWith({
+          dataset: "sales",
+        });
+        expect(mockDependencies.cache_get).toHaveBeenCalled();
+
+        expect(result.source).toBe("database");
+        expect(result.count).toBe(42);
+      });
+
+      it("should use cache when available", async () => {
+        mockDependencies.cache_get.mockResolvedValue({ cached: true });
+
+        const result = await analyzeData(
+          { dataset: "sales" },
+          mockDependencies
+        );
+
+        // Should not query database on cache hit
+        expect(mockDependencies.database_query).not.toHaveBeenCalled();
+        expect(result.source).toBe("cache");
+      });
+
+      it("should handle missing dependencies gracefully", async () => {
+        const result = await analyzeData(
+          { dataset: "sales" },
+          {
+            database_query: null,
+            cache_get: null,
+            cache_set: null,
+          }
+        );
+
+        expect(result.error).toBe("No data sources available");
+      });
+    });
+    ```
 
 ### Step 4: Integration Testing
 

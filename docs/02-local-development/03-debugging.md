@@ -23,161 +23,290 @@ Whether you're tracking down a bug in a single agent or debugging interactions b
 Set up comprehensive logging for development:
 
 ```bash
-# Environment variable
+# Environment variable (works for both Python and TypeScript)
 export MCP_MESH_LOG_LEVEL=DEBUG
-
-# Or in your agent code
-import logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 ```
 
-Create a logging configuration file `logging_config.py`:
+=== "Python"
 
-```python
-import logging.config
+    ```python
+    # In your agent code
+    import logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    ```
 
-LOGGING_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'detailed': {
-            'format': '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    Create a logging configuration file `logging_config.py`:
+
+    ```python
+    import logging.config
+
+    LOGGING_CONFIG = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'detailed': {
+                'format': '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+            },
+            'simple': {
+                'format': '%(levelname)s - %(message)s'
+            }
         },
-        'simple': {
-            'format': '%(levelname)s - %(message)s'
-        }
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'level': 'DEBUG',
-            'formatter': 'detailed',
-            'stream': 'ext://sys.stdout'
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+                'level': 'DEBUG',
+                'formatter': 'detailed',
+                'stream': 'ext://sys.stdout'
+            },
+            'file': {
+                'class': 'logging.handlers.RotatingFileHandler',
+                'level': 'DEBUG',
+                'formatter': 'detailed',
+                'filename': 'agent_debug.log',
+                'maxBytes': 10485760,  # 10MB
+                'backupCount': 5
+            }
         },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'level': 'DEBUG',
-            'formatter': 'detailed',
-            'filename': 'agent_debug.log',
-            'maxBytes': 10485760,  # 10MB
-            'backupCount': 5
-        }
-    },
-    'loggers': {
-        'mcp_mesh': {
-            'level': 'DEBUG',
-            'handlers': ['console', 'file']
-        },
-        'your_agent': {
-            'level': 'DEBUG',
-            'handlers': ['console', 'file']
+        'loggers': {
+            'mcp_mesh': {
+                'level': 'DEBUG',
+                'handlers': ['console', 'file']
+            },
+            'your_agent': {
+                'level': 'DEBUG',
+                'handlers': ['console', 'file']
+            }
         }
     }
-}
 
-logging.config.dictConfig(LOGGING_CONFIG)
-```
+    logging.config.dictConfig(LOGGING_CONFIG)
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    // Console logging is built into the SDK
+    // Use console.log, console.debug, console.error
+
+    // For structured logging, consider pino:
+    // npm install pino
+
+    import pino from "pino";
+
+    const logger = pino({
+      level: process.env.MCP_MESH_LOG_LEVEL?.toLowerCase() || "info",
+      transport: {
+        target: "pino-pretty",
+        options: { colorize: true }
+      }
+    });
+
+    // Use in your agent
+    logger.debug({ data_id: "123" }, "Processing data");
+    logger.info("Agent started");
+    logger.error({ err }, "Operation failed");
+    ```
 
 ### Step 2: IDE Debugging Setup
 
 #### VS Code Configuration
 
-Create `.vscode/launch.json`:
+=== "Python"
 
-```json
-{
-  "version": "0.8.0-beta.1",
-  "configurations": [
+    Create `.vscode/launch.json`:
+
+    ```json
     {
-      "name": "Debug Current Agent",
-      "type": "python",
-      "request": "launch",
-      "program": "${workspaceFolder}/bin/meshctl",
-      "args": ["start", "${file}"],
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "env": {
-        "MCP_MESH_LOG_LEVEL": "DEBUG",
-        "PYTHONPATH": "${workspaceFolder}"
-      }
-    },
-    {
-      "name": "Debug with Remote Attach",
-      "type": "python",
-      "request": "attach",
-      "connect": {
-        "host": "localhost",
-        "port": 5678
-      },
-      "pathMappings": [
+      "version": "0.2.0",
+      "configurations": [
         {
-          "localRoot": "${workspaceFolder}",
-          "remoteRoot": "."
+          "name": "Debug Current Agent",
+          "type": "python",
+          "request": "launch",
+          "program": "${workspaceFolder}/bin/meshctl",
+          "args": ["start", "${file}"],
+          "console": "integratedTerminal",
+          "justMyCode": false,
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG",
+            "PYTHONPATH": "${workspaceFolder}"
+          }
+        },
+        {
+          "name": "Debug with Remote Attach",
+          "type": "python",
+          "request": "attach",
+          "connect": {
+            "host": "localhost",
+            "port": 5678
+          },
+          "pathMappings": [
+            {
+              "localRoot": "${workspaceFolder}",
+              "remoteRoot": "."
+            }
+          ]
         }
       ]
     }
-  ]
-}
-```
+    ```
 
-#### PyCharm Configuration
+=== "TypeScript"
 
-1. Run → Edit Configurations → Add New Configuration → Python
-2. Script path: `/path/to/mcp-mesh/bin/meshctl`
-3. Parameters: `start examples/simple/your_agent.py`
-4. Environment variables: `MCP_MESH_LOG_LEVEL=DEBUG`
-5. Working directory: Your project root
+    Create `.vscode/launch.json`:
+
+    ```json
+    {
+      "version": "0.2.0",
+      "configurations": [
+        {
+          "name": "Debug Current Agent",
+          "type": "node",
+          "request": "launch",
+          "runtimeExecutable": "npx",
+          "runtimeArgs": ["tsx", "${file}"],
+          "console": "integratedTerminal",
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG"
+          },
+          "skipFiles": ["<node_internals>/**"]
+        },
+        {
+          "name": "Debug with Attach",
+          "type": "node",
+          "request": "attach",
+          "port": 9229,
+          "restart": true,
+          "skipFiles": ["<node_internals>/**"]
+        }
+      ]
+    }
+    ```
+
+    To enable attach mode, start your agent with:
+
+    ```bash
+    node --inspect -r tsx/cjs src/index.ts
+    ```
+
+#### PyCharm / WebStorm Configuration
+
+=== "Python (PyCharm)"
+
+    1. Run → Edit Configurations → Add New Configuration → Python
+    2. Script path: `/path/to/mcp-mesh/bin/meshctl`
+    3. Parameters: `start examples/simple/your_agent.py`
+    4. Environment variables: `MCP_MESH_LOG_LEVEL=DEBUG`
+    5. Working directory: Your project root
+
+=== "TypeScript (WebStorm)"
+
+    1. Run → Edit Configurations → Add New Configuration → Node.js
+    2. Node interpreter: Your node installation
+    3. Node parameters: `--import tsx`
+    4. JavaScript file: `src/index.ts`
+    5. Environment variables: `MCP_MESH_LOG_LEVEL=DEBUG`
 
 ### Step 3: Add Strategic Debug Points
 
 Add debug helpers to your agents:
 
-```python
-from mesh import agent, tool
-import logging
+=== "Python"
 
-logger = logging.getLogger(__name__)
+    ```python
+    from mesh import agent, tool
+    import logging
 
-@agent(name="data-processor")
-class DataProcessor:
-    pass
+    logger = logging.getLogger(__name__)
 
-@tool(
-    capability="data_processor",
-    dependencies=["database_query"]
-)
-def process_data(
-    data_id: str,
-    database_query=None
-):
-    # Debug: Log input parameters
-    logger.debug(f"process_data called with data_id={data_id}")
-    logger.debug(f"DatabaseAgent_query available: {DatabaseAgent_query is not None}")
+    @agent(name="data-processor")
+    class DataProcessor:
+        pass
 
-    # Debug: Breakpoint for IDE debugging
-    import pdb; pdb.set_trace()  # Remove in production!
+    @tool(
+        capability="data_processor",
+        dependencies=["database_query"]
+    )
+    def process_data(
+        data_id: str,
+        database_query=None
+    ):
+        # Debug: Log input parameters
+        logger.debug(f"process_data called with data_id={data_id}")
+        logger.debug(f"database_query available: {database_query is not None}")
 
-    try:
-        # Debug: Log before remote call
-        logger.debug(f"Calling database_query with id={data_id}")
-        result = database_query(f"SELECT * FROM data WHERE id='{data_id}'")
-        logger.debug(f"Query result: {result}")
+        # Debug: Breakpoint for IDE debugging
+        import pdb; pdb.set_trace()  # Remove in production!
 
-        # Process the data
-        processed = transform_data(result)
+        try:
+            # Debug: Log before remote call
+            logger.debug(f"Calling database_query with id={data_id}")
+            result = database_query(f"SELECT * FROM data WHERE id='{data_id}'")
+            logger.debug(f"Query result: {result}")
 
-        # Debug: Log success
-        logger.info(f"Successfully processed data_id={data_id}")
-        return processed
+            # Process the data
+            processed = transform_data(result)
 
-    except Exception as e:
-        # Debug: Log full exception with stack trace
-        logger.exception(f"Error processing data_id={data_id}")
-        raise
-```
+            # Debug: Log success
+            logger.info(f"Successfully processed data_id={data_id}")
+            return processed
+
+        except Exception as e:
+            # Debug: Log full exception with stack trace
+            logger.exception(f"Error processing data_id={data_id}")
+            raise
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { FastMCP, mesh } from "@mcpmesh/sdk";
+    import { z } from "zod";
+
+    const server = new FastMCP({ name: "DataProcessor", version: "1.0.0" });
+    const agent = mesh(server, { name: "data-processor", port: 9000 });
+
+    agent.addTool({
+      name: "process_data",
+      capability: "data_processor",
+      dependencies: [{ capability: "database_query" }],
+      parameters: z.object({
+        data_id: z.string(),
+      }),
+      execute: async ({ data_id }, { database_query }) => {
+        // Debug: Log input parameters
+        console.debug(`process_data called with data_id=${data_id}`);
+        console.debug(`database_query available: ${database_query !== null}`);
+
+        // Debug: Breakpoint for IDE debugging
+        debugger; // Remove in production!
+
+        try {
+          // Debug: Log before remote call
+          console.debug(`Calling database_query with id=${data_id}`);
+          const result = await database_query({
+            query: `SELECT * FROM data WHERE id='${data_id}'`
+          });
+          console.debug("Query result:", result);
+
+          // Process the data
+          const processed = transformData(result);
+
+          // Debug: Log success
+          console.info(`Successfully processed data_id=${data_id}`);
+          return processed;
+
+        } catch (err) {
+          // Debug: Log full error
+          console.error(`Error processing data_id=${data_id}`, err);
+          throw err;
+        }
+      },
+    });
+    ```
 
 ### Step 4: Debug Dependency Injection
 
