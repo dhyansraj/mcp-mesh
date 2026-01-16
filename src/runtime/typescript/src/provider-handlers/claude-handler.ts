@@ -10,9 +10,11 @@
  * - text: Plain text output for str return types (fastest)
  *
  * Features:
- * - Automatic prompt caching for system messages (up to 90% cost reduction)
  * - Anti-XML tool calling instructions
  * - Output mode optimization based on return type
+ *
+ * Note: Prompt caching is not yet implemented for AI SDK v6.
+ * TODO: Re-enable via experimental_providerOptions when AI SDK v6 supports it.
  *
  * Based on Python's ClaudeHandler:
  * src/runtime/python/_mcp_mesh/engine/provider_handlers/claude_handler.py
@@ -52,7 +54,6 @@ const SIMPLE_SCHEMA_FIELD_THRESHOLD = 5;
  * - Native structured output via response_format (requires strict schema)
  * - Native tool calling (via Anthropic messages API)
  * - Performs best with anti-XML tool calling instructions
- * - Automatic prompt caching for cost optimization
  *
  * Output Modes:
  * - strict: response_format with JSON schema (slowest, guaranteed valid JSON)
@@ -64,7 +65,6 @@ const SIMPLE_SCHEMA_FIELD_THRESHOLD = 5;
  * - Schema must have additionalProperties: false on all objects
  * - Add anti-XML instructions to prevent <invoke> style tool calls
  * - Use one tool call at a time for better reliability
- * - Use cache_control for system prompts to reduce costs
  */
 export class ClaudeHandler implements ProviderHandler {
   readonly vendor = "anthropic";
@@ -89,22 +89,19 @@ export class ClaudeHandler implements ProviderHandler {
     options?: {
       outputMode?: OutputMode;
       temperature?: number;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       topP?: number;
       [key: string]: unknown;
     }
   ): PreparedRequest {
-    const { outputMode, temperature, maxTokens, topP, ...rest } = options ?? {};
+    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
     const determinedMode = this.determineOutputMode(outputSchema, outputMode);
 
     // Convert messages to Vercel AI SDK format (shared utility)
     const convertedMessages = convertMessagesToVercelFormat(messages);
 
-    // Apply prompt caching to system messages for cost optimization
-    const cachedMessages = this.applyPromptCaching(convertedMessages);
-
     const request: PreparedRequest = {
-      messages: cachedMessages,
+      messages: convertedMessages,
       ...rest,
     };
 
@@ -119,7 +116,7 @@ export class ClaudeHandler implements ProviderHandler {
       request.temperature = temperature;
     }
     if (maxTokens !== undefined) {
-      request.maxTokens = maxTokens;
+      request.maxOutputTokens = maxTokens;
     }
     if (topP !== undefined) {
       request.topP = topP;
@@ -238,7 +235,7 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
       streaming: true, // Supports streaming
       vision: true, // Claude 3+ supports vision
       jsonMode: true, // Native JSON mode via response_format
-      promptCaching: true, // Automatic system prompt caching for cost savings
+      promptCaching: false, // TODO: Re-enable via experimental_providerOptions
     };
   }
 
@@ -391,49 +388,6 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
     return result;
   }
 
-  /**
-   * Apply prompt caching to system messages for Claude.
-   *
-   * Claude's prompt caching feature caches the system prompt prefix,
-   * reducing costs by up to 90% and improving latency for repeated calls.
-   *
-   * The cache_control with type "ephemeral" tells Claude to cache
-   * this content for the duration of the session (typically 5 minutes).
-   *
-   * Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-   */
-  private applyPromptCaching(messages: LlmMessage[]): LlmMessage[] {
-    const cachedMessages: LlmMessage[] = [];
-
-    for (const msg of messages) {
-      if (msg.role === "system") {
-        const content = msg.content ?? "";
-
-        // Convert string content to cached content block format
-        // Anthropic API expects an array of content blocks, not a JSON string
-        // Use type assertion since LlmMessage.content is typed as string,
-        // but Vercel AI SDK's Anthropic provider accepts content block arrays
-        const cachedMsg = {
-          role: "system" as const,
-          content: [
-            {
-              type: "text",
-              text: content,
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        } as unknown as LlmMessage;
-
-        cachedMessages.push(cachedMsg);
-        debug(`Applied prompt caching to system message (${content.length} chars)`);
-      } else {
-        // Non-system messages pass through unchanged
-        cachedMessages.push(msg);
-      }
-    }
-
-    return cachedMessages;
-  }
 }
 
 // Register with the registry

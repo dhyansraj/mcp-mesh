@@ -137,17 +137,17 @@ describe("OpenAIHandler", () => {
       expect(request.responseFormat).toBeUndefined();
     });
 
-    it("should pass through temperature, maxTokens, and topP", () => {
+    it("should pass through temperature, maxOutputTokens, and topP", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
 
       const request = handler.prepareRequest(messages, null, null, {
         temperature: 0.5,
-        maxTokens: 2000,
+        maxOutputTokens: 2000,
         topP: 0.95,
       });
 
       expect(request.temperature).toBe(0.5);
-      expect(request.maxTokens).toBe(2000);
+      expect(request.maxOutputTokens).toBe(2000);
       expect(request.topP).toBe(0.95);
     });
 

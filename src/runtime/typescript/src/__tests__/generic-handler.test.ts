@@ -150,17 +150,17 @@ describe("GenericHandler", () => {
       expect(request.responseFormat).toBeUndefined();
     });
 
-    it("should pass through temperature, maxTokens, and topP", () => {
+    it("should pass through temperature, maxOutputTokens, and topP", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
 
       const request = handler.prepareRequest(messages, null, null, {
         temperature: 0.8,
-        maxTokens: 500,
+        maxOutputTokens: 500,
         topP: 0.9,
       });
 
       expect(request.temperature).toBe(0.8);
-      expect(request.maxTokens).toBe(500);
+      expect(request.maxOutputTokens).toBe(500);
       expect(request.topP).toBe(0.9);
     });
 

@@ -71,12 +71,12 @@ export class OpenAIHandler implements ProviderHandler {
     options?: {
       outputMode?: OutputMode;
       temperature?: number;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       topP?: number;
       [key: string]: unknown;
     }
   ): PreparedRequest {
-    const { outputMode, temperature, maxTokens, topP, ...rest } = options ?? {};
+    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
     const determinedMode = this.determineOutputMode(outputSchema, outputMode);
 
     // Convert messages to Vercel AI SDK format (shared utility)
@@ -97,7 +97,7 @@ export class OpenAIHandler implements ProviderHandler {
       request.temperature = temperature;
     }
     if (maxTokens !== undefined) {
-      request.maxTokens = maxTokens;
+      request.maxOutputTokens = maxTokens;
     }
     if (topP !== undefined) {
       request.topP = topP;

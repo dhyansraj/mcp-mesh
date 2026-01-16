@@ -158,21 +158,24 @@ function convertToVercelMessages(messages: LlmMessage[]): VercelCoreMessage[] {
 }
 
 /**
- * Convert Vercel AI SDK tool calls to standard format.
+ * AI SDK v6 tool call structure.
  */
-function convertToolCalls(
-  toolCalls: Array<{
-    toolCallId: string;
-    toolName: string;
-    args: Record<string, unknown>;
-  }>
-): LlmToolCallRequest[] {
+interface VercelToolCall {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Convert Vercel AI SDK v6 tool calls to standard format.
+ */
+function convertToolCalls(toolCalls: VercelToolCall[]): LlmToolCallRequest[] {
   return toolCalls.map((tc) => ({
     id: tc.toolCallId,
     type: "function" as const,
     function: {
       name: tc.toolName,
-      arguments: JSON.stringify(tc.args),
+      arguments: JSON.stringify(tc.input ?? {}),
     },
   }));
 }
@@ -248,7 +251,7 @@ type MeshLlmRequestInput = z.infer<typeof MeshLlmRequestSchema>;
  *   model: "anthropic/claude-sonnet-4-5",
  *   capability: "llm",
  *   tags: ["llm", "claude", "anthropic", "provider"],
- *   maxTokens: 4096,
+ *   maxOutputTokens: 4096,
  *   temperature: 0.7,
  * }));
  *
@@ -273,7 +276,7 @@ export function llmProvider(config: LlmProviderConfig): {
     capability = "llm",
     tags = [],
     version = "1.0.0",
-    maxTokens,
+    maxOutputTokens: maxTokens,
     temperature,
     topP,
     name = "process_chat",
@@ -361,10 +364,10 @@ export function llmProvider(config: LlmProviderConfig): {
         string,
         {
           description?: string;
-          parameters: Record<string, unknown>;
+          parameters?: Record<string, unknown>;
         }
       >;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
     }) => Promise<{
@@ -375,8 +378,8 @@ export function llmProvider(config: LlmProviderConfig): {
         args: Record<string, unknown>;
       }>;
       usage?: {
-        promptTokens: number;
-        completionTokens: number;
+        inputTokens: number;
+        outputTokens: number;
       };
       finishReason: string;
     }>;
@@ -391,10 +394,24 @@ export function llmProvider(config: LlmProviderConfig): {
       const { jsonSchema } = aiModule as { jsonSchema: (schema: Record<string, unknown>) => unknown };
       vercelTools = {};
       for (const tool of request.tools) {
-        const schema = tool.function.parameters ?? { type: "object", properties: {} };
+        // Get the raw schema parameters
+        const rawSchema = tool.function.parameters ?? { type: "object", properties: {} };
+
+        // Clean up schema for AI SDK compatibility:
+        // - Remove $schema field (not needed for API calls)
+        // - Ensure type: "object" is present (required by Anthropic API)
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { $schema, ...schemaWithoutMeta } = rawSchema as Record<string, unknown>;
+        const cleanSchema = {
+          type: "object", // Ensure type is always present
+          ...schemaWithoutMeta,
+        };
+
+        debug(`Tool '${tool.function.name}' schema: ${JSON.stringify(cleanSchema)}`);
+
         vercelTools[tool.function.name] = {
           description: tool.function.description ?? "",
-          parameters: jsonSchema(schema as Record<string, unknown>),
+          inputSchema: jsonSchema(cleanSchema),
         };
       }
     }
@@ -407,7 +424,7 @@ export function llmProvider(config: LlmProviderConfig): {
       null, // no output schema for provider passthrough
       {
         temperature: temperature ?? modelParams.temperature as number | undefined,
-        maxTokens: maxTokens ?? modelParams.max_tokens as number | undefined,
+        maxOutputTokens: maxTokens ?? modelParams.max_tokens as number | undefined,
         topP: topP ?? modelParams.top_p as number | undefined,
       }
     );
@@ -415,12 +432,14 @@ export function llmProvider(config: LlmProviderConfig): {
     // Build request options - use explicit object construction to avoid spread type issues
     const convertedMessages = convertToVercelMessages(preparedRequest.messages);
 
+    debug(`Messages to AI SDK: ${JSON.stringify(convertedMessages, null, 2)}`);
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const requestOptions: {
       model: unknown;
       messages: any; // VercelCoreMessage[] - Vercel AI SDK validates at runtime
       tools?: Record<string, any>;
-      maxTokens?: number;
+      maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
     } = {
@@ -435,7 +454,7 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Apply default config values
     if (maxTokens) {
-      requestOptions.maxTokens = maxTokens;
+      requestOptions.maxOutputTokens = maxTokens;
     }
     if (temperature !== undefined) {
       requestOptions.temperature = temperature;
@@ -446,7 +465,7 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Apply model_params overrides (take precedence)
     if (modelParams.max_tokens) {
-      requestOptions.maxTokens = modelParams.max_tokens as number;
+      requestOptions.maxOutputTokens = modelParams.max_tokens as number;
     }
     if (modelParams.temperature !== undefined) {
       requestOptions.temperature = modelParams.temperature as number;
@@ -482,8 +501,8 @@ export function llmProvider(config: LlmProviderConfig): {
     // Include usage metadata for cost tracking
     if (result.usage) {
       const usage: MeshLlmUsage = {
-        prompt_tokens: result.usage.promptTokens ?? 0,
-        completion_tokens: result.usage.completionTokens ?? 0,
+        prompt_tokens: result.usage.inputTokens ?? 0,
+        completion_tokens: result.usage.outputTokens ?? 0,
         model: effectiveModel,
       };
       response._mesh_usage = usage;
