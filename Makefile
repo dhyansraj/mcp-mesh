@@ -420,6 +420,24 @@ docker-run:
 	@echo "🐳 Running with Docker..."
 	docker run -p 8000:8000 mcp-mesh-registry:latest
 
+# Documentation generation
+.PHONY: docs-generate
+docs-generate:
+	@echo "📚 Generating docs from man pages..."
+	@python3 scripts/generate_docs_from_man.py
+	@echo "✅ Docs generated in docs/"
+
+.PHONY: docs-serve
+docs-serve:
+	@echo "📚 Starting MkDocs dev server..."
+	@mkdocs serve --dev-addr 127.0.0.1:8000
+
+.PHONY: docs-build
+docs-build:
+	@echo "📚 Building static docs site..."
+	@mkdocs build
+	@echo "✅ Static site built in site/"
+
 # npm package builds
 .PHONY: npm-build
 npm-build:
@@ -478,6 +496,9 @@ help:
 	@echo "  uninstall     - Remove binary from /usr/local/bin"
 	@echo "  docker-build  - Build Docker image"
 	@echo "  docker-run    - Run with Docker"
+	@echo "  docs-generate - Generate docs from man pages"
+	@echo "  docs-serve    - Start MkDocs dev server"
+	@echo "  docs-build    - Build static docs site"
 	@echo "  help          - Show this help"
 	@echo ""
 	@echo "Common environment variables:"

@@ -24,14 +24,12 @@ MCP Mesh uses proxy objects to enable seamless communication between agents. Whe
 
 ## Proxy Types
 
-MCP Mesh automatically selects the appropriate proxy:
+MCP Mesh uses a unified proxy system:
 
-| Proxy                    | Use Case     | Features             |
-| ------------------------ | ------------ | -------------------- |
-| `SelfDependencyProxy`    | Same agent   | Direct function call |
-| `MCPClientProxy`         | Simple tools | Basic MCP calls      |
-| `EnhancedMCPClientProxy` | Configured   | Timeout, retry       |
-| `EnhancedFullMCPProxy`   | Advanced     | Streaming, sessions  |
+| Proxy                     | Use Case    | Features                                   |
+| ------------------------- | ----------- | ------------------------------------------ |
+| `SelfDependencyProxy`     | Same agent  | Direct function call (no network overhead) |
+| `EnhancedUnifiedMCPProxy` | Cross-agent | All features (auto-configured from kwargs) |
 
 ## Using Proxies
 

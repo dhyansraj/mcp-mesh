@@ -24,14 +24,12 @@ MCP Mesh uses proxy objects to enable seamless communication between agents. Whe
 
 ## Proxy Types
 
-MCP Mesh automatically selects the appropriate proxy:
+MCP Mesh uses a unified proxy system:
 
-| Proxy                    | Use Case     | Features             |
-| ------------------------ | ------------ | -------------------- |
-| `SelfDependencyProxy`    | Same agent   | Direct function call |
-| `MCPClientProxy`         | Simple tools | Basic MCP calls      |
-| `EnhancedMCPClientProxy` | Configured   | Timeout, retry       |
-| `EnhancedFullMCPProxy`   | Advanced     | Streaming, sessions  |
+| Proxy                     | Use Case    | Features                                   |
+| ------------------------- | ----------- | ------------------------------------------ |
+| `SelfDependencyProxy`     | Same agent  | Direct function call (no network overhead) |
+| `EnhancedUnifiedMCPProxy` | Cross-agent | All features (auto-configured from kwargs) |
 
 ## Using Proxies
 
@@ -47,7 +45,7 @@ agent.addTool({
   parameters: z.object({}),
   execute: async ({}, { helper }) => {
     if (helper) {
-      const result = await helper({});  // Call default tool
+      const result = await helper({}); // Call default tool
       return result;
     }
     return "Helper unavailable";
@@ -63,7 +61,7 @@ execute: async ({}, { helper }) => {
     const result = await helper.callTool("specific_tool", { arg: "value" });
     return result;
   }
-}
+};
 ```
 
 ### With Arguments
@@ -74,7 +72,7 @@ execute: async ({}, { weather }) => {
     const result = await weather({ city: "London", units: "metric" });
     return result;
   }
-}
+};
 ```
 
 ## Proxy Configuration
@@ -88,15 +86,16 @@ agent.addTool({
   dependencies: ["slow_service"],
   dependencyConfig: {
     slow_service: {
-      timeout: 60000,             // Request timeout (ms)
-      retryCount: 3,              // Retry attempts on failure
-      customHeaders: {            // Custom HTTP headers
+      timeout: 60000, // Request timeout (ms)
+      retryCount: 3, // Retry attempts on failure
+      customHeaders: {
+        // Custom HTTP headers
         "X-Request-ID": "...",
       },
-      streaming: true,            // Enable streaming responses
-      sessionRequired: true,      // Require session affinity
-      authRequired: true,         // Require authentication
-      stateful: true,             // Mark as stateful
+      streaming: true, // Enable streaming responses
+      sessionRequired: true, // Require session affinity
+      authRequired: true, // Require authentication
+      stateful: true, // Mark as stateful
       autoSessionManagement: true, // Auto session lifecycle
     },
   },
@@ -112,16 +111,16 @@ agent.addTool({
 
 ## Configuration Options
 
-| Option                  | Type    | Default | Description                  |
-| ----------------------- | ------- | ------- | ---------------------------- |
-| `timeout`               | number  | 30000   | Request timeout in ms        |
-| `retryCount`            | number  | 0       | Number of retry attempts     |
-| `streaming`             | boolean | false   | Enable streaming responses   |
-| `sessionRequired`       | boolean | false   | Require session affinity     |
-| `authRequired`          | boolean | false   | Require authentication       |
-| `stateful`              | boolean | false   | Mark capability as stateful  |
-| `autoSessionManagement` | boolean | false   | Auto manage sessions         |
-| `customHeaders`         | object  | {}      | Additional HTTP headers      |
+| Option                  | Type    | Default | Description                 |
+| ----------------------- | ------- | ------- | --------------------------- |
+| `timeout`               | number  | 30000   | Request timeout in ms       |
+| `retryCount`            | number  | 0       | Number of retry attempts    |
+| `streaming`             | boolean | false   | Enable streaming responses  |
+| `sessionRequired`       | boolean | false   | Require session affinity    |
+| `authRequired`          | boolean | false   | Require authentication      |
+| `stateful`              | boolean | false   | Mark capability as stateful |
+| `autoSessionManagement` | boolean | false   | Auto manage sessions        |
+| `customHeaders`         | object  | {}      | Additional HTTP headers     |
 
 ## Streaming
 

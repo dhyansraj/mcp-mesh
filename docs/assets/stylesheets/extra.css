@@ -122,3 +122,174 @@ table {
 .md-typeset .admonition {
   margin: 1.5rem 0;
 }
+
+/* =============================================================================
+   Runtime Toggle - Python/TypeScript SDK Switcher
+   ============================================================================= */
+
+.runtime-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 1rem;
+  z-index: 100;
+}
+
+.runtime-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: var(--md-primary-bg-color);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.runtime-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.runtime-toggle.open .runtime-toggle-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.runtime-toggle-arrow {
+  font-size: 0.65rem;
+  opacity: 0.7;
+  transition: transform 0.2s ease;
+}
+
+.runtime-toggle.open .runtime-toggle-arrow {
+  transform: rotate(180deg);
+}
+
+.runtime-toggle-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  min-width: 140px;
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+
+.runtime-toggle.open .runtime-toggle-dropdown {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.runtime-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--md-default-fg-color);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.runtime-option:hover {
+  background: var(--md-default-fg-color--lightest);
+}
+
+.runtime-option.active {
+  background: var(--md-primary-fg-color--transparent);
+  color: var(--md-primary-fg-color);
+  font-weight: 500;
+}
+
+.runtime-option.active::after {
+  content: "✓";
+  margin-left: auto;
+  font-size: 0.75rem;
+}
+
+/* Dark mode adjustments */
+[data-md-color-scheme="slate"] .runtime-toggle-btn {
+  background: rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+[data-md-color-scheme="slate"] .runtime-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+[data-md-color-scheme="slate"] .runtime-toggle-dropdown {
+  background: var(--md-default-bg-color);
+  border-color: var(--md-default-fg-color--lighter);
+}
+
+/* Mobile responsive */
+@media screen and (max-width: 76.1875em) {
+  .runtime-toggle {
+    margin-left: 0.5rem;
+  }
+
+  .runtime-toggle-btn {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
+  }
+}
+
+@media screen and (max-width: 44.9375em) {
+  .runtime-toggle-btn span:not(.runtime-toggle-arrow) {
+    display: none;
+  }
+
+  .runtime-toggle-btn {
+    padding: 0.35rem 0.5rem;
+  }
+}
+
+/* =============================================================================
+   Cross-reference Banner (Python <-> TypeScript)
+   ============================================================================= */
+
+.runtime-crossref {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0 1.5rem;
+  background: linear-gradient(135deg,
+    rgba(94, 129, 172, 0.08) 0%,
+    rgba(136, 192, 208, 0.08) 100%
+  );
+  border: 1px solid var(--md-primary-fg-color--transparent);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.runtime-crossref-icon {
+  font-size: 1.2rem;
+}
+
+.runtime-crossref a {
+  color: var(--md-primary-fg-color);
+  font-weight: 500;
+}
+
+.runtime-crossref a:hover {
+  text-decoration: underline;
+}

@@ -614,26 +614,23 @@ async def enhanced_data_processor(
     }
 ```
 
-### Automatic Proxy Selection
+### Unified Proxy System
 
-> **Smart Proxy Selection**: MCP Mesh automatically selects the appropriate proxy based on kwargs:
+> **Unified Proxy**: MCP Mesh uses `EnhancedUnifiedMCPProxy` for all cross-agent calls, automatically configured from kwargs:
 
-- **Basic kwargs** (`timeout`, `retry_count`) → `EnhancedMCPClientProxy`
-- **Streaming enabled** (`streaming=True`) → `EnhancedFullMCPProxy`
-- **No special kwargs** → Standard `MCPClientProxy` (backward compatible)
+- **Same agent** → `SelfDependencyProxy` (direct call, no network overhead)
+- **Cross-agent** → `EnhancedUnifiedMCPProxy` (auto-configured from kwargs)
 
 ```python
-# Gets EnhancedMCPClientProxy
-@mesh.tool(capability="basic", timeout=60)
+@app.tool()
+@mesh.tool(capability="basic", timeout=60, retry_count=3)
 def basic_operation(): pass
+# → EnhancedUnifiedMCPProxy with 60s timeout and 3 retries
 
-# Gets EnhancedFullMCPProxy
-@mesh.tool(capability="streaming", streaming=True)
-async def streaming_operation(): pass
-
-# Gets standard MCPClientProxy
+@app.tool()
 @mesh.tool(capability="simple")
 def simple_operation(): pass
+# → EnhancedUnifiedMCPProxy with default configuration
 ```
 
 ## @mesh.agent - Agent-Level Configuration
