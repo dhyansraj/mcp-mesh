@@ -1,3 +1,8 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">🐍</span>
+  <span>Looking for Python? See <a href="../../python/llm/index/">Python LLM Integration</a></span>
+</div>
+
 # LLM Integration (TypeScript)
 
 > Building LLM-powered agents with mesh.llm()

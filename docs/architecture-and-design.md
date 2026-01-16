@@ -12,8 +12,8 @@ Key terms used throughout MCP Mesh documentation:
 
 | Term                             | Definition                                                                                                                                                                                                                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Agent**                        | A Python application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                               |
-| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                                                                                   |
+| **Agent**                        | A Python or TypeScript application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                 |
+| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` (Python) or registered with `agent.addTool()` (TypeScript) that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                        |
 | **Capability**                   | A unique identifier (string) that describes what a tool provides. Other tools declare dependencies on capabilities, not specific agents. Example: `"redis_store_memory"`, `"analyze_emotion"`.                                                                                             |
 | **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
 | **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
@@ -119,7 +119,8 @@ curl -s -X POST http://localhost:8080/mcp \
 │                  │ │Service  │ │                                │
 │                  │ │Discovery│ │                                │
 │                  │ │         │ │                                │
-│                  │ │SQLite DB│ │                                │
+│                  │ │SQLite/  │ │                                │
+│                  │ │Postgres │ │                                │
 │                  │ └─────────┘ │                                │
 │                  │ ┌─────────┐ │                                │
 │                  │ │Health   │ │                                │
@@ -135,7 +136,7 @@ curl -s -X POST http://localhost:8080/mcp \
 
 ### Component Responsibilities
 
-#### 1. **Agents (Python Runtime)**
+#### 1. **Agents (Python & TypeScript Runtime)**
 
 - **FastMCP Integration**: Native MCP protocol support for direct agent-to-agent communication
 - **Mesh Runtime**: Background dependency injection and proxy creation
@@ -172,41 +173,65 @@ curl -s -X POST http://localhost:8080/mcp \
 
 ## MCP Mesh Agents and Tools
 
-MCP Mesh agents are simple Python scripts or modules that define one or more MCP tools. While tools communicate via the MCP protocol, all networking and communication complexity is abstracted away by MCP Mesh.
+MCP Mesh agents are simple Python or TypeScript applications that define one or more MCP tools. While tools communicate via the MCP protocol, all networking and communication complexity is abstracted away by MCP Mesh.
 
 ### What is an MCP Mesh Agent?
 
-An agent is a Python file that:
+An agent is a Python or TypeScript application that:
 
-1. Creates a FastMCP app
-2. Defines tools using the dual decorator pattern
-3. Registers with the mesh using `@mesh.agent`
+1. Creates a FastMCP server
+2. Wraps it with mesh capabilities
+3. Defines tools with capabilities and dependencies
 
-```python
-import mesh
-from fastmcp import FastMCP
+=== "Python"
 
-app = FastMCP("My Agent")
+    ```python
+    import mesh
+    from fastmcp import FastMCP
 
-@app.tool()           # FastMCP decorator - defines MCP tool
-@mesh.tool(           # Mesh decorator - adds orchestration
-    capability="greeting",
-    dependencies=["time_service"]
-)
-async def greet(name: str, time_service: mesh.McpMeshAgent = None):
-    """Greet someone with the current time."""
-    current_time = await time_service() if time_service else "unknown"
-    return f"Hello {name}! The time is {current_time}"
+    app = FastMCP("My Agent")
 
-@mesh.agent(
-    name="greeting-agent",
-    http_port=8080,
-    enable_http=True,
-    auto_run=True,
-)
-class GreetingAgent:
-    pass
-```
+    @app.tool()           # FastMCP decorator - defines MCP tool
+    @mesh.tool(           # Mesh decorator - adds orchestration
+        capability="greeting",
+        dependencies=["time_service"]
+    )
+    async def greet(name: str, time_service: mesh.McpMeshAgent = None):
+        """Greet someone with the current time."""
+        current_time = await time_service() if time_service else "unknown"
+        return f"Hello {name}! The time is {current_time}"
+
+    @mesh.agent(
+        name="greeting-agent",
+        http_port=8080,
+        enable_http=True,
+        auto_run=True,
+    )
+    class GreetingAgent:
+        pass
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { FastMCP, mesh } from "@mcpmesh/sdk";
+    import { z } from "zod";
+
+    const server = new FastMCP({ name: "My Agent", version: "1.0.0" });
+    const agent = mesh(server, { name: "greeting-agent", port: 8080 });
+
+    agent.addTool({
+      name: "greet",
+      capability: "greeting",
+      description: "Greet someone with the current time",
+      dependencies: ["time_service"],
+      parameters: z.object({ name: z.string() }),
+      execute: async ({ name }, { time_service }) => {
+        const currentTime = time_service ? await time_service() : "unknown";
+        return `Hello ${name}! The time is ${currentTime}`;
+      },
+    });
+    ```
 
 That's all the code you need. MCP Mesh handles:
 
@@ -617,29 +642,38 @@ def get_weather(time_service: Any = None) -> dict:
 - **Zero Boilerplate**: No manual server management or configuration
 - **Gradual Adoption**: Can add mesh features incrementally
 
-### 3. **Enhanced Proxy System**
+### 3. **Unified Proxy System**
 
-MCP Mesh provides automatic proxy configuration from decorator kwargs:
+MCP Mesh uses a unified proxy (`EnhancedUnifiedMCPProxy`) that auto-configures from decorator kwargs:
 
 ```python
+@app.tool()
 @mesh.tool(
     capability="enhanced_service",
     timeout=60,                    # Auto-configures proxy timeout
     retry_count=3,                 # Auto-configures retry policy
-    streaming=True,                # Auto-selects streaming proxy
+    session_required=True,         # Enables session management
     auth_required=True             # Auto-enables authentication
 )
 def enhanced_tool():
     pass
 ```
 
-**Proxy Types:**
+**Proxy Classes:**
 
-- **EnhancedMCPClientProxy**: Timeout, retry, auth auto-configuration
-- **EnhancedFullMCPProxy**: Streaming auto-selection + session management
-- **Standard Proxies**: Backward compatibility for simple tools
+- **UnifiedMCPProxy**: Base class using FastMCP client with all MCP protocol features
+- **EnhancedUnifiedMCPProxy**: Enhanced version with retry logic (used for all dependencies)
+- **SelfDependencyProxy**: Optimized proxy for local/same-agent calls (no network overhead)
 
-_Implementation: See `src/runtime/python/_mcp_mesh/engine/` for proxy classes_
+**Features (all in one proxy):**
+
+- Configurable timeout and retry with exponential backoff
+- Session management for stateful operations
+- Custom headers and authentication
+- Distributed tracing integration
+- HTTP fallback when FastMCP client unavailable
+
+_Implementation: See `src/runtime/python/_mcp_mesh/engine/unified_mcp_proxy.py`_
 
 ### 4. **Session Management and Stickiness**
 
@@ -742,11 +776,11 @@ _Implementation: See `src/runtime/python/_mcp_mesh/engine/debounce_coordinator.p
 
 #### Function Caching Strategy
 
-**Key Insight**: Mesh decorators must process BEFORE FastMCP decorators to cache original functions.
+**Key Insight**: Mesh decorators must process BEFORE FastMCP decorators to cache original functions. Since Python processes decorators bottom-up, `@mesh.tool()` goes below `@app.tool()`:
 
 ```python
-@mesh.tool()  # ← Processes first, caches original function
-@app.tool()   # ← FastMCP processes wrapped function
+@app.tool()   # ← FastMCP processes wrapped function (outer, applied second)
+@mesh.tool()  # ← Processes first, caches original function (inner, applied first)
 def hello(): pass
 ```
 
@@ -759,28 +793,20 @@ def hello(): pass
 
 #### Proxy Selection Logic
 
-**Registry-Driven**: Heartbeat response determines proxy type based on dependency location and configuration.
+**Registry-Driven**: Heartbeat response determines proxy type based on dependency location.
 
 ```python
 if current_agent_id == target_agent_id:
-    # Same agent - direct local call
+    # Same agent - direct local call (no network overhead)
     proxy = SelfDependencyProxy(original_func, function_name)
 else:
-    # Different agent - MCP JSON-RPC call
-    if has_enhanced_config:
-        proxy = EnhancedMCPClientProxy(endpoint, func_name, kwargs_config)
-    else:
-        proxy = MCPClientProxy(endpoint, func_name)
+    # Different agent - unified MCP proxy with auto-configuration
+    proxy = EnhancedUnifiedMCPProxy(endpoint, function_name, kwargs_config)
 ```
 
-**Enhanced Proxy Auto-Selection**:
+The unified proxy automatically configures itself from `kwargs_config` passed from the `@mesh.tool()` decorator (timeout, retry, session, auth, etc.).
 
-- `streaming=True` → `EnhancedFullMCPProxy`
-- `session_required=True` → `EnhancedFullMCPProxy` with session management
-- Custom timeout/retry → `EnhancedMCPClientProxy`
-- Simple tools → Standard `MCPClientProxy`
-
-_Implementation: See `src/runtime/python/_mcp_mesh/pipeline/heartbeat/dependency_resolution.py`_
+_Implementation: See `src/runtime/python/_mcp_mesh/pipeline/mcp_heartbeat/rust_heartbeat.py`_
 
 ### Hash-Based Change Detection
 
@@ -810,7 +836,7 @@ if current_hash == _last_dependency_hash:
 **Registry Responsibilities**:
 
 - Accept agent registrations via heartbeat
-- Store capability metadata in SQLite
+- Store capability metadata (SQLite for local dev, PostgreSQL for production)
 - Resolve dependencies and return topology
 - Monitor health and mark unhealthy agents
 - Generate audit events
@@ -996,26 +1022,10 @@ async def custom_health_check():
 
 _See `src/runtime/python/_mcp_mesh/` for extension interfaces_
 
-## Future Roadmap
-
-### Planned Features
-
-1. **Multi-Registry Federation**: Cross-cluster service discovery
-2. **Circuit Breakers**: Automatic failure isolation
-3. **Request Tracing**: Distributed tracing integration
-4. **Metrics Collection**: Prometheus/OpenTelemetry integration
-5. **Configuration Management**: Dynamic configuration updates
-
-### Performance Optimizations
-
-1. **gRPC Support**: Binary protocol for high-throughput scenarios
-2. **Connection Pooling**: Efficient connection reuse between agents
-3. **Edge Caching**: CDN-like caching for static capabilities
-
 ---
 
 This architecture enables MCP Mesh to provide a seamless, scalable, and developer-friendly service orchestration platform that preserves the simplicity of FastMCP while adding powerful distributed system capabilities.
 
-**For Implementation Details**: See source code in `src/runtime/python/_mcp_mesh/` and `cmd/registry/`
+**For Implementation Details**: See source code in `src/runtime/python/` (Python), `src/runtime/typescript/` (TypeScript), and `cmd/registry/` (Go)
 **For Examples**: See `examples/` directory for complete working examples
 **For Configuration**: See [Environment Variables](./environment-variables.md) for all configuration options

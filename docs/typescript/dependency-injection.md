@@ -1,3 +1,8 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">🐍</span>
+  <span>Looking for Python? See <a href="../../python/dependency-injection/">Python Dependency Injection</a></span>
+</div>
+
 # Dependency Injection (TypeScript)
 
 > Automatic wiring of capabilities between agents

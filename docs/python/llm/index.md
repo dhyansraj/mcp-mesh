@@ -1,3 +1,8 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">📘</span>
+  <span>Looking for TypeScript? See <a href="../../typescript/llm/index/">TypeScript LLM Integration</a></span>
+</div>
+
 # LLM Integration
 
 > Building LLM-powered agents with @mesh.llm decorator

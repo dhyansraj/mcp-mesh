@@ -154,15 +154,40 @@ nav:
 
   - Why MCP Mesh?: 00-why-mcp-mesh/index.md
 
-  - Getting Started:
-      - Overview: 01-getting-started.md
-      - Prerequisites: 01-getting-started/01-prerequisites.md
-      - Installation: 01-getting-started/02-installation.md
-      - Hello World: 01-getting-started/03-hello-world.md
-      - Dependency Injection: 01-getting-started/04-dependency-injection.md
-      - First Agent: 01-getting-started/05-first-agent.md
-      - LLM Integration: 01-getting-started/06-llm-integration.md
-      - Troubleshooting: 01-getting-started/troubleshooting.md
+  # Python SDK - Generated from meshctl man pages
+  - Python SDK:
+      - python/index.md
+      - Getting Started:
+          - Quick Start: python/getting-started/index.md
+          - Prerequisites: python/getting-started/prerequisites.md
+      - Core Concepts:
+          - Decorators: python/decorators.md
+          - Dependency Injection: python/dependency-injection.md
+          - Capabilities & Tags: python/capabilities-tags.md
+      - LLM Integration: python/llm/index.md
+      - FastAPI Integration: python/fastapi-integration.md
+      - Examples & Testing: python/examples.md
+
+  # TypeScript SDK - Generated from meshctl man pages
+  - TypeScript SDK:
+      - typescript/index.md
+      - Getting Started:
+          - Quick Start: typescript/getting-started/index.md
+          - Prerequisites: typescript/getting-started/prerequisites.md
+      - Core Concepts:
+          - Mesh Functions: typescript/mesh-functions.md
+          - Dependency Injection: typescript/dependency-injection.md
+          - Capabilities & Tags: typescript/capabilities-tags.md
+      - LLM Integration: typescript/llm/index.md
+      - Express Integration: typescript/express-integration.md
+      - Examples & Testing: typescript/examples.md
+
+  # Shared sections (language-agnostic)
+  - Concepts:
+      - Architecture & Design: concepts/architecture.md
+      - Registry: concepts/registry.md
+      - Health & Discovery: concepts/health-discovery.md
+      - Tag Matching: concepts/tag-matching.md
 
   - Local Development:
       - Overview: 02-local-development.md
@@ -196,14 +221,17 @@ nav:
 
   - Observability: 07-observability.md
 
+  - CLI Reference:
+      - meshctl Overview: cli/index.md
+      - meshctl start: cli/start.md
+      - meshctl call: cli/call.md
+      - meshctl list: cli/list.md
+      - meshctl scaffold: cli/scaffold.md
+      - meshctl man: cli/man.md
+      - Environment Variables: environment-variables.md
+
   - FAQ: faq.md
 
-  - Reference:
-      - Architecture & Design: architecture-and-design.md
-      - Mesh Decorators: mesh-decorators.md
-      - Environment Variables: environment-variables.md
-      - meshctl CLI: meshctl-cli.md
-      - meshctl scaffold: meshctl-scaffold.md
-      - Tag Matching Migration: enhanced-tag-matching-migration.md
-
   - Contributing: contributing.md
+
+  - Feature Comparison: comparison.md

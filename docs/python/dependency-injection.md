@@ -1,3 +1,8 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">📘</span>
+  <span>Looking for TypeScript? See <a href="../../typescript/dependency-injection/">TypeScript Dependency Injection</a></span>
+</div>
+
 # Dependency Injection
 
 > Automatic wiring of capabilities between agents

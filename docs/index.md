@@ -14,27 +14,53 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 
 ## :rocket: Quick Start
 
-```bash
-# Install MCP Mesh
-pip install "mcp-mesh>=0.7,<0.8"
-```
+=== "Python"
 
-```python
-# Create your first agent
-from fastmcp import FastMCP
-import mesh
+    ```bash
+    pip install "mcp-mesh>=0.7,<0.8"
+    ```
 
-app = FastMCP("My Service")
+    ```python
+    from fastmcp import FastMCP
+    import mesh
 
-@app.tool()
-@mesh.tool(capability="greeting", dependencies=["date_service"])
-async def greet(date_service: mesh.McpMeshAgent = None):
-    return f"Hello! {await date_service()}"
+    app = FastMCP("My Service")
 
-@mesh.agent(name="my-service", auto_run=True)
-class MyAgent:
-    pass
-```
+    @app.tool()
+    @mesh.tool(capability="greeting", dependencies=["date_service"])
+    async def greet(date_service: mesh.McpMeshAgent = None):
+        return f"Hello! {await date_service()}"
+
+    @mesh.agent(name="my-service", auto_run=True)
+    class MyAgent:
+        pass
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    npm install @mcpmesh/sdk
+    ```
+
+    ```typescript
+    import { FastMCP, mesh } from "@mcpmesh/sdk";
+    import { z } from "zod";
+
+    const server = new FastMCP({ name: "my-service", version: "1.0.0" });
+    const agent = mesh(server, { name: "my-service", port: 9000 });
+
+    agent.addTool({
+      name: "greet",
+      capability: "greeting",
+      description: "Greet the user with current date",
+      dependencies: ["date_service"],
+      parameters: z.object({ name: z.string() }),
+      execute: async ({ name }, { date_service }) => {
+        const date = await date_service();
+        return `Hello, ${name}! Today is ${date}`;
+      },
+    });
+    ```
 
 **That's it!** No manual server setup, no connection management, no networking code.
 
@@ -174,6 +200,14 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
 
+=== "TypeScript Runtime"
+
+    ```bash
+    npm install @mcpmesh/sdk
+    ```
+
+    Runtime for building agents with `mesh()`, `agent()`, and `addTool()` functions.
+
 === "Docker Images"
 
     ```bash
@@ -189,7 +223,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     helm install mcp-mesh oci://ghcr.io/dhyansraj/mcp-mesh/charts/mcp-mesh
     ```
 
-    Kubernetes deployment with the umbrella chart. See [Helm Deployment Guide](06-helm-deployment/index.md).
+    Kubernetes deployment with the umbrella chart.
 
 ---
 
@@ -206,7 +240,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 - **Latest Release**: v0.7.21 (January 2026)
 - **License**: MIT
-- **Language**: Python 3.11+ (runtime), Go 1.23+ (registry)
+- **Languages**: Python 3.11+ and TypeScript/Node.js 18+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
 
 ---
@@ -224,7 +258,8 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 **Ready to get started?**
 
-[Quick Tutorial](01-getting-started.md){ .md-button .md-button--primary }
+[Python SDK](python/getting-started/index.md){ .md-button .md-button--primary }
+[TypeScript SDK](typescript/getting-started/index.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
 
 **Star the repo** if MCP Mesh helps you build better AI systems! :star:

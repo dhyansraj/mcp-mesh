@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org)
 [![PyPI](https://img.shields.io/pypi/v/mcp-mesh?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mesh/)
 [![npm](https://img.shields.io/npm/v/@mcpmesh/cli?color=red&logo=npm&logoColor=white)](https://www.npmjs.com/package/@mcpmesh/cli)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue.svg?logo=docker&logoColor=white)](https://github.com/dhyansraj/mcp-mesh/pkgs/container/mcp-mesh%2Fregistry)
+[![Docker](https://img.shields.io/badge/docker-hub-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/u/mcpmesh)
 [![Helm](https://img.shields.io/badge/helm-charts-blue.svg?logo=helm&logoColor=white)](https://github.com/dhyansraj/mcp-mesh/pkgs/container/mcp-mesh%2Fmcp-mesh-core)
 [![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
 [![YouTube](https://img.shields.io/badge/YouTube-MCPMesh-red?logo=youtube&logoColor=white)](https://www.youtube.com/@MCPMesh)
@@ -17,10 +17,27 @@
 
 <p align="center">
   <a href="https://dhyansraj.github.io/mcp-mesh/"><strong>📚 Documentation</strong></a> ·
-  <a href="https://dhyansraj.github.io/mcp-mesh/01-getting-started/"><strong>🚀 Quick Start</strong></a> ·
+  <a href="https://dhyansraj.github.io/mcp-mesh/python/getting-started/"><strong>🚀 Quick Start</strong></a> ·
   <a href="https://www.youtube.com/@MCPMesh"><strong>🎬 YouTube</strong></a> ·
   <a href="https://discord.gg/KDFDREphWn"><strong>💬 Discord</strong></a>
 </p>
+
+---
+
+## ⚡ Getting Started
+
+```bash
+# Install the CLI
+npm install -g @mcpmesh/cli
+
+# Explore commands
+meshctl --help
+
+# Built-in documentation
+meshctl man
+```
+
+**[Python Quick Start →](https://dhyansraj.github.io/mcp-mesh/python/getting-started/)** | **[TypeScript Quick Start →](https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/)**
 
 ---
 
@@ -110,22 +127,9 @@ async def create_trip(trip_data: dict, plan_trip=None):
 
 ## Architecture Overview
 
-### Traditional MCP: Complex Systems = Nightmare
-
-![Traditional MCP Architecture](images/mcp_arch.png)
-
-**❌ Building complex agentic apps with traditional MCP:**
-
-- Client handles all orchestration, networking, and state
-- Adding new services requires reconfiguring everything
-- No dynamic upgrades - must restart entire system
-- Complex boilerplate for every service interaction
-
-### MCP Mesh: Complex Systems = Simple Code
-
 ![MCP Mesh Architecture](images/mcp-mesh_arch.png)
 
-**✅ MCP Mesh handles the complexity so you don't have to:**
+**MCP Mesh handles the complexity so you don't have to:**
 
 - **Zero Boilerplate**: Just add `@mesh.tool()` - networking handled automatically
 - **Dynamic Everything**: Add/remove/upgrade services without touching other code
@@ -133,20 +137,6 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Production Ready**: Built-in resilience, distributed observability, and scaling
 
 **The Magic**: Write simple Python functions, get enterprise-grade distributed systems.
-
----
-
-## MCP vs MCP Mesh: At a Glance
-
-| Challenge                  | Traditional MCP                      | MCP Mesh                       |
-| -------------------------- | ------------------------------------ | ------------------------------ |
-| **Connect 5 servers**      | 200+ lines of networking code        | 2 decorators                   |
-| **Handle failures**        | Manual error handling everywhere     | Automatic graceful degradation |
-| **Scale to production**    | Custom Kubernetes setup              | `helm install mcp-mesh`        |
-| **Monitor system**         | Build custom dashboards              | Built-in observability stack   |
-| **Add new capabilities**   | Restart and reconfigure clients      | Auto-discovery, zero downtime  |
-| **Development complexity** | Manage servers, clients, connections | Write business logic only      |
-| **Deployment**             | Manual orchestration                 | Kubernetes-native with Helm    |
 
 ---
 
@@ -180,6 +170,28 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Enhanced proxy system** with kwargs-driven auto-configuration for timeouts, retries, streaming
 - **meshctl CLI** for lifecycle management and network insights
 - **Kubernetes native** with scaling, health checks, and comprehensive observability
+
+---
+
+## MCP Mesh vs Other AI Agent Frameworks
+
+| Feature                                      | Other Frameworks  | MCP Mesh               |
+| -------------------------------------------- | ----------------- | ---------------------- |
+| **Zero-config Dependency Injection**         | ❌                | ✅                     |
+| **Dynamic Agent Discovery & Hot Join/Leave** | ❌                | ✅                     |
+| **Cross-language Support**                   | ❌                | ✅ Python + TypeScript |
+| **Same Code: Local → Docker → K8s**          | ❌ Rewrite needed | ✅                     |
+| **Developer CLI (scaffold, trace, status)**  | ❌                | ✅ `meshctl`           |
+| **Kubernetes-native (Helm)**                 | ❌ DIY            | ✅                     |
+| **Distributed Tracing (OpenTelemetry)**      | ❌ DIY            | ✅ Grafana/Tempo       |
+| **Auto-failover & Graceful Degradation**     | ❌                | ✅                     |
+| **LLM as Dependency (Discovery + Failover)** | ❌                | ✅                     |
+| **Zero-config Testing (Topology Mocking)**   | ❌                | ✅                     |
+| **Standard Protocol**                        | ❌ Custom         | ✅ MCP                 |
+| **Framework Lock-in**                        | High (classes)    | Low (decorators)       |
+| **Lines of Code per Agent**                  | ~50+              | ~10                    |
+
+**[See full comparison →](https://dhyansraj.github.io/mcp-mesh/comparison/)**
 
 ---
 
