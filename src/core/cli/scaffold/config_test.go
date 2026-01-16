@@ -174,7 +174,7 @@ func TestScaffoldConfig_Validate(t *testing.T) {
 				AgentType: "llm-agent",
 				LLM:       &LLMConfig{Provider: "invalid"},
 			},
-			wantErr: "llm.provider must be 'claude' or 'openai'",
+			wantErr: "llm.provider must be 'claude', 'openai', or 'gemini'",
 		},
 		{
 			name: "llm-provider missing provider section",

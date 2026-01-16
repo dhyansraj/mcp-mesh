@@ -39,8 +39,10 @@ export {
 import "./generic-handler.js";
 import "./claude-handler.js";
 import "./openai-handler.js";
+import "./gemini-handler.js";
 
 // Re-export handler classes for direct use or extension
 export { GenericHandler } from "./generic-handler.js";
 export { ClaudeHandler } from "./claude-handler.js";
 export { OpenAIHandler } from "./openai-handler.js";
+export { GeminiHandler } from "./gemini-handler.js";

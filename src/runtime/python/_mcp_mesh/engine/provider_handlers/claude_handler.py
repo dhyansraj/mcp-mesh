@@ -17,11 +17,16 @@ Features:
 
 import json
 import logging
-from typing import Any, Optional, get_args, get_origin
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from .base_provider_handler import BaseProviderHandler
+from .base_provider_handler import (
+    BASE_TOOL_INSTRUCTIONS,
+    BaseProviderHandler,
+    CLAUDE_ANTI_XML_INSTRUCTION,
+    make_schema_strict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,51 +146,6 @@ class ClaudeHandler(BaseProviderHandler):
         # Default to strict for unknown types
         return OUTPUT_MODE_STRICT
 
-    def _make_schema_strict(self, schema: dict[str, Any]) -> dict[str, Any]:
-        """
-        Make a JSON schema strict for Claude's structured output.
-
-        Claude requires additionalProperties: false on all object types.
-        This recursively processes the schema to add this constraint.
-
-        Args:
-            schema: JSON schema dict
-
-        Returns:
-            Schema with additionalProperties: false on all objects
-        """
-        if not isinstance(schema, dict):
-            return schema
-
-        result = schema.copy()
-
-        # If this is an object type, add additionalProperties: false
-        if result.get("type") == "object":
-            result["additionalProperties"] = False
-
-        # Recursively process nested schemas
-        if "properties" in result:
-            result["properties"] = {
-                k: self._make_schema_strict(v) for k, v in result["properties"].items()
-            }
-
-        # Process $defs (Pydantic uses this for nested models)
-        if "$defs" in result:
-            result["$defs"] = {
-                k: self._make_schema_strict(v) for k, v in result["$defs"].items()
-            }
-
-        # Process items for arrays
-        if "items" in result:
-            result["items"] = self._make_schema_strict(result["items"])
-
-        # Process anyOf, oneOf, allOf
-        for key in ["anyOf", "oneOf", "allOf"]:
-            if key in result:
-                result[key] = [self._make_schema_strict(s) for s in result[key]]
-
-        return result
-
     def _apply_prompt_caching(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -302,9 +262,10 @@ class ClaudeHandler(BaseProviderHandler):
         # Only add response_format in "strict" mode
         if determined_mode == OUTPUT_MODE_STRICT:
             # Claude requires additionalProperties: false on all object types
+            # Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
             if isinstance(output_type, type) and issubclass(output_type, BaseModel):
                 schema = output_type.model_json_schema()
-                strict_schema = self._make_schema_strict(schema)
+                strict_schema = make_schema_strict(schema, add_all_required=False)
                 request_params["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -346,15 +307,12 @@ class ClaudeHandler(BaseProviderHandler):
         # Add tool calling instructions if tools available
         # These prevent Claude from using XML-style <invoke> syntax
         if tool_schemas:
-            system_content += """
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time
-- NEVER use XML-style syntax like <invoke name="tool_name"/>
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-"""
+            # Use base instructions but insert anti-XML rule for Claude
+            instructions = BASE_TOOL_INSTRUCTIONS.replace(
+                "- Make ONE tool call at a time",
+                f"- Make ONE tool call at a time\n{CLAUDE_ANTI_XML_INSTRUCTION}",
+            )
+            system_content += instructions
 
         # Add output format instructions based on mode
         if determined_mode == OUTPUT_MODE_TEXT:

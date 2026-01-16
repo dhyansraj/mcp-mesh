@@ -494,6 +494,8 @@ func (p *StaticProvider) executeAddTool(ctx *ScaffoldContext, outputDir string) 
 			switch ctx.LLMProviderSelector {
 			case "openai":
 				data["ProviderTags"] = []string{"llm", "+gpt"}
+			case "gemini":
+				data["ProviderTags"] = []string{"llm", "+gemini"}
 			default: // claude
 				data["ProviderTags"] = []string{"llm", "+claude"}
 			}

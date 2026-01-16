@@ -62,7 +62,7 @@ type ScaffoldContext struct {
 	Dependencies []string // Dependency capabilities
 
 	// LLM-agent specific (for @mesh.llm decorator)
-	LLMProviderSelector string   // "claude" or "openai" for provider selection
+	LLMProviderSelector string   // "claude", "openai", or "gemini" for provider selection
 	ProviderTags        []string // Tags to filter LLM provider
 	MaxIterations       int      // Max agentic loop iterations
 	SystemPrompt        string   // System prompt (inline or file:// path)

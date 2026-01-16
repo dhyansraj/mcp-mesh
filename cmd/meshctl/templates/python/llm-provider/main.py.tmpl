@@ -134,6 +134,62 @@ async def health_check() -> dict:
         "checks": checks,
         "errors": errors,
     }
+{{ else if contains .Model "gemini" }}
+async def health_check() -> dict:
+    """
+    Health check for {{ .Name }}.
+
+    Validates:
+    1. GOOGLE_API_KEY environment variable is set
+    2. Google Gemini API is reachable
+
+    Returns:
+        dict: Health status with checks and errors
+    """
+    checks = {}
+    errors = []
+    status = "healthy"
+
+    # Check API Key presence
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if api_key:
+        checks["google_api_key_present"] = True
+    else:
+        checks["google_api_key_present"] = False
+        errors.append("GOOGLE_API_KEY not set")
+        status = "unhealthy"
+
+    # Check API connectivity (uses /v1beta/models - metadata only, no tokens consumed)
+    if api_key:
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                )
+                if response.status_code == 200:
+                    checks["gemini_api_reachable"] = True
+                    checks["google_api_key_valid"] = True
+                elif response.status_code == 400 or response.status_code == 403:
+                    checks["gemini_api_reachable"] = True
+                    checks["google_api_key_valid"] = False
+                    errors.append("Google API key is invalid")
+                    status = "unhealthy"
+                else:
+                    checks["gemini_api_reachable"] = False
+                    errors.append(f"Gemini API returned status: {response.status_code}")
+                    status = "degraded"
+        except Exception as e:
+            checks["gemini_api_reachable"] = False
+            errors.append(f"Gemini API unreachable: {str(e)}")
+            status = "degraded"
+
+    return {
+        "status": status,
+        "checks": checks,
+        "errors": errors,
+    }
 {{ else }}
 async def health_check() -> dict:
     """
@@ -155,7 +211,7 @@ async def health_check() -> dict:
 @mesh.llm_provider(
     model="{{ .Model }}",
     capability="llm",
-    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else }}["llm", "provider"]{{ end }},
+    tags={{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else if contains .Model "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
     version="1.0.0",
 )
 def {{ toSnakeCase .Name }}():

@@ -1,11 +1,20 @@
 /**
- * OpenAI provider handler.
+ * Gemini/Google provider handler.
  *
- * Optimized for OpenAI models (GPT-4, GPT-4 Turbo, GPT-3.5-turbo)
- * using OpenAI's native structured output capabilities.
+ * Optimized for Gemini models (Gemini 2.0 Flash, Gemini 1.5 Pro, etc.)
+ * using Google's best practices for tool calling and structured output.
  *
- * Based on Python's OpenAIHandler:
- * src/runtime/python/_mcp_mesh/engine/provider_handlers/openai_handler.py
+ * Features:
+ * - Native structured output via response_format (via Vercel AI SDK)
+ * - Native function calling support
+ * - Support for Gemini 2.x and 3.x models
+ * - Large context windows (up to 2M tokens)
+ *
+ * Based on Python's GeminiHandler:
+ * src/runtime/python/_mcp_mesh/engine/provider_handlers/gemini_handler.py
+ *
+ * Reference:
+ * - https://ai.google.dev/gemini-api/docs
  */
 
 import { createDebug } from "../debug.js";
@@ -24,48 +33,41 @@ import {
 } from "./provider-handler.js";
 import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
 
-const debug = createDebug("openai-handler");
+const debug = createDebug("gemini-handler");
 
 /**
- * Provider handler for OpenAI models.
+ * Provider handler for Google Gemini models.
  *
- * OpenAI Characteristics:
- * - Native structured output via response_format parameter
- * - Strict JSON schema enforcement
- * - Built-in function calling
- * - Works best with concise, focused prompts
- * - response_format ensures valid JSON matching schema
+ * Gemini Characteristics:
+ * - Native structured output via response_format (Vercel AI SDK translates)
+ * - Native function calling support
+ * - Large context windows (1M-2M tokens)
+ * - Multimodal support (text, images, video, audio)
+ * - Works well with concise, focused prompts
  *
- * Key Difference from Claude:
- * - Uses response_format instead of prompt-based JSON instructions
- * - OpenAI API guarantees JSON schema compliance
- * - More strict parsing, less tolerance for malformed JSON
- * - Shorter system prompts work better
+ * Key Similarities with OpenAI:
+ * - Uses response_format for structured output (via Vercel AI SDK)
+ * - Native function calling format
+ * - Similar schema enforcement requirements
  *
- * Supported Models:
- * - gpt-4-turbo-preview and later
- * - gpt-4-0125-preview and later
- * - gpt-3.5-turbo-0125 and later
- * - All gpt-4o models
- *
- * Reference: https://platform.openai.com/docs/guides/structured-outputs
+ * Supported Models (via Vercel AI SDK):
+ * - gemini-2.0-flash (fast, efficient)
+ * - gemini-2.0-flash-lite (fastest, most efficient)
+ * - gemini-1.5-pro (high capability)
+ * - gemini-1.5-flash (balanced)
+ * - gemini-3-flash-preview (reasoning support)
+ * - gemini-3-pro-preview (advanced reasoning)
  */
-export class OpenAIHandler implements ProviderHandler {
-  readonly vendor = "openai";
+export class GeminiHandler implements ProviderHandler {
+  readonly vendor = "google";
 
   /**
-   * Prepare request parameters for OpenAI API with structured output.
+   * Prepare request parameters for Gemini API via Vercel AI SDK.
    *
-   * OpenAI Strategy:
-   * - Use response_format parameter for guaranteed JSON schema compliance
-   * - This is the KEY difference from Claude handler
-   * - response_format.json_schema ensures the response matches output schema
+   * Gemini Strategy:
+   * - Use response_format parameter for structured JSON output
+   * - Vercel AI SDK handles translation to Gemini's native format
    * - Skip structured output for text mode (string return types)
-   *
-   * Message Format (OpenAI-specific):
-   * - Assistant messages with tool_calls → content blocks with type "tool-call"
-   * - Tool result messages → content blocks with type "tool-result"
-   * This is required for Vercel AI SDK to properly convert to OpenAI's native format.
    */
   prepareRequest(
     messages: LlmMessage[],
@@ -91,6 +93,7 @@ export class OpenAIHandler implements ProviderHandler {
     };
 
     // Add tools if provided
+    // Vercel AI SDK will convert to Gemini's function_declarations format
     if (tools && tools.length > 0) {
       request.tools = tools;
     }
@@ -114,12 +117,9 @@ export class OpenAIHandler implements ProviderHandler {
     // Only add response_format in "strict" mode
     // Hint mode relies on prompt instructions instead
     if (determinedMode === "strict") {
-      // Transform schema for OpenAI strict mode
-      // OpenAI requires additionalProperties: false and all properties in required
+      // Vercel AI SDK translates this to Gemini's native format
       const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
 
-      // OpenAI structured output format
-      // See: https://platform.openai.com/docs/guides/structured-outputs
       request.responseFormat = {
         type: "json_schema",
         jsonSchema: {
@@ -136,19 +136,13 @@ export class OpenAIHandler implements ProviderHandler {
   }
 
   /**
-   * Format system prompt for OpenAI (concise approach).
+   * Format system prompt for Gemini (concise approach).
    *
-   * OpenAI Strategy:
+   * Gemini Strategy:
    * 1. Use base prompt as-is
    * 2. Add tool calling instructions if tools present
-   * 3. NO JSON schema instructions (response_format handles this)
-   * 4. Keep prompt concise - OpenAI works well with shorter prompts
-   * 5. Skip JSON note for text mode (string return type)
-   *
-   * Key Difference from Claude:
-   * - No JSON schema in prompt (response_format ensures compliance)
-   * - Shorter, more focused instructions
-   * - Let response_format handle output structure
+   * 3. Minimal JSON instructions (response_format handles structure)
+   * 4. Keep prompt concise - Gemini works well with clear, direct prompts
    */
   formatSystemPrompt(
     basePrompt: string,
@@ -169,12 +163,7 @@ export class OpenAIHandler implements ProviderHandler {
       return systemContent;
     }
 
-    // NOTE: We do NOT add JSON schema instructions here!
-    // OpenAI's response_format parameter handles JSON structure automatically.
-    // Adding explicit JSON instructions can actually confuse the model.
-
-    // Optional: Add a brief note that response should be JSON
-    // (though response_format enforces this anyway)
+    // Add brief JSON note (response_format handles enforcement)
     systemContent += `
 
 Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
@@ -183,22 +172,22 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
   }
 
   /**
-   * Return OpenAI-specific capabilities.
+   * Return Gemini-specific capabilities.
    */
   getCapabilities(): VendorCapabilities {
     return {
-      nativeToolCalling: true, // OpenAI has native function calling
-      structuredOutput: true, // Native response_format support!
+      nativeToolCalling: true, // Gemini has native function calling
+      structuredOutput: true, // Supports structured output via response_format
       streaming: true, // Supports streaming
-      vision: true, // GPT-4V and later support vision
-      jsonMode: true, // Has dedicated JSON mode via response_format
+      vision: true, // Gemini supports multimodal (images, video, audio)
+      jsonMode: true, // Native JSON mode via response_format
     };
   }
 
   /**
-   * Determine output mode - OpenAI always uses strict mode for schemas.
+   * Determine output mode - Gemini uses strict mode for schemas.
    *
-   * Uses the default implementation since OpenAI has excellent structured output support.
+   * Uses the default implementation since Gemini has good structured output support.
    */
   determineOutputMode(
     outputSchema: OutputSchema | null,
@@ -209,4 +198,6 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
 }
 
 // Register with the registry
-ProviderHandlerRegistry.register("openai", OpenAIHandler);
+// Use "google" as vendor name to match Vercel AI SDK model extraction
+// (e.g., "google/gemini-2.0-flash" → vendor "google")
+ProviderHandlerRegistry.register("google", GeminiHandler);

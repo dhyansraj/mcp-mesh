@@ -35,6 +35,12 @@ env:
       secretKeyRef:
         name: llm-secrets
         key: openai-api-key
+{{ else if contains .Model "gemini" }}
+  - name: GOOGLE_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: google-api-key
 {{ end }}
 
 secrets: []

@@ -46,8 +46,45 @@ const VENDOR_PROVIDERS: Record<string, string> = {
   anthropic: "@ai-sdk/anthropic",
   openai: "@ai-sdk/openai",
   google: "@ai-sdk/google",
+  gemini: "@ai-sdk/google", // gemini/ model prefix uses Google AI SDK
   // Can extend with more providers as needed
 };
+
+/**
+ * Mapping from vendor name to the export name in the provider module.
+ * Most providers export a function with the same name as the vendor,
+ * but some (like gemini) use a different name (google).
+ */
+const VENDOR_EXPORTS: Record<string, string> = {
+  gemini: "google", // @ai-sdk/google exports 'google', not 'gemini'
+};
+
+/**
+ * Normalize environment variables for cross-SDK compatibility.
+ *
+ * Different SDKs use different env var names:
+ * - Python/LiteLLM: GOOGLE_API_KEY
+ * - Vercel AI SDK: GOOGLE_GENERATIVE_AI_API_KEY
+ *
+ * This function ensures either env var works for both SDKs.
+ */
+function normalizeEnvVars(vendor: string): void {
+  if (vendor === "gemini" || vendor === "google") {
+    // Vercel AI SDK expects GOOGLE_GENERATIVE_AI_API_KEY
+    // LiteLLM expects GOOGLE_API_KEY
+    // Support both by copying if one is set but not the other
+    const vercelKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    const litellmKey = process.env.GOOGLE_API_KEY;
+
+    if (!vercelKey && litellmKey) {
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = litellmKey;
+      debug("Set GOOGLE_GENERATIVE_AI_API_KEY from GOOGLE_API_KEY");
+    } else if (vercelKey && !litellmKey) {
+      process.env.GOOGLE_API_KEY = vercelKey;
+      debug("Set GOOGLE_API_KEY from GOOGLE_GENERATIVE_AI_API_KEY");
+    }
+  }
+}
 
 /**
  * Extract vendor name from model string.
@@ -109,6 +146,9 @@ export function extractModelName(model: string): string {
 async function loadProvider(
   vendor: string
 ): Promise<((modelId: string) => unknown) | null> {
+  // Normalize environment variables for cross-SDK compatibility
+  normalizeEnvVars(vendor);
+
   const providerPath = VENDOR_PROVIDERS[vendor];
   if (!providerPath) {
     debug(`Unknown vendor: ${vendor}`);
@@ -122,12 +162,15 @@ async function loadProvider(
       unknown
     >;
 
+    // Get the export name (may differ from vendor name, e.g., gemini -> google)
+    const exportName = VENDOR_EXPORTS[vendor] ?? vendor;
+
     // Each provider exports a function with the vendor name (e.g., anthropic, openai)
-    const createModel = providerModule[vendor] as
+    const createModel = providerModule[exportName] as
       | ((modelId: string) => unknown)
       | undefined;
     if (typeof createModel !== "function") {
-      debug(`Provider ${vendor} does not export a model creator function`);
+      debug(`Provider ${vendor} does not export a model creator function (looked for '${exportName}')`);
       return null;
     }
 
@@ -163,7 +206,7 @@ function convertToVercelMessages(messages: LlmMessage[]): VercelCoreMessage[] {
 interface VercelToolCall {
   toolCallId: string;
   toolName: string;
-  input: Record<string, unknown>;
+  args: Record<string, unknown>;
 }
 
 /**
@@ -175,7 +218,7 @@ function convertToolCalls(toolCalls: VercelToolCall[]): LlmToolCallRequest[] {
     type: "function" as const,
     function: {
       name: tc.toolName,
-      arguments: JSON.stringify(tc.input ?? {}),
+      arguments: JSON.stringify(tc.args ?? {}),
     },
   }));
 }
