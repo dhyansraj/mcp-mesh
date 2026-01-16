@@ -59,7 +59,7 @@ const debug = createDebug("gemini-handler");
  * - gemini-3-pro-preview (advanced reasoning)
  */
 export class GeminiHandler implements ProviderHandler {
-  readonly vendor = "gemini";
+  readonly vendor = "google";
 
   /**
    * Prepare request parameters for Gemini API via Vercel AI SDK.
@@ -198,4 +198,6 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
 }
 
 // Register with the registry
-ProviderHandlerRegistry.register("gemini", GeminiHandler);
+// Use "google" as vendor name to match Vercel AI SDK model extraction
+// (e.g., "google/gemini-2.0-flash" → vendor "google")
+ProviderHandlerRegistry.register("google", GeminiHandler);
