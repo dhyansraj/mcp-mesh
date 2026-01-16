@@ -1867,11 +1867,22 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly b
 	// Parse tool specifier (agent:tool or just tool)
 	agentName, toolName := parseToolSpec(toolSpec)
 
+	// If agent name specified, resolve with prefix matching
+	var targetAgentID string
+	if agentName != "" {
+		matchResult := ResolveAgentByPrefix(enhancedAgents, agentName, healthyOnly)
+		if err := matchResult.FormattedError(); err != nil {
+			return err
+		}
+		targetAgentID = matchResult.Agent.ID
+	}
+
 	// Find the specific tool
 	var matchedTool *ToolListItem
 	var matchedAgent *EnhancedAgent
 	for _, agent := range enhancedAgents {
-		if agentName != "" && agent.Name != agentName && agent.ID != agentName {
+		// If agent was resolved via prefix, use that specific agent
+		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
 		for _, tool := range agent.Tools {

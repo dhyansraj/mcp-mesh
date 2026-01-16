@@ -115,10 +115,13 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get agents: %w", err)
 	}
 
-	// If agent ID provided as positional argument, show details for that specific agent
+	// If agent ID/prefix provided as positional argument, show details for that specific agent
 	if len(args) > 0 {
-		agentID := args[0]
-		return outputAgentDetails(agents, agentID, jsonOutput)
+		matchResult := ResolveAgentByPrefix(agents, args[0], false) // include all agents for status
+		if err := matchResult.FormattedError(); err != nil {
+			return err
+		}
+		return outputAgentDetails(agents, matchResult.Agent.ID, jsonOutput)
 	}
 
 	// Filter to only healthy agents
