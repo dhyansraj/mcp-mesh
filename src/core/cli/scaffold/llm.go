@@ -8,12 +8,13 @@ import (
 )
 
 // supportedLLMProviders defines the LLM providers available for generation
-var supportedLLMProviders = []string{"claude", "openai"}
+var supportedLLMProviders = []string{"claude", "openai", "gemini"}
 
 // llmProviderEnvVars maps provider names to their API key environment variables
 var llmProviderEnvVars = map[string]string{
 	"claude": "ANTHROPIC_API_KEY",
 	"openai": "OPENAI_API_KEY",
+	"gemini": "GOOGLE_API_KEY",
 }
 
 // LLMProvider implements ScaffoldProvider for LLM-based generation.
@@ -39,7 +40,7 @@ func (p *LLMProvider) Description() string {
 func (p *LLMProvider) RegisterFlags(cmd *cobra.Command) {
 	cmd.Flags().String("from-doc", "", "Requirements document path")
 	cmd.Flags().String("prompt", "", "Natural language prompt")
-	cmd.Flags().String("provider", "claude", "LLM provider: claude, openai (uses provider-specific env var for API key)")
+	cmd.Flags().String("provider", "claude", "LLM provider: claude, openai, gemini (uses provider-specific env var for API key)")
 	cmd.Flags().Bool("validate", false, "Validate generated code")
 }
 

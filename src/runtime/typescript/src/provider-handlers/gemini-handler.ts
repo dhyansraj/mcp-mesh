@@ -1,0 +1,281 @@
+/**
+ * Gemini/Google provider handler.
+ *
+ * Optimized for Gemini models (Gemini 2.0 Flash, Gemini 1.5 Pro, etc.)
+ * using Google's best practices for tool calling and structured output.
+ *
+ * Features:
+ * - Native structured output via response_format (via Vercel AI SDK)
+ * - Native function calling support
+ * - Support for Gemini 2.x and 3.x models
+ * - Large context windows (up to 2M tokens)
+ *
+ * Based on Python's GeminiHandler:
+ * src/runtime/python/_mcp_mesh/engine/provider_handlers/gemini_handler.py
+ *
+ * Reference:
+ * - https://ai.google.dev/gemini-api/docs
+ */
+
+import { createDebug } from "../debug.js";
+import type { LlmMessage } from "../types.js";
+import {
+  convertMessagesToVercelFormat,
+  type ProviderHandler,
+  type VendorCapabilities,
+  type ToolSchema,
+  type OutputSchema,
+  type PreparedRequest,
+  type OutputMode,
+} from "./provider-handler.js";
+import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
+
+const debug = createDebug("gemini-handler");
+
+/**
+ * Provider handler for Google Gemini models.
+ *
+ * Gemini Characteristics:
+ * - Native structured output via response_format (Vercel AI SDK translates)
+ * - Native function calling support
+ * - Large context windows (1M-2M tokens)
+ * - Multimodal support (text, images, video, audio)
+ * - Works well with concise, focused prompts
+ *
+ * Key Similarities with OpenAI:
+ * - Uses response_format for structured output (via Vercel AI SDK)
+ * - Native function calling format
+ * - Similar schema enforcement requirements
+ *
+ * Supported Models (via Vercel AI SDK):
+ * - gemini-2.0-flash (fast, efficient)
+ * - gemini-2.0-flash-lite (fastest, most efficient)
+ * - gemini-1.5-pro (high capability)
+ * - gemini-1.5-flash (balanced)
+ * - gemini-3-flash-preview (reasoning support)
+ * - gemini-3-pro-preview (advanced reasoning)
+ */
+export class GeminiHandler implements ProviderHandler {
+  readonly vendor = "gemini";
+
+  /**
+   * Prepare request parameters for Gemini API via Vercel AI SDK.
+   *
+   * Gemini Strategy:
+   * - Use response_format parameter for structured JSON output
+   * - Vercel AI SDK handles translation to Gemini's native format
+   * - Skip structured output for text mode (string return types)
+   */
+  prepareRequest(
+    messages: LlmMessage[],
+    tools: ToolSchema[] | null,
+    outputSchema: OutputSchema | null,
+    options?: {
+      outputMode?: OutputMode;
+      temperature?: number;
+      maxOutputTokens?: number;
+      topP?: number;
+      [key: string]: unknown;
+    }
+  ): PreparedRequest {
+    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
+    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
+
+    // Convert messages to Vercel AI SDK format (shared utility)
+    const convertedMessages = convertMessagesToVercelFormat(messages);
+
+    const request: PreparedRequest = {
+      messages: convertedMessages,
+      ...rest,
+    };
+
+    // Add tools if provided
+    // Vercel AI SDK will convert to Gemini's function_declarations format
+    if (tools && tools.length > 0) {
+      request.tools = tools;
+    }
+
+    // Add standard parameters if provided
+    if (temperature !== undefined) {
+      request.temperature = temperature;
+    }
+    if (maxTokens !== undefined) {
+      request.maxOutputTokens = maxTokens;
+    }
+    if (topP !== undefined) {
+      request.topP = topP;
+    }
+
+    // Skip structured output for text mode
+    if (determinedMode === "text" || !outputSchema) {
+      return request;
+    }
+
+    // Add response_format for structured output
+    // Vercel AI SDK translates this to Gemini's native format
+    const strictSchema = this.makeSchemaStrict(outputSchema.schema);
+
+    request.responseFormat = {
+      type: "json_schema",
+      jsonSchema: {
+        name: outputSchema.name,
+        schema: strictSchema,
+        strict: true, // Enforce schema compliance
+      },
+    };
+
+    debug(`Using response_format with strict schema: ${outputSchema.name}`);
+
+    return request;
+  }
+
+  /**
+   * Format system prompt for Gemini (concise approach).
+   *
+   * Gemini Strategy:
+   * 1. Use base prompt as-is
+   * 2. Add tool calling instructions if tools present
+   * 3. Minimal JSON instructions (response_format handles structure)
+   * 4. Keep prompt concise - Gemini works well with clear, direct prompts
+   */
+  formatSystemPrompt(
+    basePrompt: string,
+    toolSchemas: ToolSchema[] | null,
+    outputSchema: OutputSchema | null,
+    outputMode?: OutputMode
+  ): string {
+    let systemContent = basePrompt;
+    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
+
+    // Add tool calling instructions if tools available
+    if (toolSchemas && toolSchemas.length > 0) {
+      systemContent += `
+
+IMPORTANT TOOL CALLING RULES:
+- You have access to tools (functions) that you can call to gather information
+- Make ONE tool call at a time
+- After receiving tool results, you can make additional calls if needed
+- Once you have all needed information, provide your final response
+`;
+    }
+
+    // Skip JSON note for text mode
+    if (determinedMode === "text" || !outputSchema) {
+      return systemContent;
+    }
+
+    // Add brief JSON note (response_format handles enforcement)
+    systemContent += `
+
+Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
+
+    return systemContent;
+  }
+
+  /**
+   * Return Gemini-specific capabilities.
+   */
+  getCapabilities(): VendorCapabilities {
+    return {
+      nativeToolCalling: true, // Gemini has native function calling
+      structuredOutput: true, // Supports structured output via response_format
+      streaming: true, // Supports streaming
+      vision: true, // Gemini supports multimodal (images, video, audio)
+      jsonMode: true, // Native JSON mode via response_format
+    };
+  }
+
+  /**
+   * Determine output mode - Gemini uses strict mode for schemas.
+   *
+   * Since Gemini has good structured output support via Vercel AI SDK,
+   * we use strict mode by default for schemas.
+   */
+  determineOutputMode(
+    outputSchema: OutputSchema | null,
+    overrideMode?: OutputMode
+  ): OutputMode {
+    // Allow explicit override
+    if (overrideMode) {
+      return overrideMode;
+    }
+
+    // No schema means text mode
+    if (!outputSchema) {
+      return "text";
+    }
+
+    // Gemini supports structured output - use strict
+    return "strict";
+  }
+
+  // ==========================================================================
+  // Private Helper Methods
+  // ==========================================================================
+
+  /**
+   * Make a JSON schema strict for Gemini's structured output.
+   *
+   * Adds additionalProperties: false and ensures required fields
+   * for proper schema enforcement.
+   */
+  private makeSchemaStrict(schema: Record<string, unknown>): Record<string, unknown> {
+    // Deep clone to avoid mutating original
+    const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+    this.addStrictConstraintsRecursive(result);
+    return result;
+  }
+
+  /**
+   * Recursively process schema for strict mode compliance.
+   */
+  private addStrictConstraintsRecursive(obj: unknown): void {
+    if (typeof obj !== "object" || obj === null) {
+      return;
+    }
+
+    const record = obj as Record<string, unknown>;
+
+    // If this is an object type, add additionalProperties: false
+    // and ensure required includes all properties
+    if (record.type === "object") {
+      record.additionalProperties = false;
+
+      // Strict mode: required should include all property keys
+      if (record.properties && typeof record.properties === "object") {
+        record.required = Object.keys(record.properties as Record<string, unknown>);
+      }
+    }
+
+    // Process $defs (used for nested models)
+    if (record.$defs && typeof record.$defs === "object") {
+      for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
+        this.addStrictConstraintsRecursive(defSchema);
+      }
+    }
+
+    // Process properties
+    if (record.properties && typeof record.properties === "object") {
+      for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
+        this.addStrictConstraintsRecursive(propSchema);
+      }
+    }
+
+    // Process items (for arrays)
+    if (record.items) {
+      this.addStrictConstraintsRecursive(record.items);
+    }
+
+    // Process anyOf, oneOf, allOf
+    for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+      if (Array.isArray(record[key])) {
+        for (const item of record[key] as unknown[]) {
+          this.addStrictConstraintsRecursive(item);
+        }
+      }
+    }
+  }
+}
+
+// Register with the registry
+ProviderHandlerRegistry.register("gemini", GeminiHandler);

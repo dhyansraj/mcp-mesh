@@ -14,7 +14,7 @@ This is a zero-code LLM provider that exposes {{ .Model }} to other MCP Mesh age
 - MCP Mesh SDK
 - FastMCP
 - LiteLLM
-{{ if contains .Model "anthropic" }}- ANTHROPIC_API_KEY environment variable{{ else if contains .Model "openai" }}- OPENAI_API_KEY environment variable{{ end }}
+{{ if contains .Model "anthropic" }}- ANTHROPIC_API_KEY environment variable{{ else if contains .Model "openai" }}- OPENAI_API_KEY environment variable{{ else if contains .Model "gemini" }}- GOOGLE_API_KEY environment variable{{ end }}
 
 ### Installation
 
@@ -31,6 +31,10 @@ export ANTHROPIC_API_KEY="your-api-key"
 {{ else if contains .Model "openai" }}
 ```bash
 export OPENAI_API_KEY="your-api-key"
+```
+{{ else if contains .Model "gemini" }}
+```bash
+export GOOGLE_API_KEY="your-api-key"
 ```
 {{ else }}
 Set the appropriate API key for your LLM provider.
@@ -103,6 +107,9 @@ The provider includes a health check that validates:
 {{ else if contains .Model "openai" }}
 - OPENAI_API_KEY is set
 - OpenAI API is reachable
+{{ else if contains .Model "gemini" }}
+- GOOGLE_API_KEY is set
+- Google Gemini API is reachable
 {{ else }}
 - Provider is configured correctly
 {{ end }}

@@ -85,7 +85,7 @@ export class MeshAgent {
   /**
    * Maps LLM provider tool names to their vendor (e.g., "process_chat" -> "anthropic").
    * TODO: Use for provider metrics, health checks, or exposing via getLlmProviderVendor() getter.
-   * Currently populated by addLlmProviderTool() for future introspection needs.
+   * Currently populated by addLlmProvider() for future introspection needs.
    */
   private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
@@ -245,7 +245,7 @@ export class MeshAgent {
   }
 
   /**
-   * Add an LLM provider tool to the agent.
+   * Add an LLM provider to the agent.
    *
    * This creates a zero-code LLM provider that other agents can use
    * via mesh delegation.
@@ -255,14 +255,14 @@ export class MeshAgent {
    *
    * @example
    * ```typescript
-   * agent.addLlmProviderTool({
+   * agent.addLlmProvider({
    *   model: "anthropic/claude-sonnet-4-5",
    *   capability: "llm",
    *   tags: ["llm", "claude", "anthropic", "provider"],
    * });
    * ```
    */
-  addLlmProviderTool(config: LlmProviderConfig): this {
+  addLlmProvider(config: LlmProviderConfig): this {
     // Create the LLM provider tool definition
     const toolDef = llmProvider(config);
 

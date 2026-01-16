@@ -1,8 +1,8 @@
 #!/usr/bin/env npx tsx
 /**
- * {{ .Name }} - MCP Mesh LLM Provider
+ * ts-claude-provider - MCP Mesh LLM Provider
  *
- * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM provider generated using meshctl scaffold.{{ end }}
+ * A MCP Mesh LLM provider generated using meshctl scaffold.
  *
  * This agent provides LLM access to other agents via the mesh network.
  */
@@ -11,14 +11,14 @@ import { FastMCP, mesh } from "@mcpmesh/sdk";
 
 // FastMCP server instance
 const server = new FastMCP({
-  name: "{{ toPascalCase .Name }}",
+  name: "TsClaudeProvider",
   version: "1.0.0",
 });
 
 // ===== AGENT CONFIGURATION =====
 
 /**
- * LLM Provider agent that exposes {{ .Model }} via mesh.
+ * LLM Provider agent that exposes anthropic/claude-sonnet-4-5 via mesh.
  *
  * Other agents can use this provider by specifying matching tags
  * in their mesh.llm() config:
@@ -26,10 +26,10 @@ const server = new FastMCP({
  *   provider: { capability: "llm", tags: ["+openai"] }  // for OpenAI
  */
 const agent = mesh(server, {
-  name: "{{ .Name }}",
+  name: "ts-claude-provider",
   version: "1.0.0",
-  description: "{{ if .Description }}{{ .Description }}{{ else }}LLM Provider for {{ .Model }}{{ end }}",
-  port: {{ .Port }},
+  description: "LLM Provider for anthropic/claude-sonnet-4-5",
+  port: 9004,
 });
 
 // ===== LLM PROVIDER =====
@@ -46,11 +46,12 @@ const agent = mesh(server, {
  * - Registers with mesh network for dependency injection
  */
 agent.addLlmProvider({
-  model: "{{ .Model }}",
+  name: "ts_process_chat",
+  model: "anthropic/claude-sonnet-4-5",
   capability: "llm",
-  tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else if contains .Model "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
+  tags: ["llm", "claude", "anthropic", "provider", "ts"],
   version: "1.0.0",
-  description: "{{ if .Description }}{{ .Description }}{{ else }}LLM provider via {{ .Model }}{{ end }}",
+  description: "LLM provider via anthropic/claude-sonnet-4-5",
   maxTokens: 4096,
 });
 
@@ -60,4 +61,4 @@ agent.addLlmProvider({
 // - HTTP server configuration
 // - Service registration with mesh registry
 
-console.log("{{ .Name }} provider starting...");
+console.log("ts-claude-provider provider starting...");

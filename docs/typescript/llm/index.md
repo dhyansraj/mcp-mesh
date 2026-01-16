@@ -166,7 +166,7 @@ filter: [{ capability: "data", tags: ["+fast"] }, { tags: ["utility"] }];
 
 ## Creating LLM Providers
 
-Create zero-code LLM providers with `agent.addLlmProviderTool()`:
+Create zero-code LLM providers with `agent.addLlmProvider()`:
 
 ```typescript
 import { FastMCP, mesh } from "@mcpmesh/sdk";
@@ -175,21 +175,21 @@ const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
 const agent = mesh(server, { name: "claude-provider", port: 9001 });
 
 // Single provider (default name: "process_chat")
-agent.addLlmProviderTool({
+agent.addLlmProvider({
   model: "anthropic/claude-sonnet-4-5",
   capability: "llm",
   tags: ["llm", "claude", "provider"],
 });
 
 // Multiple providers in one agent (use custom names)
-agent.addLlmProviderTool({
+agent.addLlmProvider({
   name: "sonnet_chat", // Custom tool name
   model: "anthropic/claude-sonnet-4-5",
   capability: "llm",
   tags: ["llm", "claude", "sonnet"],
 });
 
-agent.addLlmProviderTool({
+agent.addLlmProvider({
   name: "opus_chat", // Different tool name
   model: "anthropic/claude-opus-4",
   capability: "llm",
@@ -233,7 +233,7 @@ import { z } from "zod";
 const providerServer = new FastMCP({ name: "Claude", version: "1.0.0" });
 const provider = mesh(providerServer, { name: "claude-provider", port: 9001 });
 
-provider.addLlmProviderTool({
+provider.addLlmProvider({
   name: "chat",
   model: "anthropic/claude-sonnet-4-5",
   capability: "llm",

@@ -5,10 +5,11 @@ Manages selection and instantiation of provider handlers based on vendor name.
 """
 
 import logging
-from typing import Dict, Optional, Type
+from typing import Optional
 
 from .base_provider_handler import BaseProviderHandler
 from .claude_handler import ClaudeHandler
+from .gemini_handler import GeminiHandler
 from .generic_handler import GenericHandler
 from .openai_handler import OpenAIHandler
 
@@ -39,16 +40,17 @@ class ProviderHandlerRegistry:
     """
 
     # Built-in vendor mappings
-    _handlers: Dict[str, Type[BaseProviderHandler]] = {
+    _handlers: dict[str, type[BaseProviderHandler]] = {
         "anthropic": ClaudeHandler,
         "openai": OpenAIHandler,
+        "gemini": GeminiHandler,
     }
 
     # Cache of instantiated handlers (singleton per vendor)
-    _instances: Dict[str, BaseProviderHandler] = {}
+    _instances: dict[str, BaseProviderHandler] = {}
 
     @classmethod
-    def register(cls, vendor: str, handler_class: Type[BaseProviderHandler]) -> None:
+    def register(cls, vendor: str, handler_class: type[BaseProviderHandler]) -> None:
         """
         Register a custom provider handler.
 
@@ -143,7 +145,7 @@ class ProviderHandlerRegistry:
         return handler
 
     @classmethod
-    def list_vendors(cls) -> Dict[str, str]:
+    def list_vendors(cls) -> dict[str, str]:
         """
         List all registered vendors and their handlers.
 

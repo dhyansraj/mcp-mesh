@@ -249,12 +249,14 @@ func TestLLMProvider_SupportedProviders(t *testing.T) {
 
 	assert.Contains(t, providers, "claude")
 	assert.Contains(t, providers, "openai")
-	assert.Len(t, providers, 2)
+	assert.Contains(t, providers, "gemini")
+	assert.Len(t, providers, 3)
 }
 
 func TestLLMProvider_IsValidLLMProvider(t *testing.T) {
 	assert.True(t, IsValidLLMProvider("claude"))
 	assert.True(t, IsValidLLMProvider("openai"))
+	assert.True(t, IsValidLLMProvider("gemini"))
 	assert.False(t, IsValidLLMProvider("invalid"))
 	assert.False(t, IsValidLLMProvider(""))
 }
@@ -262,6 +264,7 @@ func TestLLMProvider_IsValidLLMProvider(t *testing.T) {
 func TestLLMProvider_GetAPIKeyEnvVar(t *testing.T) {
 	assert.Equal(t, "ANTHROPIC_API_KEY", GetAPIKeyEnvVar("claude"))
 	assert.Equal(t, "OPENAI_API_KEY", GetAPIKeyEnvVar("openai"))
+	assert.Equal(t, "GOOGLE_API_KEY", GetAPIKeyEnvVar("gemini"))
 	assert.Equal(t, "", GetAPIKeyEnvVar("invalid"))
 	assert.Equal(t, "", GetAPIKeyEnvVar(""))
 }

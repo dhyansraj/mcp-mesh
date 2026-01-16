@@ -30,7 +30,7 @@ type ScaffoldConfig struct {
 
 // LLMConfig contains configuration for @mesh.llm agents
 type LLMConfig struct {
-	// Provider selection (claude or openai)
+	// Provider selection (claude, openai, or gemini)
 	Provider string `yaml:"provider"`
 
 	// Provider filter tags
@@ -121,10 +121,10 @@ func (c *ScaffoldConfig) Validate() error {
 			return fmt.Errorf("llm section is required for llm-agent type")
 		}
 		if c.LLM.Provider == "" {
-			return fmt.Errorf("llm.provider is required (claude or openai)")
+			return fmt.Errorf("llm.provider is required (claude, openai, or gemini)")
 		}
-		if c.LLM.Provider != "claude" && c.LLM.Provider != "openai" {
-			return fmt.Errorf("llm.provider must be 'claude' or 'openai'")
+		if c.LLM.Provider != "claude" && c.LLM.Provider != "openai" && c.LLM.Provider != "gemini" {
+			return fmt.Errorf("llm.provider must be 'claude', 'openai', or 'gemini'")
 		}
 	case "llm-provider":
 		if c.Provider == nil {
@@ -175,6 +175,8 @@ func ContextFromConfig(config *ScaffoldConfig) *ScaffoldContext {
 				ctx.ProviderTags = []string{"llm", "+claude"}
 			case "openai":
 				ctx.ProviderTags = []string{"llm", "+gpt"}
+			case "gemini":
+				ctx.ProviderTags = []string{"llm", "+gemini"}
 			}
 		}
 

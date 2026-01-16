@@ -6,7 +6,7 @@
 
 ```bash
 # Set API key
-{{ if contains .Model "anthropic" }}export ANTHROPIC_API_KEY=your-key{{ else if contains .Model "openai" }}export OPENAI_API_KEY=your-key{{ end }}
+{{ if contains .Model "anthropic" }}export ANTHROPIC_API_KEY=your-key{{ else if contains .Model "openai" }}export OPENAI_API_KEY=your-key{{ else if contains .Model "gemini" }}export GOOGLE_API_KEY=your-key{{ end }}
 
 # Install dependencies
 npm install
@@ -31,7 +31,7 @@ Other agents can use this provider via `mesh.llm()`:
 server.addTool(
   mesh.llm({
     name: "my_tool",
-    provider: { capability: "llm", tags: {{ if contains .Model "anthropic" }}["claude"]{{ else if contains .Model "openai" }}["gpt"]{{ else }}["llm"]{{ end }} },
+    provider: { capability: "llm", tags: {{ if contains .Model "anthropic" }}["claude"]{{ else if contains .Model "openai" }}["gpt"]{{ else if contains .Model "gemini" }}["gemini"]{{ else }}["llm"]{{ end }} },
     // ... rest of config
   })
 );
@@ -42,7 +42,7 @@ server.addTool(
 ```bash
 docker build -t {{ .Name }}:latest .
 docker run -p {{ .Port }}:{{ .Port }} \
-  -e {{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }} \
+  -e {{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else if contains .Model "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else if contains .Model "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }} \
   {{ .Name }}:latest
 ```
 
@@ -52,7 +52,7 @@ Create a secret first:
 
 ```bash
 kubectl create secret generic llm-secrets \
-  --from-literal={{ if contains .Model "anthropic" }}anthropic-api-key{{ else if contains .Model "openai" }}openai-api-key{{ else }}api-key{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else }}API_KEY{{ end }}
+  --from-literal={{ if contains .Model "anthropic" }}anthropic-api-key{{ else if contains .Model "openai" }}openai-api-key{{ else if contains .Model "gemini" }}google-api-key{{ else }}api-key{{ end }}=${{ if contains .Model "anthropic" }}ANTHROPIC_API_KEY{{ else if contains .Model "openai" }}OPENAI_API_KEY{{ else if contains .Model "gemini" }}GOOGLE_API_KEY{{ else }}API_KEY{{ end }}
 ```
 
 Then deploy:

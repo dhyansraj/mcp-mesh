@@ -446,7 +446,7 @@ The MCP Mesh TypeScript SDK provides a function-based API for building distribut
 - **`mesh()`** - Wrap FastMCP with mesh capabilities
 - **`agent.addTool()`** - Register tools with capabilities and tags
 - **`mesh.llm()`** - Create LLM-powered tools
-- **`agent.addLlmProviderTool()`** - Zero-code LLM providers
+- **`agent.addLlmProvider()`** - Zero-code LLM providers
 
 ## Installation
 
