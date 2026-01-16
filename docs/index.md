@@ -17,7 +17,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 === "Python"
 
     ```bash
-    pip install "mcp-mesh>=0.7,<0.8"
+    pip install "mcp-mesh>=0.8,<0.9"
     ```
 
     ```python
@@ -195,7 +195,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 === "Python Runtime"
 
     ```bash
-    pip install "mcp-mesh>=0.7,<0.8"
+    pip install "mcp-mesh>=0.8,<0.9"
     ```
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
@@ -211,8 +211,8 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:0.7
-    docker pull mcpmesh/python-runtime:0.7
+    docker pull mcpmesh/registry:0.8
+    docker pull mcpmesh/python-runtime:0.8
     ```
 
     Official container images for production deployments.
@@ -238,7 +238,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 ## :star: Project Status
 
-- **Latest Release**: v0.7.21 (January 2026)
+- **Latest Release**: v0.8.0-beta.1 (January 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+ and TypeScript/Node.js 18+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

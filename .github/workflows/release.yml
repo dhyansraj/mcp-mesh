@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v0.7.0)"
+        description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.7.15"
+        default: "v0.8.0-beta.1"
       environment:
         description: "Environment"
         type: choice
@@ -57,6 +57,16 @@ jobs:
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION}"
+
+          # Check if prerelease
+          VERSION_NO_V=${VERSION#v}
+          if [[ "$VERSION_NO_V" == *"-beta"* ]] || \
+             [[ "$VERSION_NO_V" == *"-rc"* ]] || \
+             [[ "$VERSION_NO_V" == *"-alpha"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build binaries
         env:
@@ -184,23 +194,38 @@ jobs:
             VERSION="${{ github.sha }}"
           fi
           VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # SemVer format (for Cargo.toml - crates.io supports SemVer prereleases)
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Building Rust wheels for version: ${VERSION}"
+
+          # PyPI PEP 440 format: 0.8.0-beta.1 → 0.8.0b1, 0.8.0-rc.1 → 0.8.0rc1
+          VERSION_PYPI=$(echo "$VERSION" | sed 's/-beta\./b/' | sed 's/-rc\./rc/' | sed 's/-alpha\./a/')
+          echo "version_pypi=${VERSION_PYPI}" >> $GITHUB_OUTPUT
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Building Rust wheels for version: ${VERSION} (PyPI: ${VERSION_PYPI})"
 
       - name: Update version in Cargo.toml and pyproject.toml
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          VERSION_PYPI="${{ steps.version.outputs.version_pypi }}"
           cd src/runtime/core
-          # Update Cargo.toml
+          # Update Cargo.toml (uses SemVer)
           sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           rm -f Cargo.toml.bak
           echo "Updated Cargo.toml version to: ${VERSION}"
           grep "^version" Cargo.toml
-          # Update pyproject.toml
-          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
+          # Update pyproject.toml (uses PEP 440 for PyPI)
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION_PYPI}\"/" pyproject.toml
           rm -f pyproject.toml.bak
-          echo "Updated pyproject.toml version to: ${VERSION}"
+          echo "Updated pyproject.toml version to: ${VERSION_PYPI}"
           grep "^version" pyproject.toml
 
       - name: Build wheels with maturin
@@ -247,6 +272,285 @@ jobs:
           packages-dir: dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+
+  # Build Node.js native bindings for @mcpmesh/core using napi-rs
+  build-node-bindings:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact-name: node-bindings-linux-x64
+          # Linux aarch64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact-name: node-bindings-linux-arm64
+          # macOS x86_64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact-name: node-bindings-macos-x64
+          # macOS aarch64 (Apple Silicon)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact-name: node-bindings-macos-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "npm_tag=beta" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "npm_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Building Node.js bindings for version: ${VERSION}"
+
+      - name: Update version in package.json
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd src/runtime/core/typescript
+          npm version ${VERSION} --no-git-tag-version --allow-same-version
+          echo "Updated package.json version to: ${VERSION}"
+          cat package.json
+
+      - name: Install dependencies
+        working-directory: src/runtime/core/typescript
+        run: npm install
+
+      - name: Build native bindings
+        working-directory: src/runtime/core/typescript
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          npx napi build --platform --release \
+            --target ${{ matrix.target }} \
+            --manifest-path ../Cargo.toml \
+            --features typescript --no-default-features -o .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            src/runtime/core/typescript/*.node
+            src/runtime/core/typescript/package.json
+            src/runtime/core/typescript/index.js
+            src/runtime/core/typescript/index.d.ts
+          if-no-files-found: error
+
+  # Publish @mcpmesh/core to npm
+  publish-node-core:
+    runs-on: ubuntu-latest
+    needs: [build-node-bindings]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "npm_tag=beta" >> $GITHUB_OUTPUT
+          else
+            echo "npm_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all node binding artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: node-bindings-*
+          path: artifacts
+
+      - name: Prepare npm package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist/node-core
+
+          # Copy base files from first artifact (they're all the same except .node files)
+          cp artifacts/node-bindings-linux-x64/package.json dist/node-core/
+          cp artifacts/node-bindings-linux-x64/index.js dist/node-core/ || true
+          cp artifacts/node-bindings-linux-x64/index.d.ts dist/node-core/ || true
+
+          # Copy all .node files from each platform
+          find artifacts -name "*.node" -exec cp {} dist/node-core/ \;
+
+          # List contents
+          echo "Package contents:"
+          ls -la dist/node-core/
+
+      - name: Publish @mcpmesh/core to npm
+        working-directory: dist/node-core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+        run: |
+          echo "Publishing @mcpmesh/core with tag ${NPM_TAG}..."
+          npm publish --access public --tag "${NPM_TAG}" || echo "Package may already exist, continuing..."
+
+      - name: Wait for npm to index @mcpmesh/core
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Waiting for npm to index @mcpmesh/core@${VERSION}..."
+          MAX_ATTEMPTS=12
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking if @mcpmesh/core@${VERSION} is available..."
+            if npm view @mcpmesh/core@${VERSION} version 2>/dev/null; then
+              echo "✅ @mcpmesh/core@${VERSION} is now available on npm"
+              exit 0
+            fi
+            echo "Package not yet indexed, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "⚠️ Package may not be fully indexed yet, proceeding anyway..."
+
+  # Publish @mcpmesh/sdk to npm
+  publish-typescript-sdk:
+    runs-on: ubuntu-latest
+    needs: [publish-node-core]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "npm_tag=beta" >> $GITHUB_OUTPUT
+          else
+            echo "npm_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update SDK version and dependencies
+        working-directory: src/runtime/typescript
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Update version
+          npm version ${VERSION} --no-git-tag-version --allow-same-version
+
+          # Update @mcpmesh/core dependency from file: to npm version
+          sed -i 's|"@mcpmesh/core": "file:../core/typescript"|"@mcpmesh/core": "'"${VERSION}"'"|' package.json
+
+          echo "Updated package.json:"
+          cat package.json
+
+      - name: Install dependencies (with retry)
+        working-directory: src/runtime/typescript
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          MAX_ATTEMPTS=3
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Installing dependencies..."
+            if npm install; then
+              echo "✅ Dependencies installed successfully"
+              exit 0
+            fi
+            echo "npm install failed, waiting 30 seconds before retry..."
+            sleep 30
+          done
+          echo "❌ Failed to install dependencies after $MAX_ATTEMPTS attempts"
+          exit 1
+
+      - name: Build SDK
+        working-directory: src/runtime/typescript
+        run: npm run build
+
+      - name: Publish @mcpmesh/sdk to npm
+        working-directory: src/runtime/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
+        run: |
+          echo "Publishing @mcpmesh/sdk with tag ${NPM_TAG}..."
+          npm publish --access public --tag "${NPM_TAG}"
 
   # Combine checksums from all platforms (for real releases)
   combine-checksums:
@@ -348,6 +652,16 @@ jobs:
           fi
           VERSION=${VERSION#v}  # Remove 'v' prefix
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "npm_tag=beta" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "npm_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
           echo "Building npm packages for version: ${VERSION}"
 
       - name: Build npm packages
@@ -358,16 +672,19 @@ jobs:
       - name: Publish platform packages to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cd dist/npm
 
+          echo "Publishing with npm tag: ${NPM_TAG}"
+
           # Publish platform-specific packages first (order matters!)
           for pkg in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64; do
             if [ -d "$pkg" ]; then
-              echo "Publishing @mcpmesh/$pkg..."
+              echo "Publishing @mcpmesh/$pkg with tag ${NPM_TAG}..."
               cd "$pkg"
-              npm publish --access public || echo "Package may already exist, continuing..."
+              npm publish --access public --tag "${NPM_TAG}" || echo "Package may already exist, continuing..."
               cd ..
             fi
           done
@@ -375,10 +692,11 @@ jobs:
       - name: Publish main CLI package to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           cd dist/npm/cli
-          echo "Publishing @mcpmesh/cli..."
-          npm publish --access public
+          echo "Publishing @mcpmesh/cli with tag ${NPM_TAG}..."
+          npm publish --access public --tag "${NPM_TAG}"
 
       - name: Verify npm installation
         run: |
@@ -446,19 +764,38 @@ jobs:
           fi
           VERSION=${VERSION#v}  # Remove 'v' prefix
 
+          # Convert to PyPI PEP 440 format: 0.8.0-beta.1 → 0.8.0b1, 0.8.0-rc.1 → 0.8.0rc1
+          VERSION_PYPI=$(echo "$VERSION" | sed 's/-beta\./b/' | sed 's/-rc\./rc/' | sed 's/-alpha\./a/')
+
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+
           # Debug output
           echo "Event name: ${{ github.event_name }}"
           echo "Ref name: ${{ github.ref_name }}"
           echo "Detected version: ${VERSION}"
+          echo "PyPI version (PEP 440): ${VERSION_PYPI}"
+          echo "Is prerelease: ${IS_PRERELEASE}"
           echo "Current version in file: $(grep '__version__' _mcp_mesh/__init__.py)"
 
-          # Update version in both __init__.py and pyproject.toml
-          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" _mcp_mesh/__init__.py
-          sed -i "s/version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
+          # Update version in both __init__.py and pyproject.toml (using PEP 440 format)
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION_PYPI}\"/" _mcp_mesh/__init__.py
+          sed -i "s/version = \".*\"/version = \"${VERSION_PYPI}\"/" pyproject.toml
+
+          # Also update mcp-mesh-core dependency version for prereleases
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            # Update dependency to allow prerelease versions: >=0.8.0b1
+            sed -i "s/\"mcp-mesh-core>=.*\"/\"mcp-mesh-core>=${VERSION_PYPI}\"/" pyproject.toml
+          fi
 
           # Verify the versions were updated
           echo "Updated __init__.py version to: $(grep '__version__' _mcp_mesh/__init__.py)"
           echo "Updated pyproject.toml version to: $(grep 'version = ' pyproject.toml)"
+          echo "Updated mcp-mesh-core dependency: $(grep 'mcp-mesh-core' pyproject.toml)"
 
       - name: Build package
         working-directory: packaging/pypi
@@ -477,7 +814,7 @@ jobs:
   # Build and push Docker images
   build-docker:
     runs-on: ubuntu-latest
-    needs: [publish-python]
+    needs: [publish-python, publish-typescript-sdk]
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
@@ -520,8 +857,24 @@ jobs:
           # For install script in Dockerfiles, we need the v prefix
           VERSION_WITH_V="v${VERSION}"
 
+          # Check if prerelease
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
+            IS_PRERELEASE=true
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            IS_PRERELEASE=false
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
           # Create semantic version tags (e.g., 0.5.0 -> 0.5.0, 0.5, 0)
-          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          # For prereleases, only use the full version tag, no major/minor/latest
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            # For prereleases, use full version only (e.g., 0.8.0-beta.1)
+            echo "major_version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "minor_version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "patch_version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "tag_latest=false" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f1-2)
             PATCH="$VERSION"
@@ -529,16 +882,92 @@ jobs:
             echo "major_version=${MAJOR}" >> $GITHUB_OUTPUT
             echo "minor_version=${MINOR}" >> $GITHUB_OUTPUT
             echo "patch_version=${PATCH}" >> $GITHUB_OUTPUT
+            echo "tag_latest=true" >> $GITHUB_OUTPUT
           else
             # For non-semver versions (dev, etc.), use version as-is
             echo "major_version=${VERSION}" >> $GITHUB_OUTPUT
             echo "minor_version=${VERSION}" >> $GITHUB_OUTPUT
             echo "patch_version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "tag_latest=false" >> $GITHUB_OUTPUT
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "version_with_v=${VERSION_WITH_V}" >> $GITHUB_OUTPUT
-          echo "Building Docker images for version: ${VERSION} (semantic tags: ${MAJOR}, ${MINOR}, ${PATCH})"
+          echo "Building Docker images for version: ${VERSION} (prerelease: ${IS_PRERELEASE})"
+
+      - name: Compute Docker tags
+        id: docker_tags
+        run: |
+          VERSION="${{ steps.meta.outputs.patch_version }}"
+          IS_PRERELEASE="${{ steps.meta.outputs.is_prerelease }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          GHCR_REPO="ghcr.io/${{ github.repository }}"
+
+          # For prereleases, only use version tag (no latest, no major/minor)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            REGISTRY_TAGS="${REGISTRY}/registry:${VERSION}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${GHCR_REPO}/registry:${VERSION}"
+
+            PYTHON_TAGS="${REGISTRY}/python-runtime:${VERSION}"
+            PYTHON_TAGS="${PYTHON_TAGS},${GHCR_REPO}/python-runtime:${VERSION}"
+
+            TYPESCRIPT_TAGS="${REGISTRY}/typescript-runtime:${VERSION}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${GHCR_REPO}/typescript-runtime:${VERSION}"
+
+            CLI_TAGS="${REGISTRY}/cli:${VERSION}"
+            CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${VERSION}"
+          else
+            # For stable releases, include all semantic version tags + latest
+            MAJOR="${{ steps.meta.outputs.major_version }}"
+            MINOR="${{ steps.meta.outputs.minor_version }}"
+            PATCH="${{ steps.meta.outputs.patch_version }}"
+
+            REGISTRY_TAGS="${REGISTRY}/registry:${PATCH}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${REGISTRY}/registry:${MINOR}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${REGISTRY}/registry:${MAJOR}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${REGISTRY}/registry:latest"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${GHCR_REPO}/registry:${PATCH}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${GHCR_REPO}/registry:${MINOR}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${GHCR_REPO}/registry:${MAJOR}"
+            REGISTRY_TAGS="${REGISTRY_TAGS},${GHCR_REPO}/registry:latest"
+
+            PYTHON_TAGS="${REGISTRY}/python-runtime:${PATCH}"
+            PYTHON_TAGS="${PYTHON_TAGS},${REGISTRY}/python-runtime:${MINOR}"
+            PYTHON_TAGS="${PYTHON_TAGS},${REGISTRY}/python-runtime:${MAJOR}"
+            PYTHON_TAGS="${PYTHON_TAGS},${REGISTRY}/python-runtime:latest"
+            PYTHON_TAGS="${PYTHON_TAGS},${GHCR_REPO}/python-runtime:${PATCH}"
+            PYTHON_TAGS="${PYTHON_TAGS},${GHCR_REPO}/python-runtime:${MINOR}"
+            PYTHON_TAGS="${PYTHON_TAGS},${GHCR_REPO}/python-runtime:${MAJOR}"
+            PYTHON_TAGS="${PYTHON_TAGS},${GHCR_REPO}/python-runtime:latest"
+
+            TYPESCRIPT_TAGS="${REGISTRY}/typescript-runtime:${PATCH}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${REGISTRY}/typescript-runtime:${MINOR}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${REGISTRY}/typescript-runtime:${MAJOR}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${REGISTRY}/typescript-runtime:latest"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${GHCR_REPO}/typescript-runtime:${PATCH}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${GHCR_REPO}/typescript-runtime:${MINOR}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${GHCR_REPO}/typescript-runtime:${MAJOR}"
+            TYPESCRIPT_TAGS="${TYPESCRIPT_TAGS},${GHCR_REPO}/typescript-runtime:latest"
+
+            CLI_TAGS="${REGISTRY}/cli:${PATCH}"
+            CLI_TAGS="${CLI_TAGS},${REGISTRY}/cli:${MINOR}"
+            CLI_TAGS="${CLI_TAGS},${REGISTRY}/cli:${MAJOR}"
+            CLI_TAGS="${CLI_TAGS},${REGISTRY}/cli:latest"
+            CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${PATCH}"
+            CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${MINOR}"
+            CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${MAJOR}"
+            CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:latest"
+          fi
+
+          echo "registry_tags=${REGISTRY_TAGS}" >> $GITHUB_OUTPUT
+          echo "python_tags=${PYTHON_TAGS}" >> $GITHUB_OUTPUT
+          echo "typescript_tags=${TYPESCRIPT_TAGS}" >> $GITHUB_OUTPUT
+          echo "cli_tags=${CLI_TAGS}" >> $GITHUB_OUTPUT
+
+          echo "Registry tags: ${REGISTRY_TAGS}"
+          echo "Python runtime tags: ${PYTHON_TAGS}"
+          echo "TypeScript runtime tags: ${TYPESCRIPT_TAGS}"
+          echo "CLI tags: ${CLI_TAGS}"
 
       - name: Build and push Registry image
         uses: docker/build-push-action@v5
@@ -549,15 +978,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version_with_v }}
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.patch_version }}
-            ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.minor_version }}
-            ${{ env.REGISTRY }}/registry:${{ steps.meta.outputs.major_version }}
-            ${{ env.REGISTRY }}/registry:latest
-            ghcr.io/${{ github.repository }}/registry:${{ steps.meta.outputs.patch_version }}
-            ghcr.io/${{ github.repository }}/registry:${{ steps.meta.outputs.minor_version }}
-            ghcr.io/${{ github.repository }}/registry:${{ steps.meta.outputs.major_version }}
-            ghcr.io/${{ github.repository }}/registry:latest
+          tags: ${{ steps.docker_tags.outputs.registry_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -608,15 +1029,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.patch_version }}
-            ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.minor_version }}
-            ${{ env.REGISTRY }}/python-runtime:${{ steps.meta.outputs.major_version }}
-            ${{ env.REGISTRY }}/python-runtime:latest
-            ghcr.io/${{ github.repository }}/python-runtime:${{ steps.meta.outputs.patch_version }}
-            ghcr.io/${{ github.repository }}/python-runtime:${{ steps.meta.outputs.minor_version }}
-            ghcr.io/${{ github.repository }}/python-runtime:${{ steps.meta.outputs.major_version }}
-            ghcr.io/${{ github.repository }}/python-runtime:latest
+          tags: ${{ steps.docker_tags.outputs.python_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -629,25 +1042,33 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version_with_v }}
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.patch_version }}
-            ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.minor_version }}
-            ${{ env.REGISTRY }}/cli:${{ steps.meta.outputs.major_version }}
-            ${{ env.REGISTRY }}/cli:latest
-            ghcr.io/${{ github.repository }}/cli:${{ steps.meta.outputs.patch_version }}
-            ghcr.io/${{ github.repository }}/cli:${{ steps.meta.outputs.minor_version }}
-            ghcr.io/${{ github.repository }}/cli:${{ steps.meta.outputs.major_version }}
-            ghcr.io/${{ github.repository }}/cli:latest
+          tags: ${{ steps.docker_tags.outputs.cli_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Update package manager manifests
+      - name: Build and push TypeScript Runtime image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./packaging/docker/typescript-runtime.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          push: true
+          tags: ${{ steps.docker_tags.outputs.typescript_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Update package manager manifests (skip for prereleases)
   update-packages:
     runs-on: ubuntu-latest
     needs: [build-binaries, build-macos-binaries, combine-checksums]
     if: >
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+      (github.event_name == 'release' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')) &&
+      !contains(github.ref, 'beta') &&
+      !contains(github.ref, 'rc') &&
+      !contains(github.ref, 'alpha')
     permissions:
       contents: write
       pull-requests: write
@@ -775,8 +1196,11 @@ jobs:
         build-binaries,
         build-macos-binaries,
         build-rust-wheels,
+        build-node-bindings,
         combine-checksums,
         publish-rust-core,
+        publish-node-core,
+        publish-typescript-sdk,
         publish-python,
         publish-npm,
         build-docker,
@@ -787,12 +1211,15 @@ jobs:
       needs.build-binaries.result == 'success' &&
       needs.build-macos-binaries.result == 'success' &&
       needs.build-rust-wheels.result == 'success' &&
+      needs.build-node-bindings.result == 'success' &&
       needs.combine-checksums.result == 'success' &&
       needs.publish-rust-core.result == 'success' &&
+      needs.publish-node-core.result == 'success' &&
+      needs.publish-typescript-sdk.result == 'success' &&
       needs.publish-python.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-docker.result == 'success' &&
-      needs.update-packages.result == 'success' &&
+      (needs.update-packages.result == 'success' || needs.update-packages.result == 'skipped') &&
       (github.event_name == 'release' ||
        (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'))
     steps:

@@ -13,7 +13,7 @@ This directory contains simple Python agents that demonstrate MCP Mesh capabilit
 npm install -g @mcpmesh/cli
 
 # Install Python runtime
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 ```
 
 ### 2. Start the Registry

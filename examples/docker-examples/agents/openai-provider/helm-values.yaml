@@ -1,6 +1,6 @@
 # Helm values for deploying openai-provider with mcp-mesh-agent chart
 # Usage: helm install openai-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-#        --version 0.7.21 -f helm-values.yaml
+#        --version 0.8.0-beta.1 -f helm-values.yaml
 
 image:
   repository: your-registry/openai-provider

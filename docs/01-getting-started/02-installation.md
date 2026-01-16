@@ -9,7 +9,7 @@
 npm install -g @mcpmesh/cli
 
 # Install Python runtime
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 
 # Verify installation
 meshctl --version
@@ -33,7 +33,7 @@ brew tap dhyansraj/mcp-mesh
 brew install mcp-mesh
 
 # Install Python package
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 
 # Verify installation
 meshctl --version
@@ -46,7 +46,7 @@ meshctl --version
 
 ```bash
 # Install Python package
-pip install "mcp-mesh>=0.7,<0.8"
+pip install "mcp-mesh>=0.8,<0.9"
 
 # Download CLI tools
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash

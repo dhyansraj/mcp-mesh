@@ -343,7 +343,7 @@ kubectl logs <pod-name> -c init-packages
 Base your Dockerfile on `mcpmesh/python-runtime`:
 
 ```dockerfile
-FROM mcpmesh/python-runtime:0.7
+FROM mcpmesh/python-runtime:0.8
 
 # Copy agent code
 COPY . /app/

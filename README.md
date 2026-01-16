@@ -51,10 +51,10 @@ While MCP solved AI tool standardization, scaling MCP applications to production
 
 **Stop fighting infrastructure. Start building intelligence.**
 
-- **Zero Boilerplate**: Two decorators (`@app.tool()` + `@mesh.tool()`) replace hundreds of lines of networking code
-- **Pure Python Simplicity**: Write MCP servers as simple functions - no manual client/server setup, no connection management
-- **End-to-End Integration**: Use `@mesh.route()` to inject MCP agents directly into FastAPI APIs - bridge web services and AI agents seamlessly
-- **LLM as Dependencies**: Inject LLMs with `@mesh.llm()` just like MCP agents - dynamic prompts, tool filters, and type-safe contexts built-in
+- **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
+- **Python & TypeScript**: Write MCP servers as simple functions in your preferred language - no manual client/server setup
+- **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python) or Express (TypeScript) APIs seamlessly
+- **LLM as Dependencies**: Inject LLMs just like MCP agents - dynamic prompts with Jinja2 (Python) or Handlebars (TypeScript)
 - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes - same code, zero changes
 - **kubectl-like Management**: `meshctl` - a familiar command-line tool to run, monitor, and manage your entire agent network
 
@@ -136,7 +136,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Complex Apps Made Simple**: Financial services example shows 6+ interconnected agents
 - **Production Ready**: Built-in resilience, distributed observability, and scaling
 
-**The Magic**: Write simple Python functions, get enterprise-grade distributed systems.
+**The Magic**: Write simple functions in Python or TypeScript, get enterprise-grade distributed systems.
 
 ---
 
@@ -148,7 +148,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Automatic agent discovery** without configuration
 - **Smart dependency resolution** with version constraints and tags
 - **Load balancing** across multiple service providers
-- **LLM dependency injection** - treat LLMs as first-class dependencies with `@mesh.llm()`, Jinja2 templates, and automatic tool discovery
+- **LLM dependency injection** - treat LLMs as first-class dependencies with automatic tool discovery and dynamic prompts
 
 ### **Enterprise-Grade Resilience**
 
