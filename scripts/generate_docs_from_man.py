@@ -297,9 +297,13 @@ def process_content(content: str, guide: Guide, runtime: str) -> str:
     processed_lines = []
     skip_footer = False
 
-    for line in lines:
+    for i, line in enumerate(lines):
         if line.strip().startswith("**See also:**") and "meshctl man" in line:
             skip_footer = True
+            # Look ahead: if next line is not blank, reset skip_footer
+            # to preserve subsequent non-footer content
+            if i + 1 < len(lines) and lines[i + 1].strip() != "":
+                skip_footer = False
             continue
         if skip_footer and line.strip() == "":
             skip_footer = False

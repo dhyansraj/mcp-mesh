@@ -254,9 +254,6 @@
     init();
   }
 
-  // Re-initialize on navigation (for MkDocs instant loading)
-  document.addEventListener('DOMContentLoaded', init);
-
   // Handle MkDocs Material instant navigation
   if (typeof document$ !== 'undefined') {
     document$.subscribe(init);

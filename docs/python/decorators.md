@@ -101,8 +101,8 @@ Enables LLM-powered tools with automatic tool discovery.
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return llm("Help the user with their request")
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return await llm("Help the user with their request")
 ```
 
 **Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON.

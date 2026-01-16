@@ -83,7 +83,7 @@ execute: async ({}, { helper }) => {
     // Named tool call
     const result2 = await helper.callTool("tool_name", { arg: "value" });
   }
-};
+}
 ```
 
 ### LLM Injection
