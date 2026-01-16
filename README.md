@@ -232,7 +232,7 @@ This project is open source. License details will be provided in the LICENSE fil
 
 ---
 
-## 🚀 Get Started
+## 📚 Learn More
 
 1. **[📚 Full Documentation](https://dhyansraj.github.io/mcp-mesh/)** - Complete guides and reference
 2. **[⚡ Quick Tutorial](https://dhyansraj.github.io/mcp-mesh/01-getting-started/)** - Build your first distributed MCP agent
