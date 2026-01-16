@@ -11,6 +11,17 @@
     typescript: { label: 'TypeScript', icon: '📘', navId: 'typescript-sdk' }
   };
 
+  // Module-scoped flag to prevent duplicate document click listeners
+  let documentClickListenerAdded = false;
+
+  // Named handler for closing dropdown on outside click
+  function onDocumentClick() {
+    const toggle = document.getElementById('runtime-toggle');
+    if (toggle) {
+      toggle.classList.remove('open');
+    }
+  }
+
   // Page mappings between Python and TypeScript equivalents
   // Note: paths should NOT include 'index' - just the directory path
   const PAGE_MAPPINGS = {
@@ -192,10 +203,11 @@
       });
     });
 
-    // Close dropdown when clicking outside
-    document.addEventListener('click', () => {
-      toggle.classList.remove('open');
-    });
+    // Register document click listener once to close dropdown when clicking outside
+    if (!documentClickListenerAdded) {
+      document.addEventListener('click', onDocumentClick);
+      documentClickListenerAdded = true;
+    }
 
     return toggle;
   }
