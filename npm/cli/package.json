@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/cli",
-  "version": "0.8.0-beta.3",
+  "version": "0.8.0-beta.4",
   "description": "CLI for MCP Mesh - Enterprise-Grade Distributed Service Mesh for AI Agents",
   "license": "MIT",
   "repository": {
@@ -22,10 +22,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@mcpmesh/cli-linux-x64": "0.8.0-beta.3",
-    "@mcpmesh/cli-linux-arm64": "0.8.0-beta.3",
-    "@mcpmesh/cli-darwin-x64": "0.8.0-beta.3",
-    "@mcpmesh/cli-darwin-arm64": "0.8.0-beta.3"
+    "@mcpmesh/cli-linux-x64": "0.8.0-beta.4",
+    "@mcpmesh/cli-linux-arm64": "0.8.0-beta.4",
+    "@mcpmesh/cli-darwin-x64": "0.8.0-beta.4",
+    "@mcpmesh/cli-darwin-arm64": "0.8.0-beta.4"
   },
   "keywords": [
     "mcp",
