@@ -40,6 +40,14 @@
     'python/llm/prompt-templates': 'typescript/llm/prompt-templates',
     'python/fastapi-integration': 'typescript/express-integration',
     'python/examples': 'typescript/examples',
+    // Local Development mappings (both use same structure now)
+    'python/local-development': 'typescript/local-development',
+    'python/local-development/01-getting-started': 'typescript/local-development/01-getting-started',
+    'python/local-development/02-scaffold': 'typescript/local-development/02-scaffold',
+    'python/local-development/03-running-agents': 'typescript/local-development/03-running-agents',
+    'python/local-development/04-inspecting-mesh': 'typescript/local-development/04-inspecting-mesh',
+    'python/local-development/05-calling-tools': 'typescript/local-development/05-calling-tools',
+    'python/local-development/troubleshooting': 'typescript/local-development/troubleshooting',
   };
 
   // Build reverse mappings (TypeScript -> Python)
