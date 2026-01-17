@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.8.0-beta.5"
+        default: "v0.8.0-beta.6"
       environment:
         description: "Environment"
         type: choice
@@ -494,7 +494,8 @@ jobs:
           NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           echo "Publishing @mcpmesh/core with tag ${NPM_TAG}..."
-          npm publish --access public --tag "${NPM_TAG}"
+          # Use --ignore-scripts since prepublishOnly runs napi which isn't in the artifact
+          npm publish --access public --tag "${NPM_TAG}" --ignore-scripts
 
       - name: Wait for npm to index @mcpmesh/core
         env:
