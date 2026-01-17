@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.8.0-beta.1"
+        default: "v0.8.0-beta.2"
       environment:
         description: "Environment"
         type: choice
@@ -876,6 +876,10 @@ jobs:
           # For install script in Dockerfiles, we need the v prefix
           VERSION_WITH_V="v${VERSION}"
 
+          # PyPI PEP 440 format: 0.8.0-beta.1 → 0.8.0b1, 0.8.0-rc.1 → 0.8.0rc1
+          VERSION_PYPI=$(echo "$VERSION" | sed 's/-beta\./b/' | sed 's/-rc\./rc/' | sed 's/-alpha\./a/')
+          echo "version_pypi=${VERSION_PYPI}" >> $GITHUB_OUTPUT
+
           # Check if prerelease
           if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-rc"* ]] || [[ "$VERSION" == *"-alpha"* ]]; then
             IS_PRERELEASE=true
@@ -912,7 +916,7 @@ jobs:
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "version_with_v=${VERSION_WITH_V}" >> $GITHUB_OUTPUT
-          echo "Building Docker images for version: ${VERSION} (prerelease: ${IS_PRERELEASE})"
+          echo "Building Docker images for version: ${VERSION} (PyPI: ${VERSION_PYPI}, prerelease: ${IS_PRERELEASE})"
 
       - name: Compute Docker tags
         id: docker_tags
@@ -1046,7 +1050,7 @@ jobs:
           file: ./packaging/docker/python-runtime.Dockerfile
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.meta.outputs.version_pypi }}
           push: true
           tags: ${{ steps.docker_tags.outputs.python_tags }}
           cache-from: type=gha

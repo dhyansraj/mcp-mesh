@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-registry
 description: MCP Mesh Registry Service - Central service registry for MCP agents
 type: application
-version: 0.8.0-beta.1
-appVersion: "0.8.0-beta.1"
+version: 0.8.0-beta.2
+appVersion: "0.8.0-beta.2"
 keywords:
   - mcp
   - mesh
