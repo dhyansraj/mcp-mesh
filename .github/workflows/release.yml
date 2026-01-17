@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.8.0-beta.3"
+        default: "v0.8.0-beta.4"
       environment:
         description: "Environment"
         type: choice
@@ -445,17 +445,47 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist/node-core
 
+          # List available artifacts for debugging
+          echo "Available artifacts:"
+          find artifacts -type f | head -50
+
+          # Artifact path includes source directory structure
+          ARTIFACT_BASE="artifacts/node-bindings-linux-x64/src/runtime/core/typescript"
+
           # Copy base files from first artifact (they're all the same except .node files)
-          cp artifacts/node-bindings-linux-x64/package.json dist/node-core/
-          cp artifacts/node-bindings-linux-x64/index.js dist/node-core/ || true
-          cp artifacts/node-bindings-linux-x64/index.d.ts dist/node-core/ || true
+          cp "${ARTIFACT_BASE}/package.json" dist/node-core/
+
+          # Copy index.js and index.d.ts (these are required)
+          if [ -f "${ARTIFACT_BASE}/index.js" ]; then
+            cp "${ARTIFACT_BASE}/index.js" dist/node-core/
+          else
+            echo "❌ ERROR: index.js not found in artifacts at ${ARTIFACT_BASE}"
+            exit 1
+          fi
+
+          if [ -f "${ARTIFACT_BASE}/index.d.ts" ]; then
+            cp "${ARTIFACT_BASE}/index.d.ts" dist/node-core/
+          else
+            echo "❌ ERROR: index.d.ts not found in artifacts at ${ARTIFACT_BASE}"
+            exit 1
+          fi
 
           # Copy all .node files from each platform
+          NODE_FILES=$(find artifacts -name "*.node" | wc -l)
+          echo "Found ${NODE_FILES} .node files"
+          if [ "$NODE_FILES" -eq 0 ]; then
+            echo "❌ ERROR: No .node binary files found in artifacts"
+            exit 1
+          fi
           find artifacts -name "*.node" -exec cp {} dist/node-core/ \;
 
           # List contents
           echo "Package contents:"
           ls -la dist/node-core/
+
+          # Validate package.json
+          echo "Package.json contents:"
+          cat dist/node-core/package.json
 
       - name: Publish @mcpmesh/core to npm
         working-directory: dist/node-core
@@ -464,14 +494,14 @@ jobs:
           NPM_TAG: ${{ steps.version.outputs.npm_tag }}
         run: |
           echo "Publishing @mcpmesh/core with tag ${NPM_TAG}..."
-          npm publish --access public --tag "${NPM_TAG}" || echo "Package may already exist, continuing..."
+          npm publish --access public --tag "${NPM_TAG}"
 
       - name: Wait for npm to index @mcpmesh/core
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           echo "Waiting for npm to index @mcpmesh/core@${VERSION}..."
-          MAX_ATTEMPTS=12
+          MAX_ATTEMPTS=18
           ATTEMPT=0
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
@@ -483,7 +513,8 @@ jobs:
             echo "Package not yet indexed, waiting 10 seconds..."
             sleep 10
           done
-          echo "⚠️ Package may not be fully indexed yet, proceeding anyway..."
+          echo "❌ ERROR: @mcpmesh/core@${VERSION} not available after ${MAX_ATTEMPTS} attempts"
+          exit 1
 
   # Publish @mcpmesh/sdk to npm
   publish-typescript-sdk:
