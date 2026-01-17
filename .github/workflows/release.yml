@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.8.0-beta.4"
+        default: "v0.8.0-beta.5"
       environment:
         description: "Environment"
         type: choice
@@ -449,8 +449,8 @@ jobs:
           echo "Available artifacts:"
           find artifacts -type f | head -50
 
-          # Artifact path includes source directory structure
-          ARTIFACT_BASE="artifacts/node-bindings-linux-x64/src/runtime/core/typescript"
+          # Artifacts are downloaded directly without source path structure
+          ARTIFACT_BASE="artifacts/node-bindings-linux-x64"
 
           # Copy base files from first artifact (they're all the same except .node files)
           cp "${ARTIFACT_BASE}/package.json" dist/node-core/

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-mesh"
-version = "0.8.0b4"
+version = "0.8.0b5"
 description = "Kubernetes-native platform for distributed MCP applications"
 readme = "README.md"
 license = { text = "MIT" }
