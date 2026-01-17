@@ -10,7 +10,7 @@ on:
       version:
         description: "Version (e.g., v0.8.0)"
         required: true
-        default: "v0.8.0-beta.2"
+        default: "v0.8.0-beta.3"
       environment:
         description: "Environment"
         type: choice
@@ -570,6 +570,25 @@ jobs:
         run: |
           echo "Publishing @mcpmesh/sdk with tag ${NPM_TAG}..."
           npm publish --access public --tag "${NPM_TAG}"
+
+      - name: Wait for npm to index @mcpmesh/sdk
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Waiting for npm to index @mcpmesh/sdk@${VERSION}..."
+          MAX_ATTEMPTS=12
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking if @mcpmesh/sdk@${VERSION} is available..."
+            if npm view @mcpmesh/sdk@${VERSION} version 2>/dev/null; then
+              echo "✅ @mcpmesh/sdk@${VERSION} is now available on npm"
+              exit 0
+            fi
+            echo "Package not yet indexed, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "⚠️ Package may not be fully indexed yet, proceeding anyway..."
 
   # Combine checksums from all platforms (for real releases)
   combine-checksums:
