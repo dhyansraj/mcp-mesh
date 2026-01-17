@@ -21,7 +21,7 @@ kubectl create namespace mcp-mesh
 
 # Deploy core (OCI registry - no "helm repo add" needed)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh
 
 # Wait for registry
@@ -65,7 +65,7 @@ Build the image:
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=my-agent \
@@ -76,7 +76,7 @@ For cloud deployments, use your full registry path:
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
@@ -138,7 +138,7 @@ resources:
 ```bash
 # Core without Grafana/Tempo (lighter footprint)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh \
   --set grafana.enabled=false \
   --set tempo.enabled=false
@@ -149,7 +149,7 @@ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 ```bash
 # Just the registry, no database or observability
 helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh
 ```
 
@@ -161,13 +161,13 @@ helm list -n mcp-mesh
 
 # Upgrade an agent
 helm upgrade my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh \
   --set image.tag=v2
 
 # Scale replicas
 helm upgrade my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.8.0-beta.1 \
+  --version 0.8.0-beta.2 \
   --namespace mcp-mesh \
   --reuse-values \
   --set replicaCount=3
