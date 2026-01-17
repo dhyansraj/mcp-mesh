@@ -228,13 +228,18 @@ jobs:
           echo "Updated pyproject.toml version to: ${VERSION_PYPI}"
           grep "^version" pyproject.toml
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Build wheels with maturin
         uses: PyO3/maturin-action@v1
         with:
           working-directory: src/runtime/core
           target: ${{ matrix.target }}
           manylinux: auto
-          args: --release --out dist
+          args: --release --out dist -i python3.11
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
@@ -347,7 +352,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cd src/runtime/core/typescript
-          npm version ${VERSION} --no-git-tag-version --allow-same-version
+          npm version ${VERSION} --no-git-tag-version --allow-same-version --ignore-scripts
           echo "Updated package.json version to: ${VERSION}"
           cat package.json
 
@@ -511,7 +516,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
 
           # Update version
-          npm version ${VERSION} --no-git-tag-version --allow-same-version
+          npm version ${VERSION} --no-git-tag-version --allow-same-version --ignore-scripts
 
           # Update @mcpmesh/core dependency from file: to npm version
           sed -i 's|"@mcpmesh/core": "file:../core/typescript"|"@mcpmesh/core": "'"${VERSION}"'"|' package.json
