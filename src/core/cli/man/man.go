@@ -22,15 +22,18 @@ The --raw flag outputs plain markdown, which is useful for:
 - Piping to other tools (grep, less, etc.)
 - Copying to documentation
 
+The --typescript flag shows TypeScript examples for topics that have
+TypeScript variants (decorators, deployment, llm, testing, etc.).
+
 Examples:
-  meshctl man                    # Show architecture overview
-  meshctl man decorators         # Learn about mesh decorators
-  meshctl man tags               # Understand tag matching system
-  meshctl man di                 # Dependency injection (alias)
-  meshctl man testing            # MCP curl syntax for testing
-  meshctl man --list             # List all available topics
-  meshctl man --raw decorators   # Raw markdown output (LLM-friendly)
-  meshctl man --search "health"  # Search across all topics
+  meshctl man                       # Show architecture overview
+  meshctl man decorators            # Learn about mesh decorators (Python)
+  meshctl man decorators -t         # TypeScript decorator examples
+  meshctl man deployment --typescript  # TypeScript deployment guide
+  meshctl man llm -t                # TypeScript LLM integration
+  meshctl man --list                # List all available topics
+  meshctl man --raw decorators      # Raw markdown output (LLM-friendly)
+  meshctl man --search "health"     # Search across all topics
 
 Code Generation:
   To generate agent code from templates, use:
@@ -45,6 +48,7 @@ Code Generation:
 	cmd.Flags().BoolP("list", "l", false, "List all available topics")
 	cmd.Flags().BoolP("raw", "r", false, "Output raw markdown (LLM-friendly)")
 	cmd.Flags().StringP("search", "s", "", "Search across all topics")
+	cmd.Flags().BoolP("typescript", "t", false, "Show TypeScript examples (for topics with TypeScript variants)")
 
 	return cmd
 }
@@ -54,6 +58,7 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 	raw, _ := cmd.Flags().GetBool("raw")
 	list, _ := cmd.Flags().GetBool("list")
 	search, _ := cmd.Flags().GetString("search")
+	typescript, _ := cmd.Flags().GetBool("typescript")
 
 	renderer := NewRenderer(raw)
 
@@ -80,8 +85,8 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 		topic = args[0]
 	}
 
-	// Get and render guide
-	guide, content, err := GetGuide(topic)
+	// Get and render guide (with optional TypeScript variant)
+	guide, content, err := GetGuideWithVariant(topic, typescript)
 	if err != nil {
 		// Show suggestions for similar topics
 		suggestions := SuggestSimilarTopics(topic)

@@ -2,9 +2,41 @@
 
 > Develop your own MCP Mesh agents locally
 
+## Choose Your Language
+
+<div class="grid-features" markdown>
+<div class="feature-card" markdown>
+### :fontawesome-brands-python: Python
+
+Full-featured Python SDK with decorators.
+
+- `@mesh.agent`, `@mesh.tool` decorators
+- Jinja2 template support
+- pytest integration
+
+[:material-arrow-right: Python Guide](../python/local-development/){ .md-button }
+
+</div>
+
+<div class="feature-card" markdown>
+### :material-language-typescript: TypeScript
+
+Modern TypeScript SDK with full type safety.
+
+- `mesh()`, `agent.addTool()` functions
+- Zod schema validation
+- Vitest integration
+
+[:material-arrow-right: TypeScript Guide](../typescript/local-development/){ .md-button }
+
+</div>
+</div>
+
+---
+
 ## Overview
 
-This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine.
+This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine using **Python** or **TypeScript**.
 
 ## Development Workflow
 
@@ -44,6 +76,15 @@ graph LR
     ```
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
+
+=== "TypeScript Runtime"
+
+    ```bash
+    npm install @mcpmesh/sdk zod
+    npm install -D typescript tsx @types/node
+    ```
+
+    Runtime for building agents with `mesh()` and `agent.addTool()` functions.
 
 ### 2. Set Up Your Project
 
@@ -178,25 +219,46 @@ my-project/
 
 ## Environment Variables
 
-Configure your agents with environment variables:
+For local development, agent configuration (name, port, capabilities) is typically defined in the agent code itself. Environment variables are more useful for:
+
+- **Shared configuration** across multiple agents (API keys, external service URLs)
+- **Kubernetes/Helm deployments** where you override ports and registry URLs
 
 ```bash
-# .env
-MCP_MESH_REGISTRY_URL=http://localhost:8000
-MCP_MESH_LOG_LEVEL=DEBUG
-MCP_MESH_HTTP_PORT=8080
+# .env - shared config for multiple agents
+OPENAI_API_KEY=sk-...
+DATABASE_URL=postgres://localhost:5432/mydb
 ```
+
+Use `--env-file` to load shared variables when starting agents:
+
+```bash
+# Load .env for all agents
+meshctl start --env-file .env agent1.py agent2.py
+
+# Or pass individual variables
+meshctl start --env MY_API_KEY=secret main.py
+```
+
+!!! tip "Port Configuration"
+Avoid setting `MCP_MESH_HTTP_PORT` in shared env files—it causes port conflicts when running multiple agents. Define ports in your agent code for local dev, or let them auto-assign with `port: 0`.
 
 ## Useful Commands
 
 ```bash
+# Start multiple agents at once (mixed languages supported)
+meshctl start agent1.py agent2.ts agent3.py
+
+# Start with hot reload (auto-restart on file changes)
+meshctl start -w main.py
+
+# Start in background (detached mode)
+meshctl start -d main.py
+
 # List all agents
 meshctl list
 
-# List only healthy agents
-meshctl list
-
-# Check mesh status
+# Check mesh status (capabilities, dependencies, endpoints)
 meshctl status
 
 # Stop all agents
@@ -205,10 +267,17 @@ meshctl stop --all
 
 ## Debugging
 
-### Enable Debug Logging
+### Enable Debug Mode
 
 ```bash
+# Debug mode (verbose output + debug logging)
 meshctl start --debug main.py
+
+# Or set specific log level
+meshctl start --log-level DEBUG main.py
+
+# Available levels: TRACE, DEBUG, INFO, WARN, ERROR
+# TRACE enables SQL logging for registry debugging
 ```
 
 ### Check Registry Connection

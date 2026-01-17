@@ -1,133 +1,131 @@
 # meshctl CLI Reference
 
-> Command-line tool for MCP Mesh development and operations
-
-## Overview
-
-`meshctl` is the command-line interface for MCP Mesh. It provides commands for:
-
-- Starting and managing agents
-- Calling tools and capabilities
-- Scaffolding new agents
-- Viewing documentation
+> Command-line tool for MCP Mesh development and deployment
 
 ## Installation
 
-meshctl is included with the Python package:
+**Supported platforms:** macOS, Linux (Windows users: use WSL or Git Bash)
+
+=== "npm (Recommended)"
+
+    ```bash
+    npm install -g @mcpmesh/cli
+    ```
+
+=== "Homebrew"
+
+    ```bash
+    brew install dhyansraj/tap/meshctl
+    ```
+
+=== "curl"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
+    ```
+
+Verify installation:
 
 ```bash
-pip install mcp-mesh
 meshctl --version
 ```
 
 ## Commands
 
-| Command                   | Description            |
-| ------------------------- | ---------------------- |
-| [`start`](start.md)       | Start an agent         |
-| [`call`](call.md)         | Call a tool            |
-| [`list`](list.md)         | List registered agents |
-| [`scaffold`](scaffold.md) | Generate agent code    |
-| [`man`](man.md)           | View documentation     |
-| `status`                  | Show agent status      |
-| `registry`                | Manage registry        |
+| Command      | Description                       |
+| ------------ | --------------------------------- |
+| `start`      | Start agents with mesh runtime    |
+| `stop`       | Stop detached agents and registry |
+| `list`       | List running agents               |
+| `status`     | Show detailed agent status        |
+| `call`       | Call an MCP tool on an agent      |
+| `trace`      | Display distributed call trace    |
+| `logs`       | View agent logs (detached mode)   |
+| `scaffold`   | Generate new agent from template  |
+| `man`        | Show built-in documentation       |
+| `config`     | Manage meshctl configuration      |
+| `completion` | Generate shell autocompletion     |
 
 ## Quick Reference
 
-### Start an Agent
+### Start Agents
 
 ```bash
-# Basic start
-meshctl start my_agent.py
-
-# With hot reload
-meshctl start my_agent.py --watch
-
-# TypeScript
-meshctl start my_agent.ts
-
-# Custom port
-meshctl start my_agent.py --port 9090
+meshctl start my_agent.py              # Start Python agent
+meshctl start src/index.ts             # Start TypeScript agent
+meshctl start -w my_agent.py           # Hot reload on changes
+meshctl start -d my_agent.py           # Detached (background)
+meshctl start --debug my_agent.py      # Debug logging
+meshctl start --registry-only          # Start registry only
+meshctl start agent1.py agent2.ts      # Multiple agents
 ```
 
-### Call a Tool
+### Call Tools
 
 ```bash
-# Simple call
-meshctl call hello
-
-# With arguments
-meshctl call hello --name "World"
-
-# With JSON arguments
-meshctl call process --data '{"key": "value"}'
+meshctl call get_weather                    # Auto-discover agent
+meshctl call add '{"a": 1, "b": 2}'         # With JSON args
+meshctl call --trace get_weather            # With tracing
+meshctl call weather-agent-7f3a:get_weather # Specific agent
 ```
 
-### List Agents
+### Inspect Mesh
 
 ```bash
-# List all agents
-meshctl list
-
-# Filter by capability
-meshctl list --capability greeting
-
-# JSON output
-meshctl list --json
+meshctl list                   # List healthy agents
+meshctl list --all             # Include unhealthy
+meshctl list --tools           # List all tools
+meshctl list --tools=add       # Show tool schema
+meshctl status                 # Show wiring details
+meshctl status my-agent        # Specific agent
 ```
 
-### Scaffold Agent
+### Scaffold Agents
 
 ```bash
-# Interactive
-meshctl scaffold
-
-# Non-interactive
-meshctl scaffold --name my-agent --agent-type tool
-
-# TypeScript
-meshctl scaffold --name my-agent --lang typescript
+meshctl scaffold                              # Interactive wizard
+meshctl scaffold --name my-agent              # Python agent
+meshctl scaffold --name my-agent -l ts        # TypeScript agent
+meshctl scaffold --compose                    # Generate docker-compose
+meshctl scaffold --compose --observability    # With tracing stack
 ```
 
 ### View Documentation
 
 ```bash
-# List topics
-meshctl man --list
-
-# View topic
-meshctl man decorators
-
-# TypeScript version
-meshctl man decorators --typescript
+meshctl man --list              # List all topics
+meshctl man decorators          # Python decorators
+meshctl man decorators -t       # TypeScript version
+meshctl man deployment          # Deployment guide
 ```
 
-## Global Options
+### Manage Background Agents
 
-| Option           | Description                              |
-| ---------------- | ---------------------------------------- |
-| `--help`         | Show help                                |
-| `--version`      | Show version                             |
-| `--log-level`    | Set log level (debug, info, warn, error) |
-| `--registry-url` | Override registry URL                    |
+```bash
+meshctl logs my-agent           # View logs
+meshctl logs my-agent -f        # Follow logs
+meshctl stop my-agent           # Stop specific agent
+meshctl stop                    # Stop all + registry
+```
+
+## Detailed Help
+
+Each command has comprehensive built-in help with examples:
+
+```bash
+meshctl --help              # All commands
+meshctl start --help        # Start options
+meshctl call --help         # Call options
+meshctl scaffold --help     # Scaffold options
+meshctl man --help          # Man page options
+```
 
 ## Environment Variables
 
-```bash
-# Registry URL
-export MCP_MESH_REGISTRY_URL=http://localhost:8000
+| Variable                | Description                             | Default                 |
+| ----------------------- | --------------------------------------- | ----------------------- |
+| `MCP_MESH_REGISTRY_URL` | Registry URL                            | `http://localhost:8000` |
+| `MCP_MESH_LOG_LEVEL`    | Log level (TRACE/DEBUG/INFO/WARN/ERROR) | `INFO`                  |
+| `MCP_MESH_HTTP_PORT`    | Agent HTTP port                         | Auto-assigned           |
 
-# Log level
-export MCP_MESH_LOG_LEVEL=debug
-
-# Namespace
-export MCP_MESH_NAMESPACE=development
-```
-
-## See Also
-
-- [start](start.md) - Start agents
-- [call](call.md) - Call tools
-- [list](list.md) - List agents
-- [scaffold](scaffold.md) - Generate code
-- [man](man.md) - Documentation
+See [Environment Variables](../environment-variables.md) for the full list.
