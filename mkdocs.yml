@@ -191,43 +191,38 @@ nav:
 
   - Local Development:
       - Overview: 02-local-development.md
-      - Environment Setup: 02-local-development/01-environment-setup.md
-      - Local Registry: 02-local-development/02-local-registry.md
-      - Debugging: 02-local-development/03-debugging.md
-      - Hot Reload: 02-local-development/04-hot-reload.md
-      - Testing: 02-local-development/05-testing.md
-      - Troubleshooting: 02-local-development/troubleshooting.md
+      - Python:
+          - python/local-development/index.md
+          - Getting Started: python/local-development/01-getting-started.md
+          - Scaffold Agents: python/local-development/02-scaffold.md
+          - Run Agents: python/local-development/03-running-agents.md
+          - Inspect the Mesh: python/local-development/04-inspecting-mesh.md
+          - Call & Debug Tools: python/local-development/05-calling-tools.md
+          - Troubleshooting: python/local-development/troubleshooting.md
+      - TypeScript:
+          - typescript/local-development/index.md
+          - Getting Started: typescript/local-development/01-getting-started.md
+          - Scaffold Agents: typescript/local-development/02-scaffold.md
+          - Run Agents: typescript/local-development/03-running-agents.md
+          - Inspect the Mesh: typescript/local-development/04-inspecting-mesh.md
+          - Call & Debug Tools: typescript/local-development/05-calling-tools.md
+          - Troubleshooting: typescript/local-development/troubleshooting.md
 
   - Deployment:
       - deployment.md
       - Docker:
           - Overview: 03-docker-deployment.md
-          - Building Images: 03-docker-deployment/01-building-images.md
-          - Compose Setup: 03-docker-deployment/02-compose-setup.md
-          - Multi-Agent: 03-docker-deployment/03-multi-agent.md
           - Networking: 03-docker-deployment/04-networking.md
-          - Storage: 03-docker-deployment/05-storage.md
           - Troubleshooting: 03-docker-deployment/troubleshooting.md
 
       - Kubernetes:
           - Overview: 04-kubernetes-basics.md
-          - Multi-Agent Deployment: 06-helm-deployment/02-umbrella-chart.md
-          - Customizing Values: 06-helm-deployment/03-customizing-values.md
-          - Multi-Environment: 06-helm-deployment/04-multi-environment.md
           - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
-          - Advanced:
-              - Helm Charts Deep Dive: 06-helm-deployment/01-understanding-charts.md
-              - Best Practices: 06-helm-deployment/05-best-practices.md
 
   - Observability: 07-observability.md
 
   - CLI Reference:
       - meshctl Overview: cli/index.md
-      - meshctl start: cli/start.md
-      - meshctl call: cli/call.md
-      - meshctl list: cli/list.md
-      - meshctl scaffold: cli/scaffold.md
-      - meshctl man: cli/man.md
       - Environment Variables: environment-variables.md
 
   - FAQ: faq.md

@@ -26,34 +26,67 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
 
 ## Simple Setup
 
-```yaml
-# docker-compose.yml
-services:
-  registry:
-    image: mcpmesh/registry:0.8
-    ports:
-      - "8000:8000"
+=== "Python"
 
-  my-agent:
-    image: mcpmesh/python-runtime:0.8
-    volumes:
-      - ./my-agent:/app/agent:ro
-    command: ["python", "/app/agent/main.py"]
-    environment:
-      - MCP_MESH_REGISTRY_URL=http://registry:8000
+    ```yaml
+    # docker-compose.yml
+    services:
+      registry:
+        image: mcpmesh/registry:0.8
+        ports:
+          - "8000:8000"
 
-  another-agent:
-    image: mcpmesh/python-runtime:0.8
-    volumes:
-      - ./another-agent:/app/agent:ro
-    command: ["python", "/app/agent/main.py"]
-    environment:
-      - MCP_MESH_REGISTRY_URL=http://registry:8000
+      my-agent:
+        image: mcpmesh/python-runtime:0.8
+        volumes:
+          - ./my-agent:/app/agent:ro
+        command: ["python", "/app/agent/main.py"]
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
 
-networks:
-  default:
-    name: mcp-mesh
-```
+      another-agent:
+        image: mcpmesh/python-runtime:0.8
+        volumes:
+          - ./another-agent:/app/agent:ro
+        command: ["python", "/app/agent/main.py"]
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
+
+    networks:
+      default:
+        name: mcp-mesh
+    ```
+
+=== "TypeScript"
+
+    ```yaml
+    # docker-compose.yml
+    services:
+      registry:
+        image: mcpmesh/registry:0.8
+        ports:
+          - "8000:8000"
+
+      my-agent:
+        image: mcpmesh/typescript-runtime:0.8
+        volumes:
+          - ./my-agent:/app/agent:ro
+        command: ["npx", "tsx", "/app/agent/src/index.ts"]
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
+
+      another-agent:
+        image: mcpmesh/typescript-runtime:0.8
+        volumes:
+          - ./another-agent:/app/agent:ro
+        command: ["npx", "tsx", "/app/agent/src/index.ts"]
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
+
+    networks:
+      default:
+        name: mcp-mesh
+    ```
 
 That's it! Docker Compose creates a default network, and agents find each other through the registry.
 
@@ -98,4 +131,4 @@ meshctl list
 
 ## Next Steps
 
-- [Persistent Storage](./05-storage.md) - Volume mounting for agent data
+- [Troubleshooting](./troubleshooting.md) - Common Docker deployment issues
