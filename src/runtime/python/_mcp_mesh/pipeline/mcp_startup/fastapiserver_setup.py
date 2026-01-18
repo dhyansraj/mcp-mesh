@@ -198,10 +198,15 @@ class FastAPIServerSetupStep(PipelineStep):
         # Use centralized binding host resolution (always 0.0.0.0 for all interfaces)
         bind_host = HostResolver.get_binding_host()
 
-        # Port from agent config or environment
-        bind_port = int(os.getenv("MCP_MESH_HTTP_PORT", 0)) or agent_config.get(
-            "http_port", 8080
-        )
+        # Port from environment or agent config
+        # Note: port=0 means auto-assign, so we must not treat it as falsy
+        env_port = os.getenv("MCP_MESH_HTTP_PORT")
+        if env_port is not None:
+            bind_port = int(env_port)
+        elif "http_port" in agent_config:
+            bind_port = agent_config["http_port"]
+        else:
+            bind_port = 8080  # Default only if nothing specified
 
         return {
             "bind_host": bind_host,
@@ -236,9 +241,11 @@ class FastAPIServerSetupStep(PipelineStep):
         try:
             from fastapi import FastAPI
 
-            from .lifespan_factory import (create_minimal_lifespan,
-                                           create_multiple_fastmcp_lifespan,
-                                           create_single_fastmcp_lifespan)
+            from .lifespan_factory import (
+                create_minimal_lifespan,
+                create_multiple_fastmcp_lifespan,
+                create_single_fastmcp_lifespan,
+            )
 
             agent_name = agent_config.get("name", "mcp-mesh-agent")
             agent_description = agent_config.get(
@@ -328,8 +335,7 @@ class FastAPIServerSetupStep(PipelineStep):
             if health_check_fn:
                 # Use health check cache if configured
                 from ...engine.decorator_registry import DecoratorRegistry
-                from ...shared.health_check_manager import \
-                    get_health_status_with_cache
+                from ...shared.health_check_manager import get_health_status_with_cache
 
                 health_status = await get_health_status_with_cache(
                     agent_id=agent_name,
@@ -567,11 +573,29 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
 
             server_task = asyncio.create_task(run_server())
 
-            # Give server a moment to start up
-            await asyncio.sleep(0.2)
+            # Wait for server to start and get actual port
+            # uvicorn sets server.started = True when ready
+            for _ in range(50):  # Max 5 seconds
+                await asyncio.sleep(0.1)
+                if server.started:
+                    break
 
-            # Determine actual port (for now, assume it started on requested port)
-            actual_port = bind_port if bind_port != 0 else 8080
+            # Get actual port from uvicorn sockets (critical for port=0 auto-assign)
+            actual_port = bind_port
+            if server.started and server.servers:
+                try:
+                    sock = server.servers[0].sockets[0]
+                    actual_port = sock.getsockname()[1]
+                    if actual_port != bind_port:
+                        self.logger.info(
+                            f"Auto-assigned port {actual_port} (requested: {bind_port})"
+                        )
+                except (IndexError, AttributeError, OSError) as e:
+                    self.logger.warning(f"Could not get actual port from uvicorn: {e}")
+                    actual_port = bind_port if bind_port != 0 else 8080
+            elif bind_port == 0:
+                self.logger.warning("Server not started, falling back to port 8080")
+                actual_port = 8080
 
             # Build external endpoint
             final_external_endpoint = (

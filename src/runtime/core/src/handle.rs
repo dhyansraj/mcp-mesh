@@ -151,6 +151,17 @@ impl AgentHandle {
         Ok(())
     }
 
+    /// Update the HTTP port after auto-detection.
+    ///
+    /// Call this after the server starts with port=0 to update
+    /// the registry with the actual assigned port.
+    ///
+    /// Returns True if the update was sent successfully.
+    #[pyo3(name = "update_port")]
+    fn update_port_py(&self, port: u16) -> PyResult<bool> {
+        Ok(self.command_tx.try_send(RuntimeCommand::UpdatePort(port)).is_ok())
+    }
+
     fn __repr__(&self) -> String {
         let state = self.state.blocking_read();
         format!(

@@ -299,8 +299,12 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
 
         logger.debug("📦 IMMEDIATE UVICORN: Added status endpoints")
 
-        # Determine port (0 means auto-assign)
-        port = http_port if http_port > 0 else 8080
+        # Port handling:
+        # - http_port=0 explicitly means auto-assign (let uvicorn choose)
+        # - http_port>0 means use that specific port
+        # Note: The default is 8080 only if http_port was never specified,
+        # which is handled upstream in the @mesh.agent decorator
+        port = http_port
 
         logger.debug(
             f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
@@ -366,8 +370,53 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         # Give server a moment to start
         time.sleep(1)
 
+        # Detect actual port if port=0 (auto-assign)
+        actual_port = port
+        if port == 0:
+            import socket
+
+            # Try to detect actual port by scanning for listening sockets
+            try:
+                import subprocess
+
+                # Use lsof to find the port bound by this process
+                result = subprocess.run(
+                    ["lsof", "-i", "-P", "-n", f"-p{os.getpid()}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                for line in result.stdout.split("\n"):
+                    if "LISTEN" in line and "python" in line.lower():
+                        # Parse port from line like "python  1234  user  5u  IPv4 ... TCP *:54321 (LISTEN)"
+                        parts = line.split()
+                        for part in parts:
+                            if ":" in part and "(LISTEN)" not in part:
+                                try:
+                                    port_str = part.split(":")[-1]
+                                    detected_port = int(port_str)
+                                    if detected_port > 0:
+                                        actual_port = detected_port
+                                        logger.info(
+                                            f"🎯 IMMEDIATE UVICORN: Detected auto-assigned port {actual_port}"
+                                        )
+                                        # Update server_info with actual port
+                                        server_info["port"] = actual_port
+                                        server_info["requested_port"] = (
+                                            0  # Remember original request
+                                        )
+                                        break
+                                except (ValueError, IndexError):
+                                    pass
+                        if actual_port > 0:
+                            break
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ IMMEDIATE UVICORN: Could not detect auto-assigned port: {e}"
+                )
+
         logger.debug(
-            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
+            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{actual_port} (daemon thread)"
         )
 
         # Set up registry context for shutdown cleanup (use defaults initially)

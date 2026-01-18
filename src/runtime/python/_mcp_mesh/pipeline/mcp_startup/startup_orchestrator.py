@@ -38,8 +38,8 @@ class DebounceCoordinator:
         import threading
 
         self.delay_seconds = delay_seconds
-        self._pending_timer: Optional[threading.Timer] = None
-        self._orchestrator: Optional[MeshOrchestrator] = None
+        self._pending_timer: threading.Timer | None = None
+        self._orchestrator: MeshOrchestrator | None = None
         self._lock = threading.Lock()
         self.logger = logging.getLogger(f"{__name__}.DebounceCoordinator")
 
@@ -181,8 +181,9 @@ class DebounceCoordinator:
                     # For API services, ONLY do dependency injection - user controls their FastAPI server
                     # Dependency injection is already complete from pipeline execution
                     # Optionally start heartbeat in background (non-blocking)
-                    from ..api_heartbeat.api_lifespan_integration import \
-                        api_heartbeat_lifespan_task
+                    from ..api_heartbeat.api_lifespan_integration import (
+                        api_heartbeat_lifespan_task,
+                    )
 
                     self._setup_heartbeat_background(
                         heartbeat_config,
@@ -207,8 +208,7 @@ class DebounceCoordinator:
                                 f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
                             )
                         # Rust heartbeat is required - no Python fallback
-                        from ..mcp_heartbeat.rust_heartbeat import \
-                            rust_heartbeat_task
+                        from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
                         heartbeat_task_fn = rust_heartbeat_task
 
@@ -322,6 +322,16 @@ class DebounceCoordinator:
             self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
             self.logger.info("🛑 Press Ctrl+C to stop the service")
 
+            # Setup port bridge for port=0 auto-assignment
+            from ...shared.port_bridge import get_port_bridge
+
+            port_bridge = get_port_bridge()
+            port_bridge.set_configured_port(bind_port)
+
+            # Start port detection thread for port=0 case
+            if bind_port == 0:
+                self._start_port_detection_thread(bind_host)
+
             # Use uvicorn.run() - signal handlers should already be registered
             uvicorn.run(
                 app,
@@ -339,6 +349,60 @@ class DebounceCoordinator:
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
+
+    def _start_port_detection_thread(self, bind_host: str) -> None:
+        """Start background thread to detect actual port when port=0 is used."""
+        import socket
+        import time
+
+        def detect_port():
+            """Detect actual port by finding uvicorn's listening socket."""
+            from ...shared.port_bridge import get_port_bridge
+
+            port_bridge = get_port_bridge()
+
+            # Wait for uvicorn to start binding
+            time.sleep(0.5)
+
+            # Try to detect port by scanning recent listening sockets
+            # uvicorn with port=0 will bind to an ephemeral port
+            for attempt in range(20):  # Try for 10 seconds
+                try:
+                    # Use netstat-like detection via /proc or lsof
+                    # Simpler approach: try connecting to find what port uvicorn bound to
+                    import subprocess
+
+                    result = subprocess.run(
+                        ["lsof", "-i", "-P", "-n", "-sTCP:LISTEN"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    )
+                    for line in result.stdout.split("\n"):
+                        if "python" in line.lower() or "uvicorn" in line.lower():
+                            # Parse port from lsof output (format: ... *:PORT ...)
+                            parts = line.split()
+                            for part in parts:
+                                if ":" in part and part.startswith("*:"):
+                                    try:
+                                        port = int(part.split(":")[1])
+                                        if port > 0:
+                                            self.logger.info(
+                                                f"Detected uvicorn port: {port}"
+                                            )
+                                            port_bridge.set_actual_port(port)
+                                            return
+                                    except (ValueError, IndexError):
+                                        pass
+                except Exception as e:
+                    self.logger.debug(f"Port detection attempt {attempt}: {e}")
+
+                time.sleep(0.5)
+
+            self.logger.warning("Could not detect actual port for port=0")
+
+        thread = threading.Thread(target=detect_port, daemon=True)
+        thread.start()
 
     def _setup_heartbeat_background(
         self,
@@ -422,7 +486,7 @@ class DebounceCoordinator:
 
 
 # Global debounce coordinator instance
-_debounce_coordinator: Optional[DebounceCoordinator] = None
+_debounce_coordinator: DebounceCoordinator | None = None
 
 
 def get_debounce_coordinator() -> DebounceCoordinator:
@@ -520,7 +584,7 @@ class MeshOrchestrator:
                 "timestamp": "unknown",
             }
 
-    async def start_service(self, auto_run_config: Optional[dict] = None) -> None:
+    async def start_service(self, auto_run_config: dict | None = None) -> None:
         """
         Start the service with optional auto-run behavior.
 
@@ -582,7 +646,7 @@ class MeshOrchestrator:
 
 
 # Global orchestrator instance
-_global_orchestrator: Optional[MeshOrchestrator] = None
+_global_orchestrator: MeshOrchestrator | None = None
 
 
 def get_global_orchestrator() -> MeshOrchestrator:
