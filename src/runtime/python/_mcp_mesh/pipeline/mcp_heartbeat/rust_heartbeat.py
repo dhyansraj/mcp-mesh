@@ -645,9 +645,6 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         handle = core.start_agent(spec)
         logger.info(f"Rust core started for agent '{agent_id}'")
 
-        # Track if we've updated the port (for port=0 auto-assign)
-        port_updated = False
-
         # Event loop - process events from Rust core
         while True:
             # Check for Python shutdown signal
@@ -662,25 +659,6 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                     break
             except ImportError:
                 pass
-
-            # Check for port update (port=0 auto-assign case)
-            if not port_updated:
-                try:
-                    from ...shared.port_bridge import get_port_bridge
-
-                    port_bridge = get_port_bridge()
-                    if port_bridge.needs_update():
-                        actual_port = port_bridge.get_actual_port()
-                        if actual_port and actual_port > 0:
-                            logger.info(
-                                f"Updating port to {actual_port} via handle.update_port()"
-                            )
-                            handle.update_port(actual_port)
-                            port_updated = True
-                except ImportError:
-                    port_updated = True  # No port bridge, skip future checks
-                except Exception as e:
-                    logger.debug(f"Port update check failed: {e}")
 
             try:
                 # Wait for next event from Rust core with timeout

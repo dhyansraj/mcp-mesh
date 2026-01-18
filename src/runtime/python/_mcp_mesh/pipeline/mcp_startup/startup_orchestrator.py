@@ -322,16 +322,6 @@ class DebounceCoordinator:
             self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
             self.logger.info("🛑 Press Ctrl+C to stop the service")
 
-            # Setup port bridge for port=0 auto-assignment
-            from ...shared.port_bridge import get_port_bridge
-
-            port_bridge = get_port_bridge()
-            port_bridge.set_configured_port(bind_port)
-
-            # Start port detection thread for port=0 case
-            if bind_port == 0:
-                self._start_port_detection_thread(bind_host)
-
             # Use uvicorn.run() - signal handlers should already be registered
             uvicorn.run(
                 app,
@@ -349,60 +339,6 @@ class DebounceCoordinator:
         except Exception as e:
             self.logger.error(f"❌ FastAPI server error: {e}")
             raise
-
-    def _start_port_detection_thread(self, bind_host: str) -> None:
-        """Start background thread to detect actual port when port=0 is used."""
-        import socket
-        import time
-
-        def detect_port():
-            """Detect actual port by finding uvicorn's listening socket."""
-            from ...shared.port_bridge import get_port_bridge
-
-            port_bridge = get_port_bridge()
-
-            # Wait for uvicorn to start binding
-            time.sleep(0.5)
-
-            # Try to detect port by scanning recent listening sockets
-            # uvicorn with port=0 will bind to an ephemeral port
-            for attempt in range(20):  # Try for 10 seconds
-                try:
-                    # Use netstat-like detection via /proc or lsof
-                    # Simpler approach: try connecting to find what port uvicorn bound to
-                    import subprocess
-
-                    result = subprocess.run(
-                        ["lsof", "-i", "-P", "-n", "-sTCP:LISTEN"],
-                        capture_output=True,
-                        text=True,
-                        timeout=2,
-                    )
-                    for line in result.stdout.split("\n"):
-                        if "python" in line.lower() or "uvicorn" in line.lower():
-                            # Parse port from lsof output (format: ... *:PORT ...)
-                            parts = line.split()
-                            for part in parts:
-                                if ":" in part and part.startswith("*:"):
-                                    try:
-                                        port = int(part.split(":")[1])
-                                        if port > 0:
-                                            self.logger.info(
-                                                f"Detected uvicorn port: {port}"
-                                            )
-                                            port_bridge.set_actual_port(port)
-                                            return
-                                    except (ValueError, IndexError):
-                                        pass
-                except Exception as e:
-                    self.logger.debug(f"Port detection attempt {attempt}: {e}")
-
-                time.sleep(0.5)
-
-            self.logger.warning("Could not detect actual port for port=0")
-
-        thread = threading.Thread(target=detect_port, daemon=True)
-        thread.start()
 
     def _setup_heartbeat_background(
         self,
