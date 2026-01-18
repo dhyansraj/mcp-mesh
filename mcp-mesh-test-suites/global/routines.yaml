@@ -1,0 +1,269 @@
+# Global Routines - Available to all tests
+# Reference as: global.routine_name or just routine_name
+#
+# Modular pre-run routines - tests compose what they need:
+#   - Scaffolding tests: setup_node + install_meshctl
+#   - Python agent tests: setup_python_venv + install_meshctl + scaffold + install_pip_deps
+#   - TypeScript agent tests: setup_node + install_meshctl + scaffold + install_npm_deps
+
+routines:
+  #############################################################################
+  # PYTHON SETUP
+  #############################################################################
+
+  # Create Python virtual environment in workspace
+  setup_python_venv:
+    description: "Create .venv in workspace directory"
+    steps:
+      - handler: shell
+        command: |
+          cd /workspace
+          python -m venv .venv
+          echo "Created .venv in /workspace"
+      - handler: shell
+        command: "/workspace/.venv/bin/python --version"
+        capture: python_version
+
+  # Install MCP Mesh Python SDK into venv
+  install_mcpmesh_python:
+    description: "Install mcpmesh Python package into workspace venv"
+    params:
+      version:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: "/workspace/.venv/bin/pip install mcp-mesh==${params.version}"
+        timeout: 120
+      - handler: shell
+        command: "/workspace/.venv/bin/python -c \"import mcpmesh; print(mcpmesh.__version__)\""
+        capture: mcpmesh_version
+
+  # Install pip dependencies from a directory (requirements.txt or pyproject.toml)
+  install_pip_deps:
+    description: "Install Python dependencies for a scaffolded agent"
+    params:
+      path:
+        type: string
+        required: true
+        description: "Path to agent directory"
+    steps:
+      - handler: shell
+        command: |
+          cd ${params.path}
+          if [ -f "requirements.txt" ]; then
+            /workspace/.venv/bin/pip install -r requirements.txt
+          fi
+          if [ -f "pyproject.toml" ]; then
+            /workspace/.venv/bin/pip install -e .
+          fi
+        timeout: 180
+
+  #############################################################################
+  # NODE.JS SETUP
+  #############################################################################
+
+  # Install Node.js and npm in Python base image
+  setup_node:
+    description: "Install Node.js 20 and npm"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            apt-get update -qq
+            apt-get install -y -qq curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y -qq nodejs
+          fi
+        timeout: 180
+      - handler: shell
+        command: "node --version && npm --version"
+        capture: node_version
+
+  # Install meshctl CLI
+  install_meshctl:
+    description: "Install meshctl CLI at specific version"
+    params:
+      version:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: "npm install -g @mcpmesh/cli@${params.version}"
+        timeout: 120
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  # Install npm dependencies from a directory
+  install_npm_deps:
+    description: "Run npm install in a directory"
+    params:
+      path:
+        type: string
+        required: true
+        description: "Path to directory with package.json"
+    steps:
+      - handler: shell
+        command: "cd ${params.path} && npm install"
+        timeout: 180
+
+  #############################################################################
+  # COMBINED SETUP (for convenience)
+  #############################################################################
+
+  # Setup for scaffolding tests (Node + meshctl only)
+  setup_for_scaffold:
+    description: "Setup Node.js and meshctl for scaffolding tests"
+    params:
+      meshctl_version:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            apt-get update -qq
+            apt-get install -y -qq curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y -qq nodejs
+          fi
+        timeout: 180
+      - handler: shell
+        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
+        timeout: 120
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  # Setup for Python agent tests (venv + Node + meshctl)
+  # When using tsuite-mesh image, packages are pre-installed
+  setup_for_python_agent:
+    description: "Full setup for running Python agents"
+    params:
+      meshctl_version:
+        type: string
+        required: true
+      mcpmesh_version:
+        type: string
+        required: true
+    steps:
+      # Create venv and install mcpmesh (skip if using pre-built image)
+      - handler: shell
+        command: |
+          cd /workspace
+          # Check if meshctl is already installed (tsuite-mesh image)
+          if command -v meshctl &> /dev/null; then
+            echo "Using pre-built tsuite-mesh image - meshctl already installed"
+            python -m venv .venv
+            # Link to system-installed mesh package instead of reinstalling
+            echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          else
+            echo "Fresh image - installing packages..."
+            python -m venv .venv
+            /workspace/.venv/bin/pip install mcp-mesh==${params.mcpmesh_version}
+            # Install Node.js if not present
+            if ! command -v node &> /dev/null; then
+              apt-get update -qq
+              apt-get install -y -qq curl
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt-get install -y -qq nodejs
+            fi
+            npm install -g @mcpmesh/cli@${params.meshctl_version}
+          fi
+        timeout: 180
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  # Setup for TypeScript agent tests (Node + meshctl + SDK)
+  setup_for_typescript_agent:
+    description: "Full setup for running TypeScript agents"
+    params:
+      meshctl_version:
+        type: string
+        required: true
+      sdk_version:
+        type: string
+        required: true
+    steps:
+      # Install Node.js
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            apt-get update -qq
+            apt-get install -y -qq curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y -qq nodejs
+          fi
+        timeout: 180
+      # Install meshctl
+      - handler: shell
+        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
+        timeout: 120
+      # Install TypeScript SDK globally (for running agents)
+      - handler: shell
+        command: "npm install -g @mcpmesh/sdk@${params.sdk_version}"
+        timeout: 120
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  #############################################################################
+  # LEGACY (for backward compatibility)
+  #############################################################################
+
+  # Full environment setup (alias for setup_for_scaffold)
+  setup_environment:
+    description: "Setup complete test environment with Node and meshctl"
+    params:
+      meshctl_version:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            apt-get update -qq
+            apt-get install -y -qq curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y -qq nodejs
+          fi
+        timeout: 180
+      - handler: shell
+        command: "npm install -g @mcpmesh/cli@${params.meshctl_version}"
+        timeout: 120
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  #############################################################################
+  # UTILITIES
+  #############################################################################
+
+  # Cleanup workspace
+  cleanup_workspace:
+    description: "Remove all files from workspace directory"
+    steps:
+      - handler: shell
+        command: "rm -rf /workspace/* /workspace/.*  2>/dev/null || true"
+        ignore_errors: true
+
+  # Verify expected files exist
+  verify_files_exist:
+    description: "Check that all expected files exist"
+    params:
+      files:
+        type: string
+        required: true
+        description: "Space-separated list of file paths"
+    steps:
+      - handler: shell
+        command: |
+          for f in ${params.files}; do
+            if [ ! -e "$f" ]; then
+              echo "Missing: $f"
+              exit 1
+            fi
+            echo "Found: $f"
+          done

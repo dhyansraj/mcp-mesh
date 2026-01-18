@@ -1,0 +1,86 @@
+# Test Case: Scaffold TypeScript Agent
+# Verifies that meshctl can scaffold a TypeScript agent with correct structure
+
+name: "Scaffold TypeScript Agent"
+description: "Test scaffolding a TypeScript agent and verify generated files"
+tags:
+  - smoke
+  - scaffolding
+  - typescript
+timeout: 300  # 5 minutes (includes npm install)
+
+# Pre-run: Setup environment
+pre_run:
+  # Setup Node.js and install meshctl
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+# Main test steps
+test:
+  # Scaffold the agent
+  - handler: shell
+    command: "meshctl scaffold --name test-ts-agent --agent-type tool --lang typescript"
+    capture: scaffold_output
+
+  # List generated files
+  - handler: shell
+    command: "find test-ts-agent -type f | sort"
+    capture: generated_files
+
+  # Check index.ts content
+  - handler: shell
+    command: "cat test-ts-agent/src/index.ts"
+    capture: index_content
+
+  # Check package.json content
+  - handler: shell
+    command: "cat test-ts-agent/package.json"
+    capture: package_json
+
+  # Check helm-values.yaml content
+  - handler: shell
+    command: "cat test-ts-agent/helm-values.yaml"
+    capture: helm_values
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # src/index.ts exists
+  - expr: "${captured.generated_files} contains 'src/index.ts'"
+    message: "src/index.ts should be created"
+
+  # package.json exists
+  - expr: "${captured.generated_files} contains 'package.json'"
+    message: "package.json should be created"
+
+  # tsconfig.json exists
+  - expr: "${captured.generated_files} contains 'tsconfig.json'"
+    message: "tsconfig.json should be created"
+
+  # Dockerfile exists
+  - expr: "${captured.generated_files} contains 'Dockerfile'"
+    message: "Dockerfile should be created"
+
+  # helm-values.yaml exists
+  - expr: "${captured.generated_files} contains 'helm-values.yaml'"
+    message: "helm-values.yaml should be created"
+
+  # index.ts contains @mcpmesh/sdk import
+  - expr: "${captured.index_content} contains '@mcpmesh/sdk'"
+    message: "index.ts should import @mcpmesh/sdk"
+
+  # package.json has correct name
+  - expr: "${captured.package_json} contains 'test-ts-agent'"
+    message: "package.json should have correct name"
+
+  # helm-values contains agent name
+  - expr: "${captured.helm_values} contains 'test-ts-agent'"
+    message: "helm-values.yaml should contain agent name"
+
+# Post-run: Cleanup
+post_run:
+  - routine: global.cleanup_workspace

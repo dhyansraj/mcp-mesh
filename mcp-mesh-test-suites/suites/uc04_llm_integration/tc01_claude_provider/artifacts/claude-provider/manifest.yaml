@@ -1,0 +1,11 @@
+name: claude-provider
+description: A provider that uses Claude to answer questions
+version: 0.1.0
+language: python
+
+entry_point: main.py
+
+dependencies: []
+
+env:
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

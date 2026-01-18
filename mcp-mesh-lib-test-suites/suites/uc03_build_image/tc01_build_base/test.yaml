@@ -1,0 +1,133 @@
+# Test Case: Build tsuite-mesh Base Image
+# Builds the Docker image with all MCP Mesh packages pre-installed
+#
+# IMPORTANT: This test runs on the HOST (not in Docker)
+# Run the entire suite without --docker flag
+
+name: "Build tsuite-mesh Base Image"
+description: "Build Docker image with MCP Mesh packages for faster test execution"
+tags:
+  - docker
+  - build
+  - image
+timeout: 600  # 10 minutes for image build
+
+test:
+  # Verify Docker is available
+  - handler: shell
+    command: |
+      docker --version
+      docker info > /dev/null 2>&1 && echo "Docker daemon is running"
+    capture: docker_check
+
+  # Get the Dockerfile path (artifacts are in the same directory as test.yaml)
+  - handler: shell
+    command: |
+      # Find the test directory
+      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+      # Fallback to finding by pattern
+      DOCKERFILE=$(find /Users/dhyanraj/workspace/github/mcp-mesh/mcp-mesh-lib-test-suites -name "Dockerfile" -path "*tc01_build_base*" | head -1)
+      if [ -z "$DOCKERFILE" ]; then
+        echo "ERROR: Dockerfile not found"
+        exit 1
+      fi
+      echo "Dockerfile: $DOCKERFILE"
+      DOCKERFILE_DIR=$(dirname "$DOCKERFILE")
+      echo "DOCKERFILE_DIR=$DOCKERFILE_DIR"
+    capture: dockerfile_path
+
+  # Build the image
+  - handler: shell
+    command: |
+      DOCKERFILE_DIR=$(echo "${captured.dockerfile_path}" | grep "DOCKERFILE_DIR=" | cut -d= -f2)
+      VERSION="${config.packages.cli_version}"
+      PIP_VERSION="${config.packages.sdk_python_version}"
+      IMAGE_NAME="${config.docker.output_image}:${VERSION}"
+
+      echo "Building image: $IMAGE_NAME"
+      echo "  VERSION=$VERSION"
+      echo "  PIP_VERSION=$PIP_VERSION"
+      echo "  Dockerfile: $DOCKERFILE_DIR/Dockerfile"
+
+      docker build \
+        --build-arg VERSION=$VERSION \
+        --build-arg PIP_VERSION=$PIP_VERSION \
+        -t $IMAGE_NAME \
+        -f $DOCKERFILE_DIR/Dockerfile \
+        $DOCKERFILE_DIR
+
+      echo "IMAGE_NAME=$IMAGE_NAME"
+    capture: build_output
+
+  # Verify image was created
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker images $IMAGE_NAME --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
+    capture: image_info
+
+  # Test the image - verify meshctl
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME meshctl --version
+    capture: meshctl_version
+
+  # Test the image - verify mesh module
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME python -c "import mesh; print('mesh OK')"
+    capture: mesh_check
+
+  # Test the image - verify node
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME node --version
+    capture: node_version
+
+  # Print summary
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      echo ""
+      echo "=========================================="
+      echo "tsuite-mesh image built successfully!"
+      echo "=========================================="
+      echo ""
+      echo "Image: $IMAGE_NAME"
+      echo "meshctl: ${captured.meshctl_version}"
+      echo "node: ${captured.node_version}"
+      echo "mesh: OK"
+      echo ""
+      echo "To use in mcp-mesh-test-suites, update config.yaml:"
+      echo "  docker:"
+      echo "    base_image: \"$IMAGE_NAME\""
+      echo ""
+    capture: summary
+
+assertions:
+  # Docker should be available
+  - expr: ${captured.docker_check} contains 'Docker daemon is running'
+    message: "Docker daemon should be running"
+
+  # Build should succeed (check for image name in output)
+  - expr: ${captured.build_output} contains 'IMAGE_NAME='
+    message: "Docker build should succeed"
+
+  # Image should exist
+  - expr: ${captured.image_info} contains 'tsuite-mesh'
+    message: "Image should be created"
+
+  # meshctl should work
+  - expr: ${captured.meshctl_version} contains '${config.packages.cli_version}'
+    message: "meshctl version should match"
+
+  # mesh module should work
+  - expr: ${captured.mesh_check} contains 'mesh OK'
+    message: "mesh module should be importable"
+
+  # Node should be installed
+  - expr: ${captured.node_version} contains 'v22'
+    message: "Node.js 22 should be installed"

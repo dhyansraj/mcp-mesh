@@ -1,0 +1,133 @@
+# Test Case: Multi-Agent Tool Call
+# Verifies cross-agent tool calls via dependency injection
+
+name: "Multi-Agent Tool Call"
+description: "Test calculator-agent calling math-agent via dependency injection"
+tags:
+  - tool_calling
+  - python
+  - multi_agent
+  - dependency_injection
+timeout: 300
+
+pre_run:
+  # Setup for Python agent (venv + meshctl + mcpmesh SDK)
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Start math-agent with fixed port via env var
+  - handler: shell
+    command: "meshctl start math-agent/main.py --env MCP_MESH_HTTP_PORT=3010 -d"
+    workdir: /workspace
+    capture: start_math_output
+
+  # Wait for math-agent to register
+  - handler: wait
+    seconds: 5
+
+  # Start calculator-agent with fixed port via env var
+  - handler: shell
+    command: "meshctl start calculator-agent/main.py --env MCP_MESH_HTTP_PORT=3011 -d 2>&1 || echo 'START_FAILED'"
+    workdir: /workspace
+    capture: start_calc_output
+
+  # Wait for calculator-agent to register
+  - handler: wait
+    seconds: 5
+
+  # Debug: Check calculator-agent startup logs
+  - handler: shell
+    command: "meshctl logs calculator-agent 2>&1 | tail -50 || echo 'NO_CALC_LOGS'"
+    workdir: /workspace
+    capture: calc_start_logs
+
+  # Verify both agents are running
+  - handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List all available tools
+  - handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: tools_output
+
+  # Test sum_three(1, 2, 3) = 6
+  # Calls math-agent's add twice: (1+2)+3 = 6
+  - handler: shell
+    command: "meshctl call sum_three '{\"a\": 1, \"b\": 2, \"c\": 3}' 2>&1 || echo 'CALL_FAILED'"
+    workdir: /workspace
+    capture: sum_three_result
+
+  # Test square(5) = 25
+  # Calls math-agent's multiply: 5*5 = 25
+  - handler: shell
+    command: "meshctl call square '{\"n\": 5}' 2>&1 || echo 'CALL_FAILED'"
+    workdir: /workspace
+    capture: square_result
+
+  # Test sum_of_squares(3, 4) = 25
+  # Calls multiply twice (3*3=9, 4*4=16) then add (9+16=25)
+  - handler: shell
+    command: "meshctl call sum_of_squares '{\"a\": 3, \"b\": 4}' 2>&1 || echo 'CALL_FAILED'"
+    workdir: /workspace
+    capture: sum_of_squares_result
+
+  # Get logs for debugging
+  - handler: shell
+    command: "meshctl logs math-agent 2>/dev/null | tail -20 || echo 'no math logs'"
+    workdir: /workspace
+    capture: math_logs
+
+  - handler: shell
+    command: "meshctl logs calculator-agent 2>/dev/null | tail -20 || echo 'no calc logs'"
+    workdir: /workspace
+    capture: calc_logs
+
+  # Stop all agents
+  - handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Both agents running
+  - expr: ${captured.list_output} contains 'math-agent'
+    message: "math-agent should be running"
+
+  - expr: ${captured.list_output} contains 'calculator-agent'
+    message: "calculator-agent should be running"
+
+  # Tools from both agents available
+  - expr: ${captured.tools_output} contains 'add'
+    message: "add tool should be available"
+
+  - expr: ${captured.tools_output} contains 'sum_three'
+    message: "sum_three tool should be available"
+
+  # sum_three(1, 2, 3) = 6
+  - expr: ${captured.sum_three_result} contains '6'
+    message: "sum_three(1, 2, 3) should return 6"
+
+  # square(5) = 25
+  - expr: ${captured.square_result} contains '25'
+    message: "square(5) should return 25"
+
+  # sum_of_squares(3, 4) = 25
+  - expr: ${captured.sum_of_squares_result} contains '25'
+    message: "sum_of_squares(3, 4) should return 25"
+
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

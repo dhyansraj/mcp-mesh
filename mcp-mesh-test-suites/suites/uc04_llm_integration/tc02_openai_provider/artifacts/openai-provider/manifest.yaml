@@ -1,0 +1,11 @@
+name: openai-provider
+description: A provider that uses OpenAI GPT to answer questions
+version: 0.1.0
+language: python
+
+entry_point: main.py
+
+dependencies: []
+
+env:
+  OPENAI_API_KEY: "${OPENAI_API_KEY}"

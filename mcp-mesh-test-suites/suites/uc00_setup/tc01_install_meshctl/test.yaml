@@ -1,0 +1,51 @@
+# Test Case: Install meshctl
+# Verifies that meshctl can be installed in a Docker container
+
+name: "Install meshctl CLI"
+description: "Test installing meshctl in a fresh Docker container"
+tags:
+  - setup
+  - smoke
+  - install
+timeout: 180
+
+test:
+  # Install Node.js
+  - handler: shell
+    command: |
+      apt-get update -qq
+      apt-get install -y -qq curl
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get install -y -qq nodejs
+    timeout: 120
+
+  # Verify Node.js
+  - handler: shell
+    command: "node --version && npm --version"
+    capture: node_version
+
+  # Install meshctl
+  - handler: shell
+    command: "npm install -g @mcpmesh/cli@${config.packages.cli_version}"
+    timeout: 60
+    capture: install_output
+
+  # Verify meshctl
+  - handler: shell
+    command: "meshctl --version"
+    capture: meshctl_version
+
+  # Test meshctl help
+  - handler: shell
+    command: "meshctl --help"
+    capture: meshctl_help
+
+assertions:
+  - expr: ${captured.node_version} contains 'v20'
+    message: "Node.js v20 should be installed"
+
+  - expr: ${captured.meshctl_version} contains '${config.packages.cli_version}'
+    message: "meshctl version should match config"
+
+  - expr: ${captured.meshctl_help} contains 'scaffold'
+    message: "meshctl help should show scaffold command"

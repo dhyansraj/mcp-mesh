@@ -1,0 +1,100 @@
+# Test Case: Claude Provider Integration
+# Verifies Claude API integration through a provider agent
+
+name: "Claude Provider Integration"
+description: "Test Claude LLM provider with ask_claude tool"
+tags:
+  - llm
+  - claude
+  - provider
+  - python
+timeout: 120
+
+# Note: Skip this test with --skip-tag llm if no API key is available
+
+pre_run:
+  # Setup for Python agent
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+  # Install anthropic SDK
+  - handler: shell
+    command: |
+      source /workspace/.venv/bin/activate
+      pip install anthropic
+    capture: install_output
+
+test:
+  # Copy artifacts to workspace
+  - handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+    capture: copy_output
+
+  # Verify provider was copied
+  - handler: shell
+    command: "ls -la /workspace/claude-provider/"
+    capture: ls_output
+
+  # Start the claude-provider
+  - handler: shell
+    command: "meshctl start claude-provider/main.py --env MCP_MESH_HTTP_PORT=3020 -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for provider to start
+  - handler: wait
+    seconds: 5
+
+  # Verify provider is running
+  - handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Test the calculate tool (no API required) first
+  - handler: shell
+    command: "meshctl call calculate '{\"expression\": \"2 + 2\"}'"
+    workdir: /workspace
+    capture: calc_result
+
+  # Test ask_claude if API key is available
+  # This will return an error message if key is missing
+  - handler: shell
+    command: |
+      meshctl call ask_claude '{"question": "What is 2 + 2? Reply with just the number.", "max_tokens": 50}'
+    workdir: /workspace
+    capture: claude_result
+    ignore_errors: true
+
+  # Get provider logs for debugging
+  - handler: shell
+    command: "meshctl logs claude-provider 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: provider_logs
+
+  # Stop provider
+  - handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Provider started successfully
+  - expr: ${captured.list_output} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+
+  # calculate(2 + 2) = 4
+  - expr: ${captured.calc_result} contains '4'
+    message: "calculate('2 + 2') should return 4"
+
+  # Note: We don't assert on claude_result because API key may not be set
+  # In mock mode or live mode with key, it would contain "4" or "four"
+
+post_run:
+  # Stop any remaining providers
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

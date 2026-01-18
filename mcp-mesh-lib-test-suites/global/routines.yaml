@@ -1,0 +1,46 @@
+# Global Routines for MCP Mesh Library Test Suite
+# These routines verify package availability and installation
+
+routines:
+  check_npm_package:
+    description: "Check if an npm package exists and is installable"
+    params:
+      package:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+    steps:
+      # Check package exists on npm registry
+      - handler: shell
+        command: |
+          echo "Checking npm package: ${params.package}@${params.version}"
+          npm view ${params.package}@${params.version} version
+        capture: npm_version
+
+  check_pip_package:
+    description: "Check if a pip package exists and is installable"
+    params:
+      package:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+    steps:
+      # Check package exists on PyPI
+      - handler: shell
+        command: |
+          echo "Checking pip package: ${params.package}==${params.version}"
+          pip index versions ${params.package} 2>/dev/null | grep -q "${params.version}" || \
+          pip download --no-deps --dest /tmp/pip-check ${params.package}==${params.version}
+          rm -rf /tmp/pip-check
+        capture: pip_check
+
+  cleanup_workspace:
+    description: "Clean up workspace"
+    steps:
+      - handler: shell
+        command: "rm -rf /workspace/* 2>/dev/null || true"
+        ignore_errors: true

@@ -1,0 +1,93 @@
+# Test Case: Direct LLM Handler
+# Tests the LLM handler directly (not through MCP Mesh)
+
+name: "Direct LLM Handler"
+description: "Test the LLM handler with Claude and OpenAI in mock mode"
+tags:
+  - llm
+  - handler
+  - mock
+timeout: 60
+
+# This test uses the LLM handler directly
+# In mock mode (--mock-llm), it validates handler behavior without API calls
+# In live mode, it makes real API calls
+
+pre_run:
+  # Minimal setup - just need Python environment
+  - handler: shell
+    command: "python3 --version"
+    capture: python_version
+
+test:
+  # Test 1: Claude handler with mock mode
+  # The mock mode is controlled by TSUITE_MOCK_LLM env var (set by --mock-llm)
+  - handler: llm
+    provider: claude
+    model: claude-3-haiku-20240307
+    prompt: "What is 2 + 2? Reply with just the number."
+    expect_contains:
+      - "4"
+    mock_response: "The answer is 4."
+    capture: claude_result
+
+  # Test 2: Claude with system message
+  - handler: llm
+    provider: claude
+    model: claude-3-haiku-20240307
+    system: "You are a helpful math assistant. Always respond with just numbers."
+    prompt: "What is 10 divided by 2?"
+    expect_contains:
+      - "5"
+    mock_response: "5"
+    capture: claude_system_result
+
+  # Test 3: OpenAI handler
+  - handler: llm
+    provider: openai
+    model: gpt-3.5-turbo
+    prompt: "What is the capital of Japan? Reply with just the city name."
+    expect_contains:
+      - "Tokyo"
+    mock_response: "Tokyo"
+    capture: openai_result
+
+  # Test 4: Response validation with pattern
+  - handler: llm
+    provider: claude
+    prompt: "List three primary colors."
+    expect_pattern: "red|blue|yellow"
+    mock_response: "The three primary colors are red, blue, and yellow."
+    capture: pattern_result
+
+  # Test 5: expect_not_contains validation
+  - handler: llm
+    provider: claude
+    prompt: "What is 2 + 2?"
+    expect_contains:
+      - "4"
+    expect_not_contains:
+      - "error"
+      - "Error"
+    mock_response: "The answer is 4."
+    capture: not_contains_result
+
+assertions:
+  # All LLM calls should succeed (handler returns success)
+  - expr: "${captured.claude_result} contains 'passed'"
+    message: "Claude handler should validate response correctly"
+
+  - expr: "${captured.claude_system_result} contains 'passed'"
+    message: "Claude with system message should work"
+
+  - expr: "${captured.openai_result} contains 'passed'"
+    message: "OpenAI handler should validate response correctly"
+
+  - expr: "${captured.pattern_result} contains 'passed'"
+    message: "Pattern matching should work"
+
+  - expr: "${captured.not_contains_result} contains 'passed'"
+    message: "expect_not_contains validation should work"
+
+post_run:
+  - routine: global.cleanup_workspace

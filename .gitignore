@@ -221,6 +221,7 @@ feedback-*.md
 requirements*.txt
 !src/**/requirements.txt
 !examples/**/requirements.txt
+!mcp-mesh-*-suites/**/requirements.txt
 
 # OpenAPI generator config (use tools/codegen/config.yaml instead)
 openapitools.json

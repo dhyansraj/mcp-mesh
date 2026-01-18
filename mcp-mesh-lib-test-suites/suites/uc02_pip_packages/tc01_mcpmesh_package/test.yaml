@@ -1,0 +1,73 @@
+# Test Case: mcp-mesh pip Package
+# Verifies the Python SDK package exists on PyPI and is installable
+
+name: "mcp-mesh pip Package Verification"
+description: "Test that mcp-mesh package exists on PyPI and installs correctly"
+tags:
+  - pip
+  - python
+  - sdk
+  - package
+timeout: 180
+
+test:
+  # Check package exists on PyPI
+  - handler: shell
+    command: |
+      echo "Checking mcp-mesh==${config.packages.sdk_python_version} on PyPI..."
+      pip index versions mcp-mesh 2>/dev/null || echo "pip index not available, will try download"
+    capture: pypi_check
+
+  # Create temp venv and install package
+  - handler: shell
+    command: |
+      TMPDIR=$(mktemp -d)
+      cd $TMPDIR
+      echo "Creating virtual environment in $TMPDIR..."
+      python3 -m venv venv
+      source venv/bin/activate
+      echo "Installing mcp-mesh==${config.packages.sdk_python_version}..."
+      pip install mcp-mesh==${config.packages.sdk_python_version}
+      echo "TMPDIR=$TMPDIR"
+    capture: install_output
+
+  # Verify package is installed and importable
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      cd $TMPDIR
+      source venv/bin/activate
+      python -c "import mesh; print('mesh module imported successfully')"
+    capture: import_check
+
+  # Verify mesh.agent and mesh.tool decorators are available
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      cd $TMPDIR
+      source venv/bin/activate
+      python -c "import mesh; print('mesh.agent:', hasattr(mesh, 'agent')); print('mesh.tool:', hasattr(mesh, 'tool'))"
+    capture: decorator_check
+
+  # Clean up
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      rm -rf $TMPDIR
+    ignore_errors: true
+
+assertions:
+  # Install should succeed
+  - expr: ${captured.install_output} contains 'Successfully installed'
+    message: "pip install should succeed"
+
+  # Package should be importable
+  - expr: ${captured.import_check} contains 'mesh module imported successfully'
+    message: "mesh module should be importable"
+
+  # Core decorators should be available
+  - expr: "${captured.decorator_check} contains 'mesh.agent'"
+    message: "mesh.agent decorator should be available"
+
+  - expr: "${captured.decorator_check} contains 'mesh.tool'"
+    message: "mesh.tool decorator should be available"

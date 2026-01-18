@@ -1,0 +1,33 @@
+# MCP Mesh Integration Test Suite Configuration
+# Update version here before running release tests
+
+# Package versions to test (released packages only)
+packages:
+  cli_version: "0.8.0-beta.6"     # @mcpmesh/cli (npm)
+  sdk_python_version: "0.8.0b6"   # mcp-mesh (pip) - matches CLI version
+  sdk_typescript_version: "0.8.0-beta.6"  # @mcpmesh/sdk (npm)
+
+# Docker settings
+# Use tsuite-mesh image built by mcp-mesh-lib-test-suites for faster tests
+# Run lib-test-suites first: tsuite --all --suite-path ../mcp-mesh-lib-test-suites
+docker:
+  base_image: "tsuite-mesh:0.8.0-beta.6"
+  network: "bridge"
+
+# Execution defaults
+defaults:
+  timeout: 120      # seconds per step
+  parallel: 1       # concurrent tests (Phase 3+)
+  retry: 0          # retry failed tests
+
+# Report settings
+reports:
+  output_dir: "./reports"
+  formats:
+    - html
+    - json
+  keep_last: 10
+
+# Aliases for expressions (shortcuts)
+aliases:
+  mesh_version: "${packages.cli_version}"

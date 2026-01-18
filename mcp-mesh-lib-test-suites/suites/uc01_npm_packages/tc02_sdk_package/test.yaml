@@ -1,0 +1,61 @@
+# Test Case: @mcpmesh/sdk Package
+# Verifies the TypeScript SDK package exists on npm and is installable
+
+name: "@mcpmesh/sdk Package Verification"
+description: "Test that @mcpmesh/sdk package exists and installs correctly"
+tags:
+  - npm
+  - sdk
+  - typescript
+  - package
+timeout: 120
+
+test:
+  # Check package exists on npm registry
+  - handler: shell
+    command: |
+      echo "Checking @mcpmesh/sdk@${config.packages.sdk_typescript_version} on npm..."
+      npm view @mcpmesh/sdk@${config.packages.sdk_typescript_version} version
+    capture: npm_view_output
+
+  # Create temp directory and install package
+  - handler: shell
+    command: |
+      TMPDIR=$(mktemp -d)
+      cd $TMPDIR
+      npm init -y > /dev/null
+      echo "Installing @mcpmesh/sdk@${config.packages.sdk_typescript_version} in $TMPDIR..."
+      npm install @mcpmesh/sdk@${config.packages.sdk_typescript_version}
+      echo "TMPDIR=$TMPDIR"
+    capture: install_output
+
+  # Verify package is installed and has expected exports
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      cd $TMPDIR
+      # Check package.json exists
+      ls node_modules/@mcpmesh/sdk/package.json
+      # Check main entry point exists
+      cat node_modules/@mcpmesh/sdk/package.json | grep -E '"main"|"exports"'
+    capture: package_info
+
+  # Clean up
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      rm -rf $TMPDIR
+    ignore_errors: true
+
+assertions:
+  # Package version should match
+  - expr: ${captured.npm_view_output} contains '${config.packages.sdk_typescript_version}'
+    message: "npm view should return correct version"
+
+  # Install should succeed
+  - expr: ${captured.install_output} contains '@mcpmesh/sdk'
+    message: "npm install should succeed"
+
+  # Package should have entry point
+  - expr: ${captured.package_info} contains 'main'
+    message: "Package should have main entry point"
