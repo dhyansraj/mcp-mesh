@@ -91,6 +91,7 @@ export class MeshAgent {
   private handle: JsAgentHandle | null = null;
   private started = false;
   private tracingEnabled = false;
+  private shutdownRequested = false;
 
   /**
    * Resolved dependencies: composite key -> proxy
@@ -375,28 +376,34 @@ export class MeshAgent {
   /**
    * Install signal handlers for graceful shutdown.
    * Ensures agent unregisters from registry on SIGINT/SIGTERM.
+   *
+   * Calls handle.shutdown() directly to trigger Rust core unregistration.
+   * This causes nextEvent() to return with a "shutdown" event, breaking
+   * the event loop cleanly. The shutdown is async but we don't await it
+   * in the signal handler - the event loop handles the exit.
    */
   private installSignalHandlers(): void {
-    let shuttingDown = false;
-
     const shutdownHandler = (signal: string) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
+      if (this.shutdownRequested) return;
+      this.shutdownRequested = true;
 
       console.log(
         `\nReceived ${signal}, shutting down agent ${this.agentId}...`
       );
 
-      // Use setImmediate to avoid blocking the async runtime
-      setImmediate(async () => {
-        try {
-          await this.shutdown();
+      // Call shutdown directly - this triggers Rust core to unregister
+      // and send a shutdown event that breaks the event loop
+      if (this.handle) {
+        this.handle.shutdown().then(() => {
           console.log(`Agent ${this.agentId} unregistered from registry`);
-        } catch (err) {
+          process.exit(0);
+        }).catch((err) => {
           console.error("Error during shutdown:", err);
-        }
+          process.exit(1);
+        });
+      } else {
         process.exit(0);
-      });
+      }
     };
 
     process.on("SIGINT", () => shutdownHandler("SIGINT"));

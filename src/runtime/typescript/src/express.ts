@@ -109,6 +109,7 @@ export class MeshExpress {
   private handle: JsAgentHandle | null = null;
   private server: Server | null = null;
   private started = false;
+  private shutdownRequested = false;
 
   constructor(app: Application, config: MeshExpressConfig) {
     this.app = app;
@@ -394,29 +395,37 @@ export class MeshExpress {
 
   /**
    * Install signal handlers for graceful shutdown.
+   *
+   * Calls handle.shutdown() directly to trigger Rust core unregistration.
+   * This causes nextEvent() to return with a "shutdown" event, breaking
+   * the event loop cleanly.
    */
   private installSignalHandlers(): void {
-    let shuttingDown = false;
-
-    const shutdownHandler = async (signal: string) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
+    const shutdownHandler = (signal: string) => {
+      if (this.shutdownRequested) return;
+      this.shutdownRequested = true;
 
       console.log(
         `\nReceived ${signal}, shutting down service ${this.serviceId}...`
       );
 
-      try {
-        await this.shutdown();
-        console.log(`Service ${this.serviceId} unregistered from registry`);
-      } catch (err) {
-        console.error("Error during shutdown:", err);
+      // Call shutdown directly - this triggers Rust core to unregister
+      // and send a shutdown event that breaks the event loop
+      if (this.handle) {
+        this.handle.shutdown().then(() => {
+          console.log(`Service ${this.serviceId} unregistered from registry`);
+          process.exit(0);
+        }).catch((err) => {
+          console.error("Error during shutdown:", err);
+          process.exit(1);
+        });
+      } else {
+        process.exit(0);
       }
-      process.exit(0);
     };
 
-    process.on("SIGINT", () => void shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => void shutdownHandler("SIGTERM"));
+    process.on("SIGINT", () => shutdownHandler("SIGINT"));
+    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
   }
 
   /**

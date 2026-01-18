@@ -101,6 +101,7 @@ class ApiRuntime {
   private started = false;
   private starting = false;
   private scheduledStart = false;
+  private shutdownRequested = false;
 
   private constructor() {}
 
@@ -389,30 +390,35 @@ class ApiRuntime {
 
   /**
    * Install signal handlers for graceful shutdown.
+   *
+   * Calls handle.shutdown() directly to trigger Rust core unregistration.
+   * This causes nextEvent() to return with a "shutdown" event, breaking
+   * the event loop cleanly.
    */
   private installSignalHandlers(): void {
-    let shuttingDown = false;
-
-    const shutdownHandler = async (signal: string) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
+    const shutdownHandler = (signal: string) => {
+      if (this.shutdownRequested) return;
+      this.shutdownRequested = true;
 
       console.log(`\nReceived ${signal}, shutting down ${this.serviceId}...`);
 
-      try {
-        await this.shutdown();
-      } catch (err) {
-        console.error("Error during API runtime shutdown:", err);
+      // Call shutdown directly - this triggers Rust core to unregister
+      // and send a shutdown event that breaks the event loop
+      if (this.handle) {
+        this.handle.shutdown().then(() => {
+          console.log(`API runtime ${this.serviceId} unregistered from registry`);
+          process.exit(0);
+        }).catch((err) => {
+          console.error("Error during API runtime shutdown:", err);
+          process.exit(1);
+        });
+      } else {
+        process.exit(0);
       }
-
-      // Exit the process after mesh shutdown
-      // The Express server may still be running, but we've cleanly
-      // unregistered from the mesh registry
-      process.exit(0);
     };
 
-    process.on("SIGINT", () => void shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => void shutdownHandler("SIGTERM"));
+    process.on("SIGINT", () => shutdownHandler("SIGINT"));
+    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
   }
 
   /**
