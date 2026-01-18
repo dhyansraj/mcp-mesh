@@ -688,7 +688,35 @@ To fix this issue:
 	for _, agentPath := range agentPaths {
 		absPath, err := AbsolutePath(agentPath)
 		if err != nil {
-			continue // Will be caught by file existence check later
+			return &PrerequisiteError{
+				Check:   "Agent file path",
+				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
+				Remediation: fmt.Sprintf(`The specified agent path could not be resolved.
+
+Agent: %s
+
+To fix this issue:
+  1. Verify the path is correct
+  2. Use an absolute path or a path relative to the current directory
+  3. Run meshctl start again`, agentPath),
+			}
+		}
+
+		// Check agent file exists BEFORE walking up directories
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			return &PrerequisiteError{
+				Check:   "Agent file",
+				Message: fmt.Sprintf("Agent file not found: %s", absPath),
+				Remediation: fmt.Sprintf(`The specified TypeScript agent file does not exist.
+
+Agent: %s
+
+To fix this issue:
+  1. Verify the file path is correct
+  2. Ensure you're running meshctl from the correct directory
+  3. Check that the agent file has been created
+  4. Run meshctl start again`, agentPath),
+			}
 		}
 
 		// Find project root by looking for node_modules or package.json
