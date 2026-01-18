@@ -1,0 +1,171 @@
+# Test Case: Topology Updates
+# Tests that registry correctly tracks agent join/leave/rejoin:
+#   1. Start agent 1 → list shows 1 agent
+#   2. Start agent 2 → list shows 2 agents
+#   3. Stop agent 1 → list shows 1 agent (only agent 2)
+#   4. Start agent 1 again → list shows 2 agents
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Topology Updates"
+description: "Verify registry tracks agent joins and leaves correctly"
+tags:
+  - registry
+  - topology
+  - join
+  - leave
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+      cp -r /uc-artifacts/ts-simple-agent /workspace/
+      VERSION="${config.packages.sdk_typescript_version}"
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-simple-agent/package.json
+    capture: copy_output
+
+  # Install TypeScript dependencies
+  - handler: shell
+    command: "cd ts-simple-agent && npm install --silent"
+    workdir: /workspace
+    timeout: 120
+
+  # === STEP 1: Start agent 1, verify 1 agent in list ===
+  - handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_1
+
+  - handler: wait
+    seconds: 8
+
+  - handler: shell
+    command: |
+      echo "=== After starting py-simple-agent ==="
+      meshctl list
+      count=$(meshctl list 2>/dev/null | grep -c "simple-agent" || echo "0")
+      echo "Agent count: $count"
+      if [ "$count" -eq 1 ]; then
+        echo "PASS: 1 agent after first join"
+      else
+        echo "FAIL: Expected 1 agent, found $count"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: list_after_1
+
+  # === STEP 2: Start agent 2, verify 2 agents in list ===
+  - handler: shell
+    command: "meshctl start ts-simple-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_2
+
+  - handler: wait
+    seconds: 8
+
+  - handler: shell
+    command: |
+      echo "=== After starting ts-simple-agent ==="
+      meshctl list
+      count=$(meshctl list 2>/dev/null | grep -c "simple-agent" || echo "0")
+      echo "Agent count: $count"
+      if [ "$count" -eq 2 ]; then
+        echo "PASS: 2 agents after second join"
+      else
+        echo "FAIL: Expected 2 agents, found $count"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: list_after_2
+
+  # === STEP 3: Stop agent 1, verify only agent 2 remains ===
+  - handler: shell
+    command: "meshctl stop py-simple-agent"
+    workdir: /workspace
+    capture: stop_1
+
+  - handler: wait
+    seconds: 5
+
+  - handler: shell
+    command: |
+      echo "=== After stopping py-simple-agent ==="
+      meshctl list
+      # Verify py-simple-agent is gone
+      if meshctl list 2>/dev/null | grep -q "py-simple-agent"; then
+        echo "FAIL: py-simple-agent still in list after stop"
+        exit 1
+      fi
+      # Verify ts-simple-agent is still there
+      if meshctl list 2>/dev/null | grep -q "ts-simple-agent"; then
+        echo "PASS: ts-simple-agent still running, py-simple-agent left"
+      else
+        echo "FAIL: ts-simple-agent should still be running"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: list_after_leave
+
+  # === STEP 4: Start agent 1 again, verify 2 agents ===
+  - handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: rejoin_1
+
+  - handler: wait
+    seconds: 8
+
+  - handler: shell
+    command: |
+      echo "=== After py-simple-agent rejoins ==="
+      meshctl list
+      count=$(meshctl list 2>/dev/null | grep -c "simple-agent" || echo "0")
+      echo "Agent count: $count"
+      if [ "$count" -eq 2 ]; then
+        echo "PASS: 2 agents after rejoin"
+      else
+        echo "FAIL: Expected 2 agents after rejoin, found $count"
+        exit 1
+      fi
+      # Verify both are present
+      LIST=$(meshctl list 2>/dev/null)
+      if echo "$LIST" | grep -q "py-simple-agent" && echo "$LIST" | grep -q "ts-simple-agent"; then
+        echo "PASS: Both agents present after rejoin"
+      else
+        echo "FAIL: Both agents should be present"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: list_after_rejoin
+
+assertions:
+  # Step 1: One agent after first join
+  - expr: "${captured.list_after_1} contains 'PASS'"
+    message: "Should have 1 agent after first join"
+
+  # Step 2: Two agents after second join
+  - expr: "${captured.list_after_2} contains 'PASS'"
+    message: "Should have 2 agents after second join"
+
+  # Step 3: One agent after first leaves
+  - expr: "${captured.list_after_leave} contains 'PASS'"
+    message: "Should have 1 agent after py-simple-agent leaves"
+
+  # Step 4: Two agents after rejoin
+  - expr: "${captured.list_after_rejoin} contains 'PASS'"
+    message: "Should have 2 agents after py-simple-agent rejoins"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

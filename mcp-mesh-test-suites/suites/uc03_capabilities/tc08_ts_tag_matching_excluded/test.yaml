@@ -1,0 +1,100 @@
+# Test Case: TypeScript Tag Matching - Excluded
+# Tests that TS consumer excluding a tag avoids provider with that tag.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Tag Matching - Excluded"
+description: "Verify TS consumer excluding tag avoids matching provider"
+tags:
+  - capabilities
+  - tags
+  - excluded
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy and setup TypeScript artifacts
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-deprecated-provider /workspace/
+      cp -r /uc-artifacts/ts-fast-provider /workspace/
+      cp -r /uc-artifacts/ts-tag-consumer /workspace/
+      VERSION="${config.packages.sdk_typescript_version}"
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-deprecated-provider/package.json
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-fast-provider/package.json
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-tag-consumer/package.json
+    capture: copy_output
+
+  # Install npm dependencies
+  - handler: shell
+    command: |
+      cd ts-deprecated-provider && npm install --silent
+      cd ../ts-fast-provider && npm install --silent
+      cd ../ts-tag-consumer && npm install --silent
+    workdir: /workspace
+    timeout: 180
+
+  # Start both providers
+  - handler: shell
+    command: "meshctl start ts-deprecated-provider/src/index.ts ts-fast-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_providers
+
+  - handler: wait
+    seconds: 10
+
+  # Start consumer
+  - handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - handler: wait
+    seconds: 10
+
+  # Verify all agents registered
+  - handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Call fetch_exclude_deprecated which excludes "-deprecated"
+  - handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_exclude_deprecated '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "TS_DEPRECATED"; then
+        echo "FAIL: Should have excluded deprecated provider"
+        exit 1
+      fi
+      if echo "$RESULT" | grep -q "TS_FAST"; then
+        echo "PASS: Excluded deprecated, matched fast provider"
+      else
+        echo "FAIL: Expected to match fast provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_excluded
+
+assertions:
+  - expr: "${captured.list_output} contains 'ts-deprecated-provider'"
+    message: "TS Deprecated provider should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-fast-provider'"
+    message: "TS Fast provider should be registered"
+
+  - expr: "${captured.call_excluded} contains 'PASS'"
+    message: "Should exclude deprecated and match fast provider"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

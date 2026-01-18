@@ -1,0 +1,182 @@
+# Test Case: TypeScript Capability Selector OR Logic
+# Tests that multiple matching TS providers all satisfy the dependency.
+#
+# Uses UC-level artifacts from /uc-artifacts
+#
+# DISABLED: This test requires stop/restart cycles which are affected by:
+#   - Issue #432: TypeScript SDK race condition in dependency re-injection
+#   - Issue #434: Registry delayed agent unregistration after stop
+# Skip with: --skip-tag disabled
+
+name: "TypeScript Capability Selector OR Logic"
+description: "Verify any matching TS provider satisfies dependency"
+tags:
+  - capabilities
+  - tags
+  - or-logic
+  - typescript
+  - disabled
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy and setup TypeScript artifacts
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-fast-provider /workspace/
+      cp -r /uc-artifacts/ts-accurate-provider /workspace/
+      cp -r /uc-artifacts/ts-tag-consumer /workspace/
+      VERSION="${config.packages.sdk_typescript_version}"
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-fast-provider/package.json
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-accurate-provider/package.json
+      sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-tag-consumer/package.json
+    capture: copy_output
+
+  # Install npm dependencies once
+  - handler: shell
+    command: "cd ts-fast-provider && npm install --silent && cd ../ts-accurate-provider && npm install --silent"
+    workdir: /workspace
+    timeout: 180
+
+  # === TEST 1: Only fast provider available ===
+  - handler: shell
+    command: "meshctl start ts-fast-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_fast_only
+
+  - handler: wait
+    seconds: 15
+
+  - handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer_1
+
+  - handler: wait
+    seconds: 15
+
+  - handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test1"}' 2>&1)
+      echo "With only fast: $RESULT"
+      if echo "$RESULT" | grep -q "TS_FAST"; then
+        echo "PASS: Matched TS fast when only fast available"
+      else
+        echo "FAIL: Should match fast provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_fast_only
+
+  # Stop all for next test
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - handler: wait
+    seconds: 30
+
+  # === TEST 2: Only accurate provider available ===
+  # Debug: Check registry state before starting
+  - handler: shell
+    command: "meshctl list 2>&1 || echo 'No agents registered'"
+    workdir: /workspace
+    capture: debug_before_test2
+
+  - handler: shell
+    command: "meshctl start ts-accurate-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_accurate_only
+
+  - handler: wait
+    seconds: 15
+
+  - handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer_2
+
+  - handler: wait
+    seconds: 15
+
+  # Debug: Check registry state before call
+  - handler: shell
+    command: "meshctl list 2>&1"
+    workdir: /workspace
+    capture: debug_list_test2
+
+  - handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test2"}' 2>&1)
+      echo "With only accurate: $RESULT"
+      if echo "$RESULT" | grep -q "TS_ACCURATE"; then
+        echo "PASS: Matched TS accurate when only accurate available"
+      else
+        echo "FAIL: Should match accurate provider"
+        echo "DEBUG: Result was: $RESULT"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_accurate_only
+
+  # Stop all for next test
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - handler: wait
+    seconds: 30
+
+  # === TEST 3: Both providers available ===
+  - handler: shell
+    command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_both
+
+  - handler: wait
+    seconds: 15
+
+  - handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer_3
+
+  - handler: wait
+    seconds: 15
+
+  - handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test3"}' 2>&1)
+      echo "With both: $RESULT"
+      if echo "$RESULT" | grep -q "TS_FAST\|TS_ACCURATE"; then
+        echo "PASS: Matched one of the TS providers when both available"
+      else
+        echo "FAIL: Should match one of the providers"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_both
+
+assertions:
+  - expr: "${captured.test_fast_only} contains 'PASS'"
+    message: "Should match TS fast when only fast available"
+
+  - expr: "${captured.test_accurate_only} contains 'PASS'"
+    message: "Should match TS accurate when only accurate available"
+
+  - expr: "${captured.test_both} contains 'PASS'"
+    message: "Should match one TS provider when both available"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

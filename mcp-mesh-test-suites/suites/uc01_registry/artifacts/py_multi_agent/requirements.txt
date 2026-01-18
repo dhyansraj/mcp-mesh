@@ -1,0 +1,2 @@
+# py-multi-agent dependencies
+# Note: mcp-mesh and fastmcp are provided by the runtime environment

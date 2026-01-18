@@ -1,0 +1,125 @@
+# Test Case: Agent Discovery
+# Tests meshctl commands for discovering agents and tools.
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - py-simple-agent: Single-file Python agent
+#   - ts-simple-agent: Minimal TypeScript agent
+
+name: "Agent Discovery"
+description: "Verify meshctl list, list --tools, and status commands"
+tags:
+  - registry
+  - discovery
+  - meshctl
+  - python
+  - typescript
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy UC-level artifacts to workspace and replace version placeholders
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+      cp -r /uc-artifacts/ts-simple-agent /workspace/
+      # Replace version placeholders
+      sed -i "s/__SDK_VERSION__/${config.packages.sdk_typescript_version}/g" /workspace/ts-simple-agent/package.json
+    capture: copy_output
+
+  # Install TypeScript dependencies
+  - handler: shell
+    command: "cd ts-simple-agent && npm install --silent"
+    workdir: /workspace
+    timeout: 120
+
+  # Start both agents in detached mode
+  - handler: shell
+    command: "meshctl start py-simple-agent/main.py ts-simple-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_agents
+
+  # Wait for agents to register
+  - handler: wait
+    seconds: 10
+
+  # Test: meshctl list (shows healthy agents)
+  - handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Test: meshctl list --wide (extended info)
+  - handler: shell
+    command: "meshctl list --wide"
+    workdir: /workspace
+    capture: list_wide
+
+  # Test: meshctl list --tools (shows available tools)
+  - handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Test: meshctl status (shows wiring details)
+  - handler: shell
+    command: "meshctl status"
+    workdir: /workspace
+    capture: status_output
+
+  # Verify tool discovery by capability
+  - handler: shell
+    command: |
+      if meshctl list --tools | grep -q "simple_greeting"; then
+        echo "PASS: simple_greeting capability found"
+      else
+        echo "FAIL: simple_greeting capability not found"
+        meshctl list --tools
+        exit 1
+      fi
+    workdir: /workspace
+    capture: capability_check
+
+  # Stop all agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # meshctl list shows agents
+  - expr: "${captured.list_output} contains 'py-simple-agent'"
+    message: "meshctl list should show Python agent"
+
+  - expr: "${captured.list_output} contains 'ts-simple-agent'"
+    message: "meshctl list should show TypeScript agent"
+
+  # meshctl list --wide shows extended info (port numbers)
+  - expr: "${captured.list_wide} contains '900'"
+    message: "meshctl list --wide should show agent ports"
+
+  # meshctl list --tools shows tools
+  - expr: "${captured.list_tools} contains 'greet'"
+    message: "meshctl list --tools should show greet tool"
+
+  - expr: "${captured.list_tools} contains 'simple_greeting'"
+    message: "meshctl list --tools should show simple_greeting capability"
+
+  # meshctl status works
+  - expr: "${captured.status_output} contains 'agent'"
+    message: "meshctl status should show agent information"
+
+  # Capability check passed
+  - expr: "${captured.capability_check} contains 'PASS'"
+    message: "simple_greeting capability should be discoverable"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

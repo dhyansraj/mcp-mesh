@@ -1,0 +1,82 @@
+# Test Case: Basic Tool Call
+# Tests basic tool invocation via meshctl call.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Basic Tool Call"
+description: "Verify meshctl call invokes a tool and returns result"
+tags:
+  - tools
+  - meshctl
+  - basic
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/py-math-agent /workspace/
+    capture: copy_output
+
+  # Start agent
+  - handler: shell
+    command: "meshctl start py-math-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed
+  - handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Call basic tool (add with default behavior)
+  - handler: shell
+    command: |
+      echo "=== Calling add tool ==="
+      RESULT=$(meshctl call add '{"a": 5, "b": 3}' 2>&1)
+      echo "$RESULT"
+      if echo "$RESULT" | grep -q "8"; then
+        echo "PASS: add(5,3) returned 8"
+      else
+        echo "FAIL: Expected 8 in result"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_add
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'py-math-agent'"
+    message: "Agent should be registered"
+
+  # Tools are listed
+  - expr: "${captured.list_tools} contains 'add'"
+    message: "add tool should be listed"
+
+  # Tool call succeeded
+  - expr: "${captured.call_add} contains 'PASS'"
+    message: "Tool call should return correct result"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

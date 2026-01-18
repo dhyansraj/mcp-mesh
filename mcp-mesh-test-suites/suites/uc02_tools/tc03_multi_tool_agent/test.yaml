@@ -1,0 +1,123 @@
+# Test Case: Multi-Tool Agent
+# Tests that an agent with multiple tools exposes all tools correctly.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Multi-Tool Agent"
+description: "Verify agent with multiple tools works correctly"
+tags:
+  - tools
+  - multi-tool
+  - meshctl
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact
+  - handler: shell
+    command: |
+      cp -r /uc-artifacts/py-math-agent /workspace/
+    capture: copy_output
+
+  # Start agent
+  - handler: shell
+    command: "meshctl start py-math-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - handler: wait
+    seconds: 10
+
+  # Verify all tools are listed
+  - handler: shell
+    command: |
+      echo "=== Tools list ==="
+      meshctl list --tools
+
+      # Check each tool is present
+      TOOLS=$(meshctl list --tools 2>&1)
+      PASS=true
+
+      for tool in add subtract multiply divide; do
+        if echo "$TOOLS" | grep -q "$tool"; then
+          echo "Found: $tool"
+        else
+          echo "Missing: $tool"
+          PASS=false
+        fi
+      done
+
+      if [ "$PASS" = true ]; then
+        echo "PASS: All 4 tools found"
+      else
+        echo "FAIL: Some tools missing"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: all_tools_listed
+
+  # Call each tool independently
+  - handler: shell
+    command: |
+      echo "=== Calling all tools ==="
+
+      ADD=$(meshctl call add '{"a": 1, "b": 2}' 2>&1)
+      SUB=$(meshctl call subtract '{"a": 5, "b": 3}' 2>&1)
+      MUL=$(meshctl call multiply '{"a": 4, "b": 5}' 2>&1)
+      DIV=$(meshctl call divide '{"a": 10, "b": 2}' 2>&1)
+
+      echo "add(1,2) = $ADD"
+      echo "subtract(5,3) = $SUB"
+      echo "multiply(4,5) = $MUL"
+      echo "divide(10,2) = $DIV"
+
+      PASS=true
+      echo "$ADD" | grep -q "3" || { echo "add failed"; PASS=false; }
+      echo "$SUB" | grep -q "2" || { echo "subtract failed"; PASS=false; }
+      echo "$MUL" | grep -q "20" || { echo "multiply failed"; PASS=false; }
+      echo "$DIV" | grep -q "5" || { echo "divide failed"; PASS=false; }
+
+      if [ "$PASS" = true ]; then
+        echo "PASS: All tools callable independently"
+      else
+        echo "FAIL: Some tool calls failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: all_tools_callable
+
+  # Verify capability grouping
+  - handler: shell
+    command: |
+      TOOLS=$(meshctl list --tools 2>&1)
+      if echo "$TOOLS" | grep -q "math_operations"; then
+        echo "PASS: Tools share math_operations capability"
+      else
+        echo "FAIL: math_operations capability not found"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: capability_check
+
+assertions:
+  - expr: "${captured.all_tools_listed} contains 'PASS'"
+    message: "All 4 tools should be listed"
+
+  - expr: "${captured.all_tools_callable} contains 'PASS'"
+    message: "All tools should be callable independently"
+
+  - expr: "${captured.capability_check} contains 'PASS'"
+    message: "Tools should share math_operations capability"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

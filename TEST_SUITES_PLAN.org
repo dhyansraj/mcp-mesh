@@ -1,0 +1,402 @@
+#+TITLE: MCP Mesh Integration Test Suites Plan
+#+AUTHOR: MCP Mesh Team
+#+DATE: 2025-01-18
+#+STARTUP: overview
+
+* Overview
+
+Integration test suites for MCP Mesh features. Tests run via =tsuite= framework
+in Docker containers using the =tsuite-mesh= base image.
+
+** Test Suites
+
+| Suite                      | Purpose                                |
+|----------------------------+----------------------------------------|
+| =mcp-mesh-lib-test-suites= | Package verification, image building   |
+| =mcp-mesh-test-suites=     | Feature integration tests              |
+
+** Running Tests
+
+#+begin_src bash
+# Build base image first (run without --docker)
+cd mcp-mesh-lib-test-suites
+tsuite --all
+
+# Run integration tests
+cd mcp-mesh-test-suites
+tsuite --all --docker
+tsuite --uc uc01_registry --docker
+tsuite --tc uc02_tools/tc01_basic_tool --docker -v
+#+end_src
+
+* uc01_registry - Registry & Discovery
+
+Core registry functionality: registration, discovery, health monitoring.
+
+** DONE tc01_agent_registration
+CLOSED: [2025-01-18]
+- [X] Python agent registers on startup
+- [X] TypeScript agent registers on startup
+- [X] Both appear in =meshctl list=
+
+** DONE tc02_agent_discovery
+CLOSED: [2025-01-18]
+- [X] =meshctl list= shows healthy agents
+- [X] =meshctl list --tools= shows available tools
+- [X] =meshctl list --wide= shows extended info (ports)
+- [X] =meshctl status= shows wiring details
+
+** DONE tc03_heartbeat_system
+CLOSED: [2025-01-18]
+- [X] Graceful stop (meshctl stop) triggers immediate unregister
+- [X] Abrupt kill (kill -9) results in agent removal after missed heartbeats (~25s)
+
+** DONE tc04_partial_name_resolution
+CLOSED: [2025-01-18]
+- [X] =meshctl status py-simple= resolves to py-simple-agent
+- [X] =meshctl status py= resolves (short unique prefix)
+- [X] Ambiguous partial name rejected (matches multiple agents)
+- [X] Non-existent partial name rejected
+
+** DONE tc05_auto_rewiring
+CLOSED: [2025-01-18]
+- [X] Agent responds to direct curl calls
+- [X] Agent continues working after registry stops
+- [X] =meshctl stop registry= cleanly stops registry
+
+** DONE tc06_topology_updates
+CLOSED: [2025-01-18]
+- [X] Topology updates when agent joins (1 → 2 agents)
+- [X] Topology updates when agent leaves (2 → 1 agent)
+- [X] Agent can rejoin after leaving (1 → 2 agents)
+
+* uc02_tools - Basic Tool Calls
+
+Tool invocation and dependency injection.
+
+** DONE tc01_basic_tool
+CLOSED: [2025-01-18]
+- [X] Start py-math-agent with add/subtract/multiply/divide tools
+- [X] Verify agent registration
+- [X] Call =add= tool via =meshctl call=
+- [X] Verify correct result
+
+** DONE tc02_tool_with_args
+CLOSED: [2025-01-18]
+- [X] Test add with positive numbers
+- [X] Test add with negative numbers
+- [X] Test subtract, multiply, divide
+- [X] Test zero handling
+
+** DONE tc03_multi_tool_agent
+CLOSED: [2025-01-18]
+- [X] Agent with 4 tools (add, subtract, multiply, divide)
+- [X] All tools listed in =meshctl list --tools=
+- [X] Each tool callable independently
+- [X] Tools share =math_operations= capability
+
+** DONE tc04_cross_agent_call
+CLOSED: [2025-01-18]
+- [X] py-calculator-agent provides calc_add, calc_multiply
+- [X] py-report-agent depends on calc_add/calc_multiply tools
+- [X] sum_report triggers cross-agent call to calc_add
+- [X] product_report triggers cross-agent call to calc_multiply
+
+** DONE tc05_graceful_degradation
+CLOSED: [2025-01-18]
+- [X] py-optional-dep-agent with optional calc_add dependency
+- [X] Without calculator: returns local result
+- [X] With calculator: uses injected tool
+- [X] Graceful fallback when dependency unavailable
+
+* uc03_capabilities - Tags & Selectors
+
+Capability system, tag matching, and selectors.
+
+** Python Tests
+
+*** DONE tc01_tag_matching_required
+CLOSED: [2025-01-18]
+- [X] py-fast-provider with tags =["api", "fast"]=
+- [X] Consumer requires =["api"]= via dependency filter
+- [X] Match succeeds, returns "FAST: ..."
+
+*** DONE tc02_tag_matching_preferred
+CLOSED: [2025-01-18]
+- [X] py-fast-provider =["api", "fast"]=, py-accurate-provider =["api", "accurate"]=
+- [X] Consumer prefers =["+fast"]=
+- [X] Fast provider selected over accurate
+
+*** DONE tc03_tag_matching_excluded
+CLOSED: [2025-01-18]
+- [X] py-deprecated-provider =["api", "deprecated"]=
+- [X] Consumer excludes =["-deprecated"]=
+- [X] Deprecated excluded, fast provider selected
+
+*** DONE tc04_multiple_implementations
+CLOSED: [2025-01-18]
+- [X] Two providers with same =data_service= capability
+- [X] Different tags distinguish them
+- [X] Consumer with combined filter selects appropriate provider
+
+*** DONE tc05_capability_selector_or
+CLOSED: [2025-01-18]
+- [X] Test with only fast provider - matches
+- [X] Test with only accurate provider - matches
+- [X] Test with both providers - one matches
+- [X] Any matching provider satisfies dependency
+
+** TypeScript Tests
+
+*** DONE tc06_ts_tag_matching_required
+CLOSED: [2025-01-18]
+- [X] ts-fast-provider with tags =["api", "fast"]=
+- [X] Consumer requires =["api"]= via dependency filter
+- [X] Match succeeds, returns "TS_FAST: ..."
+
+*** DONE tc07_ts_tag_matching_preferred
+CLOSED: [2025-01-18]
+- [X] ts-fast-provider, ts-accurate-provider with different tags
+- [X] Consumer prefers =["+fast"]=
+- [X] Fast provider selected over accurate
+
+*** DONE tc08_ts_tag_matching_excluded
+CLOSED: [2025-01-18]
+- [X] ts-deprecated-provider =["api", "deprecated"]=
+- [X] Consumer excludes =["-deprecated"]=
+- [X] Deprecated excluded, fast provider selected
+
+*** DONE tc09_ts_multiple_implementations
+CLOSED: [2025-01-18]
+- [X] Two TS providers with same =data_service= capability
+- [X] Consumer with combined filter selects appropriate provider
+
+*** DISABLED tc10_ts_capability_selector_or
+- [ ] Test with only fast provider - matches
+- [ ] Test with only accurate provider - matches
+- [ ] Test with both providers - one matches
+- *BLOCKED BY:* #432 (TS SDK race condition), #434 (Registry unregister delay)
+
+* uc04_llm - LLM Integration
+
+LLM providers and LLM-powered agents.
+
+** TODO tc01_claude_provider
+- [ ] Scaffold =llm-provider= with Claude model
+- [ ] Start provider, verify registration
+- [ ] Tags include =["llm", "claude"]=
+
+** TODO tc02_openai_provider
+- [ ] Scaffold =llm-provider= with OpenAI model
+- [ ] Start provider, verify registration
+- [ ] Tags include =["llm", "openai"]=
+
+** TODO tc03_llm_agent_basic
+- [ ] Scaffold =llm-agent= consuming provider
+- [ ] Start both agents
+- [ ] Call LLM agent, verify response
+
+** TODO tc04_llm_tool_filtering
+- [ ] LLM agent with =filter= parameter
+- [ ] Only matching tools exposed to LLM
+- [ ] Non-matching tools excluded
+
+** TODO tc05_llm_filter_modes
+- [ ] Test =filter_mode="all"=
+- [ ] Test =filter_mode="best_match"=
+- [ ] Test =filter_mode="*"=
+
+** TODO tc06_llm_system_prompt
+- [ ] Inline system prompt
+- [ ] Jinja2 template file
+- [ ] Context variables populated
+
+** TODO tc07_llm_structured_response
+- [ ] Return type =-> PydanticModel=
+- [ ] LLM returns structured JSON
+- [ ] Response validates against schema
+
+** TODO tc08_llm_agentic_loop
+- [ ] =max_iterations > 1=
+- [ ] LLM calls tools multiple times
+- [ ] Loop terminates correctly
+
+* uc05_scaffold - Agent Scaffolding
+
+=meshctl scaffold= command variations.
+
+** DONE tc01_python_agent
+CLOSED: [2025-01-18]
+- [X] =meshctl scaffold --name x --agent-type tool=
+- [X] Verify main.py, requirements.txt, Dockerfile
+- [X] Verify helm-values.yaml
+
+** DONE tc02_typescript_agent
+CLOSED: [2025-01-18]
+- [X] =meshctl scaffold --name x --agent-type tool --lang typescript=
+- [X] Verify src/index.ts, package.json, tsconfig.json
+- [X] Verify Dockerfile, helm-values.yaml
+
+** TODO tc03_python_llm_agent
+- [ ] =--agent-type llm-agent --llm-selector claude=
+- [ ] Verify @mesh.llm decorator in code
+- [ ] Verify provider dependency
+
+** TODO tc04_python_llm_provider
+- [ ] =--agent-type llm-provider --model anthropic/claude-sonnet-4-5=
+- [ ] Verify @mesh.llm_provider decorator
+- [ ] Verify capability and tags
+
+** TODO tc05_typescript_llm_agent
+- [ ] =--agent-type llm-agent --lang typescript=
+- [ ] Verify mesh.llm() wrapper
+- [ ] Verify TypeScript types
+
+** TODO tc06_add_tool
+- [ ] =--add-tool new_function --tool-type mesh.tool=
+- [ ] Tool added to existing agent
+- [ ] Existing tools preserved
+
+** TODO tc07_dry_run
+- [ ] =--dry-run= flag
+- [ ] Code displayed, no files created
+
+** TODO tc08_compose_generation
+- [ ] =meshctl scaffold --compose=
+- [ ] docker-compose.yml generated
+- [ ] All agents included
+
+** TODO tc09_compose_observability
+- [ ] =--compose --observability=
+- [ ] Redis, Tempo, Grafana in compose
+- [ ] Correct networking
+
+* uc06_cli - CLI Commands
+
+=meshctl= command functionality.
+
+** TODO tc01_meshctl_call
+- [ ] =meshctl call tool_name=
+- [ ] =meshctl call tool_name '{"arg": "val"}'=
+- [ ] =meshctl call agent:tool= format
+
+** TODO tc02_meshctl_list
+- [ ] =meshctl list= shows agents
+- [ ] =meshctl list --all= includes unhealthy
+- [ ] =meshctl list --tools= shows tools
+- [ ] =meshctl list --wide= extended info
+
+** TODO tc03_meshctl_status
+- [ ] =meshctl status= shows wiring
+- [ ] =meshctl status agent-id= specific agent
+- [ ] =meshctl status --json= JSON output
+
+** TODO tc04_meshctl_trace
+- [ ] =meshctl call --trace= returns trace ID
+- [ ] =meshctl trace <id>= shows call tree
+- [ ] =meshctl trace <id> --json= JSON output
+
+** TODO tc05_meshctl_start
+- [ ] =meshctl start agent.py=
+- [ ] =meshctl start agent.py --watch=
+- [ ] =meshctl start agent.py --env-file .env=
+
+* uc07_observability - Tracing
+
+Distributed tracing features.
+
+** TODO tc01_trace_single_agent
+- [ ] Call tool with =--trace=
+- [ ] Trace ID returned
+- [ ] =meshctl trace= shows single span
+
+** TODO tc02_trace_multi_agent
+- [ ] Call triggers cross-agent calls
+- [ ] Trace shows full call tree
+- [ ] All agents appear in trace
+
+** TODO tc03_trace_llm_agent
+- [ ] LLM agent with tool calls
+- [ ] Trace includes LLM spans
+- [ ] Tool call spans nested
+
+* uc08_backend - FastAPI/Express Integration
+
+Backend routes consuming mesh capabilities.
+
+** TODO tc01_fastapi_route
+- [ ] FastAPI app with @mesh.route
+- [ ] Route injects mesh dependency
+- [ ] HTTP call triggers mesh call
+
+** TODO tc02_express_route
+- [ ] Express app with mesh.route()
+- [ ] Route injects mesh dependency
+- [ ] HTTP call triggers mesh call
+
+* Language Support Matrix
+
+| Feature              | Python | TypeScript |
+|----------------------+--------+------------|
+| @mesh.tool           | ✓      | ✓          |
+| @mesh.agent          | ✓      | ✓          |
+| @mesh.llm            | ✓      | ✓          |
+| @mesh.llm_provider   | ✓      | ✓          |
+| @mesh.route          | ✓      | ✓          |
+| Dependency injection | ✓      | ✓          |
+| Pydantic responses   | ✓      | N/A        |
+| Zod responses        | N/A    | ✓          |
+
+* Test Status Summary
+
+| Use Case          | Total | Done | Disabled | TODO |
+|-------------------+-------+------+----------+------|
+| uc01_registry     |     6 |    6 |        0 |    0 |
+| uc02_tools        |     5 |    5 |        0 |    0 |
+| uc03_capabilities |    10 |    9 |        1 |    0 |
+| uc04_llm          |     8 |    0 |        0 |    8 |
+| uc05_scaffold     |     9 |    2 |        0 |    7 |
+| uc06_cli          |     5 |    0 |        0 |    5 |
+| uc07_observability|     3 |    0 |        0 |    3 |
+| uc08_backend      |     2 |    0 |        0 |    2 |
+|-------------------+-------+------+----------+------|
+| TOTAL             |    48 |   22 |        1 |   25 |
+
+*Disabled tests:* Blocked by known issues, skip with =--skip-tag disabled=
+
+* Notes
+
+- Excludes Docker Compose orchestration tests (separate concern)
+- Excludes Kubernetes deployment tests (separate concern)
+- LLM tests require API keys or mock mode
+- Some tests may need real LLM calls for full validation
+
+** Known Issues Blocking Tests
+
+| Issue | Description                                           | Affected Test |
+|-------|-------------------------------------------------------|---------------|
+| #432  | TS SDK race condition in stop/restart dependency      | tc10          |
+| #433  | TS prereq check walks up through non-existent dirs    | -             |
+| #434  | Registry delayed agent unregistration after stop      | tc10          |
+
+** Tag Selector Syntax (uc03)
+
+| Prefix | Meaning   | Example          | Behavior                    |
+|--------|-----------|------------------|------------------------------|
+| (none) | Required  | ="api"=          | Provider MUST have tag       |
+| =+=    | Preferred | ="+fast"=        | Bonus score if present       |
+| =-=    | Excluded  | ="-deprecated"=  | Provider eliminated if present|
+
+Example dependency with tag filter:
+#+begin_src python
+dependencies=[
+    {"capability": "data_service", "tags": ["api", "+fast", "-deprecated"]}
+]
+#+end_src
+
+** Dependency Injection (uc02)
+
+- Dependencies are *tools*, not agents (McpMeshAgent → McpMeshTool)
+- Parameter name must match tool name
+- Injected dependency is callable: =await calc_add(a=x, b=y)=
+- Default =None= enables graceful degradation
