@@ -8,12 +8,33 @@
  */
 
 import { randomBytes } from "crypto";
+import { createServer } from "net";
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
 import {
   resolveConfig as rustResolveConfig,
   resolveConfigInt,
   getDefault,
 } from "@mcpmesh/core";
+
+/**
+ * Find an available port by binding to port 0 and getting the OS-assigned port.
+ * This is used when port=0 is specified to auto-assign a port.
+ */
+export async function findAvailablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        const port = address.port;
+        server.close(() => resolve(port));
+      } else {
+        server.close(() => reject(new Error("Failed to get server address")));
+      }
+    });
+    server.on("error", reject);
+  });
+}
 
 // TypeScript-specific defaults (not in Rust core)
 const TS_DEFAULTS = {
