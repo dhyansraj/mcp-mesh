@@ -52,7 +52,7 @@ import {
 } from "@mcpmesh/core";
 
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
-import { resolveConfig, generateAgentIdSuffix } from "./config.js";
+import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
@@ -159,6 +159,13 @@ export class MeshExpress {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+
+    // Handle port=0: auto-assign an available port
+    if (this.config.port === 0) {
+      const assignedPort = await findAvailablePort();
+      this.config = { ...this.config, port: assignedPort };
+      console.log(`Auto-assigned port ${assignedPort} for service`);
+    }
 
     console.log(`Starting MeshExpress service: ${this.serviceId}`);
 

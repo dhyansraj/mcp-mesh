@@ -30,7 +30,7 @@ import type {
   NormalizedDependency,
   LlmProviderConfig,
 } from "./types.js";
-import { resolveConfig, generateAgentIdSuffix } from "./config.js";
+import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
 import { createProxy, normalizeDependency, runWithTraceContext } from "./proxy.js";
 import {
   initTracing,
@@ -310,6 +310,13 @@ export class MeshAgent {
   async _autoStart(): Promise<void> {
     if (this.started) return;
     this.started = true;
+
+    // Handle port=0: auto-assign an available port
+    if (this.config.port === 0) {
+      const assignedPort = await findAvailablePort();
+      this.config = { ...this.config, port: assignedPort };
+      console.log(`Auto-assigned port ${assignedPort} for agent`);
+    }
 
     console.log(`Starting MCP Mesh agent: ${this.agentId}`);
 
