@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -72,6 +73,15 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 
 // Run starts the HTTP server and health monitor
 func (s *Server) Run(addr string) error {
+	// Cleanup stale agents before serving requests (issue #443)
+	// This handles agents left in healthy state from previous sessions
+	ctx := context.Background()
+	if cleaned, err := s.service.CleanupStaleAgentsOnStartup(ctx); err != nil {
+		fmt.Printf("⚠️ Startup cleanup warning: %v\n", err)
+	} else if cleaned > 0 {
+		fmt.Printf("🧹 Startup cleanup: marked %d stale agents as unhealthy\n", cleaned)
+	}
+
 	// Start health monitor
 	s.healthMonitor.Start()
 

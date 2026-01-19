@@ -34,6 +34,7 @@ type RegistryConfig struct {
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
 	HealthCheckInterval      int
+	StartupCleanupThreshold  int  // Threshold in seconds for marking stale agents on startup (default: 30)
 	EnableResponseCache      bool
 	TracingEnabled           bool // Enable distributed tracing
 }
@@ -114,6 +115,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 			DefaultTimeoutThreshold:  60,
 			DefaultEvictionThreshold: 120,
 			HealthCheckInterval:      30, // Health check every 30 seconds
+			StartupCleanupThreshold:  30, // Mark agents as stale if no heartbeat for 30s on startup
 			EnableResponseCache:      true,
 		}
 	}
@@ -2220,6 +2222,100 @@ func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string)
 
 	s.logger.Info("Created unregister event and marked agent %s as unhealthy (graceful shutdown)", agentID)
 	return nil
+}
+
+// CleanupStaleAgentsOnStartup marks agents as unhealthy if they haven't sent a heartbeat
+// within the configured threshold. This handles agents that were left in healthy state
+// from previous registry sessions. Uses database time (NOW()) to avoid clock skew issues
+// in multi-replica deployments. (Issue #443)
+func (s *EntService) CleanupStaleAgentsOnStartup(ctx context.Context) (int, error) {
+	threshold := s.config.StartupCleanupThreshold
+	if threshold <= 0 {
+		threshold = 30 // Default to 30 seconds
+	}
+
+	// Calculate threshold time - agents with updated_at before this are stale
+	thresholdTime := time.Now().UTC().Add(-time.Duration(threshold) * time.Second)
+
+	// Query agents that are marked healthy but haven't heartbeated recently
+	staleAgents, err := s.entDB.Client.Agent.
+		Query().
+		Where(
+			agent.UpdatedAtLT(thresholdTime),
+			agent.StatusNEQ(agent.StatusUnhealthy),
+		).
+		All(ctx)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to query stale agents: %w", err)
+	}
+
+	if len(staleAgents) == 0 {
+		s.logger.Info("Startup cleanup: no stale agents found (threshold: %ds)", threshold)
+		return 0, nil
+	}
+
+	s.logger.Info("Startup cleanup: found %d stale agents (threshold: %ds)", len(staleAgents), threshold)
+
+	// Mark each stale agent as unhealthy and create events
+	var cleaned int
+	now := time.Now().UTC()
+
+	for _, staleAgent := range staleAgents {
+		// Start transaction for atomic operation
+		tx, err := s.entDB.Client.Tx(ctx)
+		if err != nil {
+			s.logger.Warning("Startup cleanup: failed to start transaction for agent %s: %v", staleAgent.ID, err)
+			continue
+		}
+
+		// Create unhealthy event with startup cleanup reason
+		eventData := map[string]interface{}{
+			"agent_type":        staleAgent.AgentType.String(),
+			"name":              staleAgent.Name,
+			"previous_status":   staleAgent.Status.String(),
+			"reason":            "stale_on_startup",
+			"last_heartbeat":    staleAgent.UpdatedAt.Format(time.RFC3339),
+			"threshold_seconds": threshold,
+		}
+
+		_, err = tx.RegistryEvent.Create().
+			SetEventType(registryevent.EventTypeUnhealthy).
+			SetAgentID(staleAgent.ID).
+			SetTimestamp(now).
+			SetData(eventData).
+			Save(ctx)
+		if err != nil {
+			tx.Rollback()
+			s.logger.Warning("Startup cleanup: failed to create event for agent %s: %v", staleAgent.ID, err)
+			continue
+		}
+
+		// Update agent status to unhealthy, preserving original updated_at
+		_, err = tx.Agent.
+			Update().
+			Where(agent.IDEQ(staleAgent.ID)).
+			SetStatus(agent.StatusUnhealthy).
+			SetUpdatedAt(staleAgent.UpdatedAt). // Preserve original timestamp
+			Save(ctx)
+		if err != nil {
+			tx.Rollback()
+			s.logger.Warning("Startup cleanup: failed to update agent %s: %v", staleAgent.ID, err)
+			continue
+		}
+
+		if err := tx.Commit(); err != nil {
+			s.logger.Warning("Startup cleanup: failed to commit for agent %s: %v", staleAgent.ID, err)
+			continue
+		}
+
+		s.logger.Info("Startup cleanup: marked agent '%s' (%s) as unhealthy (last heartbeat: %v)",
+			staleAgent.Name, staleAgent.ID, staleAgent.UpdatedAt)
+		cleaned++
+	}
+
+	s.logger.Info("Startup cleanup: marked %d/%d stale agents as unhealthy", cleaned, len(staleAgents))
+	return cleaned, nil
 }
 
 // UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests
