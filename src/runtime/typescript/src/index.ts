@@ -227,7 +227,8 @@ export type {
   NormalizedDependency,
   ResolvedDependency,
   DependencyKwargs,
-  McpMeshAgent,
+  McpMeshTool,
+  McpMeshAgent, // Deprecated, use McpMeshTool
   JsAgentHandle,
   JsMeshEvent,
   JsAgentSpec,

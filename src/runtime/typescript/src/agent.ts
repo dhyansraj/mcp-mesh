@@ -26,7 +26,7 @@ import type {
   ResolvedAgentConfig,
   MeshToolDef,
   ToolMeta,
-  McpMeshAgent,
+  McpMeshTool,
   NormalizedDependency,
   LlmProviderConfig,
 } from "./types.js";
@@ -101,7 +101,7 @@ export class MeshAgent {
    * This allows multiple tools to depend on the same capability with
    * different tags/settings without overwriting each other.
    */
-  private resolvedDeps: Map<string, McpMeshAgent> = new Map();
+  private resolvedDeps: Map<string, McpMeshTool> = new Map();
 
   constructor(server: FastMCP, config: AgentConfig) {
     this.server = server;
@@ -137,7 +137,7 @@ export class MeshAgent {
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
       // Build positional deps array using composite keys (toolName:dep_index)
-      const depsArray: (McpMeshAgent | null)[] = normalizedDeps.map(
+      const depsArray: (McpMeshTool | null)[] = normalizedDeps.map(
         (_, depIndex) => this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
@@ -717,7 +717,7 @@ export class MeshAgent {
    *
    * For more precise lookup, use getDependencyByKey with composite key "toolName:dep_index".
    */
-  getDependency(capability: string): McpMeshAgent | null {
+  getDependency(capability: string): McpMeshTool | null {
     // Find first matching capability in any tool
     for (const [toolName, meta] of this.tools.entries()) {
       if (!meta.dependencies) continue;
@@ -736,14 +736,14 @@ export class MeshAgent {
    * @param depIndex - The dependency index within that tool
    * @returns The proxy or null if not available
    */
-  getDependencyByKey(toolName: string, depIndex: number): McpMeshAgent | null {
+  getDependencyByKey(toolName: string, depIndex: number): McpMeshTool | null {
     return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
   }
 
   /**
    * Get all resolved dependencies.
    */
-  getAllDependencies(): Map<string, McpMeshAgent> {
+  getAllDependencies(): Map<string, McpMeshTool> {
     return new Map(this.resolvedDeps);
   }
 

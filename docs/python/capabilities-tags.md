@@ -121,7 +121,7 @@ Consumers can select implementations using tag filters:
 @mesh.tool(
     dependencies=[{"capability": "weather_data", "tags": ["+premium"]}],
 )
-def get_forecast(weather: mesh.McpMeshAgent = None): ...
+def get_forecast(weather: mesh.McpMeshTool = None): ...
 ```
 
 ## Dependency Declaration
@@ -132,7 +132,7 @@ def get_forecast(weather: mesh.McpMeshAgent = None): ...
 @mesh.tool(
     dependencies=["date_service", "weather_data"],
 )
-def my_tool(date: mesh.McpMeshAgent = None, weather: mesh.McpMeshAgent = None):
+def my_tool(date: mesh.McpMeshTool = None, weather: mesh.McpMeshTool = None):
     pass
 ```
 
@@ -145,7 +145,7 @@ def my_tool(date: mesh.McpMeshAgent = None, weather: mesh.McpMeshAgent = None):
         {"capability": "weather_data", "tags": ["+accurate", "-deprecated"]},
     ],
 )
-def my_tool(date: mesh.McpMeshAgent = None, weather: mesh.McpMeshAgent = None):
+def my_tool(date: mesh.McpMeshTool = None, weather: mesh.McpMeshTool = None):
     pass
 ```
 

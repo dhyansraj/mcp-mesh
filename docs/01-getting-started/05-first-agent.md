@@ -85,7 +85,7 @@ def get_weather_time() -> str:
 )
 def get_weather(
     city: str,
-    time_service: mesh.McpMeshAgent = None
+    time_service: mesh.McpMeshTool = None
 ) -> dict[str, Any]:
     """
     Get weather information for a specified city.
@@ -139,8 +139,8 @@ def get_weather(
 def get_forecast(
     city: str,
     days: int = 3,
-    time_service: mesh.McpMeshAgent = None,
-    info: mesh.McpMeshAgent = None
+    time_service: mesh.McpMeshTool = None,
+    info: mesh.McpMeshTool = None
 ) -> dict[str, Any]:
     """
     Get weather forecast for multiple days.
@@ -199,7 +199,7 @@ def get_forecast(
 def weather_analysis_prompt(
     city: str,
     analysis_type: str = "detailed",
-    weather_data: mesh.McpMeshAgent = None
+    weather_data: mesh.McpMeshTool = None
 ) -> str:
     """Generate weather analysis prompt with real data."""
 
@@ -238,7 +238,7 @@ Focus on practical advice for residents and visitors."""
     tags=["weather", "config"],
     description="Weather service configuration"
 )
-async def weather_config(city: str, time_service: mesh.McpMeshAgent = None) -> str:
+async def weather_config(city: str, time_service: mesh.McpMeshTool = None) -> str:
     """Weather service configuration for specific city."""
 
     config = {
@@ -276,8 +276,8 @@ async def weather_config(city: str, time_service: mesh.McpMeshAgent = None) -> s
 )
 async def weather_stats(
     metric: str,
-    weather_data: mesh.McpMeshAgent = None,
-    time_service: mesh.McpMeshAgent = None
+    weather_data: mesh.McpMeshTool = None,
+    time_service: mesh.McpMeshTool = None
 ) -> str:
     """Get weather service statistics."""
 
@@ -450,7 +450,7 @@ Your agent demonstrates the power of MCP Mesh:
     capability="weather_data",
     dependencies=["time_service"]  # Smart dependency injection
 )
-def get_weather(city: str, time_service: mesh.McpMeshAgent = None):
+def get_weather(city: str, time_service: mesh.McpMeshTool = None):
     # Business logic here
 ```
 
@@ -502,8 +502,8 @@ dependencies=[{
 ```python
 # Type-safe injection
 def get_forecast(
-    time_service: mesh.McpMeshAgent = None,  # IDE support
-    info: mesh.McpMeshAgent = None          # Type hints
+    time_service: mesh.McpMeshTool = None,  # IDE support
+    info: mesh.McpMeshTool = None          # Type hints
 ):
 ```
 

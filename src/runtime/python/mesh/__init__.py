@@ -19,8 +19,8 @@ Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
 from . import decorators
-from .types import (LlmMeta, McpMeshAgent, MeshContextModel, MeshLlmAgent,
-                    MeshLlmRequest)
+from .types import (LlmMeta, McpMeshAgent, McpMeshTool, MeshContextModel,
+                    MeshLlmAgent, MeshLlmRequest)
 
 # Note: helpers.llm_provider is imported lazily in __getattr__ to avoid
 # initialization timing issues with @mesh.agent auto_run in tests
@@ -93,6 +93,8 @@ def create_server(name: str | None = None) -> "FastMCP":
 
 # Make decorators available as mesh.tool, mesh.agent, mesh.route, mesh.llm, and mesh.llm_provider
 def __getattr__(name):
+    import warnings
+
     if name == "tool":
         return decorators.tool
     elif name == "agent":
@@ -106,7 +108,15 @@ def __getattr__(name):
         from .helpers import llm_provider
 
         return llm_provider
+    elif name == "McpMeshTool":
+        return McpMeshTool
     elif name == "McpMeshAgent":
+        warnings.warn(
+            "McpMeshAgent is deprecated, use McpMeshTool instead. "
+            "McpMeshAgent will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return McpMeshAgent
     elif name == "MeshContextModel":
         return MeshContextModel

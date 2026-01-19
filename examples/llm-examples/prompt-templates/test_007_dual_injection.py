@@ -2,7 +2,7 @@
 """
 Test 7: Dual Agent Injection (LLM + MCP Agent)
 
-Validates that both MeshLlmAgent and McpMeshAgent can be injected into the same function.
+Validates that both MeshLlmAgent and McpMeshTool can be injected into the same function.
 The function calls the LLM first, then enriches the response with data from an MCP agent.
 """
 
@@ -49,7 +49,7 @@ class EnrichedResult(BaseModel):
 async def analyze_with_enrichment(
     query: str,
     llm: mesh.MeshLlmAgent = None,
-    date_service: mesh.McpMeshAgent = None,
+    date_service: mesh.McpMeshTool = None,
 ) -> EnrichedResult:
     """
     Analyze query with LLM and enrich with MCP agent data.
@@ -60,13 +60,13 @@ async def analyze_with_enrichment(
     3. Enriches LLM result with MCP agent data
     4. Returns enriched result
 
-    Both llm (MeshLlmAgent) and date_service (McpMeshAgent) are injected!
+    Both llm (MeshLlmAgent) and date_service (McpMeshTool) are injected!
     """
     # Step 1: Get LLM analysis (LLM has access to system tools via filter)
     llm_result: AnalysisResult = await llm(query)
 
     # Step 2: Call MCP agent directly to get current time
-    # The date_service is a direct McpMeshAgent dependency (not via LLM filter)
+    # The date_service is a direct McpMeshTool dependency (not via LLM filter)
     timestamp = "N/A"
     system_info = "N/A"
 

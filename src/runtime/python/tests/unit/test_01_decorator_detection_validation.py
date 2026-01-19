@@ -98,10 +98,10 @@ class TestMeshToolDetection:
 
     def test_mesh_tool_with_dependencies_creates_wrapper(self):
         """Test that @mesh.tool with dependencies creates injection wrapper."""
-        from mesh.types import McpMeshAgent
+        from mesh.types import McpMeshTool
 
         @mesh.tool(capability="test", dependencies=["dependency1"])
-        def dependent_function(agent: McpMeshAgent):
+        def dependent_function(agent: McpMeshTool):
             return "test"
 
         # Check that dependency injection was processed

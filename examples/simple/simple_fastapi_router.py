@@ -8,7 +8,7 @@ are defined on a router and then included in the main app.
 
 import mesh
 from fastapi import APIRouter, FastAPI
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 # Create the main FastAPI app
 app = FastAPI(
@@ -30,7 +30,7 @@ async def health():
 @router.get("/time")
 @mesh.route(dependencies=["time_service"])
 async def get_time(
-    time_agent: McpMeshAgent = None,
+    time_agent: McpMeshTool = None,
 ):
     """
     Get current time from time_service.
@@ -62,7 +62,7 @@ async def get_time(
 @router.get("/system-info")
 @mesh.route(dependencies=["system_info_service"])
 async def get_system_info(
-    system_info_agent: McpMeshAgent = None,
+    system_info_agent: McpMeshTool = None,
 ):
     """
     Get enriched system info from system_info_service.
@@ -94,8 +94,8 @@ async def get_system_info(
 @router.get("/both")
 @mesh.route(dependencies=["time_service", "system_info_service"])
 async def get_both(
-    time_agent: McpMeshAgent = None,
-    system_info_agent: McpMeshAgent = None,
+    time_agent: McpMeshTool = None,
+    system_info_agent: McpMeshTool = None,
 ):
     """
     Get both time and system info to test multiple dependencies.

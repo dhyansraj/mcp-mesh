@@ -13,7 +13,7 @@ Start this agent, then start system_agent.py to see dependency injection in acti
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshAgent
+from mcp_mesh import McpMeshTool
 
 
 @mesh.agent(name="hello-world", http_port=9090)
@@ -51,7 +51,7 @@ def hello_mesh_simple(date_service: Any = None) -> str:
 
 
 # ===== MESH FUNCTION WITH TYPED INTERFACE =====
-# Uses McpMeshAgent type for better IDE support and type safety
+# Uses McpMeshTool type for better IDE support and type safety
 
 
 @mesh.tool(
@@ -64,7 +64,7 @@ def hello_mesh_simple(date_service: Any = None) -> str:
     ],
     description="Advanced greeting with smart tag-based dependency resolution",
 )
-def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
+def hello_mesh_typed(info: McpMeshTool | None = None) -> str:
     """
     MCP Mesh greeting with smart tag-based dependency resolution.
 
@@ -96,7 +96,7 @@ def hello_mesh_typed(info: McpMeshAgent | None = None) -> str:
     description="Complete system dashboard - demonstrates clean agent chaining",
 )
 def generate_system_dashboard(
-    system_report: McpMeshAgent | None = None,
+    system_report: McpMeshTool | None = None,
 ) -> str:
     """
     Generate a comprehensive system dashboard using clean agent chaining.
@@ -205,7 +205,7 @@ def generate_system_dashboard(
 )
 def test_dependencies(
     date_service: Any = None,
-    info: McpMeshAgent | None = None,  # This will get the DISK info service!
+    info: McpMeshTool | None = None,  # This will get the DISK info service!
 ) -> dict[str, Any]:
     """
     Test function showing hybrid dependency resolution.

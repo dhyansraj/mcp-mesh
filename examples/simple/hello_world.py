@@ -49,7 +49,7 @@ async def hello_mesh_simple(date_service: Any = None) -> str:
 
 
 # ===== MESH FUNCTION WITH TYPED INTERFACE =====
-# Uses mesh.McpMeshAgent type for better IDE support and type safety
+# Uses mesh.McpMeshTool type for better IDE support and type safety
 
 
 @app.tool()
@@ -63,7 +63,7 @@ async def hello_mesh_simple(date_service: Any = None) -> str:
     ],
     description="Advanced greeting with smart tag-based dependency resolution",
 )
-async def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
+async def hello_mesh_typed(info: mesh.McpMeshTool | None = None) -> str:
     """
     MCP Mesh greeting with smart tag-based dependency resolution.
 
@@ -94,7 +94,7 @@ async def hello_mesh_typed(info: mesh.McpMeshAgent | None = None) -> str:
     description="Test self-dependency with nested cross-agent dependency",
 )
 async def test_self_dependency(
-    advanced_greeting: mesh.McpMeshAgent | None = None,
+    advanced_greeting: mesh.McpMeshTool | None = None,
 ) -> dict[str, Any]:
     """
     Test self-dependency injection with nested dependencies.
@@ -173,8 +173,8 @@ async def test_self_dependency(
     description="Test hybrid dependencies: simple + tag-based resolution",
 )
 async def test_dependencies(
-    date_service: mesh.McpMeshAgent | None = None,
-    info: mesh.McpMeshAgent | None = None,  # This will get the DISK info service!
+    date_service: mesh.McpMeshTool | None = None,
+    info: mesh.McpMeshTool | None = None,  # This will get the DISK info service!
 ) -> dict[str, Any]:
     """
     Test function showing hybrid dependency resolution.

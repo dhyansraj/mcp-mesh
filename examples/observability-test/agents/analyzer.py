@@ -28,7 +28,7 @@ app = FastMCP("Analyzer")
 async def analyze_data(
     data: dict,
     analysis_type: str = "basic",
-    storage: mesh.McpMeshAgent = None,
+    storage: mesh.McpMeshTool = None,
 ) -> dict:
     """
     Analyze incoming data and chain to storage.

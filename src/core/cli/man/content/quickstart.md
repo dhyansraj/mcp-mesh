@@ -95,7 +95,7 @@ app = mesh.get_app()
 )
 async def smart_greet(
     name: str,
-    greeting_svc: mesh.McpMeshAgent = None,  # Injected!
+    greeting_svc: mesh.McpMeshTool = None,  # Injected!
 ) -> str:
     if greeting_svc:
         base_greeting = await greeting_svc(name=name)

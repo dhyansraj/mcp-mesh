@@ -29,7 +29,7 @@ app = FastMCP("Processor")
 async def process_data(
     data: dict,
     operation: str = "default",
-    analyzer: mesh.McpMeshAgent = None,
+    analyzer: mesh.McpMeshTool = None,
 ) -> dict:
     """
     Process incoming data and chain to analyzer.

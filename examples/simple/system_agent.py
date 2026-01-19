@@ -162,7 +162,7 @@ def analyze_storage_and_os() -> dict[str, Any]:  # Completely different function
     version="1.0.0",
 )
 def perform_health_diagnostic(
-    date_service: mesh.McpMeshAgent | None = None,
+    date_service: mesh.McpMeshTool | None = None,
 ) -> dict[str, Any]:
     """
     Get system status including current time.

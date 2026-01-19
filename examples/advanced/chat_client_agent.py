@@ -35,7 +35,7 @@ async def simple_chat(
     task: str = "analyze",
     context: Optional[str] = None,
     model: str = "claude-3-5-sonnet-20241022",
-    llm_service: mesh.McpMeshAgent | None = None,
+    llm_service: mesh.McpMeshTool | None = None,
 ) -> Dict[str, str]:
     """
     Simple chat interface using dependency injection to call LLM agent.
@@ -89,7 +89,7 @@ async def simple_chat(
     dependencies=["llm-service"],  # Simple dependency to check LLM service
     description="Check if LLM chat services are available and working",
 )
-async def health_check(llm_service: mesh.McpMeshAgent | None = None) -> Dict[str, str]:
+async def health_check(llm_service: mesh.McpMeshTool | None = None) -> Dict[str, str]:
     """
     Health check for the chat client and its dependencies.
 
@@ -140,7 +140,7 @@ async def analyze_file(
     task: str = "analyze",
     context: Optional[str] = None,
     model: str = "claude-3-5-sonnet-20241022",
-    llm_service: mesh.McpMeshAgent | None = None,
+    llm_service: mesh.McpMeshTool | None = None,
 ) -> Dict[str, Any]:
     """
     Read a file from disk and analyze its content using the LLM agent.
@@ -367,7 +367,7 @@ class ChatClientAgent:
     processing to the llm-chat-agent via MCP Mesh dependency injection.
 
     Key features:
-    - Dependency injection for LLM services using mesh.McpMeshAgent typing
+    - Dependency injection for LLM services using mesh.McpMeshTool typing
     - Conversational interface
     - Health checking
     - Error handling and graceful degradation

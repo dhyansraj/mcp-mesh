@@ -86,7 +86,7 @@ meshctl scaffold --name assistant --agent-type tool --lang typescript --port 900
 Edit `assistant/src/index.ts`:
 
 ```typescript
-import { mesh, MeshAgent, McpMeshAgent } from "@mcpmesh/sdk";
+import { mesh, MeshAgent, McpMeshTool } from "@mcpmesh/sdk";
 
 const app = new MeshAgent({
   name: "assistant",
@@ -102,7 +102,7 @@ app.tool(
   }),
   async (
     { name }: { name: string },
-    { greeting }: { greeting: McpMeshAgent | null }, // Injected!
+    { greeting }: { greeting: McpMeshTool | null }, // Injected!
   ) => {
     if (greeting) {
       const baseGreeting = await greeting({ name });

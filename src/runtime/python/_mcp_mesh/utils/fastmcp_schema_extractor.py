@@ -24,7 +24,7 @@ class FastMCPSchemaExtractor:
     This class extracts those schemas so they can be sent to the registry
     for LLM tool discovery.
 
-    Phase 2.5: Filters out McpMeshAgent parameters from schemas since
+    Phase 2.5: Filters out McpMeshTool parameters from schemas since
     they are dependency injection parameters and should not be visible to LLMs.
 
     Phase 0: Enhances schemas with MeshContextModel Field descriptions for
@@ -239,7 +239,7 @@ class FastMCPSchemaExtractor:
         schema: dict[str, Any], function: Any
     ) -> dict[str, Any]:
         """
-        Filter out McpMeshAgent dependency injection parameters from schema.
+        Filter out McpMeshTool dependency injection parameters from schema.
 
         Phase 2.5: Remove dependency injection parameters from LLM-facing schemas.
         These parameters are injected at runtime by MCP Mesh and should not be
@@ -273,7 +273,7 @@ class FastMCPSchemaExtractor:
         if not schema or not isinstance(schema, dict):
             return schema
 
-        # Get McpMeshAgent parameter names from signature analysis
+        # Get McpMeshTool parameter names from signature analysis
         from _mcp_mesh.engine.signature_analyzer import \
             get_mesh_agent_parameter_names
 

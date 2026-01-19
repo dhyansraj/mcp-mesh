@@ -250,8 +250,8 @@ All tools use FastMCP + MCP Mesh dual decorators:
 def parse_data_file(
     file_path: str,
     file_format: Optional[str] = None,
-    weather_service: mesh.McpMeshAgent = None,  # Dependency injection
-    llm_service: mesh.McpMeshAgent = None       # Dependency injection
+    weather_service: mesh.McpMeshTool = None,  # Dependency injection
+    llm_service: mesh.McpMeshTool = None       # Dependency injection
 ) -> Dict[str, Any]:
     # Implementation with injected dependencies
     pass
@@ -299,7 +299,7 @@ class DataProcessorAgent:
 ### 5. **Service Discovery & Dependency Injection**
 
 - Automatic service discovery through MCP Mesh registry
-- Type-safe dependency injection with `mesh.McpMeshAgent` parameters
+- Type-safe dependency injection with `mesh.McpMeshTool` parameters
 - Graceful degradation when dependencies are unavailable
 
 ## Development Workflow
@@ -374,8 +374,8 @@ These examples demonstrate advanced MCP Mesh features:
 )
 def analyze_data_with_context(
     data: str,
-    weather_service: mesh.McpMeshAgent = None,   # Auto-injected weather service
-    llm_service: mesh.McpMeshAgent = None        # Auto-injected LLM service
+    weather_service: mesh.McpMeshTool = None,   # Auto-injected weather service
+    llm_service: mesh.McpMeshTool = None        # Auto-injected LLM service
 ) -> Dict[str, Any]:
     # Get weather context
     weather_data = weather_service() if weather_service else None

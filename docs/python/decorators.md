@@ -67,7 +67,7 @@ Registers a function as a mesh capability with dependency injection.
     tags=["greeting", "utility"],       # Tags for filtering
     dependencies=["date_service"],      # Required capabilities
 )
-async def greet(name: str, date_svc: mesh.McpMeshAgent = None) -> str:
+async def greet(name: str, date_svc: mesh.McpMeshTool = None) -> str:
     if date_svc:
         today = await date_svc()  # Must use await for proxy calls!
         return f"Hello {name}! Today is {today}"
@@ -80,7 +80,7 @@ async def greet(name: str, date_svc: mesh.McpMeshAgent = None) -> str:
 
 | Type                | Use Case                               |
 | ------------------- | -------------------------------------- |
-| `mesh.McpMeshAgent` | Tool calls via proxy                   |
+| `mesh.McpMeshTool` | Tool calls via proxy                   |
 | `mesh.MeshLlmAgent` | LLM agent injection (with `@mesh.llm`) |
 
 ## @mesh.llm
@@ -137,7 +137,7 @@ Enables mesh dependency injection in FastAPI route handlers. Use this when build
 ```python
 from fastapi import APIRouter, Request
 import mesh
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 router = APIRouter()
 
@@ -146,7 +146,7 @@ router = APIRouter()
 async def chat_endpoint(
     request: Request,
     message: str,
-    avatar_agent: McpMeshAgent = None,  # Injected by mesh
+    avatar_agent: McpMeshTool = None,  # Injected by mesh
 ):
     result = await avatar_agent(message=message, user_email="user@example.com")
     return {"response": result.get("message")}

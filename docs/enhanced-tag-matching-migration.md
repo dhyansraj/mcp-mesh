@@ -76,7 +76,7 @@ Transform exact requirements into intelligent preferences:
         "tags": ["claude", "opus"]  # Fails if no opus available
     }]
 )
-def premium_chat(llm_service: mesh.McpMeshAgent = None):
+def premium_chat(llm_service: mesh.McpMeshTool = None):
     return llm_service() if llm_service else "Service unavailable"
 ```
 
@@ -95,7 +95,7 @@ def premium_chat(llm_service: mesh.McpMeshAgent = None):
         ]
     }]
 )
-def adaptive_chat(llm_service: mesh.McpMeshAgent = None):
+def adaptive_chat(llm_service: mesh.McpMeshTool = None):
     """
     Smart chat that adapts to available services:
     - Prefers opus when available

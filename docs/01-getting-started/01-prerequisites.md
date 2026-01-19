@@ -49,7 +49,7 @@ app = FastMCP("My Service")
     capability="greeting",
     dependencies=["time_service"]
 )
-async def hello(time_service: mesh.McpMeshAgent = None):
+async def hello(time_service: mesh.McpMeshTool = None):
     return f"Hello! Time: {await time_service()}"
 ```
 

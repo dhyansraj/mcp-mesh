@@ -24,7 +24,7 @@ MCP Mesh provides automatic dependency injection (DI) that connects agents based
     capability="greeting",
     dependencies=["date_service"],  # Request by capability name
 )
-async def greet(name: str, date_service: mesh.McpMeshAgent = None) -> str:
+async def greet(name: str, date_service: mesh.McpMeshTool = None) -> str:
     if date_service:
         today = await date_service()  # Must use await!
         return f"Hello {name}! Today is {today}"
@@ -47,8 +47,8 @@ Use the capability selector syntax (see `meshctl man capabilities`) to filter by
     ],
 )
 async def generate_report(
-    data_svc: mesh.McpMeshAgent = None,
-    formatter: mesh.McpMeshAgent = None,
+    data_svc: mesh.McpMeshTool = None,
+    formatter: mesh.McpMeshTool = None,
 ) -> str:
     data = await data_svc(query="sales")
     return await formatter(data=data)
@@ -56,12 +56,12 @@ async def generate_report(
 
 ## Injection Types
 
-### mesh.McpMeshAgent
+### mesh.McpMeshTool
 
 Callable proxy for tool invocations:
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     result = await helper(arg1="value")  # Direct call
     result = await helper.call_tool("tool_name", {"arg": "value"})  # Named tool
 ```
@@ -81,7 +81,7 @@ def smart_tool(ctx: Context, llm: mesh.MeshLlmAgent = None):
 Dependencies may be unavailable. Always handle `None`:
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     if helper is None:
         return "Service temporarily unavailable"
     return await helper()
@@ -90,7 +90,7 @@ async def my_tool(helper: mesh.McpMeshAgent = None):
 Or use default values:
 
 ```python
-async def get_time(date_service: mesh.McpMeshAgent = None):
+async def get_time(date_service: mesh.McpMeshTool = None):
     if date_service:
         return await date_service()
     return datetime.now().isoformat()  # Fallback
@@ -112,7 +112,7 @@ Configure proxy behavior via `dependency_kwargs`:
         }
     },
 )
-async def my_tool(slow_service: mesh.McpMeshAgent = None):
+async def my_tool(slow_service: mesh.McpMeshTool = None):
     result = await slow_service(data="large_payload")
     ...
 ```

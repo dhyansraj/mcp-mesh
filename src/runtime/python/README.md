@@ -14,7 +14,7 @@ pip install mcp-mesh
 import mesh
 
 # Import types from public API
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 # Define your agent
 @mesh.agent(name="hello-world", http_port=9090)
@@ -28,11 +28,11 @@ class HelloWorldAgent:
     dependencies=["date_service"],
     description="Greeting function with date dependency injection"
 )
-def greet(name: str = "World", systemDate: McpMeshAgent = None) -> str:
+def greet(name: str = "World", date_tool: McpMeshTool = None) -> str:
     """Greeting function with automatic dependency injection."""
-    if systemDate is not None:
+    if date_tool is not None:
         try:
-            current_date = systemDate()
+            current_date = date_tool()
             return f"Hello, {name}! Today is {current_date}"
         except Exception:
             pass

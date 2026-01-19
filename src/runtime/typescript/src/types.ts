@@ -135,15 +135,15 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
   parameters: T;
   /**
    * Dependencies required by this tool.
-   * Injected positionally as McpMeshAgent params after args.
+   * Injected positionally as McpMeshTool params after args.
    *
    * @example
    * ```typescript
    * dependencies: ["time-service", "calculator"],
    * execute: async (
    *   { query },
-   *   timeSvc: McpMeshAgent | null = null,  // dependencies[0]
-   *   calc: McpMeshAgent | null = null      // dependencies[1]
+   *   timeTool: McpMeshTool | null = null,  // dependencies[0]
+   *   calcTool: McpMeshTool | null = null   // dependencies[1]
    * ) => { ... }
    * ```
    */
@@ -158,17 +158,17 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    * Tool implementation.
    *
    * @param args - Parsed arguments matching the Zod schema
-   * @param deps - Dependency proxies injected positionally (McpMeshAgent | null)
+   * @param deps - Dependency proxies injected positionally (McpMeshTool | null)
    *
    * @example
    * ```typescript
    * execute: async (
    *   { query },
-   *   timeSvc: McpMeshAgent | null = null,
-   *   calc: McpMeshAgent | null = null
+   *   timeTool: McpMeshTool | null = null,
+   *   calcTool: McpMeshTool | null = null
    * ) => {
-   *   if (timeSvc) {
-   *     const time = await timeSvc();
+   *   if (timeTool) {
+   *     const time = await timeTool();
    *   }
    *   return "result";
    * }
@@ -176,29 +176,29 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   execute: (
     args: z.infer<T>,
-    ...deps: (McpMeshAgent | null)[]
+    ...deps: (McpMeshTool | null)[]
   ) => Promise<string> | string;
 }
 
 /**
- * Proxy for calling remote MCP agents.
+ * Proxy for calling remote MCP tools.
  *
- * Dependencies are injected as McpMeshAgent instances.
+ * Dependencies are injected as McpMeshTool instances.
  * Always check for null (dependency may be unavailable).
  *
  * @example
  * ```typescript
  * execute: async (
  *   { query },
- *   dateSvc: McpMeshAgent | null = null
+ *   dateTool: McpMeshTool | null = null
  * ) => {
- *   if (!dateSvc) return "Date service unavailable";
- *   const date = await dateSvc({ format: "ISO" });
+ *   if (!dateTool) return "Date service unavailable";
+ *   const date = await dateTool({ format: "ISO" });
  *   return `Today is ${date}`;
  * }
  * ```
  */
-export interface McpMeshAgent {
+export interface McpMeshTool {
   /**
    * Call the bound tool with arguments.
    * Returns parsed result (object/array) or raw string if not JSON.
@@ -232,6 +232,11 @@ export interface McpMeshAgent {
    */
   readonly isAvailable: boolean;
 }
+
+/**
+ * @deprecated Use McpMeshTool instead. McpMeshAgent will be removed in a future version.
+ */
+export type McpMeshAgent = McpMeshTool;
 
 /**
  * Internal metadata for a registered tool.

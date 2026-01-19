@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshAgent
+from mcp_mesh import McpMeshTool
 
 
 @mesh.agent(name="system-agent", http_port=9091)
@@ -158,7 +158,7 @@ def analyze_storage_and_os() -> dict[str, Any]:  # Completely different function
     version="1.0.0",
 )
 def perform_health_diagnostic(
-    date_service: McpMeshAgent | None = None,
+    date_service: McpMeshTool | None = None,
 ) -> dict[str, Any]:
     """
     Get system status including current time.
@@ -207,7 +207,7 @@ def perform_health_diagnostic(
     version="1.0.0",
 )
 def generate_comprehensive_report(
-    weather_service: McpMeshAgent | None = None,
+    weather_service: McpMeshTool | None = None,
 ) -> dict[str, Any]:
     """
     Generate a comprehensive system report with weather information.

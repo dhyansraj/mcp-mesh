@@ -35,7 +35,7 @@ npm install -D @types/express tsx
 ```typescript
 import express from "express";
 import { mesh } from "@mcpmesh/sdk";
-import type { McpMeshAgent } from "@mcpmesh/sdk";
+import type { McpMeshTool } from "@mcpmesh/sdk";
 
 const app = express();
 app.use(express.json());
@@ -98,7 +98,7 @@ app.post(
 ```typescript
 import express, { Request, Response } from "express";
 import { mesh } from "@mcpmesh/sdk";
-import type { McpMeshAgent } from "@mcpmesh/sdk";
+import type { McpMeshTool } from "@mcpmesh/sdk";
 
 const app = express();
 app.use(express.json());

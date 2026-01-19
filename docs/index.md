@@ -28,7 +28,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 
     @app.tool()
     @mesh.tool(capability="greeting", dependencies=["date_service"])
-    async def greet(date_service: mesh.McpMeshAgent = None):
+    async def greet(date_service: mesh.McpMeshTool = None):
         return f"Hello! {await date_service()}"
 
     @mesh.agent(name="my-service", auto_run=True)

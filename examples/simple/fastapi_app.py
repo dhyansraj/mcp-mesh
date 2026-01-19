@@ -24,7 +24,7 @@ from typing import Optional
 import mesh
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 # Create FastAPI app
 app = FastAPI(
@@ -68,7 +68,7 @@ async def health():
 async def upload_resume(
     request: Request,
     file: UploadFile = File(...),
-    time_agent: McpMeshAgent = None,  # Will be injected by MCP Mesh (time_service)
+    time_agent: McpMeshTool = None,  # Will be injected by MCP Mesh (time_service)
 ):
     """
     Upload and process a resume file using dependency injection.
@@ -139,8 +139,8 @@ async def upload_resume(
 @app.get("/api/v1/benchmark-services")
 @mesh.route(dependencies=["time_service", "system_info_service"])
 async def benchmark_services(
-    time_agent: McpMeshAgent = None,  # Will be injected by MCP Mesh (time_service)
-    system_info_agent: McpMeshAgent = None,  # Will be injected by MCP Mesh (system_info_service)
+    time_agent: McpMeshTool = None,  # Will be injected by MCP Mesh (time_service)
+    system_info_agent: McpMeshTool = None,  # Will be injected by MCP Mesh (system_info_service)
 ):
     """
     Benchmark and time both time_service and system_info_service calls.
@@ -248,7 +248,7 @@ async def benchmark_services(
 async def process_document(
     request: Request,
     document_type: str = "text",
-    system_info_agent: McpMeshAgent = None,  # Will be injected by MCP Mesh (system_info_service)
+    system_info_agent: McpMeshTool = None,  # Will be injected by MCP Mesh (system_info_service)
 ):
     """
     Generic document processing endpoint.

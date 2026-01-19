@@ -63,7 +63,7 @@ def orchestrate_analysis(
     description="Test self-dependency with @mesh.llm decorated function",
 )
 async def test_self_dependency_llm(
-    orchestrate_analysis: mesh.McpMeshAgent | None = None,
+    orchestrate_analysis: mesh.McpMeshTool | None = None,
 ) -> SelfDepTestResult:
     """
     Test self-dependency injection with @mesh.llm decorated functions.

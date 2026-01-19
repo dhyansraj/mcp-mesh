@@ -36,7 +36,7 @@ pip install mcp-mesh
 ```python
 from fastapi import APIRouter, Request
 import mesh
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 router = APIRouter()
 
@@ -45,7 +45,7 @@ router = APIRouter()
 async def chat(
     request: Request,
     message: str,
-    avatar_agent: McpMeshAgent = None,  # Injected by mesh
+    avatar_agent: McpMeshTool = None,  # Injected by mesh
 ):
     result = await avatar_agent(
         message=message,
@@ -61,8 +61,8 @@ async def chat(
 ```python
 @mesh.route(dependencies=["user_service", "notification_service"])
 async def handler(
-    user_svc: McpMeshAgent = None,
-    notif_svc: McpMeshAgent = None,
+    user_svc: McpMeshTool = None,
+    notif_svc: McpMeshTool = None,
 ):
     ...
 ```
@@ -75,8 +75,8 @@ async def handler(
     {"capability": "storage", "tags": ["-deprecated"]},
 ])
 async def handler(
-    llm_agent: McpMeshAgent = None,
-    storage_agent: McpMeshAgent = None,
+    llm_agent: McpMeshTool = None,
+    storage_agent: McpMeshTool = None,
 ):
     ...
 ```
@@ -86,7 +86,7 @@ async def handler(
 ```python
 from fastapi import FastAPI, APIRouter, Request, HTTPException
 import mesh
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 from pydantic import BaseModel
 
 app = FastAPI(title="My Backend")
@@ -105,7 +105,7 @@ class ChatResponse(BaseModel):
 async def chat_endpoint(
     request: Request,
     chat_req: ChatRequest,
-    avatar_agent: McpMeshAgent = None,
+    avatar_agent: McpMeshTool = None,
 ):
     """Chat endpoint that delegates to mesh avatar agent."""
     if avatar_agent is None:
@@ -128,7 +128,7 @@ async def get_history(
     request: Request,
     avatar_id: str = "default",
     limit: int = 50,
-    history_agent: McpMeshAgent = None,
+    history_agent: McpMeshTool = None,
 ):
     """Get conversation history from mesh agent."""
     result = await history_agent(
@@ -155,7 +155,7 @@ The backend will:
 
 1. Connect to the mesh registry on startup
 2. Resolve dependencies declared in `@mesh.route`
-3. Inject `McpMeshAgent` proxies into route handlers
+3. Inject `McpMeshTool` proxies into route handlers
 4. Re-resolve on topology changes (auto-rewiring)
 
 ## Key Differences from @mesh.tool

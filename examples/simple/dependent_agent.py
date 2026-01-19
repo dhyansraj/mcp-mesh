@@ -33,8 +33,8 @@ app = FastMCP("Dependent Service")
 async def generate_report(
     title: str,
     content: str = "Sample content",
-    time_service_local: mesh.McpMeshAgent = None,
-    time_service_utc: mesh.McpMeshAgent = None,
+    time_service_local: mesh.McpMeshTool = None,
+    time_service_utc: mesh.McpMeshTool = None,
 ) -> dict:
     """Generate a timestamped report with both local and UTC timestamps."""
     # Get timestamps from both injected time services
@@ -56,7 +56,7 @@ async def generate_report(
 @app.tool()
 @mesh.tool(capability="analysis_service", dependencies=["time_service"])
 async def analyze_data(
-    data: list, analysis_type: str = "basic", time_service: mesh.McpMeshAgent = None
+    data: list, analysis_type: str = "basic", time_service: mesh.McpMeshTool = None
 ) -> dict:
     """Analyze data with timestamp from time service."""
     # Get timestamp from the injected time service using natural async pattern
@@ -101,7 +101,7 @@ async def analyze_data(
 async def generate_comprehensive_report(
     report_title: str,
     include_system_data: bool = True,
-    system_info_service: mesh.McpMeshAgent = None,
+    system_info_service: mesh.McpMeshTool = None,
 ) -> dict:
     """Generate a comprehensive report with system information from FastMCP service."""
     # Get enriched system info from FastMCP service (which calls system agent)

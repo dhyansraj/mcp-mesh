@@ -18,7 +18,7 @@ Key terms used throughout MCP Mesh documentation:
 | **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
 | **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
 | **Heartbeat**                    | Periodic signal sent by agents to the registry to indicate they're alive. Default interval is 15 seconds.                                                                                                                                                                                  |
-| **Proxy**                        | An injected object (`McpMeshAgent`) that transparently handles communication with remote tools. You call it like a function; MCP Mesh handles the rest.                                                                                                                                    |
+| **Proxy**                        | An injected object (`McpMeshTool`) that transparently handles communication with remote tools. You call it like a function; MCP Mesh handles the rest.                                                                                                                                    |
 | **Tag**                          | Metadata attached to tools for filtering during dependency resolution. Supports `+` (prefer) and `-` (avoid) operators.                                                                                                                                                                    |
 | **MCP (Model Context Protocol)** | The underlying protocol used for tool communication. MCP Mesh tools are standard MCP tools and can be invoked via HTTP using MCP's `tools/list` and `tools/call` endpoints.                                                                                                                |
 
@@ -196,7 +196,7 @@ An agent is a Python or TypeScript application that:
         capability="greeting",
         dependencies=["time_service"]
     )
-    async def greet(name: str, time_service: mesh.McpMeshAgent = None):
+    async def greet(name: str, time_service: mesh.McpMeshTool = None):
         """Greet someone with the current time."""
         current_time = await time_service() if time_service else "unknown"
         return f"Hello {name}! The time is {current_time}"
@@ -299,7 +299,7 @@ When a tool declares dependencies, MCP Mesh automatically resolves and injects t
 async def update_emotion(
     user_email: str,
     avatar_id: str,
-    analyze: mesh.McpMeshAgent = None,  # Injected automatically
+    analyze: mesh.McpMeshTool = None,  # Injected automatically
 ) -> dict:
     """Update emotion state using LLM analysis."""
 
@@ -317,7 +317,7 @@ async def update_emotion(
 
 1. Agent starts and registers its capabilities with the registry
 2. MCP Mesh discovers agents that provide required dependencies
-3. Proxy objects (`mesh.McpMeshAgent`) are injected at runtime
+3. Proxy objects (`mesh.McpMeshTool`) are injected at runtime
 4. Calling the proxy transparently invokes the remote tool via MCP
 5. You don't manage URLs, connections, retries, or failures
 
@@ -504,7 +504,7 @@ The `@mesh.route` decorator lets FastAPI endpoints call MCP tools as regular Pyt
 
 ```python
 from fastapi import APIRouter, Request
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -514,7 +514,7 @@ async def chat_completions(
     request: Request,
     chat_request: ChatCompletionRequest,
     avatar_id: str = "maya-creative",
-    avatar_agent: McpMeshAgent = None,  # Injected by @mesh.route
+    avatar_agent: McpMeshTool = None,  # Injected by @mesh.route
 ):
     """OpenAI-compatible chat endpoint."""
 

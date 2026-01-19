@@ -30,7 +30,7 @@
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import type { DependencySpec, McpMeshAgent, DependencyKwargs } from "./types.js";
+import type { DependencySpec, McpMeshTool, DependencyKwargs } from "./types.js";
 import { normalizeDependency } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
 
@@ -44,7 +44,7 @@ let expressAutoDetected = false;
  * Dependencies object passed to route handlers.
  * Keys are capability names, values are proxy instances (or null if unavailable).
  */
-export type RouteDependencies = Record<string, McpMeshAgent | null>;
+export type RouteDependencies = Record<string, McpMeshTool | null>;
 
 /**
  * Route handler function with dependency injection.
@@ -106,7 +106,7 @@ export interface RouteMetadata {
 export class RouteRegistry {
   private static instance: RouteRegistry | null = null;
   private routes: Map<string, RouteMetadata> = new Map();
-  private resolvedDeps: Map<string, McpMeshAgent> = new Map();
+  private resolvedDeps: Map<string, McpMeshTool> = new Map();
   private routeIdMapping: Map<string, string> = new Map(); // old ID → new ID
   private routeCounter = 0;
 
@@ -180,7 +180,7 @@ export class RouteRegistry {
    * Update resolved dependency for a route.
    * Handles old route IDs that have been remapped after introspection.
    */
-  setDependency(routeId: string, depIndex: number, proxy: McpMeshAgent): void {
+  setDependency(routeId: string, depIndex: number, proxy: McpMeshTool): void {
     // Resolve to current route ID in case this is an old ID from Rust core
     const actualId = this.routeIdMapping.get(routeId) || routeId;
     const depKey = `${actualId}:dep_${depIndex}`;
@@ -202,7 +202,7 @@ export class RouteRegistry {
    * Get resolved dependency for a route.
    * Handles old route IDs that have been remapped after introspection.
    */
-  getDependency(routeId: string, depIndex: number): McpMeshAgent | null {
+  getDependency(routeId: string, depIndex: number): McpMeshTool | null {
     // Resolve to current route ID in case this is an old ID from Rust core
     const actualId = this.routeIdMapping.get(routeId) || routeId;
     const depKey = `${actualId}:dep_${depIndex}`;

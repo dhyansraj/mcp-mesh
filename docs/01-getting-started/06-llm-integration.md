@@ -226,7 +226,7 @@ class EnrichedResult(BaseModel):
 async def analyze_with_enrichment(
     query: str,
     llm: mesh.MeshLlmAgent = None,        # ← Injected LLM
-    date_service: mesh.McpMeshAgent = None  # ← Injected MCP agent
+    date_service: mesh.McpMeshTool = None  # ← Injected MCP agent
 ) -> EnrichedResult:
     """Both LLM and MCP agents injected!"""
 

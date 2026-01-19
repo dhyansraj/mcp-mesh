@@ -52,7 +52,7 @@ class AnalysisResponse(BaseModel):
 )
 async def smart_analyze(
     query: str,
-    time_service: mesh.McpMeshAgent = None
+    time_service: mesh.McpMeshTool = None
 ) -> AnalysisResponse:
 
     timestamp = await time_service()
@@ -95,7 +95,7 @@ async def smart_analyze(
 )
 async def generate_simple_report(
     title: str,
-    time_service: mesh.McpMeshAgent = None,
+    time_service: mesh.McpMeshTool = None,
 ) -> dict:
     """Generate a simple timestamped report using time_service dependency."""
     timestamp = "unknown"

@@ -38,7 +38,7 @@ MCP Mesh uses a unified proxy system:
 ### Simple Call
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     if helper:
         result = await helper()  # Call default tool
 ```
@@ -46,7 +46,7 @@ async def my_tool(helper: mesh.McpMeshAgent = None):
 ### Named Tool Call
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     if helper:
         result = await helper.call_tool("specific_tool", {"arg": "value"})
 ```
@@ -54,7 +54,7 @@ async def my_tool(helper: mesh.McpMeshAgent = None):
 ### With Arguments
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     if helper:
         result = await helper(city="London", units="metric")
 ```
@@ -81,7 +81,7 @@ Configure via `dependency_kwargs` in the decorator:
         }
     },
 )
-async def my_tool(slow_service: mesh.McpMeshAgent = None):
+async def my_tool(slow_service: mesh.McpMeshTool = None):
     result = await slow_service(data="payload")
     ...
 ```
@@ -110,7 +110,7 @@ Enable streaming for real-time data:
         "stream_service": {"streaming": True}
     },
 )
-async def process_stream(stream_svc: mesh.McpMeshAgent = None):
+async def process_stream(stream_svc: mesh.McpMeshTool = None):
     async for chunk in stream_svc.stream("data"):
         process(chunk)
 ```
@@ -129,7 +129,7 @@ For stateful services, ensure requests go to the same instance:
         }
     },
 )
-async def stateful_operation(svc: mesh.McpMeshAgent = None):
+async def stateful_operation(svc: mesh.McpMeshTool = None):
     # All calls routed to same instance
     await svc.initialize()
     result = await svc.process()
@@ -141,7 +141,7 @@ async def stateful_operation(svc: mesh.McpMeshAgent = None):
 Proxies handle errors gracefully:
 
 ```python
-async def my_tool(helper: mesh.McpMeshAgent = None):
+async def my_tool(helper: mesh.McpMeshTool = None):
     if helper is None:
         return "Service unavailable"
 
