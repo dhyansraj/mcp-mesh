@@ -1753,7 +1753,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		// Check if it's a database lock error
 		if isDatabaseLockError(err) {
 			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
 			continue
 		}
 
@@ -2153,7 +2153,7 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		if isDatabaseLockError(err) {
 			lastErr = err
 			s.logger.Warning("Database lock on unregister attempt %d for agent %s, retrying...", attempt+1, agentID)
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
 			continue
 		}
 
@@ -2296,7 +2296,7 @@ func (s *EntService) markAgentStaleWithRetry(ctx context.Context, staleAgent *en
 		if isDatabaseLockError(err) {
 			lastErr = err
 			s.logger.Warning("Startup cleanup: database lock on attempt %d for agent %s, retrying...", attempt+1, staleAgent.ID)
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
 			continue
 		}
 
@@ -2307,7 +2307,9 @@ func (s *EntService) markAgentStaleWithRetry(ctx context.Context, staleAgent *en
 	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
 }
 
-// markAgentStaleAttempt performs a single attempt to mark an agent as stale
+// markAgentStaleAttempt performs a single attempt to mark an agent as stale using optimistic locking.
+// Uses conditional update to prevent overwriting concurrent heartbeats - only updates if the agent
+// hasn't been modified since we queried it.
 func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.Agent, threshold int) error {
 	now := time.Now().UTC()
 
@@ -2318,7 +2320,28 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 	}
 	defer tx.Rollback()
 
-	// Create unhealthy event with startup cleanup reason
+	// Optimistic conditional update - only update if agent hasn't changed since we queried it.
+	// This prevents overwriting a concurrent heartbeat that may have updated the agent.
+	affected, err := tx.Agent.
+		Update().
+		Where(
+			agent.IDEQ(staleAgent.ID),
+			agent.UpdatedAtEQ(staleAgent.UpdatedAt),
+			agent.StatusEQ(staleAgent.Status),
+		).
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(now).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update agent: %w", err)
+	}
+
+	// If no rows affected, agent was modified concurrently (likely by a heartbeat) - no-op
+	if affected == 0 {
+		return nil
+	}
+
+	// Only create unhealthy event if the update actually applied
 	eventData := map[string]interface{}{
 		"agent_type":        staleAgent.AgentType.String(),
 		"name":              staleAgent.Name,
@@ -2336,17 +2359,6 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create event: %w", err)
-	}
-
-	// Update agent status to unhealthy, preserving original updated_at
-	_, err = tx.Agent.
-		Update().
-		Where(agent.IDEQ(staleAgent.ID)).
-		SetStatus(agent.StatusUnhealthy).
-		SetUpdatedAt(staleAgent.UpdatedAt). // Preserve original timestamp
-		Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to update agent: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
