@@ -1751,7 +1751,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		}
 
 		// Check if it's a database lock error
-		if strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "SQLITE_BUSY") {
+		if isDatabaseLockError(err) {
 			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
 			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
 			continue
@@ -1937,6 +1937,15 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 }
 
 // Helper functions
+
+// isDatabaseLockError checks if an error is a SQLite database lock error
+func isDatabaseLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") || strings.Contains(errStr, "SQLITE_BUSY")
+}
 
 func getStringFromMap(m map[string]interface{}, key, defaultValue string) string {
 	if value, exists := m[key]; exists {
@@ -2141,7 +2150,7 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 		}
 
 		// Check if it's a database lock error - retry with backoff
-		if strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "SQLITE_BUSY") {
+		if isDatabaseLockError(err) {
 			lastErr = err
 			s.logger.Warning("Database lock on unregister attempt %d for agent %s, retrying...", attempt+1, agentID)
 			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
@@ -2257,58 +2266,13 @@ func (s *EntService) CleanupStaleAgentsOnStartup(ctx context.Context) (int, erro
 
 	s.logger.Info("Startup cleanup: found %d stale agents (threshold: %ds)", len(staleAgents), threshold)
 
-	// Mark each stale agent as unhealthy and create events
+	// Mark each stale agent as unhealthy with retry logic for DB locks
 	var cleaned int
-	now := time.Now().UTC()
-
 	for _, staleAgent := range staleAgents {
-		// Start transaction for atomic operation
-		tx, err := s.entDB.Client.Tx(ctx)
-		if err != nil {
-			s.logger.Warning("Startup cleanup: failed to start transaction for agent %s: %v", staleAgent.ID, err)
+		if err := s.markAgentStaleWithRetry(ctx, staleAgent, threshold); err != nil {
+			s.logger.Warning("Startup cleanup: failed to mark agent %s as unhealthy: %v", staleAgent.ID, err)
 			continue
 		}
-
-		// Create unhealthy event with startup cleanup reason
-		eventData := map[string]interface{}{
-			"agent_type":        staleAgent.AgentType.String(),
-			"name":              staleAgent.Name,
-			"previous_status":   staleAgent.Status.String(),
-			"reason":            "stale_on_startup",
-			"last_heartbeat":    staleAgent.UpdatedAt.Format(time.RFC3339),
-			"threshold_seconds": threshold,
-		}
-
-		_, err = tx.RegistryEvent.Create().
-			SetEventType(registryevent.EventTypeUnhealthy).
-			SetAgentID(staleAgent.ID).
-			SetTimestamp(now).
-			SetData(eventData).
-			Save(ctx)
-		if err != nil {
-			tx.Rollback()
-			s.logger.Warning("Startup cleanup: failed to create event for agent %s: %v", staleAgent.ID, err)
-			continue
-		}
-
-		// Update agent status to unhealthy, preserving original updated_at
-		_, err = tx.Agent.
-			Update().
-			Where(agent.IDEQ(staleAgent.ID)).
-			SetStatus(agent.StatusUnhealthy).
-			SetUpdatedAt(staleAgent.UpdatedAt). // Preserve original timestamp
-			Save(ctx)
-		if err != nil {
-			tx.Rollback()
-			s.logger.Warning("Startup cleanup: failed to update agent %s: %v", staleAgent.ID, err)
-			continue
-		}
-
-		if err := tx.Commit(); err != nil {
-			s.logger.Warning("Startup cleanup: failed to commit for agent %s: %v", staleAgent.ID, err)
-			continue
-		}
-
 		s.logger.Info("Startup cleanup: marked agent '%s' (%s) as unhealthy (last heartbeat: %v)",
 			staleAgent.Name, staleAgent.ID, staleAgent.UpdatedAt)
 		cleaned++
@@ -2316,6 +2280,81 @@ func (s *EntService) CleanupStaleAgentsOnStartup(ctx context.Context) (int, erro
 
 	s.logger.Info("Startup cleanup: marked %d/%d stale agents as unhealthy", cleaned, len(staleAgents))
 	return cleaned, nil
+}
+
+// markAgentStaleWithRetry marks a single agent as stale/unhealthy with retry logic for DB locks
+func (s *EntService) markAgentStaleWithRetry(ctx context.Context, staleAgent *ent.Agent, threshold int) error {
+	const maxRetries = 5
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.markAgentStaleAttempt(ctx, staleAgent, threshold)
+		if err == nil {
+			return nil // Success
+		}
+
+		// Check if it's a database lock error - retry with backoff
+		if isDatabaseLockError(err) {
+			lastErr = err
+			s.logger.Warning("Startup cleanup: database lock on attempt %d for agent %s, retrying...", attempt+1, staleAgent.ID)
+			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			continue
+		}
+
+		// Non-lock error, don't retry
+		return err
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+// markAgentStaleAttempt performs a single attempt to mark an agent as stale
+func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.Agent, threshold int) error {
+	now := time.Now().UTC()
+
+	// Start transaction for atomic operation
+	tx, err := s.entDB.Client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Create unhealthy event with startup cleanup reason
+	eventData := map[string]interface{}{
+		"agent_type":        staleAgent.AgentType.String(),
+		"name":              staleAgent.Name,
+		"previous_status":   staleAgent.Status.String(),
+		"reason":            "stale_on_startup",
+		"last_heartbeat":    staleAgent.UpdatedAt.Format(time.RFC3339),
+		"threshold_seconds": threshold,
+	}
+
+	_, err = tx.RegistryEvent.Create().
+		SetEventType(registryevent.EventTypeUnhealthy).
+		SetAgentID(staleAgent.ID).
+		SetTimestamp(now).
+		SetData(eventData).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create event: %w", err)
+	}
+
+	// Update agent status to unhealthy, preserving original updated_at
+	_, err = tx.Agent.
+		Update().
+		Where(agent.IDEQ(staleAgent.ID)).
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(staleAgent.UpdatedAt). // Preserve original timestamp
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update agent: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests
