@@ -39,7 +39,7 @@ app = FastMCP("My Agent")
 # Define a tool with automatic dependency injection
 @app.tool()
 @mesh.tool(capability="greeting", dependencies=["time_service"])
-async def greet(name: str, time_service: mesh.McpMeshAgent = None):
+async def greet(name: str, time_service: mesh.McpMeshTool = None):
     current_time = await time_service() if time_service else "unknown"
     return f"Hello {name}! The time is {current_time}"
 
@@ -98,7 +98,7 @@ That's a complete agent with:
     capability="analyze_data",
     dependencies=["db_service", "ml_service"]
 )
-async def analyze(data, db_service: mesh.McpMeshAgent = None, ml_service: mesh.McpMeshAgent = None):
+async def analyze(data, db_service: mesh.McpMeshTool = None, ml_service: mesh.McpMeshTool = None):
     # db_service and ml_service are automatically injected
     # MCP Mesh finds them, connects them, handles failures
     records = await db_service(query=data) if db_service else {}

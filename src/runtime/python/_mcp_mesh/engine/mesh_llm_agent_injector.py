@@ -380,7 +380,7 @@ class MeshLlmAgentInjector(BaseInjector):
         """
         Create wrapper that injects MeshLlmAgent into function parameters.
 
-        Like McpMeshAgent injection, this creates a wrapper at decorator time with llm_agent=None,
+        Like McpMeshTool injection, this creates a wrapper at decorator time with llm_agent=None,
         which gets updated during heartbeat when tools arrive from registry.
 
         Args:

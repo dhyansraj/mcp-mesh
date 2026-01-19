@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class UnifiedMCPProxy:
     """Unified MCP proxy using FastMCP's built-in client.
 
-    This provides the implementation for McpMeshAgent type parameters,
+    This provides the implementation for McpMeshTool type parameters,
     offering all MCP protocol features using FastMCP's superior client.
 
     Features:

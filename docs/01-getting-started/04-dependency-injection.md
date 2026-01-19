@@ -7,7 +7,7 @@
 MCP Mesh's **dual decorator pattern** provides powerful dependency injection:
 
 - 🔗 **Smart capability matching** using tags and metadata
-- 🎯 **Type-safe injection** with `mesh.McpMeshAgent` or flexible `Any` types
+- 🎯 **Type-safe injection** with `mesh.McpMeshTool` or flexible `Any` types
 - 🏷️ **Tag-based resolution** for intelligent service selection
 - 📞 **Seamless function calls** - remote functions work like local ones
 - 🔄 **Automatic discovery** - no configuration files or service URLs needed
@@ -47,7 +47,7 @@ Declare what capabilities you need:
     capability="weather_advisor",
     dependencies=["date_service"]  # ← Simple capability name
 )
-def get_weather_advice(date_service: mesh.McpMeshAgent = None) -> str:
+def get_weather_advice(date_service: mesh.McpMeshTool = None) -> str:
     if date_service:
         current_date = date_service()  # Call remote function
         return f"Weather advice for {current_date}"
@@ -71,8 +71,8 @@ Use tags for intelligent service selection:
     ]
 )
 def create_system_report(
-    date_service: mesh.McpMeshAgent = None,
-    info: mesh.McpMeshAgent = None  # Gets general system info
+    date_service: mesh.McpMeshTool = None,
+    info: mesh.McpMeshTool = None  # Gets general system info
 ) -> dict:
     report = {"generated_at": "unknown", "system_info": "unavailable"}
 
@@ -133,7 +133,7 @@ Now other agents can request specific info types:
         "tags": ["system", "general"]  # Matches first service
     }]
 )
-def get_general_status(info: mesh.McpMeshAgent = None):
+def get_general_status(info: mesh.McpMeshTool = None):
     return info()  # Returns server_name, uptime, version
 
 # Gets DISK info (not general info)
@@ -143,13 +143,13 @@ def get_general_status(info: mesh.McpMeshAgent = None):
         "tags": ["system", "disk"]  # Matches second service
     }]
 )
-def get_storage_status(info: mesh.McpMeshAgent = None):
+def get_storage_status(info: mesh.McpMeshTool = None):
     return info()  # Returns disk_usage, filesystem, mount_points
 ```
 
 ## Type Safety Options
 
-### Option 1: Type-Safe with `mesh.McpMeshAgent`
+### Option 1: Type-Safe with `mesh.McpMeshTool`
 
 ```python
 @app.tool()
@@ -159,8 +159,8 @@ def get_storage_status(info: mesh.McpMeshAgent = None):
 )
 def analyze_data(
     data: list,
-    time_service: mesh.McpMeshAgent = None,  # Type-safe
-    data_service: mesh.McpMeshAgent = None   # IDE support
+    time_service: mesh.McpMeshTool = None,  # Type-safe
+    data_service: mesh.McpMeshTool = None   # IDE support
 ) -> dict:
     timestamp = time_service() if time_service else "unknown"
     processed = data_service(data) if data_service else data
@@ -202,7 +202,7 @@ Agents can depend on their own capabilities:
     capability="health_check",
     dependencies=["date_service"]  # Uses own date_service
 )
-def perform_health_check(date_service: mesh.McpMeshAgent = None) -> dict:
+def perform_health_check(date_service: mesh.McpMeshTool = None) -> dict:
     status = {"status": "healthy", "memory": "normal"}
 
     if date_service:
@@ -230,9 +230,9 @@ def perform_health_check(date_service: mesh.McpMeshAgent = None) -> dict:
     ]
 )
 def create_full_report(
-    date_service: mesh.McpMeshAgent = None,
-    info: mesh.McpMeshAgent = None,      # Gets general info
-    disk_info: mesh.McpMeshAgent = None  # Gets disk info
+    date_service: mesh.McpMeshTool = None,
+    info: mesh.McpMeshTool = None,      # Gets general info
+    disk_info: mesh.McpMeshTool = None  # Gets disk info
 ) -> dict:
     # This function gets THREE injected services!
     return {
@@ -355,7 +355,7 @@ curl -s -X POST http://localhost:9090/mcp \
 
 - **Familiar FastMCP** - Keep using `@app.tool()` decorators
 - **Enhanced capabilities** - Add `@mesh.tool()` for orchestration
-- **Type safety** - Choose between `mesh.McpMeshAgent` and `Any`
+- **Type safety** - Choose between `mesh.McpMeshTool` and `Any`
 - **Smart resolution** - Tag-based service selection
 
 ### For Operations
@@ -385,7 +385,7 @@ meshctl status
 
 ### Type Errors
 
-- Use `mesh.McpMeshAgent` for better IDE support
+- Use `mesh.McpMeshTool` for better IDE support
 - Use `Any` for maximum flexibility
 - Always check if dependency is `None` before calling
 

@@ -22,7 +22,7 @@ app = FastMCP("FastMCP Service")
 @app.prompt()
 @mesh.tool(capability="prompt_service", dependencies=["time_service"])
 def analysis_prompt(
-    topic: str, depth: str = "basic", time_service: mesh.McpMeshAgent = None
+    topic: str, depth: str = "basic", time_service: mesh.McpMeshTool = None
 ) -> str:
     """Generate analysis prompt with current time."""
     timestamp = time_service() if time_service else "unknown"
@@ -53,7 +53,7 @@ def get_current_time() -> str:
 @app.tool()
 @mesh.tool(capability="math_service", dependencies=["time_service"])
 def calculate_with_timestamp(
-    a: float, b: float, operation: str = "add", time_service: mesh.McpMeshAgent = None
+    a: float, b: float, operation: str = "add", time_service: mesh.McpMeshTool = None
 ) -> dict:
     """Perform math operation with timestamp from time service."""
     if operation == "add":
@@ -131,7 +131,7 @@ async def service_config() -> str:
 @app.resource("status://health/{status_type}")
 @mesh.tool(capability="status_service", dependencies=["time_service"])
 async def health_status(
-    status_type: str, time_service: mesh.McpMeshAgent = None
+    status_type: str, time_service: mesh.McpMeshTool = None
 ) -> str:
     """Health status information."""
     timestamp = time_service() if time_service else "unknown"

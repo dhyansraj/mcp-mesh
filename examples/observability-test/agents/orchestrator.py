@@ -27,9 +27,9 @@ app = FastMCP("Orchestrator")
 )
 async def orchestrate_workflow(
     workflow_id: str,
-    processor: mesh.McpMeshAgent = None,
-    status_checker: mesh.McpMeshAgent = None,
-    metrics_checker: mesh.McpMeshAgent = None,
+    processor: mesh.McpMeshTool = None,
+    status_checker: mesh.McpMeshTool = None,
+    metrics_checker: mesh.McpMeshTool = None,
 ) -> dict:
     """
     Main orchestration tool that demonstrates tracing hierarchy.
@@ -98,7 +98,7 @@ async def orchestrate_workflow(
 )
 async def simple_chain(
     data: str,
-    processor: mesh.McpMeshAgent = None,
+    processor: mesh.McpMeshTool = None,
 ) -> dict:
     """Simple single chain call for basic testing."""
     logger.info(f"Starting simple_chain with data: {data}")

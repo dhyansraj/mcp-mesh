@@ -70,8 +70,8 @@ def say_hello(name: str = "World") -> str:
     dependencies=["date_service", "location_service"]  # Simple string array
 )
 def get_weather(
-    date_service: mesh.McpMeshAgent = None,
-    location_service: mesh.McpMeshAgent = None
+    date_service: mesh.McpMeshTool = None,
+    location_service: mesh.McpMeshTool = None
 ) -> str:
     date = date_service() if date_service else "unknown"
     location = location_service() if location_service else "unknown"
@@ -101,9 +101,9 @@ def get_weather(
     version="2.1.0"
 )
 def get_advanced_weather(
-    date_service: mesh.McpMeshAgent = None,
-    location_service: mesh.McpMeshAgent = None,
-    info: mesh.McpMeshAgent = None
+    date_service: mesh.McpMeshTool = None,
+    location_service: mesh.McpMeshTool = None,
+    info: mesh.McpMeshTool = None
 ) -> dict:
     """Advanced weather with multiple tagged dependencies."""
     return {
@@ -199,7 +199,7 @@ def claude_experimental(): return "Experimental Claude features"
         ]
     }]
 )
-async def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
+async def intelligent_chat(llm_service: mesh.McpMeshTool = None) -> str:
     """
     Smart chat that:
     - Requires Claude models
@@ -246,7 +246,7 @@ async def intelligent_chat(llm_service: mesh.McpMeshAgent = None) -> str:
         ]
     }]
 )
-async def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
+async def cost_conscious_analysis(llm_service: mesh.McpMeshTool = None):
     """Cost-conscious analysis that avoids premium pricing."""
     return await llm_service() if llm_service else "Budget service unavailable"
 
@@ -264,7 +264,7 @@ async def cost_conscious_analysis(llm_service: mesh.McpMeshAgent = None):
         ]
     }]
 )
-async def production_workflow(database_service: mesh.McpMeshAgent = None):
+async def production_workflow(database_service: mesh.McpMeshTool = None):
     """Production workflow with strict service requirements."""
     return await database_service(query="SELECT * FROM users") if database_service else None
 ```
@@ -333,8 +333,8 @@ def get_disk_info():
     ]
 )
 def create_report(
-    health_info: mesh.McpMeshAgent = None,
-    disk_info: mesh.McpMeshAgent = None
+    health_info: mesh.McpMeshTool = None,
+    disk_info: mesh.McpMeshTool = None
 ):
     return {
         "health": health_info() if health_info else {},
@@ -557,8 +557,8 @@ async def enhanced_data_processor(
     data_batch: list,
     processing_type: str = "standard",
     # Injected dependencies
-    auth_service: mesh.McpMeshAgent = None,
-    session_manager: mesh.McpMeshAgent = None
+    auth_service: mesh.McpMeshTool = None,
+    session_manager: mesh.McpMeshTool = None
 ) -> AsyncGenerator[dict, None]:
     """
     Enhanced data processor with full advanced configuration.
@@ -669,7 +669,7 @@ app = FastMCP("Weather Service")
     version="1.2.0",
     dependencies=["location_service"]
 )
-async def get_current_weather(location_service: mesh.McpMeshAgent = None):
+async def get_current_weather(location_service: mesh.McpMeshTool = None):
     location = await location_service() if location_service else "Unknown"
     return f"Current weather in {location}: 22°C, Sunny"
 
@@ -679,7 +679,7 @@ async def get_current_weather(location_service: mesh.McpMeshAgent = None):
     tags=["weather", "ai"],
     dependencies=["current_weather"]
 )
-async def weather_analysis_prompt(current_weather: mesh.McpMeshAgent = None):
+async def weather_analysis_prompt(current_weather: mesh.McpMeshTool = None):
     weather = await current_weather() if current_weather else "No data"
     return f"Analyze this weather: {weather}"
 
@@ -762,7 +762,7 @@ def get_timestamp():
 )
 def hello_with_log(
     name: str,
-    timestamp: mesh.McpMeshAgent = None
+    timestamp: mesh.McpMeshTool = None
 ) -> str:
     time = timestamp() if timestamp else "unknown"
     greeting = f"Hello {name}!"
@@ -808,7 +808,7 @@ def connect_database():
     dependencies=["database"],
     tags=["data", "layer"]
 )
-async def access_data(database: mesh.McpMeshAgent = None):
+async def access_data(database: mesh.McpMeshTool = None):
     db = await database() if database else None
     return f"data_from_{db}"
 
@@ -826,8 +826,8 @@ async def access_data(database: mesh.McpMeshAgent = None):
     tags=["business", "api"]
 )
 async def process_business_logic(
-    data_access: mesh.McpMeshAgent = None,
-    cache: mesh.McpMeshAgent = None
+    data_access: mesh.McpMeshTool = None,
+    cache: mesh.McpMeshTool = None
 ):
     data = await data_access() if data_access else "no_data"
     cached = await cache() if cache else "no_cache"
@@ -836,11 +836,11 @@ async def process_business_logic(
 
 ## Dependency Injection Types
 
-MCP Mesh provides `mesh.McpMeshAgent` as the proxy type for all dependency injection. This type handles both simple tool calls and advanced MCP protocol operations.
+MCP Mesh provides `mesh.McpMeshTool` as the proxy type for all dependency injection. This type handles both simple tool calls and advanced MCP protocol operations.
 
-### McpMeshAgent - The Universal Proxy
+### McpMeshTool - The Universal Proxy
 
-Use `mesh.McpMeshAgent` for all injected dependencies:
+Use `mesh.McpMeshTool` for all injected dependencies:
 
 ```python
 @app.tool()
@@ -849,8 +849,8 @@ Use `mesh.McpMeshAgent` for all injected dependencies:
     dependencies=["service1", "service2"]
 )
 async def process_data(
-    service1: mesh.McpMeshAgent = None,
-    service2: mesh.McpMeshAgent = None,
+    service1: mesh.McpMeshTool = None,
+    service2: mesh.McpMeshTool = None,
 ) -> dict:
     """Process data using injected dependencies."""
 
@@ -866,7 +866,7 @@ async def process_data(
     return {"result1": result1, "result2": result2, "result3": result3}
 ```
 
-**Key Features of McpMeshAgent:**
+**Key Features of McpMeshTool:**
 
 - ✅ Function-to-function binding (no need to specify function names)
 - ✅ Simple async call syntax: `await service(args)`
@@ -884,9 +884,9 @@ async def process_data(
 )
 async def process_pipeline(
     data: dict,
-    validator: mesh.McpMeshAgent = None,
-    transformer: mesh.McpMeshAgent = None,
-    storage: mesh.McpMeshAgent = None,
+    validator: mesh.McpMeshTool = None,
+    transformer: mesh.McpMeshTool = None,
+    storage: mesh.McpMeshTool = None,
 ) -> dict:
     """Multi-step data processing pipeline."""
 
@@ -1080,7 +1080,7 @@ class EnrichedResult(BaseModel):
 async def analyze_with_enrichment(
     query: str,
     llm: mesh.MeshLlmAgent = None,        # ← Injected LLM agent
-    date_service: mesh.McpMeshAgent = None  # ← Injected MCP agent
+    date_service: mesh.McpMeshTool = None  # ← Injected MCP agent
 ) -> EnrichedResult:
     """
     Demonstrates dual injection pattern.
@@ -1430,7 +1430,7 @@ async def orchestrate(task: str, llm: mesh.MeshLlmAgent = None):
 async def enriched_analyze(
     query: str,
     llm: mesh.MeshLlmAgent = None,
-    date_service: mesh.McpMeshAgent = None
+    date_service: mesh.McpMeshTool = None
 ):
     if llm is None:
         return {"error": "LLM unavailable"}
@@ -1504,7 +1504,7 @@ curl -s http://localhost:8000/agents | \
     capability="safe_processor",
     dependencies=["external_service"]
 )
-async def process_safely(external_service: mesh.McpMeshAgent = None):
+async def process_safely(external_service: mesh.McpMeshTool = None):
     if external_service is None:
         return {"status": "degraded", "reason": "external_service_unavailable"}
 

@@ -13,7 +13,7 @@ Use `@mesh.tool` without `@app.tool`. The decorator provides full dependency inj
 ```python
 # Declare dependency - NOT an MCP tool (no @app.tool)
 @mesh.tool(dependencies=["notification_service"])
-async def send_notification(msg: str, notifier: mesh.McpMeshAgent = None):
+async def send_notification(msg: str, notifier: mesh.McpMeshTool = None):
     """Internal function with DI - not exposed via MCP."""
     await notifier({"message": msg})
 

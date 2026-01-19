@@ -65,7 +65,7 @@ agent.addTool({
 
 ## Injection Types
 
-### McpMeshAgent
+### McpMeshTool
 
 Callable proxy for tool invocations:
 
@@ -194,12 +194,12 @@ No code changes needed - happens transparently.
 Dependencies are typed based on the capability name:
 
 ```typescript
-// Dependencies are McpMeshAgent | null
-execute: async (params, deps: Record<string, McpMeshAgent | null>) => {
+// Dependencies are McpMeshTool | null
+execute: async (params, deps: Record<string, McpMeshTool | null>) => {
   const { date_service, weather_service } = deps;
 
   if (date_service) {
-    // TypeScript knows this is McpMeshAgent
+    // TypeScript knows this is McpMeshTool
     const result = await date_service({});
   }
 };

@@ -5,7 +5,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { McpMeshAgent, DependencyKwargs } from "./types.js";
+import type { McpMeshTool, DependencyKwargs } from "./types.js";
 import type { TraceContext } from "./tracing.js";
 import {
   generateSpanId,
@@ -51,7 +51,7 @@ export function setCurrentTraceContext(_ctx: TraceContext | null): void {
 }
 
 /**
- * Create an McpMeshAgent proxy for a resolved dependency.
+ * Create an McpMeshTool proxy for a resolved dependency.
  *
  * The returned object is callable (invokes the bound function)
  * and also has methods for calling other tools on the agent.
@@ -61,7 +61,7 @@ export function createProxy(
   capability: string,
   functionName: string,
   kwargs?: DependencyKwargs
-): McpMeshAgent {
+): McpMeshTool {
   const timeout = (kwargs?.timeout ?? 30) * 1000; // Convert to ms
   const maxAttempts = kwargs?.maxAttempts ?? 1;
 
@@ -101,7 +101,7 @@ export function createProxy(
     },
   });
 
-  return proxyFn as McpMeshAgent;
+  return proxyFn as McpMeshTool;
 }
 
 /**

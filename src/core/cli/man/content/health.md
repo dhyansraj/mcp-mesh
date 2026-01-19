@@ -104,7 +104,7 @@ None! Auto-rewiring is transparent:
 
 ```python
 @mesh.tool(dependencies=["date_service"])
-def my_tool(date_svc: mesh.McpMeshAgent = None):
+def my_tool(date_svc: mesh.McpMeshTool = None):
     # If date_service agent restarts or is replaced,
     # the proxy automatically points to new instance
     return date_svc()

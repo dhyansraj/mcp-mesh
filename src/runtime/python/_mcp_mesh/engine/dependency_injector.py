@@ -27,8 +27,8 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     Analyze function signature and determine injection strategy.
 
     Rules:
-    1. Single parameter: inject regardless of typing (with warning if not McpMeshAgent)
-    2. Multiple parameters: only inject into McpMeshAgent typed parameters
+    1. Single parameter: inject regardless of typing (with warning if not McpMeshTool)
+    2. Multiple parameters: only inject into McpMeshTool typed parameters
     3. Log warnings for mismatches and edge cases
 
     Args:
@@ -60,17 +60,17 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             logger.warning(
                 f"Single parameter '{param_name}' in function '{func_name}' found, "
                 f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
-                f"(consider typing as McpMeshAgent for clarity)"
+                f"(consider typing as McpMeshTool for clarity)"
             )
         return [0]  # Inject into the single parameter
 
-    # Multiple parameters rule: only inject into McpMeshAgent typed parameters
+    # Multiple parameters rule: only inject into McpMeshTool typed parameters
     if param_count > 1:
         if not mesh_positions:
             logger.warning(
                 f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
-                f"typed as McpMeshAgent. Skipping injection of {len(dependencies)} dependencies. "
-                f"Consider typing dependency parameters as McpMeshAgent."
+                f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
+                f"Consider typing dependency parameters as McpMeshTool."
             )
             return []
 
@@ -80,7 +80,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 excess_deps = dependencies[len(mesh_positions) :]
                 logger.warning(
                     f"Function '{func_name}' has {len(dependencies)} dependencies "
-                    f"but only {len(mesh_positions)} McpMeshAgent parameters. "
+                    f"but only {len(mesh_positions)} McpMeshTool parameters. "
                     f"Dependencies {excess_deps} will not be injected."
                 )
             else:
@@ -88,7 +88,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                     params[pos].name for pos in mesh_positions[len(dependencies) :]
                 ]
                 logger.warning(
-                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshAgent parameters "
+                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshTool parameters "
                     f"but only {len(dependencies)} dependencies declared. "
                     f"Parameters {excess_params} will remain None."
                 )
@@ -104,7 +104,7 @@ class DependencyInjector:
     Manages dynamic dependency injection for mesh agents.
 
     This class:
-    1. Maintains a registry of available dependencies (McpMeshAgent)
+    1. Maintains a registry of available dependencies (McpMeshTool)
     2. Coordinates with MeshLlmAgentInjector for LLM agent injection
     3. Tracks which functions depend on which services
     4. Updates function bindings when topology changes

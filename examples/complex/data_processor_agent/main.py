@@ -77,8 +77,8 @@ logger = logging.getLogger(__name__)
 def parse_data_file(
     file_path: str,
     file_format: Optional[str] = None,
-    weather_service: mesh.McpMeshAgent = None,
-    llm_service: mesh.McpMeshAgent = None,
+    weather_service: mesh.McpMeshTool = None,
+    llm_service: mesh.McpMeshTool = None,
 ) -> Dict[str, Any]:
     """
     Parse a data file from various formats into a structured format.
@@ -259,7 +259,7 @@ def transform_data(data_source: str, operations: List[str]) -> Dict[str, Any]:
     retry_count=2,
 )
 def analyze_statistics(
-    data_source: str, analysis_type: str, llm_service: mesh.McpMeshAgent = None
+    data_source: str, analysis_type: str, llm_service: mesh.McpMeshTool = None
 ) -> Dict[str, Any]:
     """
     Perform statistical analysis on data.

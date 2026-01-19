@@ -2,6 +2,7 @@
 MCP Mesh type definitions for dependency injection.
 """
 
+import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
@@ -14,24 +15,24 @@ except ImportError:
     PYDANTIC_AVAILABLE = False
 
 
-class McpMeshAgent(Protocol):
+class McpMeshTool(Protocol):
     """
-    Unified MCP Mesh agent proxy using FastMCP's built-in client.
+    MCP Mesh tool proxy for dependency injection.
 
-    This protocol now provides all MCP protocol features using FastMCP's superior client
-    implementation, replacing both the old basic and advanced proxy types.
+    This protocol defines the interface for injected tool dependencies. When you declare
+    a dependency on a remote tool, MCP Mesh injects a proxy that implements this interface.
 
     Features:
-    - All MCP protocol methods (tools, resources, prompts)
+    - Simple callable interface for tool invocation
+    - Full MCP protocol methods (tools, resources, prompts)
     - Streaming support with FastMCP's StreamableHttpTransport
     - Session management with notifications
-    - Automatic redirect handling (fixes /mcp/ → /mcp issue)
+    - Automatic redirect handling
     - CallToolResult objects with structured content parsing
-    - Enhanced proxy configuration via kwargs
 
     Usage Examples:
         @mesh.tool(dependencies=["date-service"])
-        def greet(name: str, date_service: McpMeshAgent) -> str:
+        def greet(name: str, date_service: McpMeshTool) -> str:
             # Simple call - proxy knows which remote function to invoke
             current_date = date_service()
 
@@ -44,7 +45,7 @@ class McpMeshAgent(Protocol):
             return f"Hello {name}, today is {current_date}"
 
         @mesh.tool(dependencies=["file-service"])
-        async def process_files(file_service: McpMeshAgent) -> str:
+        async def process_files(file_service: McpMeshTool) -> str:
             # Full MCP Protocol usage
             tools = await file_service.list_tools()
             resources = await file_service.list_resources()
@@ -62,7 +63,7 @@ class McpMeshAgent(Protocol):
 
             return "Processing complete"
 
-    The unified proxy provides all MCP protocol features while maintaining simple callable interface.
+    The proxy provides all MCP protocol features while maintaining a simple callable interface.
     """
 
     def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
@@ -156,15 +157,15 @@ class McpMeshAgent(Protocol):
             handler: Any,
         ) -> core_schema.CoreSchema:
             """
-            Custom Pydantic core schema for McpMeshAgent.
+            Custom Pydantic core schema for McpMeshTool.
 
-            This makes McpMeshAgent parameters appear as optional/nullable in MCP schemas,
+            This makes McpMeshTool parameters appear as optional/nullable in MCP schemas,
             preventing serialization errors while maintaining type safety for dependency injection.
 
             The dependency injection system will replace None values with actual proxy objects
             at runtime, so MCP callers never need to provide these parameters.
             """
-            # Treat McpMeshAgent as an optional Any type for MCP serialization
+            # Treat McpMeshTool as an optional Any type for MCP serialization
             return core_schema.with_default_schema(
                 core_schema.nullable_schema(core_schema.any_schema()),
                 default=None,
@@ -179,6 +180,32 @@ class McpMeshAgent(Protocol):
                 "schema": {"type": "nullable", "schema": {"type": "any"}},
                 "default": None,
             }
+
+
+def _create_deprecated_mcpmeshagent():
+    """Create McpMeshAgent as a deprecated alias for McpMeshTool."""
+
+    class McpMeshAgent(McpMeshTool, Protocol):
+        """
+        Deprecated: Use McpMeshTool instead.
+
+        This is a backwards-compatible alias that will be removed in a future version.
+        """
+
+        def __init_subclass__(cls, **kwargs):
+            warnings.warn(
+                "McpMeshAgent is deprecated, use McpMeshTool instead. "
+                "McpMeshAgent will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init_subclass__(**kwargs)
+
+    return McpMeshAgent
+
+
+# Deprecated alias for backwards compatibility
+McpMeshAgent = _create_deprecated_mcpmeshagent()
 
 
 class MeshLlmAgent(Protocol):

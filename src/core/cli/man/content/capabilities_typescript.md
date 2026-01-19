@@ -148,7 +148,7 @@ agent.addTool({
   dependencies: ["date_service", "weather_data"],
   parameters: z.object({ query: z.string() }),
   execute: async ({ query }, { date_service, weather_data }) => {
-    // date_service and weather_data are McpMeshAgent | null
+    // date_service and weather_data are McpMeshTool | null
   },
 });
 ```

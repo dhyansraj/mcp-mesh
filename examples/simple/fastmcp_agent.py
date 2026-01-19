@@ -22,7 +22,7 @@ app = FastMCP("FastMCP Service")
 @app.prompt()
 @mesh.tool(capability="prompt_service", dependencies=["time_service"])
 def analysis_prompt(
-    topic: str, depth: str = "basic", time_service: mesh.McpMeshAgent = None
+    topic: str, depth: str = "basic", time_service: mesh.McpMeshTool = None
 ) -> str:
     """Generate analysis prompt with current time."""
     timestamp = time_service() if time_service else "unknown"
@@ -60,7 +60,7 @@ def get_current_time_utc() -> str:
 @app.tool()
 @mesh.tool(capability="math_service", dependencies=["time_service"])
 async def calculate_with_timestamp(
-    a: float, b: float, operation: str = "add", time_service: mesh.McpMeshAgent = None
+    a: float, b: float, operation: str = "add", time_service: mesh.McpMeshTool = None
 ) -> dict:
     """Perform math operation with timestamp from time service."""
     if operation == "add":
@@ -97,7 +97,7 @@ def process_data(data: str, format_type: str = "json") -> dict:
 @app.tool()
 @mesh.tool(capability="system_info_service", dependencies=["info"])
 async def get_enriched_system_info(
-    include_timestamp: bool = True, info_service: mesh.McpMeshAgent = None
+    include_timestamp: bool = True, info_service: mesh.McpMeshTool = None
 ) -> dict:
     """Get enriched system information by calling system agent."""
     # Get system info from system agent (fixed async await bug)
@@ -162,7 +162,7 @@ async def service_config() -> str:
 @app.resource("status://health/{status_type}")
 @mesh.tool(capability="status_service", dependencies=["time_service"])
 async def health_status(
-    status_type: str, time_service: mesh.McpMeshAgent = None
+    status_type: str, time_service: mesh.McpMeshTool = None
 ) -> str:
     """Health status information."""
     timestamp = await time_service() if time_service else "unknown"

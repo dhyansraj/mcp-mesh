@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Request, Response, NextFunction } from "express";
 import { route, routeWithConfig, RouteRegistry } from "../route.js";
-import type { McpMeshAgent } from "../types.js";
+import type { McpMeshTool } from "../types.js";
 
 // Mock createProxy from proxy.ts
 vi.mock("../proxy.js", () => ({
@@ -22,7 +22,7 @@ vi.mock("../proxy.js", () => ({
     };
   }),
   createProxy: vi.fn((endpoint, capability, functionName) => {
-    // Create mock McpMeshAgent
+    // Create mock McpMeshTool
     const mockProxy = async (args?: Record<string, unknown>) => {
       return JSON.stringify({ result: "mock", args });
     };
@@ -33,7 +33,7 @@ vi.mock("../proxy.js", () => ({
       isAvailable: { value: true },
       callTool: { value: async () => "mock" },
     });
-    return mockProxy as McpMeshAgent;
+    return mockProxy as McpMeshTool;
   }),
 }));
 
@@ -117,7 +117,7 @@ describe("RouteRegistry", () => {
       const routeId = registry.registerRoute("GET", "/test", ["calculator"]);
 
       // Create mock proxy
-      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshAgent;
+      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshTool;
       Object.defineProperties(mockProxy, {
         endpoint: { value: "http://localhost:8000" },
         capability: { value: "calculator" },
@@ -145,7 +145,7 @@ describe("RouteRegistry", () => {
       const registry = RouteRegistry.getInstance();
       const routeId = registry.registerRoute("GET", "/test", ["calculator"]);
 
-      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshAgent;
+      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshTool;
       registry.setDependency(routeId, 0, mockProxy);
       registry.removeDependency(routeId, 0);
 
@@ -160,7 +160,7 @@ describe("RouteRegistry", () => {
         "logger",
       ]);
 
-      const mockCalc = (() => Promise.resolve("calc")) as unknown as McpMeshAgent;
+      const mockCalc = (() => Promise.resolve("calc")) as unknown as McpMeshTool;
       Object.defineProperties(mockCalc, { capability: { value: "calculator" } });
 
       registry.setDependency(routeId, 0, mockCalc);
@@ -175,7 +175,7 @@ describe("RouteRegistry", () => {
       const registry = RouteRegistry.getInstance();
       const routeId = registry.registerRoute("GET", "/test", ["calculator"]);
 
-      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshAgent;
+      const mockProxy = (() => Promise.resolve("test")) as unknown as McpMeshTool;
       registry.setDependency(routeId, 0, mockProxy);
       registry.clearAllDependencies();
 
@@ -239,7 +239,7 @@ describe("route()", () => {
     };
 
     // Set up resolved dependency
-    const mockCalc = (async () => "result") as unknown as McpMeshAgent;
+    const mockCalc = (async () => "result") as unknown as McpMeshTool;
     registry.setDependency(middleware._meshRouteId, 0, mockCalc);
 
     // Create mock request/response/next
@@ -347,8 +347,8 @@ describe("mesh.route integration", () => {
     ) as ReturnType<typeof route> & { _meshRouteId: string };
 
     // Set up some dependencies
-    const mockCalc = (async () => "calc") as unknown as McpMeshAgent;
-    const mockLogger = (async () => "log") as unknown as McpMeshAgent;
+    const mockCalc = (async () => "calc") as unknown as McpMeshTool;
+    const mockLogger = (async () => "log") as unknown as McpMeshTool;
     registry.setDependency(middleware._meshRouteId, 0, mockCalc);
     registry.setDependency(middleware._meshRouteId, 1, mockLogger);
     // formatter left unresolved

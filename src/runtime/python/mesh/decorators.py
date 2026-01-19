@@ -1031,10 +1031,10 @@ def route(
         async def upload_resume(
             request: Request,
             file: UploadFile = File(...),
-            pdf_agent: mesh.McpMeshAgent = None,    # Injected by MCP Mesh
-            user_service: mesh.McpMeshAgent = None  # Injected by MCP Mesh
+            pdf_tool: mesh.McpMeshTool = None,    # Injected by MCP Mesh
+            user_service: mesh.McpMeshTool = None  # Injected by MCP Mesh
         ):
-            result = await pdf_agent.extract_text_from_pdf(file)
+            result = await pdf_tool.extract_text_from_pdf(file)
             await user_service.update_profile(user_data, result)
             return {"success": True}
     """

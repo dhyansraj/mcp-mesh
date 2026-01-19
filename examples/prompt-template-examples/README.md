@@ -282,7 +282,7 @@ docker compose -f docker-compose.prompt-templates.yml --profile test-pt-006 down
 
 ### PT-007: Dual Injection (LLM + MCP Agent)
 
-**Concept**: Inject both `MeshLlmAgent` and `McpMeshAgent` into the same function.
+**Concept**: Inject both `MeshLlmAgent` and `McpMeshTool` into the same function.
 
 ```bash
 # Start

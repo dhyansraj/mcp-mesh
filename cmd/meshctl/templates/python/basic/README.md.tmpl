@@ -82,7 +82,7 @@ To inject dependencies from other agents:
 )
 async def my_tool_with_deps(
     param: str,
-    other_capability: mesh.McpMeshAgent = None,
+    other_capability: mesh.McpMeshTool = None,
 ) -> str:
     """Tool with injected dependency."""
     if other_capability:

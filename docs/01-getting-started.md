@@ -12,7 +12,7 @@ MCP Mesh is a **distributed service mesh framework** that enhances FastMCP with 
 
 - 🔌 **Dual decorators**: Combine familiar `@app.tool` (FastMCP) with `@mesh.tool` (orchestration)
 - 🔍 **All MCP decorators**: Support for `@app.tool`, `@app.prompt`, `@app.resource` from FastMCP
-- 💉 **Smart dependency injection**: Use remote functions with type safety (`mesh.McpMeshAgent`)
+- 💉 **Smart dependency injection**: Use remote functions with type safety (`mesh.McpMeshTool`)
 - 🏷️ **Tag-based resolution**: Smart capability matching using tags and metadata
 - 🚀 **Zero boilerplate**: Mesh discovers your FastMCP `app` and handles everything
 - 📦 **Production ready**: Go registry + Python agents + Kubernetes support
@@ -38,7 +38,7 @@ def greet(name: str = "World") -> str:
     capability="advanced_greeting",
     dependencies=["date_service"]  # ← Mesh handles service discovery
 )
-async def greet_with_date(name: str = "World", date_service: mesh.McpMeshAgent = None) -> str:
+async def greet_with_date(name: str = "World", date_service: mesh.McpMeshTool = None) -> str:
     if date_service:
         current_date = await date_service()  # Calls remote system agent
         return f"Hello, {name}! Today is {current_date}"

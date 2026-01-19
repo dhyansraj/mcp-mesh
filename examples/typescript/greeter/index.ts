@@ -13,7 +13,7 @@
  */
 
 import { FastMCP } from "fastmcp";
-import { mesh, type McpMeshAgent } from "@mcpmesh/sdk";
+import { mesh, type McpMeshTool } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Greeter", version: "1.0.0" });
@@ -52,7 +52,7 @@ agent.addTool({
   }),
   execute: async (
     { name, birthYear, birthMonth },
-    add: McpMeshAgent | null = null // Positional injection!
+    add: McpMeshTool | null = null // Positional injection!
   ) => {
     if (!add) {
       // Graceful degradation when calculator is unavailable
@@ -82,7 +82,7 @@ agent.addTool({
   }),
   execute: async (
     { name, birthYear },
-    subtract: McpMeshAgent | null = null // Positional injection!
+    subtract: McpMeshTool | null = null // Positional injection!
   ) => {
     if (!subtract) {
       return `Hello, ${name}! (Age calculation unavailable - calculator not connected)`;
@@ -112,8 +112,8 @@ agent.addTool({
   }),
   Execute: async (
     { name, a, b },
-    add: McpMeshAgent | null = null,      // dependencies[0]
-    multiply: McpMeshAgent | null = null  // dependencies[1]
+    add: McpMeshTool | null = null,      // dependencies[0]
+    multiply: McpMeshTool | null = null  // dependencies[1]
   ) => {
     const results: string[] = [`Hello, ${name}!`];
 

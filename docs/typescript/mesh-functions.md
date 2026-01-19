@@ -79,7 +79,7 @@ agent.addTool({
 
 | Type           | Use Case               |
 | -------------- | ---------------------- |
-| `McpMeshAgent` | Tool calls via proxy   |
+| `McpMeshTool` | Tool calls via proxy   |
 | `null`         | Dependency unavailable |
 
 ## mesh.llm()
