@@ -1,8 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.7)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.8)
 
-## v0.8.0-beta.7 (2026-01-18)
+## v0.8.0-beta.8 (2026-01-18)
 
 ### 🎯 TypeScript SDK (Major)
 
