@@ -1705,7 +1705,7 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 		fmt.Println("\nShutting down all services...")
 	}
 
-	// Stop all processes
+	// Stop all processes - agents first, registry last (issue #442)
 	processes, err := GetRunningProcesses()
 	if err == nil {
 		shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
@@ -1713,14 +1713,48 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 			shutdownTimeout = config.ShutdownTimeout
 		}
 
-		for _, proc := range processes {
+		// Separate agents from registry
+		var agents []ProcessInfo
+		var registry *ProcessInfo
+		for i := range processes {
+			if processes[i].Type == "registry" {
+				registry = &processes[i]
+			} else {
+				agents = append(agents, processes[i])
+			}
+		}
+
+		// Stop agents first (in parallel)
+		if len(agents) > 0 {
+			var wg sync.WaitGroup
+			for _, proc := range agents {
+				wg.Add(1)
+				go func(p ProcessInfo) {
+					defer wg.Done()
+					if !quiet {
+						fmt.Printf("Stopping %s (PID: %d)\n", p.Name, p.PID)
+					}
+					if err := KillProcess(p.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
+						fmt.Printf("Failed to stop %s: %v\n", p.Name, err)
+					}
+					RemoveRunningProcess(p.PID)
+				}(proc)
+			}
+			wg.Wait()
+
+			// Grace period for agents to complete unregister HTTP calls
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		// Stop registry last
+		if registry != nil {
 			if !quiet {
-				fmt.Printf("Stopping %s (PID: %d)\n", proc.Name, proc.PID)
+				fmt.Printf("Stopping %s (PID: %d)\n", registry.Name, registry.PID)
 			}
-			if err := KillProcess(proc.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
-				fmt.Printf("Failed to stop %s: %v\n", proc.Name, err)
+			if err := KillProcess(registry.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
+				fmt.Printf("Failed to stop %s: %v\n", registry.Name, err)
 			}
-			RemoveRunningProcess(proc.PID)
+			RemoveRunningProcess(registry.PID)
 		}
 	}
 

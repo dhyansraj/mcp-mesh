@@ -2129,6 +2129,32 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 
 // UnregisterAgent gracefully unregisters an agent by marking it as unhealthy
 func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
+	const maxRetries = 5
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.unregisterAgentAttempt(ctx, agentID)
+		if err == nil {
+			return nil // Success
+		}
+
+		// Check if it's a database lock error - retry with backoff
+		if strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "SQLITE_BUSY") {
+			lastErr = err
+			s.logger.Warning("Database lock on unregister attempt %d for agent %s, retrying...", attempt+1, agentID)
+			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			continue
+		}
+
+		// Non-lock error, don't retry
+		return err
+	}
+
+	return fmt.Errorf("failed to unregister agent %s after %d attempts: %w", agentID, maxRetries, lastErr)
+}
+
+// unregisterAgentAttempt performs a single unregister attempt within a transaction
+func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string) error {
 	// Start a transaction for atomic operation
 	tx, err := s.entDB.Client.Tx(ctx)
 	if err != nil {
