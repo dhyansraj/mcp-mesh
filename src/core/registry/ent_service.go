@@ -34,6 +34,7 @@ type RegistryConfig struct {
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
 	HealthCheckInterval      int
+	StartupCleanupThreshold  int  // Threshold in seconds for marking stale agents on startup (default: 30)
 	EnableResponseCache      bool
 	TracingEnabled           bool // Enable distributed tracing
 }
@@ -114,6 +115,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 			DefaultTimeoutThreshold:  60,
 			DefaultEvictionThreshold: 120,
 			HealthCheckInterval:      30, // Health check every 30 seconds
+			StartupCleanupThreshold:  30, // Mark agents as stale if no heartbeat for 30s on startup
 			EnableResponseCache:      true,
 		}
 	}
@@ -1749,9 +1751,9 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		}
 
 		// Check if it's a database lock error
-		if strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "SQLITE_BUSY") {
+		if isDatabaseLockError(err) {
 			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond) // Exponential backoff
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
 			continue
 		}
 
@@ -1935,6 +1937,15 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 }
 
 // Helper functions
+
+// isDatabaseLockError checks if an error is a SQLite database lock error
+func isDatabaseLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") || strings.Contains(errStr, "SQLITE_BUSY")
+}
 
 func getStringFromMap(m map[string]interface{}, key, defaultValue string) string {
 	if value, exists := m[key]; exists {
@@ -2129,6 +2140,32 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 
 // UnregisterAgent gracefully unregisters an agent by marking it as unhealthy
 func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error {
+	const maxRetries = 5
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.unregisterAgentAttempt(ctx, agentID)
+		if err == nil {
+			return nil // Success
+		}
+
+		// Check if it's a database lock error - retry with backoff
+		if isDatabaseLockError(err) {
+			lastErr = err
+			s.logger.Warning("Database lock on unregister attempt %d for agent %s, retrying...", attempt+1, agentID)
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
+			continue
+		}
+
+		// Non-lock error, don't retry
+		return err
+	}
+
+	return fmt.Errorf("failed to unregister agent %s after %d attempts: %w", agentID, maxRetries, lastErr)
+}
+
+// unregisterAgentAttempt performs a single unregister attempt within a transaction
+func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string) error {
 	// Start a transaction for atomic operation
 	tx, err := s.entDB.Client.Tx(ctx)
 	if err != nil {
@@ -2193,6 +2230,141 @@ func (s *EntService) UnregisterAgent(ctx context.Context, agentID string) error 
 	}
 
 	s.logger.Info("Created unregister event and marked agent %s as unhealthy (graceful shutdown)", agentID)
+	return nil
+}
+
+// CleanupStaleAgentsOnStartup marks agents as unhealthy if they haven't sent a heartbeat
+// within the configured threshold. This handles agents that were left in healthy state
+// from previous registry sessions. (Issue #443)
+func (s *EntService) CleanupStaleAgentsOnStartup(ctx context.Context) (int, error) {
+	threshold := s.config.StartupCleanupThreshold
+	if threshold <= 0 {
+		threshold = 30 // Default to 30 seconds
+	}
+
+	// Calculate threshold time - agents with updated_at before this are stale
+	thresholdTime := time.Now().UTC().Add(-time.Duration(threshold) * time.Second)
+
+	// Query agents that are marked healthy but haven't heartbeated recently
+	staleAgents, err := s.entDB.Client.Agent.
+		Query().
+		Where(
+			agent.UpdatedAtLT(thresholdTime),
+			agent.StatusNEQ(agent.StatusUnhealthy),
+		).
+		All(ctx)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to query stale agents: %w", err)
+	}
+
+	if len(staleAgents) == 0 {
+		s.logger.Info("Startup cleanup: no stale agents found (threshold: %ds)", threshold)
+		return 0, nil
+	}
+
+	s.logger.Info("Startup cleanup: found %d stale agents (threshold: %ds)", len(staleAgents), threshold)
+
+	// Mark each stale agent as unhealthy with retry logic for DB locks
+	var cleaned int
+	for _, staleAgent := range staleAgents {
+		if err := s.markAgentStaleWithRetry(ctx, staleAgent, threshold); err != nil {
+			s.logger.Warning("Startup cleanup: failed to mark agent %s as unhealthy: %v", staleAgent.ID, err)
+			continue
+		}
+		s.logger.Info("Startup cleanup: marked agent '%s' (%s) as unhealthy (last heartbeat: %v)",
+			staleAgent.Name, staleAgent.ID, staleAgent.UpdatedAt)
+		cleaned++
+	}
+
+	s.logger.Info("Startup cleanup: marked %d/%d stale agents as unhealthy", cleaned, len(staleAgents))
+	return cleaned, nil
+}
+
+// markAgentStaleWithRetry marks a single agent as stale/unhealthy with retry logic for DB locks
+func (s *EntService) markAgentStaleWithRetry(ctx context.Context, staleAgent *ent.Agent, threshold int) error {
+	const maxRetries = 5
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.markAgentStaleAttempt(ctx, staleAgent, threshold)
+		if err == nil {
+			return nil // Success
+		}
+
+		// Check if it's a database lock error - retry with backoff
+		if isDatabaseLockError(err) {
+			lastErr = err
+			s.logger.Warning("Startup cleanup: database lock on attempt %d for agent %s, retrying...", attempt+1, staleAgent.ID)
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
+			continue
+		}
+
+		// Non-lock error, don't retry
+		return err
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+// markAgentStaleAttempt performs a single attempt to mark an agent as stale using optimistic locking.
+// Uses conditional update to prevent overwriting concurrent heartbeats - only updates if the agent
+// hasn't been modified since we queried it.
+func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.Agent, threshold int) error {
+	now := time.Now().UTC()
+
+	// Start transaction for atomic operation
+	tx, err := s.entDB.Client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Optimistic conditional update - only update if agent hasn't changed since we queried it.
+	// This prevents overwriting a concurrent heartbeat that may have updated the agent.
+	affected, err := tx.Agent.
+		Update().
+		Where(
+			agent.IDEQ(staleAgent.ID),
+			agent.UpdatedAtEQ(staleAgent.UpdatedAt),
+			agent.StatusEQ(staleAgent.Status),
+		).
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(now).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update agent: %w", err)
+	}
+
+	// If no rows affected, agent was modified concurrently (likely by a heartbeat) - no-op
+	if affected == 0 {
+		return nil
+	}
+
+	// Only create unhealthy event if the update actually applied
+	eventData := map[string]interface{}{
+		"agent_type":        staleAgent.AgentType.String(),
+		"name":              staleAgent.Name,
+		"previous_status":   staleAgent.Status.String(),
+		"reason":            "stale_on_startup",
+		"last_heartbeat":    staleAgent.UpdatedAt.Format(time.RFC3339),
+		"threshold_seconds": threshold,
+	}
+
+	_, err = tx.RegistryEvent.Create().
+		SetEventType(registryevent.EventTypeUnhealthy).
+		SetAgentID(staleAgent.ID).
+		SetTimestamp(now).
+		SetData(eventData).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create event: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
+	}
+
 	return nil
 }
 
