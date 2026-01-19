@@ -10,14 +10,12 @@ Tests MCP Mesh package availability and builds the `tsuite-mesh` base image for 
 
 ## Prerequisites
 
-```bash
-# Install tsuite framework (one-time setup)
-cd /path/to/mcp-mesh/test-suite
-pip install -e .
+**IMPORTANT:** Use Python 3.11 for the virtual environment. The `mcp-mesh-core` Rust package only has pre-built wheels for Python 3.11.
 
-# Or create a venv in this directory
+```bash
+# Create venv with Python 3.11 (required for mcp-mesh-core wheels)
 cd /path/to/mcp-mesh/mcp-mesh-lib-test-suites
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
 pip install -e ../test-suite
 ```
