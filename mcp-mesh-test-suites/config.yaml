@@ -3,15 +3,15 @@
 
 # Package versions to test (released packages only)
 packages:
-  cli_version: "0.8.0-beta.6"     # @mcpmesh/cli (npm)
-  sdk_python_version: "0.8.0b6"   # mcp-mesh (pip) - matches CLI version
-  sdk_typescript_version: "0.8.0-beta.6"  # @mcpmesh/sdk (npm)
+  cli_version: "0.8.0-beta.8"     # @mcpmesh/cli (npm)
+  sdk_python_version: "0.8.0b8"   # mcp-mesh (pip) - matches CLI version
+  sdk_typescript_version: "0.8.0-beta.8"  # @mcpmesh/sdk (npm)
 
 # Docker settings
 # Use tsuite-mesh image built by mcp-mesh-lib-test-suites for faster tests
 # Run lib-test-suites first: tsuite --all --suite-path ../mcp-mesh-lib-test-suites
 docker:
-  base_image: "tsuite-mesh:0.8.0-beta.6"
+  base_image: "tsuite-mesh:0.8.0-beta.8"
   network: "bridge"
 
 # Execution defaults
