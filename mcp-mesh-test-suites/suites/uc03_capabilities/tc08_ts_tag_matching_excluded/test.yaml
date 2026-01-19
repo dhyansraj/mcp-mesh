@@ -13,10 +13,10 @@ tags:
 timeout: 180
 
 pre_run:
-  - routine: global.setup_for_python_agent
+  # TypeScript-only test - just need Node.js + meshctl (no Python venv)
+  - routine: global.setup_environment
     params:
       meshctl_version: "${config.packages.cli_version}"
-      mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
   # Copy and setup TypeScript artifacts

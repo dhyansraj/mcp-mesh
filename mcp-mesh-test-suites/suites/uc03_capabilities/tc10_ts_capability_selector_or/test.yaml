@@ -3,10 +3,8 @@
 #
 # Uses UC-level artifacts from /uc-artifacts
 #
-# DISABLED: This test requires stop/restart cycles which are affected by:
-#   - Issue #432: TypeScript SDK race condition in dependency re-injection
-#   - Issue #434: Registry delayed agent unregistration after stop
-# Skip with: --skip-tag disabled
+# NOTE: Uses `meshctl stop --agents` to keep registry running during stop/restart
+# cycles. This avoids stale DB entries from agents that weren't properly unregistered.
 
 name: "TypeScript Capability Selector OR Logic"
 description: "Verify any matching TS provider satisfies dependency"
@@ -15,14 +13,13 @@ tags:
   - tags
   - or-logic
   - typescript
-  - disabled
 timeout: 300
 
 pre_run:
-  - routine: global.setup_for_python_agent
+  # TypeScript-only test - just need Node.js + meshctl (no Python venv)
+  - routine: global.setup_environment
     params:
       meshctl_version: "${config.packages.cli_version}"
-      mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
   # Copy and setup TypeScript artifacts
@@ -37,9 +34,9 @@ test:
       sed -i "s/__SDK_VERSION__/$VERSION/g" /workspace/ts-tag-consumer/package.json
     capture: copy_output
 
-  # Install npm dependencies once
+  # Install npm dependencies for all TS agents
   - handler: shell
-    command: "cd ts-fast-provider && npm install --silent && cd ../ts-accurate-provider && npm install --silent"
+    command: "cd ts-fast-provider && npm install --silent && cd ../ts-accurate-provider && npm install --silent && cd ../ts-tag-consumer && npm install --silent"
     workdir: /workspace
     timeout: 180
 
@@ -50,7 +47,7 @@ test:
     capture: start_fast_only
 
   - handler: wait
-    seconds: 15
+    seconds: 20
 
   - handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
@@ -58,29 +55,36 @@ test:
     capture: start_consumer_1
 
   - handler: wait
-    seconds: 15
+    seconds: 20
 
   - handler: shell
     command: |
+      echo "=== DEBUG: Before call ==="
+      meshctl list 2>&1 || echo "meshctl list failed"
+      echo "=== DEBUG: Calling fetch_required ==="
       RESULT=$(meshctl call fetch_required '{"query": "test1"}' 2>&1)
       echo "With only fast: $RESULT"
       if echo "$RESULT" | grep -q "TS_FAST"; then
         echo "PASS: Matched TS fast when only fast available"
+      elif echo "$RESULT" | grep -q "NO_PROVIDER"; then
+        echo "FAIL: Got NO_PROVIDER - dependency not injected"
+        exit 1
       else
         echo "FAIL: Should match fast provider"
+        echo "Full result: $RESULT"
         exit 1
       fi
     workdir: /workspace
     capture: test_fast_only
 
-  # Stop all for next test
+  # Stop agents but keep registry running (avoids stale DB entries)
   - handler: shell
-    command: "meshctl stop 2>/dev/null || true"
+    command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
 
   - handler: wait
-    seconds: 30
+    seconds: 5
 
   # === TEST 2: Only accurate provider available ===
   # Debug: Check registry state before starting
@@ -95,15 +99,16 @@ test:
     capture: start_accurate_only
 
   - handler: wait
-    seconds: 15
+    seconds: 25
 
   - handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_2
 
+  # Wait longer for registry to clear stale agents (heartbeat interval is 5s)
   - handler: wait
-    seconds: 15
+    seconds: 25
 
   # Debug: Check registry state before call
   - handler: shell
@@ -125,14 +130,14 @@ test:
     workdir: /workspace
     capture: test_accurate_only
 
-  # Stop all for next test
+  # Stop agents but keep registry running
   - handler: shell
-    command: "meshctl stop 2>/dev/null || true"
+    command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
 
   - handler: wait
-    seconds: 30
+    seconds: 5
 
   # === TEST 3: Both providers available ===
   - handler: shell
@@ -141,15 +146,16 @@ test:
     capture: start_both
 
   - handler: wait
-    seconds: 15
+    seconds: 25
 
   - handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_3
 
+  # Wait longer for registry to clear stale agents
   - handler: wait
-    seconds: 15
+    seconds: 25
 
   - handler: shell
     command: |
