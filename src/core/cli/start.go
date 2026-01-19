@@ -173,6 +173,16 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Run pre-flight checks BEFORE forking to background (issue #444)
+	// This ensures validation errors are shown to the user, not hidden in log files
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	skipChecks, _ := cmd.Flags().GetBool("skip-checks")
+	if !skipChecks && len(args) > 0 {
+		if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
+			return err
+		}
+	}
+
 	// Handle detach mode FIRST - before other modes
 	// This ensures log redirection is set up before any other processing
 	if detach {
@@ -420,10 +430,7 @@ func startConnectOnlyMode(cmd *cobra.Command, args []string, registryURL string,
 
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
-	// Validate prerequisites before spawning any agents
-	if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
-		return err
-	}
+	// Note: Prerequisites are validated in runStartCommand before reaching here
 
 	// Validate registry connection
 	if !IsRegistryRunning(registryURL) {
@@ -455,10 +462,7 @@ func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) e
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
-	// Validate prerequisites before spawning any agents
-	if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
-		return err
-	}
+	// Note: Prerequisites are validated in runStartCommand before reaching here
 
 	// Determine registry URL from flags or config
 	registryURL := determineStartRegistryURL(cmd, config)
