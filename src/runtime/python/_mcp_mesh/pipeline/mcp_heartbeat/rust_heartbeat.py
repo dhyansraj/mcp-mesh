@@ -73,6 +73,18 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
     # Get HTTP config
     http_host = agent_config.get("http_host", "localhost")
     http_port = agent_config.get("http_port", 0)
+
+    # If port=0 (auto-assign), check for detected port from server discovery
+    if http_port == 0:
+        existing_server = context.get("existing_server")
+        if existing_server:
+            detected_port = existing_server.get("port", 0)
+            if detected_port > 0:
+                logger.info(
+                    f"Using detected port {detected_port} (agent_config had port=0)"
+                )
+                http_port = detected_port
+
     namespace = agent_config.get("namespace", "default")
     version = agent_config.get("version", "1.0.0")
     description = agent_config.get("description", "")
@@ -335,13 +347,13 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
 
 async def _handle_dependency_change(
     capability: str,
-    endpoint: Optional[str],
-    function_name: Optional[str],
-    agent_id: Optional[str],
+    endpoint: str | None,
+    function_name: str | None,
+    agent_id: str | None,
     available: bool,
     context: dict[str, Any],
-    requesting_function: Optional[str] = None,
-    dep_index: Optional[int] = None,
+    requesting_function: str | None = None,
+    dep_index: int | None = None,
 ) -> None:
     """
     Handle dependency availability change.

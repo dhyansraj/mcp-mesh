@@ -38,8 +38,8 @@ class DebounceCoordinator:
         import threading
 
         self.delay_seconds = delay_seconds
-        self._pending_timer: Optional[threading.Timer] = None
-        self._orchestrator: Optional[MeshOrchestrator] = None
+        self._pending_timer: threading.Timer | None = None
+        self._orchestrator: MeshOrchestrator | None = None
         self._lock = threading.Lock()
         self.logger = logging.getLogger(f"{__name__}.DebounceCoordinator")
 
@@ -181,8 +181,9 @@ class DebounceCoordinator:
                     # For API services, ONLY do dependency injection - user controls their FastAPI server
                     # Dependency injection is already complete from pipeline execution
                     # Optionally start heartbeat in background (non-blocking)
-                    from ..api_heartbeat.api_lifespan_integration import \
-                        api_heartbeat_lifespan_task
+                    from ..api_heartbeat.api_lifespan_integration import (
+                        api_heartbeat_lifespan_task,
+                    )
 
                     self._setup_heartbeat_background(
                         heartbeat_config,
@@ -207,8 +208,7 @@ class DebounceCoordinator:
                                 f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
                             )
                         # Rust heartbeat is required - no Python fallback
-                        from ..mcp_heartbeat.rust_heartbeat import \
-                            rust_heartbeat_task
+                        from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
 
                         heartbeat_task_fn = rust_heartbeat_task
 
@@ -422,7 +422,7 @@ class DebounceCoordinator:
 
 
 # Global debounce coordinator instance
-_debounce_coordinator: Optional[DebounceCoordinator] = None
+_debounce_coordinator: DebounceCoordinator | None = None
 
 
 def get_debounce_coordinator() -> DebounceCoordinator:
@@ -520,7 +520,7 @@ class MeshOrchestrator:
                 "timestamp": "unknown",
             }
 
-    async def start_service(self, auto_run_config: Optional[dict] = None) -> None:
+    async def start_service(self, auto_run_config: dict | None = None) -> None:
         """
         Start the service with optional auto-run behavior.
 
@@ -582,7 +582,7 @@ class MeshOrchestrator:
 
 
 # Global orchestrator instance
-_global_orchestrator: Optional[MeshOrchestrator] = None
+_global_orchestrator: MeshOrchestrator | None = None
 
 
 def get_global_orchestrator() -> MeshOrchestrator:
