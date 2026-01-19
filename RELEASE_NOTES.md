@@ -1,8 +1,8 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.1)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.7)
 
-## v0.8.0-beta.1 (2026-01-16)
+## v0.8.0-beta.7 (2026-01-18)
 
 ### 🎯 TypeScript SDK (Major)
 
@@ -18,9 +18,20 @@
 - **Gemini (Google AI) support** - New LLM provider alongside Claude/OpenAI (#416)
 - **Agent name prefix matching** - `meshctl call calc` matches `calculator-agent` (#417)
 
+### 🔧 Improvements
+
+- **Rename McpMeshAgent to McpMeshTool** (#431) - Dependency injection type renamed for clarity
+  - `McpMeshTool` is now the primary type for injected tool proxies
+  - `McpMeshAgent` remains as deprecated alias for backward compatibility
+  - Python: Shows runtime `DeprecationWarning` when `McpMeshAgent` is used
+  - TypeScript: `@deprecated` JSDoc annotation for IDE warnings
+
 ### 🐛 Bug Fixes
 
 - **addLlmProviderTool** now respects the `name` parameter (#407)
+- **http_port=0 auto-assignment** (#430) - Fixed port auto-assignment in both Python and TypeScript SDKs
+  - Python: Port detection now works correctly with uvicorn auto-assigned ports
+  - TypeScript: Fixed port=0 being overridden to 8080
 
 ### 📚 Documentation
 
