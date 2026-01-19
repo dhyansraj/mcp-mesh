@@ -2235,8 +2235,7 @@ func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string)
 
 // CleanupStaleAgentsOnStartup marks agents as unhealthy if they haven't sent a heartbeat
 // within the configured threshold. This handles agents that were left in healthy state
-// from previous registry sessions. Uses database time (NOW()) to avoid clock skew issues
-// in multi-replica deployments. (Issue #443)
+// from previous registry sessions. (Issue #443)
 func (s *EntService) CleanupStaleAgentsOnStartup(ctx context.Context) (int, error) {
 	threshold := s.config.StartupCleanupThreshold
 	if threshold <= 0 {
