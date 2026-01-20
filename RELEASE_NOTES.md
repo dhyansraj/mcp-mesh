@@ -1,6 +1,24 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.8)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.9)
+
+## v0.8.0-beta.9 (2026-01-20)
+
+### 🔧 Improvements
+
+- **Gemini 2.5 Pro default** (#447) - Updated scaffold to use `gemini-2.5-pro` for parity with Claude Sonnet 4.5 and GPT-4o
+- **AGE and LAST SEEN columns** (#452) - `meshctl list` now shows AGE (time since registration) and LAST SEEN (time since heartbeat), following kubectl conventions
+- **Pre-flight checks before forking** (#444) - Validation errors now shown to user instead of hidden in log files when using `--detach`
+- **Shutdown order fix** (#442) - Agents now stop first (in parallel), then registry. Added retry logic with exponential backoff for SQLite lock errors
+- **Startup cleanup for stale agents** (#443) - Registry marks agents as unhealthy if no heartbeat within threshold (default 30s). Safe for multi-replica K8s deployments
+
+### 🐛 Bug Fixes
+
+- **Python SDK race condition** (#448) - Fixed `provider_proxy` being wiped by tools update. Now uses field-level updates to preserve data
+- **TypeScript SDK template paths** (#449) - `file://` templates now resolve relative to package.json location, not `process.cwd()`
+- **Scaffold template cleanup** (#446, #450) - Removed redundant transitive dependencies (`@ai-sdk/*`, `zod`) from TypeScript templates
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.0-beta.8...v0.8.0-beta.9)
 
 ## v0.8.0-beta.8 (2026-01-18)
 
