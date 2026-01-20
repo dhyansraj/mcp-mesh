@@ -10,9 +10,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import FastAPIServerSetupStep
+from _mcp_mesh.pipeline.mcp_startup.fastapiserver_setup import \
+    FastAPIServerSetupStep
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -77,7 +77,31 @@ class TestConfigurationResolution:
             "http_port": 8080,
         }
 
-    # Note: _is_http_enabled tests removed - HTTP is now always enabled
+    @patch.dict("os.environ", {}, clear=True)
+    def test_is_http_enabled_default_true(self, step):
+        """Test _is_http_enabled returns True by default."""
+        result = step._is_http_enabled()
+        assert result is True
+
+    @patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": "true"})
+    def test_is_http_enabled_true_values(self, step):
+        """Test _is_http_enabled with various true values."""
+        true_values = ["true", "True", "TRUE", "1", "yes", "YES", "on", "ON"]
+
+        for value in true_values:
+            with patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": value}):
+                result = step._is_http_enabled()
+                assert result is True, f"Failed for value: {value}"
+
+    @patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": "false"})
+    def test_is_http_enabled_false_values(self, step):
+        """Test _is_http_enabled with false values."""
+        false_values = ["false", "False", "FALSE", "0", "no", "NO", "off", "OFF"]
+
+        for value in false_values:
+            with patch.dict("os.environ", {"MCP_MESH_HTTP_ENABLED": value}):
+                result = step._is_http_enabled()
+                assert result is False, f"Failed for value: {value}"
 
     @patch.dict("os.environ", {}, clear=True)
     def test_resolve_binding_config_defaults(self, step, mock_agent_config):

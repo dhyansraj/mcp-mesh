@@ -729,7 +729,8 @@ def agent(
             Environment variable: MCP_MESH_HTTP_HOST (takes precedence)
         http_port: HTTP server port (default: 0, means auto-assign)
             Environment variable: MCP_MESH_HTTP_PORT (takes precedence)
-        enable_http: Enable HTTP endpoints (default: True, always enabled for mesh)
+        enable_http: Enable HTTP endpoints (default: True)
+            Environment variable: MCP_MESH_HTTP_ENABLED (takes precedence)
         namespace: Agent namespace (default: "default")
             Environment variable: MCP_MESH_NAMESPACE (takes precedence)
         health_interval: Health check interval in seconds (default: 30)
@@ -738,15 +739,20 @@ def agent(
             Called before heartbeat and on /health endpoint with TTL caching
         health_check_ttl: Cache TTL for health check results in seconds (default: 15)
             Reduces expensive health check calls by caching results
-        auto_run: Automatically start service and keep process alive (default: True, always enabled)
+        auto_run: Automatically start service and keep process alive (default: True)
+            Environment variable: MCP_MESH_AUTO_RUN (takes precedence)
         auto_run_interval: Keep-alive heartbeat interval in seconds (default: 10)
+            Environment variable: MCP_MESH_AUTO_RUN_INTERVAL (takes precedence)
         **kwargs: Additional agent metadata
 
     Environment Variables:
         MCP_MESH_HTTP_HOST: Override http_host parameter (string)
         MCP_MESH_HTTP_PORT: Override http_port parameter (integer, 0-65535)
+        MCP_MESH_HTTP_ENABLED: Override enable_http parameter (boolean: true/false)
         MCP_MESH_NAMESPACE: Override namespace parameter (string)
         MCP_MESH_HEALTH_INTERVAL: Override health_interval parameter (integer, ≥1)
+        MCP_MESH_AUTO_RUN: Override auto_run parameter (boolean: true/false)
+        MCP_MESH_AUTO_RUN_INTERVAL: Override auto_run_interval parameter (integer, ≥1)
 
     Auto-Run Feature:
         When auto_run=True, the decorator automatically starts the service and keeps
@@ -836,8 +842,12 @@ def agent(
             rule=ValidationRule.PORT_RULE,
         )
 
-        # HTTP always enabled - required for mesh communication
-        final_enable_http = True
+        final_enable_http = get_config_value(
+            "MCP_MESH_HTTP_ENABLED",
+            override=enable_http,
+            default=True,
+            rule=ValidationRule.TRUTHY_RULE,
+        )
 
         final_namespace = get_config_value(
             "MCP_MESH_NAMESPACE",
@@ -856,12 +866,18 @@ def agent(
             rule=ValidationRule.NONZERO_RULE,
         )
 
-        # Auto-run always enabled - required for mesh operation
-        final_auto_run = True
-        final_auto_run_interval = (
-            auto_run_interval
-            if auto_run_interval != 10
-            else MeshDefaults.AUTO_RUN_INTERVAL
+        final_auto_run = get_config_value(
+            "MCP_MESH_AUTO_RUN",
+            override=auto_run,
+            default=MeshDefaults.AUTO_RUN,
+            rule=ValidationRule.TRUTHY_RULE,
+        )
+
+        final_auto_run_interval = get_config_value(
+            "MCP_MESH_AUTO_RUN_INTERVAL",
+            override=auto_run_interval,
+            default=MeshDefaults.AUTO_RUN_INTERVAL,
+            rule=ValidationRule.NONZERO_RULE,
         )
 
         # Generate agent ID using shared function

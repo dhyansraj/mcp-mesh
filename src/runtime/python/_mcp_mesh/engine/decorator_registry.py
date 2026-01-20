@@ -486,7 +486,11 @@ class DecoratorRegistry:
                 default=MeshDefaults.HTTP_PORT,
                 rule=ValidationRule.PORT_RULE,
             ),
-            "enable_http": True,  # HTTP always enabled - required for mesh
+            "enable_http": get_config_value(
+                "MCP_MESH_HTTP_ENABLED",
+                default=MeshDefaults.HTTP_ENABLED,
+                rule=ValidationRule.TRUTHY_RULE,
+            ),
             "namespace": get_config_value(
                 "MCP_MESH_NAMESPACE",
                 default=MeshDefaults.NAMESPACE,
@@ -497,8 +501,16 @@ class DecoratorRegistry:
                 default=MeshDefaults.HEALTH_INTERVAL,
                 rule=ValidationRule.NONZERO_RULE,
             ),
-            "auto_run": True,  # Auto-run always enabled - required for mesh
-            "auto_run_interval": MeshDefaults.AUTO_RUN_INTERVAL,
+            "auto_run": get_config_value(
+                "MCP_MESH_AUTO_RUN",
+                default=MeshDefaults.AUTO_RUN,
+                rule=ValidationRule.TRUTHY_RULE,
+            ),
+            "auto_run_interval": get_config_value(
+                "MCP_MESH_AUTO_RUN_INTERVAL",
+                default=MeshDefaults.AUTO_RUN_INTERVAL,
+                rule=ValidationRule.NONZERO_RULE,
+            ),
             "agent_id": agent_id,
         }
 

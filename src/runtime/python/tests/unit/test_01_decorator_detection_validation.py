@@ -10,10 +10,9 @@ import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Import the decorators and registry
 import mesh
+import pytest
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from _mcp_mesh.shared.config_resolver import get_config_value
 
@@ -130,10 +129,16 @@ class TestMeshAgentDetection:
         clear_debounce_coordinator()
 
         # Clear environment variables that may be auto-set by runtime initialization
-        # Note: PYTEST_RUNNING=true (set in conftest.py) prevents actual server startups
+        # CRITICAL: Don't clear MCP_MESH_AUTO_RUN or MCP_MESH_HTTP_ENABLED - conftest.py
+        # sets these to "false" to prevent server startups during tests. Removing them
+        # causes decorators to fall back to MeshDefaults.AUTO_RUN = True, starting
+        # uvicorn servers and making tests take 2-3s each (19+ minutes for 750 tests).
         env_vars = [
             "MCP_MESH_NAMESPACE",
+            # "MCP_MESH_AUTO_RUN",  # Don't clear - needed to prevent server startup
+            "MCP_MESH_AUTO_RUN_INTERVAL",
             "MCP_MESH_HEALTH_INTERVAL",
+            # "MCP_MESH_HTTP_ENABLED",  # Don't clear - needed to prevent HTTP server
         ]
         for var in env_vars:
             os.environ.pop(var, None)
@@ -151,8 +156,8 @@ class TestMeshAgentDetection:
         metadata = agents["TestAgent"].metadata
         assert metadata["name"] == "test-agent"
         assert metadata["version"] == "1.0.0"  # default
-        # enable_http is always True - required for mesh communication
-        assert metadata["enable_http"] is True
+        # Note: enable_http is False in test environment due to conftest.py setting MCP_MESH_HTTP_ENABLED=false
+        assert metadata["enable_http"] is False
 
     @patch.dict("os.environ", {"MCP_MESH_HTTP_HOST": "custom.host"})
     def test_mesh_agent_with_all_parameters(self):
@@ -164,10 +169,10 @@ class TestMeshAgentDetection:
             description="Full agent description",
             http_host="custom.host",  # This parameter is now ignored, HostResolver used instead
             http_port=8080,
-            enable_http=False,  # Ignored - always True
+            enable_http=False,
             namespace="custom",
             health_interval=60,
-            auto_run=False,  # Ignored - always True
+            auto_run=False,
             auto_run_interval=20,
             custom_param="custom_value",
         )
@@ -184,10 +189,10 @@ class TestMeshAgentDetection:
             metadata["http_host"] == "custom.host"
         )  # Now comes from HostResolver via env var
         assert metadata["http_port"] == 8080
-        assert metadata["enable_http"] is True  # Always True - required for mesh
+        assert metadata["enable_http"] is False
         assert metadata["namespace"] == "custom"
         assert metadata["health_interval"] == 60
-        assert metadata["auto_run"] is True  # Always True - required for mesh
+        assert metadata["auto_run"] is False
         assert metadata["auto_run_interval"] == 20
         assert metadata["custom_param"] == "custom_value"
 
@@ -330,14 +335,16 @@ class TestEnvironmentVariablePrecedence:
         from _mcp_mesh.pipeline.mcp_startup import clear_debounce_coordinator
 
         clear_debounce_coordinator()
-        # Clear relevant environment variables
-        # Note: PYTEST_RUNNING=true prevents actual server startups
+        # Clear relevant environment variables, but preserve MCP_MESH_AUTO_RUN=false for tests
         env_vars = [
             "MCP_MESH_AGENT_NAME",
             "MCP_MESH_HTTP_HOST",
             "MCP_MESH_HTTP_PORT",
+            "MCP_MESH_HTTP_ENABLED",
             "MCP_MESH_NAMESPACE",
             "MCP_MESH_HEALTH_INTERVAL",
+            # "MCP_MESH_AUTO_RUN",  # CRITICAL: Don't clear this in tests to prevent runtime initialization
+            "MCP_MESH_AUTO_RUN_INTERVAL",
         ]
         for var in env_vars:
             os.environ.pop(var, None)
@@ -348,8 +355,11 @@ class TestEnvironmentVariablePrecedence:
             "MCP_MESH_AGENT_NAME",
             "MCP_MESH_HTTP_HOST",
             "MCP_MESH_HTTP_PORT",
+            "MCP_MESH_HTTP_ENABLED",
             "MCP_MESH_NAMESPACE",
             "MCP_MESH_HEALTH_INTERVAL",
+            # "MCP_MESH_AUTO_RUN",  # CRITICAL: Don't clear this in tests to preserve test environment
+            "MCP_MESH_AUTO_RUN_INTERVAL",
         ]
         for var in env_vars:
             os.environ.pop(var, None)
@@ -378,7 +388,17 @@ class TestEnvironmentVariablePrecedence:
         metadata = agents["TestAgent"].metadata
         assert metadata["http_port"] == 9090
 
-    # Note: test_enable_http_env_var_precedence removed - HTTP is now always enabled
+    def test_enable_http_env_var_precedence(self):
+        """Test MCP_MESH_HTTP_ENABLED environment variable takes precedence."""
+        os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
+
+        @mesh.agent(name="test", enable_http=True)
+        class TestAgent:
+            pass
+
+        agents = DecoratorRegistry.get_mesh_agents()
+        metadata = agents["TestAgent"].metadata
+        assert metadata["enable_http"] is False
 
     def test_health_interval_env_var_precedence(self):
         """Test MCP_MESH_HEALTH_INTERVAL environment variable takes precedence."""
@@ -650,7 +670,8 @@ class TestConstraintValidation:
     def test_agent_id_shared_across_process(self):
         """Test that agent ID is shared across the process."""
         # Clear any existing agent ID
-        from mesh.decorators import _clear_shared_agent_id, _get_or_create_agent_id
+        from mesh.decorators import (_clear_shared_agent_id,
+                                     _get_or_create_agent_id)
 
         _clear_shared_agent_id()
 
@@ -664,7 +685,8 @@ class TestConstraintValidation:
 
     def test_agent_id_generation_precedence(self):
         """Test agent ID generation precedence: env > name > default."""
-        from mesh.decorators import _clear_shared_agent_id, _get_or_create_agent_id
+        from mesh.decorators import (_clear_shared_agent_id,
+                                     _get_or_create_agent_id)
 
         # Test with environment variable
         os.environ["MCP_MESH_AGENT_NAME"] = "env-agent"

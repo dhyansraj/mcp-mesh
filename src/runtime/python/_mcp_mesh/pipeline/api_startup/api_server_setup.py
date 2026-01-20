@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.defaults import MeshDefaults
@@ -117,7 +117,7 @@ class APIServerSetupStep(PipelineStep):
 
         return result
 
-    def _prepare_display_config(self) -> dict[str, Any]:
+    def _prepare_display_config(self) -> Dict[str, Any]:
         """
         Prepare display configuration for service registration.
 
@@ -157,10 +157,10 @@ class APIServerSetupStep(PipelineStep):
 
     def _prepare_service_metadata(
         self,
-        app_info: dict[str, Any],
-        integration_results: dict[str, Any],
-        display_config: dict[str, Any],
-    ) -> dict[str, Any]:
+        app_info: Dict[str, Any],
+        integration_results: Dict[str, Any],
+        display_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         Prepare service registration metadata for mesh registry.
 
@@ -207,10 +207,10 @@ class APIServerSetupStep(PipelineStep):
 
     def _prepare_heartbeat_config(
         self,
-        app_info: dict[str, Any],
-        display_config: dict[str, Any],
-        service_metadata: dict[str, Any],
-    ) -> dict[str, Any]:
+        app_info: Dict[str, Any],
+        display_config: Dict[str, Any],
+        service_metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         Prepare heartbeat configuration for API service.
 
@@ -222,6 +222,7 @@ class APIServerSetupStep(PipelineStep):
         service_id = self._get_or_generate_api_service_id(app_info)
 
         # Get heartbeat interval using centralized defaults (consistent with MCP heartbeat)
+        from ...shared.defaults import MeshDefaults
 
         heartbeat_interval = get_config_value(
             "MCP_MESH_HEALTH_INTERVAL",
@@ -270,7 +271,7 @@ class APIServerSetupStep(PipelineStep):
         return heartbeat_config
 
     def _generate_api_service_id(
-        self, app_info: Optional[dict[str, Any]] = None
+        self, app_info: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Generate API service ID using same priority logic as MCP agents.
@@ -286,6 +287,7 @@ class APIServerSetupStep(PipelineStep):
         Returns:
             Generated service ID with UUID suffix
         """
+        import uuid
 
         # Check for API-specific environment variable first
         api_name = get_config_value(
@@ -330,7 +332,7 @@ class APIServerSetupStep(PipelineStep):
         return service_id
 
     def _get_or_generate_api_service_id(
-        self, app_info: Optional[dict[str, Any]] = None
+        self, app_info: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Get existing service ID from decorator registry or generate a new one.
@@ -376,3 +378,11 @@ class APIServerSetupStep(PipelineStep):
                 f"⚠️ Error checking existing service ID, generating new one: {e}"
             )
             return self._generate_api_service_id(app_info)
+
+    def _is_http_enabled(self) -> bool:
+        """Check if HTTP transport is enabled."""
+        return get_config_value(
+            "MCP_MESH_HTTP_ENABLED",
+            default=True,
+            rule=ValidationRule.TRUTHY_RULE,
+        )

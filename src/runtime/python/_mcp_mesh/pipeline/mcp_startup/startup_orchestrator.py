@@ -152,137 +152,157 @@ class DebounceCoordinator:
             # Execute the pipeline using asyncio.run
             import asyncio
 
+            # Check if auto-run is enabled (defaults to true for persistent service behavior)
+            auto_run_enabled = self._check_auto_run_enabled()
+
+            self.logger.debug(f"🔍 Auto-run enabled: {auto_run_enabled}")
             self.logger.info(f"🎯 Pipeline type: {pipeline_type}")
-            self.logger.info("🔄 Starting pipeline with FastAPI natural blocking")
 
-            # Execute appropriate pipeline based on type
-            if pipeline_type == "mcp":
-                # Phase 1: Run async MCP pipeline setup
-                result = asyncio.run(orchestrator.process_once())
-            elif pipeline_type == "api":
-                # Phase 1: Run async API pipeline setup
-                result = asyncio.run(orchestrator.process_api_once())
-            else:
-                raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+            if auto_run_enabled:
+                self.logger.info("🔄 Auto-run enabled - using FastAPI natural blocking")
 
-            # Phase 2: Extract FastAPI app and start synchronous server
-            pipeline_context = result.get("context", {}).get("pipeline_context", {})
-            fastapi_app = pipeline_context.get("fastapi_app")
-            binding_config = pipeline_context.get("fastapi_binding_config", {})
-            heartbeat_config = pipeline_context.get("heartbeat_config", {})
-
-            if pipeline_type == "api":
-                # For API services, ONLY do dependency injection - user controls their FastAPI server
-                # Dependency injection is already complete from pipeline execution
-                # Optionally start heartbeat in background (non-blocking)
-                from ..api_heartbeat.api_lifespan_integration import (
-                    api_heartbeat_lifespan_task,
-                )
-
-                self._setup_heartbeat_background(
-                    heartbeat_config,
-                    pipeline_context,
-                    api_heartbeat_lifespan_task,
-                    id_field="service_id",
-                    label="API service",
-                )
-                self.logger.info(
-                    "✅ API dependency injection complete - user's FastAPI server can now start"
-                )
-                return  # Don't block - let user's uvicorn run
-            elif fastapi_app and binding_config:
-                # For MCP agents - use Rust-backed heartbeat task from config
-                # HeartbeatLoopStep sets this to rust_heartbeat_task
-                heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
-
-                # Validate heartbeat_task_fn is callable, fall back to Rust heartbeat if not
-                if heartbeat_task_fn is None or not callable(heartbeat_task_fn):
-                    if heartbeat_task_fn is not None:
-                        self.logger.warning(
-                            f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
-                        )
-                    # Rust heartbeat is required - no Python fallback
-                    from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
-
-                    heartbeat_task_fn = rust_heartbeat_task
-
-                self._setup_heartbeat_background(
-                    heartbeat_config,
-                    pipeline_context,
-                    heartbeat_task_fn,
-                )
-
-                # Check if server was already reused from immediate uvicorn start
-                server_reused = pipeline_context.get("server_reused", False)
-                existing_server = pipeline_context.get("existing_server", {})
-
-                if server_reused:
-                    # Check server status to determine action
-                    server_status = existing_server.get("status", "unknown")
-
-                    if server_status == "configured":
-                        self.logger.info(
-                            "🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop"
-                        )
-                        # Start the configured server within this event loop
-                        server_obj = existing_server.get("server")
-                        if server_obj:
-                            self.logger.info(
-                                "🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context"
-                            )
-                            # This runs in the same event loop as the pipeline - no conflict!
-                            import asyncio
-
-                            # Define async function to run the server
-                            async def run_configured_server():
-                                await server_obj.serve()
-
-                            # Run the server within the existing event loop context
-                            asyncio.run(run_configured_server())
-                            self.logger.info(
-                                "✅ CONFIGURED SERVER: Server started successfully"
-                            )
-                        else:
-                            self.logger.error(
-                                "❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()"
-                            )
-                            self._start_blocking_fastapi_server(
-                                fastapi_app, binding_config
-                            )
-                    elif server_status == "running":
-                        self.logger.debug(
-                            "🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()"
-                        )
-                        self.logger.info(
-                            "✅ FastMCP mounted on running server - agent in normal operating state"
-                        )
-                        # Server is already running in normal state - no further action needed
-                        return
-                    else:
-                        self.logger.info(
-                            "🔄 SERVER REUSE: Existing server detected, skipping uvicorn.run()"
-                        )
-                        self.logger.info(
-                            "✅ FastMCP mounted on existing server - agent ready"
-                        )
-                        # Keep the process alive but don't start new uvicorn
-                        # Use a robust keep-alive pattern that doesn't overflow
-                        import time
-
-                        try:
-                            while True:
-                                time.sleep(
-                                    3600
-                                )  # Sleep 1 hour at a time instead of infinity
-                        except KeyboardInterrupt:
-                            self.logger.info(
-                                "🛑 Server reuse mode interrupted - shutting down"
-                            )
-                            return
+                # Execute appropriate pipeline based on type
+                if pipeline_type == "mcp":
+                    # Phase 1: Run async MCP pipeline setup
+                    result = asyncio.run(orchestrator.process_once())
+                elif pipeline_type == "api":
+                    # Phase 1: Run async API pipeline setup
+                    result = asyncio.run(orchestrator.process_api_once())
                 else:
-                    self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                    raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+
+                # Phase 2: Extract FastAPI app and start synchronous server
+                pipeline_context = result.get("context", {}).get("pipeline_context", {})
+                fastapi_app = pipeline_context.get("fastapi_app")
+                binding_config = pipeline_context.get("fastapi_binding_config", {})
+                heartbeat_config = pipeline_context.get("heartbeat_config", {})
+
+                if pipeline_type == "api":
+                    # For API services, ONLY do dependency injection - user controls their FastAPI server
+                    # Dependency injection is already complete from pipeline execution
+                    # Optionally start heartbeat in background (non-blocking)
+                    from ..api_heartbeat.api_lifespan_integration import (
+                        api_heartbeat_lifespan_task,
+                    )
+
+                    self._setup_heartbeat_background(
+                        heartbeat_config,
+                        pipeline_context,
+                        api_heartbeat_lifespan_task,
+                        id_field="service_id",
+                        label="API service",
+                    )
+                    self.logger.info(
+                        "✅ API dependency injection complete - user's FastAPI server can now start"
+                    )
+                    return  # Don't block - let user's uvicorn run
+                elif fastapi_app and binding_config:
+                    # For MCP agents - use Rust-backed heartbeat task from config
+                    # HeartbeatLoopStep sets this to rust_heartbeat_task
+                    heartbeat_task_fn = heartbeat_config.get("heartbeat_task_fn")
+
+                    # Validate heartbeat_task_fn is callable, fall back to Rust heartbeat if not
+                    if heartbeat_task_fn is None or not callable(heartbeat_task_fn):
+                        if heartbeat_task_fn is not None:
+                            self.logger.warning(
+                                f"heartbeat_task_fn from config is not callable: {type(heartbeat_task_fn)}, using Rust heartbeat"
+                            )
+                        # Rust heartbeat is required - no Python fallback
+                        from ..mcp_heartbeat.rust_heartbeat import rust_heartbeat_task
+
+                        heartbeat_task_fn = rust_heartbeat_task
+
+                    self._setup_heartbeat_background(
+                        heartbeat_config,
+                        pipeline_context,
+                        heartbeat_task_fn,
+                    )
+
+                    # Check if server was already reused from immediate uvicorn start
+                    server_reused = pipeline_context.get("server_reused", False)
+                    existing_server = pipeline_context.get("existing_server", {})
+
+                    if server_reused:
+                        # Check server status to determine action
+                        server_status = existing_server.get("status", "unknown")
+
+                        if server_status == "configured":
+                            self.logger.info(
+                                "🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop"
+                            )
+                            # Start the configured server within this event loop
+                            server_obj = existing_server.get("server")
+                            if server_obj:
+                                self.logger.info(
+                                    "🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context"
+                                )
+                                # This runs in the same event loop as the pipeline - no conflict!
+                                import asyncio
+
+                                # Define async function to run the server
+                                async def run_configured_server():
+                                    await server_obj.serve()
+
+                                # Run the server within the existing event loop context
+                                asyncio.run(run_configured_server())
+                                self.logger.info(
+                                    "✅ CONFIGURED SERVER: Server started successfully"
+                                )
+                            else:
+                                self.logger.error(
+                                    "❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()"
+                                )
+                                self._start_blocking_fastapi_server(
+                                    fastapi_app, binding_config
+                                )
+                        elif server_status == "running":
+                            self.logger.debug(
+                                "🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()"
+                            )
+                            self.logger.info(
+                                "✅ FastMCP mounted on running server - agent in normal operating state"
+                            )
+                            # Server is already running in normal state - no further action needed
+                            return
+                        else:
+                            self.logger.info(
+                                "🔄 SERVER REUSE: Existing server detected, skipping uvicorn.run()"
+                            )
+                            self.logger.info(
+                                "✅ FastMCP mounted on existing server - agent ready"
+                            )
+                            # Keep the process alive but don't start new uvicorn
+                            # Use a robust keep-alive pattern that doesn't overflow
+                            import time
+
+                            try:
+                                while True:
+                                    time.sleep(
+                                        3600
+                                    )  # Sleep 1 hour at a time instead of infinity
+                            except KeyboardInterrupt:
+                                self.logger.info(
+                                    "🛑 Server reuse mode interrupted - shutting down"
+                                )
+                                return
+                    else:
+                        self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                else:
+                    self.logger.warning(
+                        "⚠️ Auto-run enabled but no FastAPI app prepared - exiting"
+                    )
             else:
-                self.logger.warning("⚠️ No FastAPI app prepared - exiting")
+                # Single execution mode (for testing/debugging)
+                self.logger.info("🏁 Auto-run disabled - single execution mode")
+
+                if pipeline_type == "mcp":
+                    result = asyncio.run(orchestrator.process_once())
+                elif pipeline_type == "api":
+                    result = asyncio.run(orchestrator.process_api_once())
+                else:
+                    raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+
+                self.logger.info("✅ Pipeline execution completed, exiting")
 
         except Exception as e:
             self.logger.error(f"❌ Error in debounced processing: {e}")
@@ -383,6 +403,22 @@ class DebounceCoordinator:
             self.logger.warning(f"Could not setup {label} heartbeat: {e}")
 
     # Graceful shutdown is now handled by FastAPI lifespan in simple_shutdown.py
+
+    def _check_auto_run_enabled(self) -> bool:
+        """Check if auto-run is enabled (defaults to True for persistent service behavior)."""
+        # Check environment variable - defaults to "true" for persistent service behavior
+        env_auto_run = os.getenv("MCP_MESH_AUTO_RUN", "true").lower()
+        self.logger.debug(f"🔍 MCP_MESH_AUTO_RUN='{env_auto_run}' (default: 'true')")
+
+        if env_auto_run in ("false", "0", "no"):
+            self.logger.debug(
+                "🔍 Auto-run explicitly disabled via environment variable"
+            )
+            return False
+        else:
+            # Default to True - agents should run persistently by default
+            self.logger.debug("🔍 Auto-run enabled (default behavior)")
+            return True
 
 
 # Global debounce coordinator instance

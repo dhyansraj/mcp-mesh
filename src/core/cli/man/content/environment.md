@@ -30,8 +30,15 @@ export HOST=0.0.0.0              # Bind address
 export MCP_MESH_HTTP_PORT=8080   # Server port
 export MCP_MESH_HTTP_HOST=my-service  # Announced hostname
 
+# Auto-run behavior
+export MCP_MESH_AUTO_RUN=true
+export MCP_MESH_AUTO_RUN_INTERVAL=30  # Heartbeat interval (seconds)
+
 # Health monitoring
 export MCP_MESH_HEALTH_INTERVAL=30
+
+# Global toggle
+export MCP_MESH_ENABLED=true
 ```
 
 ### Registry Connection
@@ -58,6 +65,9 @@ export MCP_MESH_DEBUG_MODE=true
 ### Advanced Settings
 
 ```bash
+# HTTP server toggle
+export MCP_MESH_HTTP_ENABLED=true
+
 # External endpoint (for proxies/load balancers)
 export MCP_MESH_HTTP_ENDPOINT=https://api.example.com:443
 
@@ -156,6 +166,7 @@ HOST=0.0.0.0
 ```bash
 # .env.testing
 MCP_MESH_LOG_LEVEL=WARNING
+MCP_MESH_AUTO_RUN=false
 MCP_MESH_REGISTRY_URL=http://test-registry:8000
 MCP_MESH_NAMESPACE=testing
 ```
