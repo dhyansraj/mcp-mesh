@@ -361,6 +361,7 @@ type AgentInfoAPI struct {
 	Runtime              *string     `json:"runtime,omitempty"`
 	Endpoint             string      `json:"endpoint"`
 	Version              *string     `json:"version,omitempty"`
+	CreatedAt            *time.Time  `json:"created_at,omitempty"`
 	LastSeen             *time.Time  `json:"last_seen,omitempty"`
 	TotalDependencies    int         `json:"total_dependencies"`
 	DependenciesResolved int         `json:"dependencies_resolved"`
@@ -463,6 +464,10 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 
 		if agent.LastSeen != nil {
 			agentMap["last_seen"] = agent.LastSeen.Format(time.RFC3339)
+		}
+
+		if agent.CreatedAt != nil {
+			agentMap["created_at"] = agent.CreatedAt.Format(time.RFC3339)
 		}
 
 		// Convert capabilities to the expected format ([]interface{} containing maps)
@@ -1082,10 +1087,12 @@ func printTableHeader(nameWidth, runtimeWidth, statusWidth, typeWidth, endpointW
 
 	if wide {
 		fmt.Printf(" %-6s", "TOOLS")
-		fmt.Printf(" %-12s", "SINCE")
+		fmt.Printf(" %-8s", "AGE")
+		fmt.Printf(" %-10s", "LAST SEEN")
 	} else {
-		// In standard view, SINCE goes at the end
-		fmt.Printf(" %-12s", "SINCE")
+		// In standard view, AGE and LAST SEEN go at the end
+		fmt.Printf(" %-8s", "AGE")
+		fmt.Printf(" %-10s", "LAST SEEN")
 	}
 
 	if verbose || wide {
@@ -1103,8 +1110,8 @@ func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpoi
 	}
 	// Always include endpoint width in standard view
 	totalWidth += endpointWidth + 1
-	// Always include SINCE width (12 + 1 for spacing)
-	totalWidth += 13
+	// Always include AGE (8 + 1) and LAST SEEN (10 + 1) widths
+	totalWidth += 9 + 11 // AGE and LAST SEEN columns
 	if wide {
 		totalWidth += 7 // for tools column
 	}
@@ -1154,15 +1161,15 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 	endpoint := formatEndpoint(agent.Endpoint)
 	fmt.Printf(" %-*s", endpointWidth, truncateStringForList(endpoint, endpointWidth-2))
 
-	// Tools count and SINCE (only in wide mode)
+	// Tools count, AGE, and LAST SEEN
 	if wide {
 		fmt.Printf(" %-6s", fmt.Sprintf("%d", len(agent.Tools)))
-		since := formatSince(agent)
-		fmt.Printf(" %-12s", since)
+		fmt.Printf(" %-8s", formatAge(agent))
+		fmt.Printf(" %-10s", formatLastSeen(agent))
 	} else {
-		// In standard view, SINCE goes at the end
-		since := formatSince(agent)
-		fmt.Printf(" %-12s", since)
+		// In standard view, AGE and LAST SEEN go at the end
+		fmt.Printf(" %-8s", formatAge(agent))
+		fmt.Printf(" %-10s", formatLastSeen(agent))
 	}
 
 	// Capabilities column (if verbose or wide) - always at the end
@@ -1226,18 +1233,28 @@ func formatDependencies(resolved, total int) string {
 	return fmt.Sprintf("%s%d/%d%s", color, resolved, total, colorReset)
 }
 
-func formatSince(agent EnhancedAgent) string {
-	var since time.Time
-	if agent.LastHeartbeat != nil && !agent.LastHeartbeat.IsZero() {
-		since = *agent.LastHeartbeat
-	} else if !agent.StartTime.IsZero() {
-		since = agent.StartTime
-	} else if !agent.CreatedAt.IsZero() {
-		since = agent.CreatedAt
-	} else {
-		return "-"
+// formatAge returns time since agent was first registered (created_at)
+func formatAge(agent EnhancedAgent) string {
+	if !agent.CreatedAt.IsZero() {
+		return formatDuration(time.Since(agent.CreatedAt))
 	}
-	return formatDuration(time.Since(since))
+	// Fallback to start time if created_at is not available
+	if !agent.StartTime.IsZero() {
+		return formatDuration(time.Since(agent.StartTime))
+	}
+	return "-"
+}
+
+// formatLastSeen returns time since last heartbeat
+func formatLastSeen(agent EnhancedAgent) string {
+	if agent.LastHeartbeat != nil && !agent.LastHeartbeat.IsZero() {
+		return formatDuration(time.Since(*agent.LastHeartbeat))
+	}
+	// Fallback to updated_at if last_heartbeat is not available
+	if !agent.UpdatedAt.IsZero() {
+		return formatDuration(time.Since(agent.UpdatedAt))
+	}
+	return "-"
 }
 
 func formatEndpoint(endpoint string) string {
