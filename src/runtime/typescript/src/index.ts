@@ -206,6 +206,9 @@ export {
   registerPartial,
   isFileTemplate,
   extractFilePath,
+  setTemplateBasePath,
+  getTemplateBasePath,
+  findAndSetBasePath,
 } from "./template.js";
 
 // Response parser

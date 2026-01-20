@@ -161,36 +161,44 @@ class MeshLlmAgentInjector(BaseInjector):
         # Create UnifiedMCPProxy for the provider
         provider_proxy = self._create_provider_proxy(provider_data)
 
-        # Update llm_agents data with provider_proxy and vendor (Phase 2)
-        if function_id in self._llm_agents:
-            self._llm_agents[function_id]["provider_proxy"] = provider_proxy
+        # Update only provider-related fields, preserving tool data if already set.
+        # This avoids race conditions where provider and tools updates can arrive in any order.
+        if function_id not in self._llm_agents:
+            self._llm_agents[function_id] = {}
 
-            # Phase 2: Extract vendor from provider_data for handler selection
-            vendor = provider_data.get("vendor", "unknown")
-            self._llm_agents[function_id]["vendor"] = vendor
+        # Phase 2: Extract vendor from provider_data for handler selection
+        vendor = provider_data.get("vendor", "unknown")
 
+        self._llm_agents[function_id]["provider_proxy"] = provider_proxy
+        self._llm_agents[function_id]["vendor"] = vendor
+
+        logger.info(
+            f"✅ Set provider proxy for '{function_id}': {provider_proxy.function_name} at {provider_proxy.endpoint} (vendor={vendor})"
+        )
+
+        # Re-create and update MeshLlmAgent with new provider (only if tools are also available)
+        # Get the function wrapper from DecoratorRegistry
+        llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+        wrapper = None
+        for agent_func_id, metadata in llm_agents.items():
+            if metadata.function_id == function_id:
+                wrapper = metadata.function
+                break
+
+        # Only update wrapper if we have both tools and provider (tools_metadata indicates tools were processed)
+        if (
+            wrapper
+            and hasattr(wrapper, "_mesh_update_llm_agent")
+            and "tools_metadata" in self._llm_agents[function_id]
+        ):
+            llm_agent = self._create_llm_agent(function_id)
+            wrapper._mesh_update_llm_agent(llm_agent)
             logger.info(
-                f"✅ Set provider proxy for '{function_id}': {provider_proxy.function_name} at {provider_proxy.endpoint} (vendor={vendor})"
+                f"🔄 Updated wrapper with new MeshLlmAgent (with provider) for '{function_id}'"
             )
-
-            # Re-create and update MeshLlmAgent with new provider
-            # Get the function wrapper from DecoratorRegistry
-            llm_agents = DecoratorRegistry.get_mesh_llm_agents()
-            wrapper = None
-            for agent_func_id, metadata in llm_agents.items():
-                if metadata.function_id == function_id:
-                    wrapper = metadata.function
-                    break
-
-            if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
-                llm_agent = self._create_llm_agent(function_id)
-                wrapper._mesh_update_llm_agent(llm_agent)
-                logger.info(
-                    f"🔄 Updated wrapper with new MeshLlmAgent (with provider) for '{function_id}'"
-                )
-        else:
-            logger.warning(
-                f"⚠️ Function '{function_id}' not found in _llm_agents, cannot set provider proxy"
+        elif wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
+            logger.debug(
+                f"⏳ Provider set for '{function_id}', waiting for tools before updating wrapper"
             )
 
     def _create_provider_proxy(self, provider_data: dict[str, Any]) -> UnifiedMCPProxy:
@@ -273,21 +281,23 @@ class MeshLlmAgentInjector(BaseInjector):
                 logger.error(f"❌ Error creating proxy for tool {tool_name}: {e}")
                 # Continue processing other tools
 
-        # Provider proxy will be set separately via process_llm_providers()
-        # (v0.6.1 - providers come from llm_providers field, not dependencies)
-        provider_proxy = None
+        # Update only tool-related fields, preserving provider_proxy if already set.
+        # Provider proxy is managed separately by process_llm_providers().
+        # This avoids race conditions where tools update wipes out provider resolution.
+        if function_id not in self._llm_agents:
+            self._llm_agents[function_id] = {}
 
-        # Store LLM agent data with both metadata and proxies
-        # Keep original tool metadata for schema building
-        self._llm_agents[function_id] = {
-            "config": llm_metadata.config,
-            "output_type": llm_metadata.output_type,
-            "param_name": llm_metadata.param_name,
-            "tools_metadata": tools,  # Original metadata for schema building
-            "tools_proxies": tool_proxies_map,  # Proxies for execution
-            "function": llm_metadata.function,
-            "provider_proxy": provider_proxy,  # Provider proxy for mesh delegation
-        }
+        self._llm_agents[function_id].update(
+            {
+                "config": llm_metadata.config,
+                "output_type": llm_metadata.output_type,
+                "param_name": llm_metadata.param_name,
+                "tools_metadata": tools,  # Original metadata for schema building
+                "tools_proxies": tool_proxies_map,  # Proxies for execution
+                "function": llm_metadata.function,
+                # Note: provider_proxy is NOT set here - managed by _process_function_provider
+            }
+        )
 
         logger.info(
             f"✅ Processed {len(tool_proxies_map)} tools for LLM function '{function_id}'"
@@ -431,8 +441,7 @@ class MeshLlmAgentInjector(BaseInjector):
                     if is_template:
                         # Templates enabled - create per-call agent with context
                         # Import signature analyzer for context detection
-                        from .signature_analyzer import \
-                            get_context_parameter_name
+                        from .signature_analyzer import get_context_parameter_name
 
                         # Detect context parameter
                         context_param_name = config_dict.get("context_param")
