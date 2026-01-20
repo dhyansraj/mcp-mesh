@@ -48,6 +48,7 @@ import {
   LlmToolRegistry,
 } from "./llm.js";
 import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
+import { findAndSetBasePath } from "./template.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -310,6 +311,10 @@ export class MeshAgent {
   async _autoStart(): Promise<void> {
     if (this.started) return;
     this.started = true;
+
+    // Auto-detect template base path from agent's package.json location
+    // This ensures file:// templates resolve correctly regardless of cwd
+    findAndSetBasePath();
 
     // Handle port=0: auto-assign an available port
     if (this.config.port === 0) {
