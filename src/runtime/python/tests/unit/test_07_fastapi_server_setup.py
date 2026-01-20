@@ -47,7 +47,6 @@ class TestFastAPIServerSetupStep:
         """Test helper methods exist."""
         step = FastAPIServerSetupStep()
         helper_methods = [
-            "_is_http_enabled",
             "_resolve_binding_config",
             "_resolve_advertisement_config",
             "_create_fastapi_app",
@@ -409,14 +408,7 @@ class TestExecuteScenarios:
             "heartbeat_config": {"interval": 30},
         }
 
-    @pytest.mark.asyncio
-    async def test_execute_http_disabled(self, step, mock_context_minimal):
-        """Test execute when HTTP transport is disabled."""
-        with patch.object(step, "_is_http_enabled", return_value=False):
-            result = await step.execute(mock_context_minimal)
-
-            assert result.status == PipelineStatus.SKIPPED
-            assert result.message == "HTTP transport disabled"
+    # Note: test_execute_http_disabled removed - HTTP is now always enabled
 
     @pytest.mark.asyncio
     @patch("fastapi.FastAPI")
@@ -428,7 +420,6 @@ class TestExecuteScenarios:
         mock_fastapi.return_value = mock_app
 
         with (
-            patch.object(step, "_is_http_enabled", return_value=True),
             patch.object(
                 step,
                 "_resolve_binding_config",
@@ -467,7 +458,6 @@ class TestExecuteScenarios:
         mock_wrapper_class.return_value = mock_wrapper
 
         with (
-            patch.object(step, "_is_http_enabled", return_value=True),
             patch.object(
                 step,
                 "_resolve_binding_config",
@@ -499,7 +489,7 @@ class TestExecuteScenarios:
     async def test_execute_general_exception(self, step, mock_context_minimal):
         """Test execute with general exception."""
         with patch.object(
-            step, "_is_http_enabled", side_effect=Exception("General error")
+            step, "_resolve_binding_config", side_effect=Exception("General error")
         ):
             result = await step.execute(mock_context_minimal)
 

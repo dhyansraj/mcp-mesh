@@ -1337,6 +1337,7 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			Version:   &a.Version,
 			Status:    generated.AgentInfoStatus(status),
 			Endpoint:  endpoint,
+			CreatedAt: &a.CreatedAt,
 			LastSeen:  &a.UpdatedAt,
 		}
 

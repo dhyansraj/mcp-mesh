@@ -1225,10 +1225,16 @@ components:
               provider_agent_id: "claude-provider-abc123"
               endpoint: "http://claude-provider:9020"
               status: "available"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:25:00Z"
+          description: When agent was first registered
         last_seen:
           type: string
           format: date-time
           example: "2024-01-20T10:30:45Z"
+          description: Last heartbeat timestamp
         version:
           type: string
           example: "1.0.0"
