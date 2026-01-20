@@ -51,10 +51,14 @@ function findPackageJsonDir(startDir: string): string | null {
   let currentDir = path.resolve(startDir);
   const root = path.parse(currentDir).root;
 
-  while (currentDir !== root) {
+  while (true) {
     const packageJsonPath = path.join(currentDir, "package.json");
     if (fsSync.existsSync(packageJsonPath)) {
       return currentDir;
+    }
+    // Exit after checking root directory
+    if (currentDir === root) {
+      break;
     }
     currentDir = path.dirname(currentDir);
   }
