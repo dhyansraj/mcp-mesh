@@ -55,7 +55,6 @@ def greet(name: str = "World", date_tool: McpMeshTool = None) -> str:
 
 The runtime can be configured via environment variables:
 
-- `MCP_MESH_ENABLED`: Enable/disable runtime (default: "true")
 - `MCP_MESH_REGISTRY_URL`: Registry URL (default: "http://localhost:8080")
 - `MCP_MESH_AGENT_NAME`: Custom agent name (auto-generated if not set)
 

@@ -4,15 +4,12 @@ Pytest configuration for MCP Mesh SDK tests.
 Provides shared fixtures and test configuration across all test modules.
 """
 
-# CRITICAL: Set test environment variables BEFORE any imports
-# This prevents server startups during unit tests caused by @mesh.agent auto_run
-# The issue: mesh/__init__.py now imports helpers.py at module level, changing
-# initialization order. By setting ENV vars here (pytest loads conftest.py FIRST),
-# we ensure they're in place before any mesh code runs.
+# CRITICAL: Set PYTEST_RUNNING BEFORE any imports
+# This prevents server startups during unit tests by signaling to _mcp_mesh/__init__.py
+# to skip auto-initialization. pytest loads conftest.py FIRST, so this env var
+# is in place before any mesh code runs.
 import os
 
-os.environ["MCP_MESH_AUTO_RUN"] = "false"
-os.environ["MCP_MESH_HTTP_ENABLED"] = "false"
 os.environ["PYTEST_RUNNING"] = "true"
 
 import asyncio
@@ -22,10 +19,11 @@ from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+
 # Configure logging with TRACE level support BEFORE any other mcp_mesh imports
 # This ensures the Logger.trace method is available for all modules
 import _mcp_mesh.shared.logging_config  # noqa: F401 - import for side effects
-import pytest
 from _mcp_mesh.shared.support_types import HealthStatus
 
 # Import SDK components for testing

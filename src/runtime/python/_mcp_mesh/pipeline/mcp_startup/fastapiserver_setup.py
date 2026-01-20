@@ -41,13 +41,6 @@ class FastAPIServerSetupStep(PipelineStep):
             existing_fastapi_app = context.get("existing_fastapi_app")
             server_reuse = context.get("server_reuse", False)
 
-            # Check if HTTP transport is enabled
-            if not self._is_http_enabled():
-                result.status = PipelineStatus.SKIPPED
-                result.message = "HTTP transport disabled"
-                self.logger.info("⚠️ HTTP transport disabled via MCP_MESH_HTTP_ENABLED")
-                return result
-
             # Resolve binding and advertisement configuration
             binding_config = self._resolve_binding_config(agent_config)
             advertisement_config = self._resolve_advertisement_config(agent_config)
@@ -180,16 +173,6 @@ class FastAPIServerSetupStep(PipelineStep):
             self.logger.error(f"❌ FastAPI server setup failed: {e}")
 
         return result
-
-    def _is_http_enabled(self) -> bool:
-        """Check if HTTP transport is enabled."""
-
-        return os.getenv("MCP_MESH_HTTP_ENABLED", "true").lower() in (
-            "true",
-            "1",
-            "yes",
-            "on",
-        )
 
     def _resolve_binding_config(self, agent_config: dict[str, Any]) -> dict[str, Any]:
         """Resolve local server binding configuration."""
