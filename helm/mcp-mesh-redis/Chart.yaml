@@ -2,7 +2,7 @@ apiVersion: v2
 name: mcp-mesh-redis
 description: Redis cache for MCP Mesh session storage
 type: application
-version: 0.8.0-beta.8
+version: 0.8.0-beta.9
 appVersion: "7"
 keywords:
   - mcp
