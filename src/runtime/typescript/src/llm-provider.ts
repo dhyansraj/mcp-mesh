@@ -538,10 +538,14 @@ export function llmProvider(config: LlmProviderConfig): {
 
     debug(`Calling Vercel AI SDK: model=${effectiveModelName}`);
 
-    // Issue #459: Use generateObject for structured output when schema is provided
-    // This uses the native API's structured output feature (response_format for OpenAI/Gemini)
-    // instead of relying on prompt-based JSON instructions
-    const useStructuredOutput = outputSchema && !vercelTools;
+    // Issue #459: Use generateObject for structured output based on handler's output mode
+    // - "strict" mode: Use generateObject() for native structured output (OpenAI/Gemini)
+    // - "hint" mode: Use generateText() with prompt-based JSON instructions (Claude)
+    // - "text" mode: Use generateText() for plain text output
+    // Claude always uses "hint" mode because generateObject() has issues with Anthropic
+    const outputMode = handler.determineOutputMode(outputSchemaObj);
+    const useStructuredOutput = outputMode === "strict" && outputSchema && !vercelTools;
+    debug(`Output mode: ${outputMode}, useStructuredOutput: ${useStructuredOutput}`);
 
     let response: MeshLlmResponse;
     let latencyMs: number;

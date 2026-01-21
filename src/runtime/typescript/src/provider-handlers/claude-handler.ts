@@ -39,13 +39,6 @@ import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
 const debug = createDebug("claude-handler");
 
 // ============================================================================
-// Constants
-// ============================================================================
-
-/** Simple schema threshold - schemas with fewer fields use hint mode */
-const SIMPLE_SCHEMA_FIELD_THRESHOLD = 5;
-
-// ============================================================================
 // Claude Handler Implementation
 // ============================================================================
 
@@ -101,7 +94,17 @@ export class ClaudeHandler implements ProviderHandler {
     const determinedMode = this.determineOutputMode(outputSchema, outputMode);
 
     // Convert messages to Vercel AI SDK format (shared utility)
-    const convertedMessages = convertMessagesToVercelFormat(messages);
+    let convertedMessages = convertMessagesToVercelFormat(messages);
+
+    // For "hint" mode, append JSON instructions to the system prompt
+    // This is the fast, prompt-based approach instead of slow generateObject()
+    if (determinedMode === "hint" && outputSchema) {
+      convertedMessages = this.appendJsonInstructionsToSystemPrompt(
+        convertedMessages,
+        outputSchema
+      );
+      debug(`Using hint mode with JSON instructions in prompt for schema: ${outputSchema.name}`);
+    }
 
     const request: PreparedRequest = {
       messages: convertedMessages,
@@ -125,7 +128,7 @@ export class ClaudeHandler implements ProviderHandler {
       request.topP = topP;
     }
 
-    // Only add response_format in "strict" mode
+    // Only add response_format in "strict" mode (not used for Claude anymore)
     if (determinedMode === "strict" && outputSchema) {
       // Claude requires additionalProperties: false on all object types
       // Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
@@ -220,7 +223,10 @@ ${fieldsText}
 Example format:
 ${JSON.stringify(exampleFormat, null, 2)}
 
-IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble text.`;
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
+- DO NOT include any text before or after the JSON
+- Start directly with { and end with }`;
     }
 
     return systemContent;
@@ -243,11 +249,16 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
   /**
    * Determine the output mode based on schema complexity.
    *
+   * Claude Strategy (Option A):
+   * - Always use "hint" mode (prompt-based) for schemas, never "strict"
+   * - Vercel AI SDK's generateObject() for Anthropic has issues with nested schemas
+   * - Anthropic's native structured output is slow and requires beta header
+   * - Prompt-based JSON instructions are fast and ~95% reliable for Claude
+   *
    * Logic:
    * - If overrideMode specified, use it
    * - If no schema (string return type), use "text" mode
-   * - If schema is simple (<5 fields, basic types), use "hint" mode
-   * - Otherwise, use "strict" mode
+   * - If schema exists, always use "hint" mode (prompt-based)
    */
   determineOutputMode(
     outputSchema: OutputSchema | null,
@@ -263,13 +274,9 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
       return "text";
     }
 
-    // Check if schema is simple
-    if (this.isSimpleSchema(outputSchema)) {
-      return "hint";
-    }
-
-    // Complex schema - use strict mode
-    return "strict";
+    // Always use hint mode for Claude - generateObject() has issues with Anthropic
+    // and native structured output is slow. Prompt-based JSON is fast and reliable.
+    return "hint";
   }
 
   // ==========================================================================
@@ -277,61 +284,78 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
   // ==========================================================================
 
   /**
-   * Check if a schema is simple enough for hint mode.
+   * Append JSON schema instructions to the system prompt for "hint" mode.
    *
-   * Simple schema criteria:
-   * - Less than 5 fields
-   * - No nested objects (hasNestedObjects flag or $defs present)
+   * This enables fast, prompt-based structured output instead of slow generateObject().
+   * Claude is excellent at following detailed instructions, so this approach is
+   * ~95% reliable while being much faster than native structured output.
+   *
+   * @param messages - Messages with system prompt
+   * @param outputSchema - Schema to include in instructions
+   * @returns Messages with updated system prompt
    */
-  private isSimpleSchema(outputSchema: OutputSchema): boolean {
-    // Use pre-computed values if available
-    if (outputSchema.fieldCount !== undefined) {
-      if (outputSchema.fieldCount >= SIMPLE_SCHEMA_FIELD_THRESHOLD) {
-        return false;
-      }
+  private appendJsonInstructionsToSystemPrompt(
+    messages: LlmMessage[],
+    outputSchema: OutputSchema
+  ): LlmMessage[] {
+    const properties = (outputSchema.schema.properties ?? {}) as Record<
+      string,
+      { type?: string; description?: string }
+    >;
+    const required = (outputSchema.schema.required ?? []) as string[];
+
+    // Build human-readable schema description
+    const fieldDescriptions: string[] = [];
+    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+      const fieldType = fieldSchema.type ?? "any";
+      const isRequired = required.includes(fieldName);
+      const reqMarker = isRequired ? " (required)" : " (optional)";
+      const desc = fieldSchema.description ?? "";
+      const descText = desc ? ` - ${desc}` : "";
+      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
     }
 
-    if (outputSchema.hasNestedObjects !== undefined) {
-      return !outputSchema.hasNestedObjects;
+    const fieldsText = fieldDescriptions.join("\n");
+    const exampleFormat = Object.fromEntries(
+      Object.entries(properties).map(([k, v]) => [k, `<${v.type ?? "value"}>`])
+    );
+
+    const jsonInstructions = `
+
+RESPONSE FORMAT:
+You MUST respond with valid JSON matching the ${outputSchema.name} schema:
+{
+${fieldsText}
+}
+
+Example format:
+${JSON.stringify(exampleFormat, null, 2)}
+
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
+- DO NOT include any text before or after the JSON
+- Start directly with { and end with }`;
+
+    // Find and update system message, or prepend one if none exists
+    const updatedMessages = [...messages];
+    const systemIndex = updatedMessages.findIndex((m) => m.role === "system");
+
+    if (systemIndex >= 0) {
+      // Append to existing system message
+      const systemMsg = updatedMessages[systemIndex];
+      updatedMessages[systemIndex] = {
+        ...systemMsg,
+        content: (systemMsg.content ?? "") + jsonInstructions,
+      };
+    } else {
+      // Prepend new system message with JSON instructions
+      updatedMessages.unshift({
+        role: "system",
+        content: jsonInstructions.trim(),
+      });
     }
 
-    // Analyze schema directly
-    const schema = outputSchema.schema;
-    const properties = schema.properties as Record<string, unknown> | undefined;
-
-    // Check field count
-    if (properties && Object.keys(properties).length >= SIMPLE_SCHEMA_FIELD_THRESHOLD) {
-      return false;
-    }
-
-    // Check for $defs (indicates nested models)
-    if (schema.$defs) {
-      return false;
-    }
-
-    // Check for nested objects in properties
-    if (properties) {
-      for (const fieldSchema of Object.values(properties)) {
-        const fs = fieldSchema as Record<string, unknown>;
-        // Check for nested objects
-        if (fs.type === "object" && fs.properties) {
-          return false;
-        }
-        // Check for $ref (nested model reference)
-        if (fs.$ref) {
-          return false;
-        }
-        // Check array items for complex types
-        if (fs.type === "array") {
-          const items = fs.items as Record<string, unknown> | undefined;
-          if (items?.type === "object" || items?.$ref) {
-            return false;
-          }
-        }
-      }
-    }
-
-    return true;
+    return updatedMessages;
   }
 }
 
