@@ -26,7 +26,7 @@ export type {
   OutputMode,
 } from "./provider-handler.js";
 
-export { convertMessagesToVercelFormat } from "./provider-handler.js";
+export { convertMessagesToVercelFormat, makeSchemaStrict } from "./provider-handler.js";
 
 // Export registry
 export {

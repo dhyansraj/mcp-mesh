@@ -30,7 +30,7 @@ import type {
   LlmMessage,
   LlmToolCallRequest,
 } from "./types.js";
-import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
+import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/index.js";
 
 const debug = createDebug("llm-provider");
 
@@ -577,18 +577,18 @@ export function llmProvider(config: LlmProviderConfig): {
       const { jsonSchema } = aiModule as { jsonSchema: (schema: Record<string, unknown>) => unknown };
 
       // Clean up schema - remove $schema and other meta fields
-      // Add additionalProperties: false for OpenAI strict mode requirement
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { $schema, title, ...cleanSchema } = outputSchema as Record<string, unknown>;
+
+      // Apply strict constraints recursively to all nested objects
+      // This adds additionalProperties: false and required fields at all levels
+      // Required for OpenAI/Gemini structured output, and enables future Claude support
+      const strictSchema = makeSchemaStrict(cleanSchema as Record<string, unknown>, { addAllRequired: true });
 
       const objectResult = await generateObject({
         model: aiModel,
         messages: convertedMessages,
-        schema: jsonSchema({
-          type: "object",
-          additionalProperties: false, // Required by OpenAI structured output
-          ...cleanSchema,
-        }),
+        schema: jsonSchema(strictSchema),
         schemaName: outputTypeName,
         maxOutputTokens: requestOptions.maxOutputTokens,
         temperature: requestOptions.temperature,
