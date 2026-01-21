@@ -176,16 +176,41 @@ class MeshLlmAgentInjector(BaseInjector):
             f"✅ Set provider proxy for '{function_id}': {provider_proxy.function_name} at {provider_proxy.endpoint} (vendor={vendor})"
         )
 
-        # Re-create and update MeshLlmAgent with new provider (only if tools are also available)
-        # Get the function wrapper from DecoratorRegistry
+        # Re-create and update MeshLlmAgent with new provider
+        # Get the function wrapper and metadata from DecoratorRegistry
         llm_agents = DecoratorRegistry.get_mesh_llm_agents()
         wrapper = None
+        llm_metadata = None
         for agent_func_id, metadata in llm_agents.items():
             if metadata.function_id == function_id:
                 wrapper = metadata.function
+                llm_metadata = metadata
                 break
 
-        # Only update wrapper if we have both tools and provider (tools_metadata indicates tools were processed)
+        # Check if tools are required (filter is specified)
+        has_filter = False
+        if llm_metadata and llm_metadata.config:
+            filter_config = llm_metadata.config.get("filter")
+            has_filter = filter_config is not None and len(filter_config) > 0
+
+        # If no filter specified, initialize empty tools data so we can create LLM agent without tools
+        # This supports simple LLM calls (text generation) that don't need tool calling
+        if not has_filter and "tools_metadata" not in self._llm_agents[function_id]:
+            self._llm_agents[function_id].update(
+                {
+                    "config": llm_metadata.config if llm_metadata else {},
+                    "output_type": llm_metadata.output_type if llm_metadata else None,
+                    "param_name": llm_metadata.param_name if llm_metadata else "llm",
+                    "tools_metadata": [],  # No tools for simple LLM calls
+                    "tools_proxies": {},  # No tool proxies needed
+                    "function": llm_metadata.function if llm_metadata else None,
+                }
+            )
+            logger.info(
+                f"✅ Initialized empty tools for '{function_id}' (no filter specified - simple LLM mode)"
+            )
+
+        # Update wrapper if we have tools data (either from filter matching or initialized empty)
         if (
             wrapper
             and hasattr(wrapper, "_mesh_update_llm_agent")
@@ -194,9 +219,10 @@ class MeshLlmAgentInjector(BaseInjector):
             llm_agent = self._create_llm_agent(function_id)
             wrapper._mesh_update_llm_agent(llm_agent)
             logger.info(
-                f"🔄 Updated wrapper with new MeshLlmAgent (with provider) for '{function_id}'"
+                f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}'"
+                + (" (with tools)" if has_filter else " (simple LLM mode)")
             )
-        elif wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
+        elif wrapper and hasattr(wrapper, "_mesh_update_llm_agent") and has_filter:
             logger.debug(
                 f"⏳ Provider set for '{function_id}', waiting for tools before updating wrapper"
             )

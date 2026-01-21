@@ -214,6 +214,58 @@ def llm_provider(
                             f"(requested by consumer)"
                         )
 
+            # Issue #459: Handle output_schema for vendor-specific structured output
+            # Convert to response_format for vendors that support it
+            output_schema = model_params_copy.pop("output_schema", None)
+            output_type_name = model_params_copy.pop("output_type_name", None)
+
+            # Vendors that support structured output via response_format
+            supported_structured_output_vendors = (
+                "openai",
+                "azure",  # Azure OpenAI uses same format as OpenAI
+                "gemini",
+                "vertex_ai",  # Vertex AI Gemini uses same format as Gemini
+                "anthropic",
+            )
+
+            if output_schema:
+                if vendor in supported_structured_output_vendors:
+                    # Apply vendor-specific response_format for structured output
+                    from _mcp_mesh.engine.provider_handlers import make_schema_strict
+
+                    if vendor == "anthropic":
+                        # Claude: doesn't require all properties in 'required', uses strict=False
+                        schema = make_schema_strict(
+                            output_schema, add_all_required=False
+                        )
+                        strict_mode = False
+                    else:
+                        # OpenAI/Azure/Gemini/Vertex: require all properties in 'required', uses strict=True
+                        schema = make_schema_strict(
+                            output_schema, add_all_required=True
+                        )
+                        strict_mode = True
+
+                    model_params_copy["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": output_type_name or "Response",
+                            "schema": schema,
+                            "strict": strict_mode,
+                        },
+                    }
+                    logger.debug(
+                        f"🎯 Applied {vendor} response_format for structured output: "
+                        f"{output_type_name} (strict={strict_mode})"
+                    )
+                else:
+                    # Vendor doesn't support structured output - warn user
+                    logger.warning(
+                        f"⚠️ Structured output schema '{output_type_name or 'Response'}' "
+                        f"was provided but vendor '{vendor}' does not support response_format. "
+                        f"The schema will be ignored and the LLM may return unstructured output."
+                    )
+
             # Build litellm.completion arguments
             completion_args: dict[str, Any] = {
                 "model": effective_model,

@@ -1354,6 +1354,34 @@ def llm(
                 rule=ValidationRule.STRING_RULE,
             )
 
+        # Resolve model with env var override
+        resolved_model = get_config_value(
+            "MESH_LLM_MODEL",
+            override=model,
+            default=None,
+            rule=ValidationRule.STRING_RULE,
+        )
+
+        # Warn about missing configuration parameters
+        if not system_prompt and not system_prompt_file:
+            logger.warning(
+                f"⚠️ @mesh.llm: No 'system_prompt' specified for function '{func.__name__}'. "
+                f"Using default: 'You are a helpful assistant.' "
+                f"Consider adding a custom system_prompt for better results."
+            )
+
+        if isinstance(provider, str) and provider == "claude" and not resolved_model:
+            logger.warning(
+                f"⚠️ @mesh.llm: No 'model' specified for function '{func.__name__}'. "
+                f"The LLM provider will use its default model. "
+                f"Consider specifying a model explicitly (e.g., model='anthropic/claude-sonnet-4-5')."
+            )
+
+        # Use default system prompt if not provided
+        effective_system_prompt = (
+            system_prompt if system_prompt else "You are a helpful assistant."
+        )
+
         resolved_config = {
             "filter": filter,
             "filter_mode": get_config_value(
@@ -1363,12 +1391,7 @@ def llm(
                 rule=ValidationRule.STRING_RULE,
             ),
             "provider": resolved_provider,
-            "model": get_config_value(
-                "MESH_LLM_MODEL",
-                override=model,
-                default=None,
-                rule=ValidationRule.STRING_RULE,
-            ),
+            "model": resolved_model,
             "api_key": api_key,  # Will be resolved from provider-specific env vars later
             "max_iterations": get_config_value(
                 "MESH_LLM_MAX_ITERATIONS",
@@ -1376,7 +1399,7 @@ def llm(
                 default=10,
                 rule=ValidationRule.NONZERO_RULE,
             ),
-            "system_prompt": system_prompt,
+            "system_prompt": effective_system_prompt,
             "system_prompt_file": system_prompt_file,
             # Phase 1: Template metadata
             "is_template": is_template,

@@ -52,7 +52,9 @@ describe("ClaudeHandler", () => {
       expect(handler.determineOutputMode(schema, "text")).toBe("text");
     });
 
-    it("should return 'hint' for simple schemas (< 5 fields)", () => {
+    it("should always return 'hint' for any schema (Claude strategy)", () => {
+      // Claude always uses "hint" mode because generateObject() has issues with Anthropic
+      // and native structured output is slow. Prompt-based JSON is fast and reliable.
       const simpleSchema: OutputSchema = {
         name: "SimpleSchema",
         schema: {
@@ -68,7 +70,7 @@ describe("ClaudeHandler", () => {
       expect(mode).toBe("hint");
     });
 
-    it("should return 'strict' for complex schemas (>= 5 fields)", () => {
+    it("should return 'hint' for complex schemas (Claude always uses hint)", () => {
       const complexSchema: OutputSchema = {
         name: "ComplexSchema",
         schema: {
@@ -83,11 +85,12 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode regardless of complexity
       const mode = handler.determineOutputMode(complexSchema);
-      expect(mode).toBe("strict");
+      expect(mode).toBe("hint");
     });
 
-    it("should return 'strict' for schemas with nested objects", () => {
+    it("should return 'hint' for schemas with nested objects (Claude always uses hint)", () => {
       const nestedSchema: OutputSchema = {
         name: "NestedSchema",
         schema: {
@@ -105,11 +108,12 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode regardless of nesting
       const mode = handler.determineOutputMode(nestedSchema);
-      expect(mode).toBe("strict");
+      expect(mode).toBe("hint");
     });
 
-    it("should return 'strict' for schemas with $defs", () => {
+    it("should return 'hint' for schemas with $defs (Claude always uses hint)", () => {
       const schemaWithDefs: OutputSchema = {
         name: "SchemaWithDefs",
         schema: {
@@ -123,11 +127,12 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode regardless of $defs
       const mode = handler.determineOutputMode(schemaWithDefs);
-      expect(mode).toBe("strict");
+      expect(mode).toBe("hint");
     });
 
-    it("should return 'strict' for schemas with $ref", () => {
+    it("should return 'hint' for schemas with $ref (Claude always uses hint)", () => {
       const schemaWithRef: OutputSchema = {
         name: "SchemaWithRef",
         schema: {
@@ -138,22 +143,24 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode regardless of $ref
       const mode = handler.determineOutputMode(schemaWithRef);
-      expect(mode).toBe("strict");
+      expect(mode).toBe("hint");
     });
 
-    it("should use pre-computed fieldCount if available", () => {
+    it("should return 'hint' regardless of pre-computed fieldCount", () => {
       const schemaWithFieldCount: OutputSchema = {
         name: "SchemaWithFieldCount",
         schema: { type: "object" },
         fieldCount: 10,
       };
 
+      // Claude always uses hint mode regardless of field count
       const mode = handler.determineOutputMode(schemaWithFieldCount);
-      expect(mode).toBe("strict");
+      expect(mode).toBe("hint");
     });
 
-    it("should use pre-computed hasNestedObjects if available", () => {
+    it("should return 'hint' regardless of pre-computed hasNestedObjects", () => {
       const schemaWithFlag: OutputSchema = {
         name: "SchemaWithFlag",
         schema: { type: "object", properties: { a: { type: "string" } } },
@@ -161,6 +168,7 @@ describe("ClaudeHandler", () => {
         hasNestedObjects: false,
       };
 
+      // Claude always uses hint mode regardless of flags
       const mode = handler.determineOutputMode(schemaWithFlag);
       expect(mode).toBe("hint");
     });
@@ -209,7 +217,7 @@ describe("ClaudeHandler", () => {
       expect(request.tools).toEqual(tools);
     });
 
-    it("should include response_format in strict mode with schema", () => {
+    it("should not include response_format by default (Claude uses hint mode)", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Response",
@@ -225,14 +233,33 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode by default, so no responseFormat
       const request = handler.prepareRequest(messages, null, outputSchema);
+
+      expect(request.responseFormat).toBeUndefined();
+    });
+
+    it("should include response_format when outputMode: strict is explicitly set", () => {
+      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
+      const outputSchema: OutputSchema = {
+        name: "Response",
+        schema: {
+          type: "object",
+          properties: {
+            field1: { type: "string" },
+          },
+        },
+      };
+
+      // Explicitly set strict mode to get responseFormat
+      const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
       expect(request.responseFormat).toBeDefined();
       expect(request.responseFormat?.type).toBe("json_schema");
       expect(request.responseFormat?.jsonSchema.name).toBe("Response");
     });
 
-    it("should not include response_format in hint mode", () => {
+    it("should not include response_format in hint mode (any schema)", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const simpleSchema: OutputSchema = {
         name: "Simple",
@@ -244,7 +271,7 @@ describe("ClaudeHandler", () => {
 
       const request = handler.prepareRequest(messages, null, simpleSchema);
 
-      // Simple schema uses hint mode, no response_format
+      // Claude always uses hint mode, no response_format
       expect(request.responseFormat).toBeUndefined();
     });
 
@@ -256,7 +283,7 @@ describe("ClaudeHandler", () => {
       expect(request.responseFormat).toBeUndefined();
     });
 
-    it("should add additionalProperties:false to schema in strict mode", () => {
+    it("should add additionalProperties:false to schema when explicit strict mode is set", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Test",
@@ -264,15 +291,12 @@ describe("ClaudeHandler", () => {
           type: "object",
           properties: {
             field1: { type: "string" },
-            field2: { type: "string" },
-            field3: { type: "string" },
-            field4: { type: "string" },
-            field5: { type: "string" },
           },
         },
       };
 
-      const request = handler.prepareRequest(messages, null, outputSchema);
+      // Must explicitly use strict mode for Claude to include responseFormat
+      const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
       expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
     });
@@ -388,7 +412,7 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("NEVER use XML-style syntax");
     });
 
-    it("should add brief JSON note in strict mode", () => {
+    it("should add detailed JSON schema for any schema (Claude uses hint mode by default)", () => {
       const basePrompt = "You are a helpful assistant.";
       const complexSchema: OutputSchema = {
         name: "ComplexOutput",
@@ -404,9 +428,29 @@ describe("ClaudeHandler", () => {
         },
       };
 
+      // Claude always uses hint mode, so detailed JSON instructions are added
       const result = handler.formatSystemPrompt(basePrompt, null, complexSchema);
 
-      expect(result).toContain("ComplexOutput format");
+      expect(result).toContain("RESPONSE FORMAT:");
+      expect(result).toContain("CRITICAL: Your response must be ONLY the raw JSON object");
+    });
+
+    it("should add brief JSON note when explicit strict mode is set", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const schema: OutputSchema = {
+        name: "StrictOutput",
+        schema: {
+          type: "object",
+          properties: {
+            a: { type: "string" },
+          },
+        },
+      };
+
+      // Only with explicit "strict" mode override
+      const result = handler.formatSystemPrompt(basePrompt, null, schema, "strict");
+
+      expect(result).toContain("StrictOutput format");
       // Should NOT contain detailed schema (that's handled by response_format)
       expect(result).not.toContain("RESPONSE FORMAT:");
     });
@@ -430,7 +474,7 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("RESPONSE FORMAT:");
       expect(result).toContain("name: string (required)");
       expect(result).toContain("age: number (optional)");
-      expect(result).toContain("Respond ONLY with valid JSON");
+      expect(result).toContain("CRITICAL: Your response must be ONLY the raw JSON object");
     });
 
     it("should not add JSON instructions in text mode", () => {
@@ -443,8 +487,10 @@ describe("ClaudeHandler", () => {
     });
   });
 
-  describe("schema strictness (makeSchemaStrict)", () => {
-    it("should add additionalProperties:false to nested objects", () => {
+  describe("schema strictness (makeSchemaStrict) - only in explicit strict mode", () => {
+    // These tests verify that when outputMode: "strict" is explicitly set,
+    // the schema is properly modified with additionalProperties: false
+    it("should add additionalProperties:false to nested objects in strict mode", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const nestedSchema: OutputSchema = {
         name: "Nested",
@@ -458,14 +504,12 @@ describe("ClaudeHandler", () => {
               },
             },
             a: { type: "string" },
-            b: { type: "string" },
-            c: { type: "string" },
-            d: { type: "string" },
           },
         },
       };
 
-      const request = handler.prepareRequest(messages, null, nestedSchema);
+      // Must explicitly use strict mode for Claude to include responseFormat
+      const request = handler.prepareRequest(messages, null, nestedSchema, { outputMode: "strict" });
 
       const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
       expect(schema.additionalProperties).toBe(false);
@@ -474,7 +518,7 @@ describe("ClaudeHandler", () => {
       expect(properties.user.additionalProperties).toBe(false);
     });
 
-    it("should add additionalProperties:false to $defs", () => {
+    it("should add additionalProperties:false to $defs in strict mode", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const schemaWithDefs: OutputSchema = {
         name: "WithDefs",
@@ -482,10 +526,6 @@ describe("ClaudeHandler", () => {
           type: "object",
           properties: {
             a: { type: "string" },
-            b: { type: "string" },
-            c: { type: "string" },
-            d: { type: "string" },
-            e: { type: "string" },
           },
           $defs: {
             Address: {
@@ -496,14 +536,15 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      const request = handler.prepareRequest(messages, null, schemaWithDefs);
+      // Must explicitly use strict mode for Claude to include responseFormat
+      const request = handler.prepareRequest(messages, null, schemaWithDefs, { outputMode: "strict" });
 
       const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
       const defs = schema.$defs as Record<string, Record<string, unknown>>;
       expect(defs.Address.additionalProperties).toBe(false);
     });
 
-    it("should add additionalProperties:false to array items", () => {
+    it("should add additionalProperties:false to array items in strict mode", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const arraySchema: OutputSchema = {
         name: "ArraySchema",
@@ -518,14 +559,12 @@ describe("ClaudeHandler", () => {
               },
             },
             a: { type: "string" },
-            b: { type: "string" },
-            c: { type: "string" },
-            d: { type: "string" },
           },
         },
       };
 
-      const request = handler.prepareRequest(messages, null, arraySchema);
+      // Must explicitly use strict mode for Claude to include responseFormat
+      const request = handler.prepareRequest(messages, null, arraySchema, { outputMode: "strict" });
 
       const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
       const properties = schema.properties as Record<string, Record<string, unknown>>;

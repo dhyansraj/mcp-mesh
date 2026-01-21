@@ -7,10 +7,11 @@ Tests follow TDD approach - these should FAIL initially until decorator is imple
 import os
 from typing import get_type_hints
 
-import mesh
 import pytest
-from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 from pydantic import BaseModel
+
+import mesh
+from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
 
 class ChatResponse(BaseModel):
@@ -517,11 +518,12 @@ class TestContextParamSupport:
                 filter={"capability": "chat"},
                 system_prompt="You are helpful.",  # No file://
                 context_param="ctx",  # Context param without template
+                model="anthropic/claude-sonnet-4-5",  # Avoid model warning
             )
             def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
                 return llm(message)
 
-            # Should log warning
+            # Should log warning about context_param without template
             mock_logger.warning.assert_called()
             warning_message = str(mock_logger.warning.call_args)
             assert "context_param" in warning_message.lower()
@@ -537,11 +539,12 @@ class TestContextParamSupport:
                 filter={"capability": "chat"},
                 system_prompt="file://prompts/chat.jinja2",
                 context_param="ctx",
+                model="anthropic/claude-sonnet-4-5",  # Avoid model warning
             )
             def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
                 return llm(message)
 
-            # Should NOT log warning
+            # Should NOT log warning (no context_param warning because template is used)
             mock_logger.warning.assert_not_called()
 
     def test_context_param_none_is_valid(self):

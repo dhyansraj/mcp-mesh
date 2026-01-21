@@ -14,8 +14,12 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel
 
 from .llm_config import LLMConfig
-from .llm_errors import (LLMAPIError, MaxIterationsError, ResponseParseError,
-                         ToolExecutionError)
+from .llm_errors import (
+    LLMAPIError,
+    MaxIterationsError,
+    ResponseParseError,
+    ToolExecutionError,
+)
 from .provider_handlers import ProviderHandlerRegistry
 from .response_parser import ResponseParser
 from .tool_executor import ToolExecutor
@@ -23,8 +27,7 @@ from .tool_schema_builder import ToolSchemaBuilder
 
 # Import Jinja2 for template rendering
 try:
-    from jinja2 import (Environment, FileSystemLoader, Template,
-                        TemplateSyntaxError)
+    from jinja2 import Environment, FileSystemLoader, Template, TemplateSyntaxError
 except ImportError:
     Environment = None
     FileSystemLoader = None
@@ -633,12 +636,14 @@ IMPORTANT TOOL CALLING RULES:
             # Multi-turn conversation - use provided messages array
             messages = message.copy()
 
-            # Ensure system prompt is prepended if not already present
-            if not messages or messages[0].get("role") != "system":
-                messages.insert(0, {"role": "system", "content": system_content})
-            else:
-                # Replace existing system message with our constructed one
-                messages[0] = {"role": "system", "content": system_content}
+            # Only add/update system message if we have non-empty content
+            # (Claude API rejects empty system messages - though decorator provides default)
+            if system_content:
+                if not messages or messages[0].get("role") != "system":
+                    messages.insert(0, {"role": "system", "content": system_content})
+                else:
+                    # Replace existing system message with our constructed one
+                    messages[0] = {"role": "system", "content": system_content}
 
             # Log conversation history
             logger.info(
@@ -646,10 +651,17 @@ IMPORTANT TOOL CALLING RULES:
             )
         else:
             # Single-turn - build messages array from string
-            messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": message},
-            ]
+            # Only include system message if non-empty (Claude API rejects empty system messages)
+            if system_content:
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": message},
+                ]
+            else:
+                # Fallback for edge case where system_content is explicitly empty
+                messages = [
+                    {"role": "user", "content": message},
+                ]
 
             logger.info(f"🚀 Starting agentic loop for message: {message[:100]}...")
 
@@ -704,6 +716,16 @@ IMPORTANT TOOL CALLING RULES:
                         # (e.g., use haiku instead of provider's default sonnet)
                         if self.model:
                             model_params["model"] = self.model
+
+                        # Issue #459: Include output_schema for provider to apply vendor-specific handling
+                        # (e.g., OpenAI needs response_format, not prompt-based JSON instructions)
+                        if self.output_type is not str and hasattr(
+                            self.output_type, "model_json_schema"
+                        ):
+                            model_params["output_schema"] = (
+                                self.output_type.model_json_schema()
+                            )
+                            model_params["output_type_name"] = self.output_type.__name__
 
                         logger.debug(
                             f"📤 Delegating to mesh provider with handler-prepared params: "
