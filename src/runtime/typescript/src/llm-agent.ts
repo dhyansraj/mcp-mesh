@@ -460,25 +460,25 @@ export class MeshLlmAgent<T = string> {
     // Determine model
     const model = context.meshProvider?.model ?? this.config.model ?? this.getDefaultModel();
 
+    // Build output schema for provider (Issue #459) - computed once before loop
+    let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
+    if (this.config.returnSchema) {
+      try {
+        const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
+        // Extract schema name from title or use generic name
+        const schemaName = (jsonSchema.title as string) ?? "Response";
+        outputSchema = { schema: jsonSchema, name: schemaName };
+      } catch {
+        // If schema conversion fails, skip
+      }
+    }
+
     // Agentic loop
     let iteration = 0;
     let finalContent: string = "";
 
     while (iteration < maxIterations) {
       iteration++;
-
-      // Build output schema for provider (Issue #459)
-      let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
-      if (this.config.returnSchema) {
-        try {
-          const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
-          // Extract schema name from title or use generic name
-          const schemaName = (jsonSchema.title as string) ?? "Response";
-          outputSchema = { schema: jsonSchema, name: schemaName };
-        } catch {
-          // If schema conversion fails, skip
-        }
-      }
 
       // Call LLM
       const response = await provider.complete(

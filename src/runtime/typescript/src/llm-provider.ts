@@ -27,7 +27,6 @@ import { createDebug } from "./debug.js";
 import type {
   LlmProviderConfig,
   MeshLlmResponse,
-  MeshLlmUsage,
   LlmMessage,
   LlmToolCallRequest,
 } from "./types.js";
@@ -373,20 +372,16 @@ export function llmProvider(config: LlmProviderConfig): {
       }
     }
 
-    // Issue #459: Extract output_schema for provider to apply vendor-specific handling
-    // Note: Vercel AI SDK uses generateObject for structured output, not response_format
-    // For now, we extract it and pass to handler for prompt formatting
+    // Issue #459: Extract output_schema for structured output via generateObject()
     const outputSchema = modelParams.output_schema as Record<string, unknown> | undefined;
     const outputTypeName = modelParams.output_type_name as string | undefined;
     delete modelParams.output_schema;
     delete modelParams.output_type_name;
 
-    // Build OutputSchema object if schema was provided
+    // Build OutputSchema object for handler (prompt formatting) - generateObject uses it directly
     const outputSchemaObj = outputSchema ? {
       schema: outputSchema,
       name: outputTypeName ?? "Response",
-      fieldCount: Object.keys(outputSchema.properties ?? {}).length,
-      hasNestedObjects: false, // Simplified check
     } : null;
 
     if (outputSchemaObj) {
@@ -550,6 +545,7 @@ export function llmProvider(config: LlmProviderConfig): {
 
     let response: MeshLlmResponse;
     let latencyMs: number;
+    let resultUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
     if (useStructuredOutput) {
       // Use generateObject for structured output
@@ -607,16 +603,7 @@ export function llmProvider(config: LlmProviderConfig): {
         role: "assistant",
         content: JSON.stringify(objectResult.object),
       };
-
-      // Include usage metadata for cost tracking
-      if (objectResult.usage) {
-        const usage: MeshLlmUsage = {
-          prompt_tokens: objectResult.usage.inputTokens ?? 0,
-          completion_tokens: objectResult.usage.outputTokens ?? 0,
-          model: effectiveModel,
-        };
-        response._mesh_usage = usage;
-      }
+      resultUsage = objectResult.usage;
     } else {
       // Use generateText for regular text or tool-calling scenarios
       const result = await generateText(requestOptions);
@@ -639,16 +626,16 @@ export function llmProvider(config: LlmProviderConfig): {
       if (result.toolCalls && result.toolCalls.length > 0) {
         response.tool_calls = convertToolCalls(result.toolCalls);
       }
+      resultUsage = result.usage;
+    }
 
-      // Include usage metadata for cost tracking
-      if (result.usage) {
-        const usage: MeshLlmUsage = {
-          prompt_tokens: result.usage.inputTokens ?? 0,
-          completion_tokens: result.usage.outputTokens ?? 0,
-          model: effectiveModel,
-        };
-        response._mesh_usage = usage;
-      }
+    // Include usage metadata for cost tracking (shared for both paths)
+    if (resultUsage) {
+      response._mesh_usage = {
+        prompt_tokens: resultUsage.inputTokens ?? 0,
+        completion_tokens: resultUsage.outputTokens ?? 0,
+        model: effectiveModel,
+      };
     }
 
     debug(
