@@ -111,6 +111,8 @@ export interface LlmProvider {
       temperature?: number;
       topP?: number;
       stop?: string[];
+      // Issue #459: Output schema for provider to apply vendor-specific handling
+      outputSchema?: { schema: Record<string, unknown>; name: string };
     }
   ): Promise<LlmCompletionResponse>;
 }
@@ -206,6 +208,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       temperature?: number;
       topP?: number;
       stop?: string[];
+      // Issue #459: Output schema for provider to apply vendor-specific handling
+      outputSchema?: { schema: Record<string, unknown>; name: string };
     }
   ): Promise<LlmCompletionResponse> {
     // Build MeshLlmRequest structure (matches Python claude_provider schema)
@@ -218,6 +222,12 @@ export class MeshDelegatedProvider implements LlmProvider {
     if (options?.temperature !== undefined) modelParams.temperature = options.temperature;
     if (options?.topP !== undefined) modelParams.top_p = options.topP;
     if (options?.stop) modelParams.stop = options.stop;
+    // Issue #459: Include output_schema for provider to apply vendor-specific handling
+    // (e.g., OpenAI/Gemini need response_format, Claude uses strict mode)
+    if (options?.outputSchema) {
+      modelParams.output_schema = options.outputSchema.schema;
+      modelParams.output_type_name = options.outputSchema.name;
+    }
 
     const request: Record<string, unknown> = {
       messages,
@@ -457,12 +467,25 @@ export class MeshLlmAgent<T = string> {
     while (iteration < maxIterations) {
       iteration++;
 
+      // Build output schema for provider (Issue #459)
+      let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
+      if (this.config.returnSchema) {
+        try {
+          const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
+          // Extract schema name from title or use generic name
+          const schemaName = (jsonSchema.title as string) ?? "Response";
+          outputSchema = { schema: jsonSchema, name: schemaName };
+        } catch {
+          // If schema conversion fails, skip
+        }
+      }
+
       // Call LLM
       const response = await provider.complete(
         model,
         messages,
         toolDefs.length > 0 ? toolDefs : undefined,
-        { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop }
+        { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop, outputSchema }
       );
 
       // Track tokens

@@ -705,6 +705,16 @@ IMPORTANT TOOL CALLING RULES:
                         if self.model:
                             model_params["model"] = self.model
 
+                        # Issue #459: Include output_schema for provider to apply vendor-specific handling
+                        # (e.g., OpenAI needs response_format, not prompt-based JSON instructions)
+                        if self.output_type is not str and hasattr(
+                            self.output_type, "model_json_schema"
+                        ):
+                            model_params["output_schema"] = (
+                                self.output_type.model_json_schema()
+                            )
+                            model_params["output_type_name"] = self.output_type.__name__
+
                         logger.debug(
                             f"📤 Delegating to mesh provider with handler-prepared params: "
                             f"keys={list(model_params.keys())}"

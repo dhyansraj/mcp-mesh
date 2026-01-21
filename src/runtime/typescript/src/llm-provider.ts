@@ -106,6 +106,7 @@ export function extractVendorFromModel(model: string): string | null {
     return null;
   }
 
+  // Handle slash format (e.g., "anthropic/claude-sonnet-4-5")
   if (model.includes("/")) {
     const vendor = model.split("/")[0].toLowerCase().trim();
     return vendor || null;
@@ -127,6 +128,7 @@ export function extractVendorFromModel(model: string): string | null {
  * ```
  */
 export function extractModelName(model: string): string {
+  // Handle slash format (e.g., "anthropic/claude-sonnet-4-5")
   if (model.includes("/")) {
     return model.split("/").slice(1).join("/");
   }
@@ -344,6 +346,7 @@ export function llmProvider(config: LlmProviderConfig): {
     const startTime = Date.now();
 
     debug(`Processing chat request: messages=${request.messages.length}, tools=${request.tools?.length ?? 0}`);
+    debug(`Received model_params keys: ${JSON.stringify(Object.keys(request.model_params ?? {}))}`);
 
     // Determine effective model (check for consumer override)
     let effectiveModel = model;
@@ -368,6 +371,26 @@ export function llmProvider(config: LlmProviderConfig): {
         effectiveModel = overrideModel;
         debug(`Using model override '${effectiveModel}' (requested by consumer)`);
       }
+    }
+
+    // Issue #459: Extract output_schema for provider to apply vendor-specific handling
+    // Note: Vercel AI SDK uses generateObject for structured output, not response_format
+    // For now, we extract it and pass to handler for prompt formatting
+    const outputSchema = modelParams.output_schema as Record<string, unknown> | undefined;
+    const outputTypeName = modelParams.output_type_name as string | undefined;
+    delete modelParams.output_schema;
+    delete modelParams.output_type_name;
+
+    // Build OutputSchema object if schema was provided
+    const outputSchemaObj = outputSchema ? {
+      schema: outputSchema,
+      name: outputTypeName ?? "Response",
+      fieldCount: Object.keys(outputSchema.properties ?? {}).length,
+      hasNestedObjects: false, // Simplified check
+    } : null;
+
+    if (outputSchemaObj) {
+      debug(`Received output_schema for structured output: ${outputSchemaObj.name}`);
     }
 
     const effectiveModelName = extractModelName(effectiveModel);
@@ -461,10 +484,11 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Apply vendor-specific request preparation (e.g., Claude prompt caching)
     // The handler may transform messages or add vendor-specific options
+    // Issue #459: Pass output schema so handler can format system prompt appropriately
     const preparedRequest = handler.prepareRequest(
       request.messages as LlmMessage[],
       null, // tools handled separately for Vercel AI SDK
-      null, // no output schema for provider passthrough
+      outputSchemaObj, // Pass output schema for prompt formatting
       {
         temperature: temperature ?? modelParams.temperature as number | undefined,
         maxOutputTokens: maxTokens ?? modelParams.max_tokens as number | undefined,
@@ -519,42 +543,118 @@ export function llmProvider(config: LlmProviderConfig): {
 
     debug(`Calling Vercel AI SDK: model=${effectiveModelName}`);
 
-    // Call the model
-    const result = await generateText(requestOptions);
+    // Issue #459: Use generateObject for structured output when schema is provided
+    // This uses the native API's structured output feature (response_format for OpenAI/Gemini)
+    // instead of relying on prompt-based JSON instructions
+    const useStructuredOutput = outputSchema && !vercelTools;
 
-    const latencyMs = Date.now() - startTime;
-    debug(
-      `LLM response received: ` +
-        `finishReason=${result.finishReason}, ` +
-        `toolCalls=${result.toolCalls?.length ?? 0}, ` +
-        `latency=${latencyMs}ms`
-    );
+    let response: MeshLlmResponse;
+    let latencyMs: number;
 
-    // Build response
-    const response: MeshLlmResponse = {
-      role: "assistant",
-      content: result.text ?? "",
-    };
+    if (useStructuredOutput) {
+      // Use generateObject for structured output
+      debug(`Using generateObject for structured output: ${outputTypeName}`);
 
-    // Include tool_calls if present (critical for agentic loop!)
-    if (result.toolCalls && result.toolCalls.length > 0) {
-      response.tool_calls = convertToolCalls(result.toolCalls);
-    }
+      const generateObject = aiModule.generateObject as (options: {
+        model: unknown;
+        messages: unknown[];
+        schema: unknown;
+        schemaName?: string;
+        schemaDescription?: string;
+        maxOutputTokens?: number;
+        temperature?: number;
+        topP?: number;
+      }) => Promise<{
+        object: Record<string, unknown>;
+        usage?: {
+          inputTokens: number;
+          outputTokens: number;
+        };
+        finishReason: string;
+      }>;
 
-    // Include usage metadata for cost tracking
-    if (result.usage) {
-      const usage: MeshLlmUsage = {
-        prompt_tokens: result.usage.inputTokens ?? 0,
-        completion_tokens: result.usage.outputTokens ?? 0,
-        model: effectiveModel,
+      // Import jsonSchema helper to wrap JSON Schema for generateObject
+      const { jsonSchema } = aiModule as { jsonSchema: (schema: Record<string, unknown>) => unknown };
+
+      // Clean up schema - remove $schema and other meta fields
+      // Add additionalProperties: false for OpenAI strict mode requirement
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { $schema, title, ...cleanSchema } = outputSchema as Record<string, unknown>;
+
+      const objectResult = await generateObject({
+        model: aiModel,
+        messages: convertedMessages,
+        schema: jsonSchema({
+          type: "object",
+          additionalProperties: false, // Required by OpenAI structured output
+          ...cleanSchema,
+        }),
+        schemaName: outputTypeName,
+        maxOutputTokens: requestOptions.maxOutputTokens,
+        temperature: requestOptions.temperature,
+        topP: requestOptions.topP,
+      });
+
+      latencyMs = Date.now() - startTime;
+      debug(
+        `generateObject response received: ` +
+          `finishReason=${objectResult.finishReason}, ` +
+          `latency=${latencyMs}ms`
+      );
+
+      // Build response with structured object as JSON string content
+      response = {
+        role: "assistant",
+        content: JSON.stringify(objectResult.object),
       };
-      response._mesh_usage = usage;
+
+      // Include usage metadata for cost tracking
+      if (objectResult.usage) {
+        const usage: MeshLlmUsage = {
+          prompt_tokens: objectResult.usage.inputTokens ?? 0,
+          completion_tokens: objectResult.usage.outputTokens ?? 0,
+          model: effectiveModel,
+        };
+        response._mesh_usage = usage;
+      }
+    } else {
+      // Use generateText for regular text or tool-calling scenarios
+      const result = await generateText(requestOptions);
+
+      latencyMs = Date.now() - startTime;
+      debug(
+        `LLM response received: ` +
+          `finishReason=${result.finishReason}, ` +
+          `toolCalls=${result.toolCalls?.length ?? 0}, ` +
+          `latency=${latencyMs}ms`
+      );
+
+      // Build response
+      response = {
+        role: "assistant",
+        content: result.text ?? "",
+      };
+
+      // Include tool_calls if present (critical for agentic loop!)
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        response.tool_calls = convertToolCalls(result.toolCalls);
+      }
+
+      // Include usage metadata for cost tracking
+      if (result.usage) {
+        const usage: MeshLlmUsage = {
+          prompt_tokens: result.usage.inputTokens ?? 0,
+          completion_tokens: result.usage.outputTokens ?? 0,
+          model: effectiveModel,
+        };
+        response._mesh_usage = usage;
+      }
     }
 
     debug(
       `LLM provider processed request ` +
         `(model=${effectiveModel}, messages=${request.messages.length}, ` +
-        `tool_calls=${response.tool_calls?.length ?? 0})`
+        `structured=${useStructuredOutput}, tool_calls=${response.tool_calls?.length ?? 0})`
     );
 
     // Return JSON-stringified response
