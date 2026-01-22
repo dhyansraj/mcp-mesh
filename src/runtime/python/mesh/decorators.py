@@ -386,10 +386,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                     text=True,
                     timeout=5,
                 )
+                current_pid = str(os.getpid())
                 for line in result.stdout.split("\n"):
-                    if "LISTEN" in line and "python" in line.lower():
-                        # Parse port from line like "python  1234  user  5u  IPv4 ... TCP *:54321 (LISTEN)"
-                        parts = line.split()
+                    parts = line.split()
+                    # Check PID matches current process (lsof returns all network connections on macOS)
+                    if len(parts) > 1 and parts[1] == current_pid and "LISTEN" in line:
                         for part in parts:
                             if ":" in part and "(LISTEN)" not in part:
                                 try:
