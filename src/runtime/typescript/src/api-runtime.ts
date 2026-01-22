@@ -77,12 +77,10 @@ export interface ApiRuntimeConfig {
   name?: string;
   /** Namespace for isolation. Env: MCP_MESH_NAMESPACE. Default: "default" */
   namespace?: string;
-  /** Registry URL. Env: MCP_MESH_REGISTRY_URL. Default: "http://localhost:8000" */
-  registryUrl?: string;
   /** Heartbeat interval in seconds. Env: MCP_MESH_HEALTH_INTERVAL. Default: 5 */
   heartbeatInterval?: number;
-  /** Port the Express app is listening on (for registry display) */
-  port?: number;
+  /** HTTP port the Express app is listening on (for registry display) */
+  httpPort?: number;
 }
 
 /**
@@ -173,11 +171,8 @@ class ApiRuntime {
 
       console.log(`Starting API runtime: ${this.serviceId}`);
 
-      // Resolve configuration with env var precedence
-      const registryUrl = resolveConfig(
-        "registry_url",
-        this.config.registryUrl
-      );
+      // Registry URL only from env var MCP_MESH_REGISTRY_URL
+      const registryUrl = resolveConfig("registry_url", null);
       const namespace = resolveConfig("namespace", this.config.namespace);
       const heartbeatInterval =
         resolveConfigInt(
@@ -185,10 +180,8 @@ class ApiRuntime {
           this.config.heartbeatInterval ?? null
         ) ?? 5;
 
-      // Get port from config, env var, or default to 0
-      // Common pattern: apps use PORT env var
-      const port = this.config.port ??
-        (process.env.PORT ? parseInt(process.env.PORT, 10) : 0);
+      // Get port from MCP_MESH_HTTP_PORT env var, config, or default to 0
+      const port = resolveConfigInt("http_port", this.config.httpPort ?? null) ?? 0;
 
       // Initialize distributed tracing
       const agentMetadata: AgentMetadata = {
@@ -466,7 +459,7 @@ class ApiRuntime {
 
     // Update port if detected
     if (port > 0) {
-      this.config.port = port;
+      this.config.httpPort = port;
       // Send port update to Rust core (triggers heartbeat if changed)
       this.handle.updatePort(port).catch((err) => {
         console.warn("Failed to update port:", err);

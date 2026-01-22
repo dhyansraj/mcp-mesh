@@ -184,7 +184,7 @@ import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Weather Consumer", version: "1.0.0" });
-const agent = mesh(server, { name: "weather-consumer", port: 9000 });
+const agent = mesh(server, { name: "weather-consumer", httpPort: 9000 });
 
 // Tool that prefers fast, accurate weather with fallback
 agent.addTool({

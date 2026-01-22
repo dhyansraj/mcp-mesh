@@ -27,11 +27,13 @@ describe("Calculator Agent", () => {
   let agent: ReturnType<typeof mesh>;
 
   beforeAll(() => {
+    // Set env var to disable registry for unit tests
+    process.env.MCP_MESH_REGISTRY_URL = "";
+
     const server = new FastMCP({ name: "Test Calculator", version: "1.0.0" });
     agent = mesh(server, {
       name: "test-calculator",
-      port: 0, // Auto-assign port for testing
-      registryUrl: "", // No registry for unit tests
+      httpPort: 0, // Auto-assign port for testing
     });
 
     agent.addTool({

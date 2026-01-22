@@ -213,7 +213,7 @@ import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Report Service", version: "1.0.0" });
-const agent = mesh(server, { name: "report-service", port: 9000 });
+const agent = mesh(server, { name: "report-service", httpPort: 9000 });
 
 // Tool with multiple dependencies
 agent.addTool({

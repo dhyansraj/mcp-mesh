@@ -18,7 +18,7 @@
  *   tags: ["llm", "claude", "anthropic", "provider"],
  * }));
  *
- * const agent = mesh(server, { name: "claude-provider", port: 9011 });
+ * const agent = mesh(server, { name: "claude-provider", httpPort: 9011 });
  * ```
  */
 
@@ -299,7 +299,7 @@ type MeshLlmRequestInput = z.infer<typeof MeshLlmRequestSchema>;
  *   temperature: 0.7,
  * }));
  *
- * const agent = mesh(server, { name: "claude-provider", port: 9011 });
+ * const agent = mesh(server, { name: "claude-provider", httpPort: 9011 });
  * ```
  */
 export function llmProvider(config: LlmProviderConfig): {

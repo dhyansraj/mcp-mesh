@@ -87,21 +87,29 @@ export interface AgentConfig {
   /** Human-readable description */
   description?: string;
   /** HTTP port for this agent. Env: MCP_MESH_HTTP_PORT */
-  port: number;
+  httpPort: number;
   /** HTTP host announced to registry. Env: MCP_MESH_HTTP_HOST (auto-detected if not set) */
-  host?: string;
+  httpHost?: string;
   /** Namespace for isolation. Env: MCP_MESH_NAMESPACE. Defaults to "default" */
   namespace?: string;
-  /** Registry URL. Env: MCP_MESH_REGISTRY_URL. Defaults to "http://localhost:8000" */
-  registryUrl?: string;
   /** Heartbeat interval in seconds. Env: MCP_MESH_HEALTH_INTERVAL. Defaults to 5 */
   heartbeatInterval?: number;
 }
 
 /**
  * Resolved configuration with all defaults applied.
+ * Note: Does not include deprecated aliases (port, host).
  */
-export type ResolvedAgentConfig = Required<AgentConfig>;
+export interface ResolvedAgentConfig {
+  name: string;
+  version: string;
+  description: string;
+  httpPort: number;
+  httpHost: string;
+  namespace: string;
+  registryUrl: string;
+  heartbeatInterval: number;
+}
 
 /**
  * Proxy configuration for a dependency.

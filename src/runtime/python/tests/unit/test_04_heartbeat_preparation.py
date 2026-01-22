@@ -64,7 +64,7 @@ class TestHeartbeatPreparationSuccess:
             "http_port": 8080,
             "enable_http": True,
             "namespace": "default",
-            "health_interval": 30,
+            "heartbeat_interval": 30,
         }
 
     @pytest.fixture
@@ -988,7 +988,7 @@ class TestHeartbeatPreparationLLMFilter:
             "http_port": 8080,
             "enable_http": True,
             "namespace": "default",
-            "health_interval": 30,
+            "heartbeat_interval": 30,
         }
 
     @pytest.fixture

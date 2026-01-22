@@ -171,7 +171,7 @@ class TestMeshAgentDetection:
             http_port=8080,
             enable_http=False,
             namespace="custom",
-            health_interval=60,
+            heartbeat_interval=60,
             auto_run=False,
             auto_run_interval=20,
             custom_param="custom_value",
@@ -191,7 +191,7 @@ class TestMeshAgentDetection:
         assert metadata["http_port"] == 8080
         assert metadata["enable_http"] is False
         assert metadata["namespace"] == "custom"
-        assert metadata["health_interval"] == 60
+        assert metadata["heartbeat_interval"] == 60
         assert metadata["auto_run"] is False
         assert metadata["auto_run_interval"] == 20
         assert metadata["custom_param"] == "custom_value"
@@ -304,13 +304,13 @@ class TestParameterValidation:
             class InvalidAgent:
                 pass
 
-    def test_mesh_agent_invalid_health_interval_minimum(self):
-        """Test @mesh.agent raises error for invalid health_interval minimum."""
+    def test_mesh_agent_invalid_heartbeat_interval_minimum(self):
+        """Test @mesh.agent raises error for invalid heartbeat_interval minimum."""
         with pytest.raises(
-            ValueError, match="health_interval must be at least 1 second"
+            ValueError, match="heartbeat_interval must be at least 1 second"
         ):
 
-            @mesh.agent(name="test", health_interval=0)
+            @mesh.agent(name="test", heartbeat_interval=0)
             class InvalidAgent:
                 pass
 
@@ -400,17 +400,17 @@ class TestEnvironmentVariablePrecedence:
         metadata = agents["TestAgent"].metadata
         assert metadata["enable_http"] is False
 
-    def test_health_interval_env_var_precedence(self):
+    def test_heartbeat_interval_env_var_precedence(self):
         """Test MCP_MESH_HEALTH_INTERVAL environment variable takes precedence."""
         os.environ["MCP_MESH_HEALTH_INTERVAL"] = "120"
 
-        @mesh.agent(name="test", health_interval=60)
+        @mesh.agent(name="test", heartbeat_interval=60)
         class TestAgent:
             pass
 
         agents = DecoratorRegistry.get_mesh_agents()
         metadata = agents["TestAgent"].metadata
-        assert metadata["health_interval"] == 120
+        assert metadata["heartbeat_interval"] == 120
 
     def test_multiple_env_vars_together(self):
         """Test multiple environment variables work together."""
@@ -422,7 +422,7 @@ class TestEnvironmentVariablePrecedence:
             name="test",
             http_host="decorator.host.com",
             http_port=8080,
-            health_interval=30,
+            heartbeat_interval=30,
         )
         class TestAgent:
             pass
@@ -431,7 +431,7 @@ class TestEnvironmentVariablePrecedence:
         metadata = agents["TestAgent"].metadata
         assert metadata["http_host"] == "multi.host.com"
         assert metadata["http_port"] == 7070
-        assert metadata["health_interval"] == 90
+        assert metadata["heartbeat_interval"] == 90
 
     def test_env_var_vs_default_precedence(self):
         """Test environment variable takes precedence over default values."""

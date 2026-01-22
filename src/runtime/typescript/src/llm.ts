@@ -28,7 +28,7 @@
  *   execute: async ({ message }, { llm }) => llm(message),
  * }));
  *
- * const agent = mesh(server, { name: "smart-assistant", port: 9003 });
+ * const agent = mesh(server, { name: "smart-assistant", httpPort: 9003 });
  * ```
  */
 

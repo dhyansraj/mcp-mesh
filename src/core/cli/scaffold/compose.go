@@ -17,7 +17,7 @@ import (
 // DetectedAgent represents an agent discovered from main.py or src/index.ts
 type DetectedAgent struct {
 	Name     string // From @mesh.agent(name="...") or mesh(server, {name: "..."})
-	Port     int    // From http_port=... or port: ...
+	Port     int    // From http_port=... or httpPort: ...
 	Dir      string // Directory containing main.py or src/index.ts (relative to scan root)
 	MainFile string // Full path to main.py or src/index.ts
 	Language string // "python" or "typescript"
@@ -161,7 +161,7 @@ func parseAgentDecorator(content string) (*DetectedAgent, error) {
 // parseTypeScriptAgent extracts name and port from TypeScript mesh() call
 func parseTypeScriptAgent(content string) (*DetectedAgent, error) {
 	// Pattern to match mesh(server, { ... }) call (handles multiline)
-	// TypeScript SDK uses: mesh(server, { name: "...", port: ... })
+	// TypeScript SDK uses: mesh(server, { name: "...", httpPort: ... })
 	meshPattern := regexp.MustCompile(`mesh\s*\(\s*\w+\s*,\s*\{[\s\S]*?\}\s*\)`)
 	match := meshPattern.FindString(content)
 	if match == "" {
@@ -175,8 +175,8 @@ func parseTypeScriptAgent(content string) (*DetectedAgent, error) {
 		return nil, fmt.Errorf("could not extract agent name from mesh() call")
 	}
 
-	// Extract port (optional, default 9000)
-	portPattern := regexp.MustCompile(`port\s*:\s*(\d+)`)
+	// Extract httpPort (optional, default 9000)
+	portPattern := regexp.MustCompile(`httpPort\s*:\s*(\d+)`)
 	portMatch := portPattern.FindStringSubmatch(match)
 	port := 9000 // Default
 	if len(portMatch) >= 2 {

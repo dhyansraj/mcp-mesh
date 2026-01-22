@@ -316,10 +316,10 @@ export class MeshAgent {
     // This ensures file:// templates resolve correctly regardless of cwd
     findAndSetBasePath();
 
-    // Handle port=0: auto-assign an available port
-    if (this.config.port === 0) {
+    // Handle httpPort=0: auto-assign an available port
+    if (this.config.httpPort === 0) {
       const assignedPort = await findAvailablePort();
-      this.config = { ...this.config, port: assignedPort };
+      this.config = { ...this.config, httpPort: assignedPort };
       console.log(`Auto-assigned port ${assignedPort} for agent`);
     }
 
@@ -330,10 +330,10 @@ export class MeshAgent {
       agentId: this.agentId,
       agentName: this.config.name,
       agentNamespace: this.config.namespace,
-      agentHostname: this.config.host,
-      agentIp: this.config.host,
-      agentPort: this.config.port,
-      agentEndpoint: `http://${this.config.host}:${this.config.port}`,
+      agentHostname: this.config.httpHost,
+      agentIp: this.config.httpHost,
+      agentPort: this.config.httpPort,
+      agentEndpoint: `http://${this.config.httpHost}:${this.config.httpPort}`,
     };
     this.tracingEnabled = await initTracing(agentMetadata);
 
@@ -343,13 +343,13 @@ export class MeshAgent {
     await this.server.start({
       transportType: "httpStream",
       httpStream: {
-        port: this.config.port,
-        host: "0.0.0.0", // Listen on all interfaces so external IPs work
+        port: this.config.httpPort,
+        host: process.env.HOST ?? "0.0.0.0", // Listen on all interfaces, or use HOST env var
         stateless: true,
       },
     });
 
-    console.log(`Agent listening on port ${this.config.port}`);
+    console.log(`Agent listening on port ${this.config.httpPort}`);
 
     // 2. Register LLM tools from LlmToolRegistry
     this.registerLlmTools();
@@ -493,8 +493,8 @@ export class MeshAgent {
       version: this.config.version,
       description: this.config.description,
       registryUrl: this.config.registryUrl,
-      httpPort: this.config.port,
-      httpHost: this.config.host,
+      httpPort: this.config.httpPort,
+      httpHost: this.config.httpHost,
       namespace: this.config.namespace,
       tools,
       llmAgents,
@@ -793,7 +793,7 @@ export class MeshAgent {
  * ```typescript
  * const agent = mesh(server, {
  *   name: "calculator",
- *   port: 9002,
+ *   httpPort: 9002,
  * });
  * ```
  */

@@ -73,10 +73,9 @@ describe("resolveConfig", () => {
       name: "test-agent",
       version: "2.0.0",
       description: "Test description",
-      port: 9000,
-      host: "192.168.1.100",
+      httpPort: 9000,
+      httpHost: "192.168.1.100",
       namespace: "production",
-      registryUrl: "http://registry.example.com:8000",
       heartbeatInterval: 10,
     };
 
@@ -85,17 +84,17 @@ describe("resolveConfig", () => {
     expect(resolved.name).toBe("test-agent");
     expect(resolved.version).toBe("2.0.0");
     expect(resolved.description).toBe("Test description");
-    expect(resolved.port).toBe(9000);
-    expect(resolved.host).toBe("192.168.1.100");
+    expect(resolved.httpPort).toBe(9000);
+    expect(resolved.httpHost).toBe("192.168.1.100");
     expect(resolved.namespace).toBe("production");
-    expect(resolved.registryUrl).toBe("http://registry.example.com:8000");
+    expect(resolved.registryUrl).toBe("http://localhost:8000"); // Always from env/default
     expect(resolved.heartbeatInterval).toBe(10);
   });
 
   it("should use defaults for optional values not provided", () => {
     const config: AgentConfig = {
       name: "minimal-agent",
-      port: 8080,
+      httpPort: 8080,
     };
 
     const resolved = resolveConfig(config);
@@ -103,8 +102,8 @@ describe("resolveConfig", () => {
     expect(resolved.name).toBe("minimal-agent");
     expect(resolved.version).toBe("1.0.0");
     expect(resolved.description).toBe("");
-    expect(resolved.port).toBe(8080);
-    expect(resolved.host).toBe("10.0.0.1"); // Auto-detected by Rust
+    expect(resolved.httpPort).toBe(8080);
+    expect(resolved.httpHost).toBe("10.0.0.1"); // Auto-detected by Rust
     expect(resolved.namespace).toBe("default");
     expect(resolved.registryUrl).toBe("http://localhost:8000");
     expect(resolved.heartbeatInterval).toBe(5);
@@ -117,7 +116,7 @@ describe("resolveConfig", () => {
 
     const config: AgentConfig = {
       name: "rust-test",
-      port: 7777,
+      httpPort: 7777,
     };
 
     resolveConfig(config);
@@ -134,17 +133,16 @@ describe("resolveConfig", () => {
   it("should handle null/undefined optional values", () => {
     const config: AgentConfig = {
       name: "null-test",
-      port: 5000,
-      host: undefined,
+      httpPort: 5000,
+      httpHost: undefined,
       namespace: undefined,
-      registryUrl: undefined,
       heartbeatInterval: undefined,
     };
 
     const resolved = resolveConfig(config);
 
     // Should use Rust core defaults
-    expect(resolved.host).toBe("10.0.0.1");
+    expect(resolved.httpHost).toBe("10.0.0.1");
     expect(resolved.namespace).toBe("default");
     expect(resolved.registryUrl).toBe("http://localhost:8000");
     expect(resolved.heartbeatInterval).toBe(5);
@@ -155,7 +153,7 @@ describe("ResolvedAgentConfig", () => {
   it("should have all required fields after resolution", () => {
     const config: AgentConfig = {
       name: "complete-test",
-      port: 3000,
+      httpPort: 3000,
     };
 
     const resolved = resolveConfig(config);
@@ -164,8 +162,8 @@ describe("ResolvedAgentConfig", () => {
     expect(resolved.name).toBeDefined();
     expect(resolved.version).toBeDefined();
     expect(resolved.description).toBeDefined();
-    expect(resolved.port).toBeDefined();
-    expect(resolved.host).toBeDefined();
+    expect(resolved.httpPort).toBeDefined();
+    expect(resolved.httpHost).toBeDefined();
     expect(resolved.namespace).toBeDefined();
     expect(resolved.registryUrl).toBeDefined();
     expect(resolved.heartbeatInterval).toBeDefined();

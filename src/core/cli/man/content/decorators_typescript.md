@@ -31,7 +31,7 @@ const agent = mesh(server, {
   name: "my-service",           // Required: unique agent identifier
   version: "1.0.0",             // Semantic version
   description: "Service desc",  // Human-readable description
-  port: 8080,                   // HTTP server port (0 = auto-assign)
+  httpPort: 8080,                   // HTTP server port (0 = auto-assign)
   host: "localhost",            // Host announced to registry
   namespace: "default",         // Namespace for isolation
   heartbeatInterval: 30,        // Heartbeat interval in seconds
@@ -188,7 +188,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "calculator",
-  port: 9000,
+  httpPort: 9000,
 });
 
 // Basic tool

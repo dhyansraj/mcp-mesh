@@ -33,7 +33,7 @@
  * import { meshExpress, mesh } from "@mcpmesh/sdk";
  *
  * const app = express();
- * const meshApp = meshExpress(app, { name: "my-api", port: 3000 });
+ * const meshApp = meshExpress(app, { name: "my-api", httpPort: 3000 });
  *
  * app.post("/compute", mesh.route(...));
  *
@@ -160,10 +160,10 @@ export class MeshExpress {
     if (this.started) return;
     this.started = true;
 
-    // Handle port=0: auto-assign an available port
-    if (this.config.port === 0) {
+    // Handle httpPort=0: auto-assign an available port
+    if (this.config.httpPort === 0) {
       const assignedPort = await findAvailablePort();
-      this.config = { ...this.config, port: assignedPort };
+      this.config = { ...this.config, httpPort: assignedPort };
       console.log(`Auto-assigned port ${assignedPort} for service`);
     }
 
@@ -174,10 +174,10 @@ export class MeshExpress {
       agentId: this.serviceId,
       agentName: this.config.name,
       agentNamespace: this.config.namespace,
-      agentHostname: this.config.host,
-      agentIp: this.config.host,
-      agentPort: this.config.port,
-      agentEndpoint: `http://${this.config.host}:${this.config.port}`,
+      agentHostname: this.config.httpHost,
+      agentIp: this.config.httpHost,
+      agentPort: this.config.httpPort,
+      agentEndpoint: `http://${this.config.httpHost}:${this.config.httpPort}`,
     };
     await initTracing(agentMetadata);
 
@@ -197,8 +197,9 @@ export class MeshExpress {
   private startServer(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.server = this.app.listen(this.config.port, "0.0.0.0", () => {
-          console.log(`Service listening on port ${this.config.port}`);
+        const bindHost = process.env.HOST ?? "0.0.0.0";
+        this.server = this.app.listen(this.config.httpPort, bindHost, () => {
+          console.log(`Service listening on port ${this.config.httpPort}`);
           resolve();
         });
 
@@ -224,8 +225,8 @@ export class MeshExpress {
       version: this.config.version,
       description: this.config.description,
       registryUrl: this.config.registryUrl,
-      httpPort: this.config.port,
-      httpHost: this.config.host,
+      httpPort: this.config.httpPort,
+      httpHost: this.config.httpHost,
       namespace: this.config.namespace,
       agentType: "api", // API services only consume capabilities, not provide them
       tools,
@@ -494,7 +495,7 @@ export class MeshExpress {
  * @example
  * ```typescript
  * const app = express();
- * const meshApp = meshExpress(app, { name: "my-api", port: 3000 });
+ * const meshApp = meshExpress(app, { name: "my-api", httpPort: 3000 });
  *
  * // Define routes with mesh.route()...
  *
