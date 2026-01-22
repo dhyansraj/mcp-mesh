@@ -26,6 +26,25 @@ _runtime_processor: Any | None = None
 _SHARED_AGENT_ID: str | None = None
 
 
+def _find_available_port() -> int:
+    """
+    Find an available port by binding to port 0 and getting the OS-assigned port.
+
+    This is used when http_port=0 is specified to auto-assign a port.
+    Works reliably on all platforms (macOS, Linux, Windows) without external tools.
+
+    Returns:
+        int: An available port number
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
 def _start_uvicorn_immediately(http_host: str, http_port: int):
     """
     Start basic uvicorn server immediately to prevent Python interpreter shutdown.
@@ -306,6 +325,13 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         # which is handled upstream in the @mesh.agent decorator
         port = http_port
 
+        # Handle http_port=0: find an available port BEFORE starting uvicorn
+        # This is more reliable than detecting the port after uvicorn starts
+        # and works on all platforms (Linux containers don't have lsof installed)
+        if port == 0:
+            port = _find_available_port()
+            logger.info(f"🎯 IMMEDIATE UVICORN: Auto-assigned port {port} for agent")
+
         logger.debug(
             f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
         )
@@ -370,54 +396,8 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         # Give server a moment to start
         time.sleep(1)
 
-        # Detect actual port if port=0 (auto-assign)
-        actual_port = port
-        if port == 0:
-            import socket
-
-            # Try to detect actual port by scanning for listening sockets
-            try:
-                import subprocess
-
-                # Use lsof to find the port bound by this process
-                result = subprocess.run(
-                    ["lsof", "-i", "-P", "-n", f"-p{os.getpid()}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                current_pid = str(os.getpid())
-                for line in result.stdout.split("\n"):
-                    parts = line.split()
-                    # Check PID matches current process (lsof returns all network connections on macOS)
-                    if len(parts) > 1 and parts[1] == current_pid and "LISTEN" in line:
-                        for part in parts:
-                            if ":" in part and "(LISTEN)" not in part:
-                                try:
-                                    port_str = part.split(":")[-1]
-                                    detected_port = int(port_str)
-                                    if detected_port > 0:
-                                        actual_port = detected_port
-                                        logger.info(
-                                            f"🎯 IMMEDIATE UVICORN: Detected auto-assigned port {actual_port}"
-                                        )
-                                        # Update server_info with actual port
-                                        server_info["port"] = actual_port
-                                        server_info["requested_port"] = (
-                                            0  # Remember original request
-                                        )
-                                        break
-                                except (ValueError, IndexError):
-                                    pass
-                        if actual_port > 0:
-                            break
-            except Exception as e:
-                logger.warning(
-                    f"⚠️ IMMEDIATE UVICORN: Could not detect auto-assigned port: {e}"
-                )
-
         logger.debug(
-            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{actual_port} (daemon thread)"
+            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
         )
 
         # Set up registry context for shutdown cleanup (use defaults initially)
