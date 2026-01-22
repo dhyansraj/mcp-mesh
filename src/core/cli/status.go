@@ -117,7 +117,7 @@ func runStatusCommand(cmd *cobra.Command, args []string) error {
 
 	// If agent ID/prefix provided as positional argument, show details for that specific agent
 	if len(args) > 0 {
-		matchResult := ResolveAgentByPrefix(agents, args[0], false) // include all agents for status
+		matchResult := ResolveAgentByPrefix(agents, args[0], true) // prefer healthy agents, same as call.go
 		if err := matchResult.FormattedError(); err != nil {
 			return err
 		}
