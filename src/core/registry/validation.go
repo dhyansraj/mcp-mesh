@@ -343,29 +343,29 @@ func (v *AgentRegistrationValidator) validateSemanticVersion(version string) err
 }
 
 // validateHealthConfig validates health monitoring configuration
-// MUST match Python health config validation exactly
+// MUST match Python/TypeScript health config validation exactly
 func (v *AgentRegistrationValidator) validateHealthConfig(metadata map[string]interface{}) error {
-	// Validate health_interval (if provided)
-	if healthInterval, exists := metadata["health_interval"]; exists {
-		switch hi := healthInterval.(type) {
+	// Validate heartbeat_interval (if provided)
+	if heartbeatInterval, exists := metadata["heartbeat_interval"]; exists {
+		switch hi := heartbeatInterval.(type) {
 		case float64:
 			if hi < 1 || hi > 3600 {
 				return ValidationError{
-					Field:   "health_interval",
-					Message: "health_interval must be between 1 and 3600 seconds",
+					Field:   "heartbeat_interval",
+					Message: "heartbeat_interval must be between 1 and 3600 seconds",
 				}
 			}
 		case int:
 			if hi < 1 || hi > 3600 {
 				return ValidationError{
-					Field:   "health_interval",
-					Message: "health_interval must be between 1 and 3600 seconds",
+					Field:   "heartbeat_interval",
+					Message: "heartbeat_interval must be between 1 and 3600 seconds",
 				}
 			}
 		default:
 			return ValidationError{
-				Field:   "health_interval",
-				Message: "health_interval must be a number",
+				Field:   "heartbeat_interval",
+				Message: "heartbeat_interval must be a number",
 			}
 		}
 	}

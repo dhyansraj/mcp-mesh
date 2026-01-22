@@ -68,16 +68,14 @@ export function generateAgentIdSuffix(): string {
 export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
   // All config resolution via Rust core - ensures consistent ENV > param > default
   const resolvedName = rustResolveConfig("agent_name", config.name);
-  const resolvedPort = resolveConfigInt("http_port", config.port) ?? config.port;
-  const resolvedHost = rustResolveConfig("http_host", config.host ?? null);
+  const resolvedPort = resolveConfigInt("http_port", config.httpPort) ?? config.httpPort;
+  const resolvedHost = rustResolveConfig("http_host", config.httpHost ?? null);
   const resolvedNamespace = rustResolveConfig(
     "namespace",
     config.namespace ?? null
   );
-  const resolvedRegistryUrl = rustResolveConfig(
-    "registry_url",
-    config.registryUrl ?? null
-  );
+  // Registry URL only from env var MCP_MESH_REGISTRY_URL, default: http://localhost:8000
+  const resolvedRegistryUrl = rustResolveConfig("registry_url", null);
 
   // Get heartbeat interval with fallback to Rust core default
   const healthIntervalDefault = parseInt(getDefault("health_interval") ?? "5", 10);
@@ -89,8 +87,8 @@ export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
     name: resolvedName,
     version: config.version ?? TS_DEFAULTS.version,
     description: config.description ?? TS_DEFAULTS.description,
-    port: resolvedPort,
-    host: resolvedHost,
+    httpPort: resolvedPort,
+    httpHost: resolvedHost,
     namespace: resolvedNamespace,
     registryUrl: resolvedRegistryUrl,
     heartbeatInterval: resolvedHeartbeatInterval,

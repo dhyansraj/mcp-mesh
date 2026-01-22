@@ -13,7 +13,7 @@
  *
  * const agent = mesh(server, {
  *   name: "calculator",
- *   port: 9002,
+ *   httpPort: 9002,
  * });
  *
  * agent.addTool({
@@ -36,7 +36,7 @@
  * const app = express();
  * app.use(express.json());
  *
- * const meshApp = meshExpress(app, { name: "my-api", port: 3000 });
+ * const meshApp = meshExpress(app, { name: "my-api", httpPort: 3000 });
  *
  * app.post("/compute", mesh.route(
  *   [{ capability: "calculator" }],

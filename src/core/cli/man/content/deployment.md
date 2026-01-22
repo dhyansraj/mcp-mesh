@@ -182,11 +182,11 @@ image:
 
 agent:
   name: my-agent
-  # port: 8080 (default - no need to specify, see "Port Strategy" section)
+  # http_port: 8080 (default - no need to specify, see "Port Strategy" section)
 
 mesh:
   enabled: true
-  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+  registry_url: http://mcp-core-mcp-mesh-registry:8000
 
 resources:
   limits:
@@ -250,12 +250,12 @@ When moving from docker-compose to Kubernetes, do NOT set custom ports:
 ```yaml
 # ❌ WRONG - copying docker-compose ports
 agent:
-  port: 9001
+  http_port: 9001
 
 # ✅ CORRECT - use defaults
 agent:
   name: my-agent
-  # port: 8080 is the default, no need to specify
+  # http_port: 8080 is the default, no need to specify
 ```
 
 ### How It Works

@@ -57,11 +57,11 @@ class TestHeartbeatLoopStepSuccess:
         return HeartbeatLoopStep()
 
     @pytest.fixture
-    def mock_context_with_health_interval(self):
-        """Mock context with agent_config containing health_interval."""
+    def mock_context_with_heartbeat_interval(self):
+        """Mock context with agent_config containing heartbeat_interval."""
         return {
             "agent_config": {
-                "health_interval": 45,
+                "heartbeat_interval": 45,
                 "name": "test-agent",
                 "version": "1.0.0",
             },
@@ -69,8 +69,8 @@ class TestHeartbeatLoopStepSuccess:
         }
 
     @pytest.fixture
-    def mock_context_without_health_interval(self):
-        """Mock context with agent_config missing health_interval."""
+    def mock_context_without_heartbeat_interval(self):
+        """Mock context with agent_config missing heartbeat_interval."""
         return {
             "agent_config": {"name": "test-agent", "version": "1.0.0"},
             "agent_id": "test-agent-abc12345",
@@ -83,15 +83,15 @@ class TestHeartbeatLoopStepSuccess:
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
-    async def test_execute_with_health_interval(
-        self, mock_get_config_value, step, mock_context_with_health_interval
+    async def test_execute_with_heartbeat_interval(
+        self, mock_get_config_value, step, mock_context_with_heartbeat_interval
     ):
-        """Test execute with health_interval in agent_config."""
-        # Mock get_config_value to return the health_interval from agent_config (45)
+        """Test execute with heartbeat_interval in agent_config."""
+        # Mock get_config_value to return the heartbeat_interval from agent_config (45)
         # The first call gets the health interval, second call gets standalone mode
         mock_get_config_value.side_effect = [45, False]
 
-        result = await step.execute(mock_context_with_health_interval)
+        result = await step.execute(mock_context_with_heartbeat_interval)
 
         assert result.status == PipelineStatus.SUCCESS
         assert "Heartbeat config prepared (interval: 45s)" in result.message
@@ -106,14 +106,14 @@ class TestHeartbeatLoopStepSuccess:
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")
-    async def test_execute_without_health_interval_defaults_to_30(
-        self, mock_get_config_value, step, mock_context_without_health_interval
+    async def test_execute_without_heartbeat_interval_defaults_to_30(
+        self, mock_get_config_value, step, mock_context_without_heartbeat_interval
     ):
-        """Test execute without health_interval defaults to 5 seconds."""
+        """Test execute without heartbeat_interval defaults to 5 seconds."""
         # Mock get_config_value to return default health interval (5) and standalone mode (False)
         mock_get_config_value.side_effect = [5, False]
 
-        result = await step.execute(mock_context_without_health_interval)
+        result = await step.execute(mock_context_without_heartbeat_interval)
 
         assert result.status == PipelineStatus.SUCCESS
         assert "Heartbeat config prepared (interval: 5s)" in result.message
@@ -156,7 +156,7 @@ class TestHeartbeatLoopStepStandalone:
     def mock_context(self):
         """Mock context for standalone tests."""
         return {
-            "agent_config": {"health_interval": 60, "name": "test-agent"},
+            "agent_config": {"heartbeat_interval": 60, "name": "test-agent"},
             "agent_id": "test-agent-abc12345",
         }
 
@@ -227,7 +227,7 @@ class TestHeartbeatLoopStepErrors:
     @pytest.fixture
     def mock_context_missing_agent_id(self):
         """Mock context missing agent_id."""
-        return {"agent_config": {"health_interval": 30}}
+        return {"agent_config": {"heartbeat_interval": 30}}
 
     @pytest.mark.asyncio
     @patch("_mcp_mesh.pipeline.mcp_startup.heartbeat_loop.get_config_value")

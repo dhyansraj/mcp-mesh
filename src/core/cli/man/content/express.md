@@ -178,8 +178,7 @@ app.use(express.json());
 // Explicit mesh configuration
 const meshApp = meshExpress(app, {
   name: "my-api",
-  port: 3000,
-  registryUrl: "http://localhost:8000",
+  httpPort: 3000,
 });
 
 // Define routes with mesh.route()

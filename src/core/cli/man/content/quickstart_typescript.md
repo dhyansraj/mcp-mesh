@@ -34,7 +34,7 @@ import { mesh, MeshAgent } from "@mcpmesh/sdk";
 const app = new MeshAgent({
   name: "greeter",
   version: "1.0.0",
-  port: 9000,
+  httpPort: 9000,
 });
 
 app.tool(
@@ -86,7 +86,7 @@ import { mesh, MeshAgent, McpMeshTool } from "@mcpmesh/sdk";
 const app = new MeshAgent({
   name: "assistant",
   version: "1.0.0",
-  port: 9001,
+  httpPort: 9001,
 });
 
 app.tool(

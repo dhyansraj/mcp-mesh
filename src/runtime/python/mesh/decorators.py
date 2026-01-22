@@ -709,7 +709,7 @@ def agent(
     http_port: int = 0,
     enable_http: bool = True,
     namespace: str = "default",
-    health_interval: int = 5,  # Will be overridden by centralized defaults
+    heartbeat_interval: int = 5,
     health_check: Callable[[], Awaitable[Any]] | None = None,
     health_check_ttl: int = 15,
     auto_run: bool = True,  # Changed to True by default!
@@ -734,7 +734,7 @@ def agent(
             Environment variable: MCP_MESH_HTTP_ENABLED (takes precedence)
         namespace: Agent namespace (default: "default")
             Environment variable: MCP_MESH_NAMESPACE (takes precedence)
-        health_interval: Health check interval in seconds (default: 30)
+        heartbeat_interval: Heartbeat interval in seconds (default: 5)
             Environment variable: MCP_MESH_HEALTH_INTERVAL (takes precedence)
         health_check: Optional async function that returns HealthStatus
             Called before heartbeat and on /health endpoint with TTL caching
@@ -751,7 +751,7 @@ def agent(
         MCP_MESH_HTTP_PORT: Override http_port parameter (integer, 0-65535)
         MCP_MESH_HTTP_ENABLED: Override enable_http parameter (boolean: true/false)
         MCP_MESH_NAMESPACE: Override namespace parameter (string)
-        MCP_MESH_HEALTH_INTERVAL: Override health_interval parameter (integer, ≥1)
+        MCP_MESH_HEALTH_INTERVAL: Override heartbeat_interval parameter (integer, ≥1)
         MCP_MESH_AUTO_RUN: Override auto_run parameter (boolean: true/false)
         MCP_MESH_AUTO_RUN_INTERVAL: Override auto_run_interval parameter (integer, ≥1)
 
@@ -802,10 +802,10 @@ def agent(
         if not isinstance(namespace, str):
             raise ValueError("namespace must be a string")
 
-        if not isinstance(health_interval, int):
-            raise ValueError("health_interval must be an integer")
-        if health_interval < 1:
-            raise ValueError("health_interval must be at least 1 second")
+        if not isinstance(heartbeat_interval, int):
+            raise ValueError("heartbeat_interval must be an integer")
+        if heartbeat_interval < 1:
+            raise ValueError("heartbeat_interval must be at least 1 second")
 
         if not isinstance(auto_run, bool):
             raise ValueError("auto_run must be a boolean")
@@ -860,9 +860,9 @@ def agent(
         # Import centralized defaults
         from _mcp_mesh.shared.defaults import MeshDefaults
 
-        final_health_interval = get_config_value(
+        final_heartbeat_interval = get_config_value(
             "MCP_MESH_HEALTH_INTERVAL",
-            override=health_interval,
+            override=heartbeat_interval,
             default=MeshDefaults.HEALTH_INTERVAL,
             rule=ValidationRule.NONZERO_RULE,
         )
@@ -893,7 +893,7 @@ def agent(
             "http_port": final_http_port,
             "enable_http": final_enable_http,
             "namespace": final_namespace,
-            "health_interval": final_health_interval,
+            "heartbeat_interval": final_heartbeat_interval,
             "health_check": health_check,
             "health_check_ttl": health_check_ttl,
             "auto_run": final_auto_run,
