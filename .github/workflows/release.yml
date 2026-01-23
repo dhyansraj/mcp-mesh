@@ -229,10 +229,13 @@ jobs:
           echo "Updated pyproject.toml version to: ${VERSION_PYPI}"
           grep "^version" pyproject.toml
 
-      - name: Set up Python
+      - name: Set up Python versions
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: |
+            3.11
+            3.12
+            3.13
 
       - name: Install Zig
         if: matrix.use-zig
@@ -253,7 +256,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           container: ${{ matrix.use-zig && 'off' || '' }}
-          args: --release --out dist -i python3.11 ${{ matrix.use-zig && '--zig' || '' }}
+          args: --release --out dist -i python3.11 python3.12 python3.13 ${{ matrix.use-zig && '--zig' || '' }}
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
