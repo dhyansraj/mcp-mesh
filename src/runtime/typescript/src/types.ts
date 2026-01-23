@@ -165,11 +165,24 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
   /**
    * Tool implementation.
    *
+   * Returns any serializable value - the SDK auto-converts to string:
+   * - string: returned as-is
+   * - number/boolean: converted via JSON.stringify
+   * - object/array: converted via JSON.stringify
+   * - null/undefined: converted to empty string
+   *
    * @param args - Parsed arguments matching the Zod schema
    * @param deps - Dependency proxies injected positionally (McpMeshTool | null)
    *
    * @example
    * ```typescript
+   * // Return number - auto-serialized
+   * execute: async ({ a, b }) => a + b
+   *
+   * // Return object - auto-serialized to JSON
+   * execute: async ({ a, b }) => ({ result: a + b, source: "local" })
+   *
+   * // With dependencies
    * execute: async (
    *   { query },
    *   timeTool: McpMeshTool | null = null,
@@ -178,14 +191,14 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    *   if (timeTool) {
    *     const time = await timeTool();
    *   }
-   *   return "result";
+   *   return { result: time };
    * }
    * ```
    */
   execute: (
     args: z.infer<T>,
     ...deps: (McpMeshTool | null)[]
-  ) => Promise<string> | string;
+  ) => Promise<unknown> | unknown;
 }
 
 /**
