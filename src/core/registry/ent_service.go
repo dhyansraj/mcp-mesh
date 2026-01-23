@@ -78,6 +78,56 @@ type DependencyResolution struct {
 	Status       string `json:"status"`
 }
 
+// DependencySpec represents a single dependency requirement (capability + tags + version)
+type DependencySpec struct {
+	Capability string   `json:"capability"`
+	Tags       []string `json:"tags,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	Namespace  string   `json:"namespace,omitempty"`
+}
+
+// IndexedResolution is the result of resolving a positional dependency.
+// Contains the position (DepIndex), the spec that matched, and the resolution result.
+type IndexedResolution struct {
+	DepIndex   int                   // Position in dependency array (0-indexed)
+	Spec       DependencySpec        // The spec that matched (or first spec if unresolved)
+	Resolution *DependencyResolution // nil if unresolved
+	Status     string                // "available", "unavailable", "unresolved"
+}
+
+// parseDependencySpec parses a map into a DependencySpec
+func parseDependencySpec(m map[string]interface{}) DependencySpec {
+	spec := DependencySpec{}
+
+	if cap, ok := m["capability"].(string); ok {
+		spec.Capability = cap
+	}
+
+	if version, ok := m["version"].(string); ok {
+		spec.Version = version
+	}
+
+	if namespace, ok := m["namespace"].(string); ok {
+		spec.Namespace = namespace
+	}
+
+	// Handle tags - can be []interface{} or []string
+	if tags, exists := m["tags"]; exists {
+		if tagsList, ok := tags.([]interface{}); ok {
+			spec.Tags = make([]string, 0, len(tagsList))
+			for _, tag := range tagsList {
+				if tagStr, ok := tag.(string); ok {
+					spec.Tags = append(spec.Tags, tagStr)
+				}
+			}
+		} else if stringSlice, ok := tags.([]string); ok {
+			spec.Tags = stringSlice
+		}
+	}
+
+	return spec
+}
+
 // HeartbeatRequest matches Python HeartbeatRequest exactly
 type HeartbeatRequest struct {
 	AgentID  string                 `json:"agent_id" binding:"required"`
@@ -480,7 +530,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	}, nil
 }
 
-// StoreDependencyResolutions persists dependency resolution information to the database
+// StoreDependencyResolutions persists dependency resolution information to the database.
+// This function uses resolveAtPosition to handle both single specs and OR alternatives,
+// ensuring each dependency is stored with its correct dep_index for positional integrity.
 func (s *EntService) StoreDependencyResolutions(
 	ctx context.Context,
 	agentID string,
@@ -544,74 +596,58 @@ func (s *EntService) StoreDependencyResolutions(
 			continue // No dependencies
 		}
 
-		// Get resolved dependencies for this function
-		resolved, hasResolved := dependenciesResolved[functionName]
+		// Process each dependency at its position using resolveAtPosition
+		// This handles both single specs and OR alternatives correctly
+		for depIndex, depData := range depsSlice {
+			// Use resolveAtPosition which is the single source of truth for resolution
+			result := s.resolveAtPosition(depIndex, depData)
 
-		// Process each requested dependency
-		for _, depData := range depsSlice {
-			depMap, ok := depData.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			capability := getString(depMap, "capability")
-			if capability == "" {
-				continue
-			}
-
-			tags := getStringSlice(depMap, "tags")
-			version := getString(depMap, "version")
-			namespace := getString(depMap, "namespace")
+			// Determine namespace
+			namespace := result.Spec.Namespace
 			if namespace == "" {
 				namespace = "default"
 			}
 
-			// Find matching resolved dependency (if any)
-			var matchedResolution *DependencyResolution
-			if hasResolved {
-				for _, res := range resolved {
-					if res.Capability == capability {
-						matchedResolution = res
-						break
-					}
-				}
-			}
-
-			// Create dependency resolution record
+			// Create dependency resolution record with correct dep_index
 			create := s.entDB.DependencyResolution.Create().
 				SetConsumerAgentID(agentID).
 				SetConsumerFunctionName(functionName).
-				SetCapabilityRequired(capability).
+				SetDepIndex(depIndex). // Store positional index
+				SetCapabilityRequired(result.Spec.Capability).
 				SetNamespaceRequired(namespace)
 
-			if len(tags) > 0 {
-				create = create.SetTagsRequired(tags)
+			if len(result.Spec.Tags) > 0 {
+				create = create.SetTagsRequired(result.Spec.Tags)
 			}
-			if version != "" {
-				create = create.SetVersionRequired(version)
+			if result.Spec.Version != "" {
+				create = create.SetVersionRequired(result.Spec.Version)
 			}
 
-			if matchedResolution != nil {
+			if result.Resolution != nil {
 				// Dependency was resolved
 				create = create.
-					SetNillableProviderAgentID(&matchedResolution.AgentID).
-					SetNillableProviderFunctionName(&matchedResolution.FunctionName).
-					SetNillableEndpoint(&matchedResolution.Endpoint).
+					SetNillableProviderAgentID(&result.Resolution.AgentID).
+					SetNillableProviderFunctionName(&result.Resolution.FunctionName).
+					SetNillableEndpoint(&result.Resolution.Endpoint).
 					SetStatus(dependencyresolution.StatusAvailable).
 					SetResolvedAt(time.Now().UTC())
 			} else {
-				// Dependency is unresolved
+				// Dependency is unresolved - still store with correct dep_index
 				create = create.SetStatus(dependencyresolution.StatusUnresolved)
 			}
 
 			savedResolution, err := create.Save(ctx)
 			if err != nil {
-				s.logger.Warning("Failed to save dependency resolution for %s/%s: %v",
-					agentID, functionName, err)
+				s.logger.Warning("Failed to save dependency resolution for %s/%s[%d]: %v",
+					agentID, functionName, depIndex, err)
 				// Continue processing other dependencies
 			} else {
-				s.logger.Debug("Saved dependency resolution: %s/%s -> %s (status: %s)",
-					agentID, functionName, capability, savedResolution.Status)
+				providerFn := "(unresolved)"
+				if result.Resolution != nil {
+					providerFn = result.Resolution.FunctionName
+				}
+				s.logger.Debug("Saved dependency resolution: %s/%s[%d] -> %s => %s (status: %s)",
+					agentID, functionName, depIndex, result.Spec.Capability, providerFn, savedResolution.Status)
 			}
 		}
 	}
@@ -1532,65 +1568,27 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 		var resolvedDeps []*DependencyResolution
 
 		if deps, exists := toolMap["dependencies"]; exists {
-			// Handle both []interface{} and []map[string]interface{} types
-			var depsList []map[string]interface{}
-
+			// Handle []interface{} - each item can be:
+			// - map[string]interface{} : single spec
+			// - []interface{} : OR alternatives (array of specs)
 			if depsSlice, ok := deps.([]interface{}); ok {
-				depsList = make([]map[string]interface{}, len(depsSlice))
-				for i, item := range depsSlice {
-					if depMap, ok := item.(map[string]interface{}); ok {
-						depsList[i] = depMap
+				for depIndex, depData := range depsSlice {
+					// Use resolveAtPosition which handles both single specs and OR alternatives
+					result := s.resolveAtPosition(depIndex, depData)
+
+					if result.Resolution != nil {
+						resolvedDeps = append(resolvedDeps, result.Resolution)
+					} else {
+						s.logger.Debug("Dependency at position %d unresolved for function %s (capability: %s)",
+							depIndex, functionName, result.Spec.Capability)
 					}
 				}
 			} else if depsMapSlice, ok := deps.([]map[string]interface{}); ok {
-				depsList = depsMapSlice
-			} else {
-				depsList = nil
-			}
-
-			if depsList != nil {
-				for _, depMap := range depsList {
-					// Extract dependency info
-					requiredCapability, _ := depMap["capability"].(string)
-					if requiredCapability == "" {
-						continue
-					}
-
-					// Create dependency object
-					dep := Dependency{
-						Capability: requiredCapability,
-					}
-
-					if version, exists := depMap["version"]; exists {
-						if vStr, ok := version.(string); ok {
-							dep.Version = vStr
-						}
-					}
-
-					if tags, exists := depMap["tags"]; exists {
-						s.logger.Debug("Found tags in dependency: %T = %v", tags, tags)
-						if tagsList, ok := tags.([]interface{}); ok {
-							dep.Tags = make([]string, len(tagsList))
-							for i, tag := range tagsList {
-								if tagStr, ok := tag.(string); ok {
-									dep.Tags[i] = tagStr
-								}
-							}
-						} else if stringSlice, ok := tags.([]string); ok {
-							// Handle direct []string case
-							dep.Tags = stringSlice
-						}
-					}
-
-					// Find provider with TTL and strict matching using Ent
-					s.logger.Debug("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
-					provider := s.findHealthyProviderWithTTL(dep)
-					if provider != nil {
-						resolvedDeps = append(resolvedDeps, provider)
-					} else {
-						// Dependency cannot be resolved - log but continue with other dependencies
-						s.logger.Debug("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
-						// Continue processing other dependencies instead of breaking
+				// Handle direct []map[string]interface{} (backward compatibility)
+				for depIndex, depMap := range depsMapSlice {
+					result := s.resolveAtPosition(depIndex, depMap)
+					if result.Resolution != nil {
+						resolvedDeps = append(resolvedDeps, result.Resolution)
 					}
 				}
 			}
@@ -1935,6 +1933,112 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 
 	s.logger.Debug("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
 	return nil
+}
+
+// resolveSingle is the SINGLE SOURCE OF TRUTH for all dependency matching logic.
+// It takes a DependencySpec and returns a resolved dependency or nil if not found.
+// All resolution logic (capability + version + tags) happens here.
+func (s *EntService) resolveSingle(spec DependencySpec) *DependencyResolution {
+	// Convert DependencySpec to Dependency for the existing findHealthyProviderWithTTL
+	dep := Dependency{
+		Capability: spec.Capability,
+		Version:    spec.Version,
+		Tags:       spec.Tags,
+	}
+	return s.findHealthyProviderWithTTL(dep)
+}
+
+// resolveAtPosition handles resolution for a single position in the dependency array.
+// It handles both:
+//   - Single spec (map): A single dependency requirement
+//   - OR alternatives (array): Try each spec in order, first match wins
+//
+// Returns an IndexedResolution with the position, matched spec, and resolution result.
+func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) IndexedResolution {
+	// Check if it's an OR alternative (array of specs)
+	if alternatives, ok := depData.([]interface{}); ok {
+		// OR alternatives: try each spec in order until one resolves
+		var firstSpec DependencySpec
+
+		for i, alt := range alternatives {
+			altMap, ok := alt.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			spec := parseDependencySpec(altMap)
+
+			// Store first spec for unresolved case
+			if i == 0 {
+				firstSpec = spec
+			}
+
+			s.logger.Debug("Trying OR alternative %d at position %d: capability=%s, tags=%v",
+				i, depIndex, spec.Capability, spec.Tags)
+
+			if resolved := s.resolveSingle(spec); resolved != nil {
+				s.logger.Debug("OR alternative %d matched: %s -> %s", i, spec.Capability, resolved.FunctionName)
+				return IndexedResolution{
+					DepIndex:   depIndex,
+					Spec:       spec, // The spec that matched
+					Resolution: resolved,
+					Status:     "available",
+				}
+			}
+		}
+
+		// None of the alternatives resolved
+		s.logger.Debug("All OR alternatives at position %d unresolved", depIndex)
+		return IndexedResolution{
+			DepIndex:   depIndex,
+			Spec:       firstSpec, // Store first spec for reference
+			Resolution: nil,
+			Status:     "unresolved",
+		}
+	}
+
+	// Single spec (map): standard case
+	if depMap, ok := depData.(map[string]interface{}); ok {
+		spec := parseDependencySpec(depMap)
+
+		if spec.Capability == "" {
+			return IndexedResolution{
+				DepIndex:   depIndex,
+				Spec:       spec,
+				Resolution: nil,
+				Status:     "unresolved",
+			}
+		}
+
+		s.logger.Debug("Resolving single spec at position %d: capability=%s, tags=%v",
+			depIndex, spec.Capability, spec.Tags)
+
+		resolved := s.resolveSingle(spec)
+		if resolved != nil {
+			return IndexedResolution{
+				DepIndex:   depIndex,
+				Spec:       spec,
+				Resolution: resolved,
+				Status:     "available",
+			}
+		}
+
+		return IndexedResolution{
+			DepIndex:   depIndex,
+			Spec:       spec,
+			Resolution: nil,
+			Status:     "unresolved",
+		}
+	}
+
+	// Unknown format
+	s.logger.Warning("Unknown dependency format at position %d: %T", depIndex, depData)
+	return IndexedResolution{
+		DepIndex:   depIndex,
+		Spec:       DependencySpec{},
+		Resolution: nil,
+		Status:     "unresolved",
+	}
 }
 
 // Helper functions

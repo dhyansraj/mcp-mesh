@@ -58,6 +58,27 @@ func (dru *DependencyResolutionUpdate) SetNillableConsumerFunctionName(s *string
 	return dru
 }
 
+// SetDepIndex sets the "dep_index" field.
+func (dru *DependencyResolutionUpdate) SetDepIndex(i int) *DependencyResolutionUpdate {
+	dru.mutation.ResetDepIndex()
+	dru.mutation.SetDepIndex(i)
+	return dru
+}
+
+// SetNillableDepIndex sets the "dep_index" field if the given value is not nil.
+func (dru *DependencyResolutionUpdate) SetNillableDepIndex(i *int) *DependencyResolutionUpdate {
+	if i != nil {
+		dru.SetDepIndex(*i)
+	}
+	return dru
+}
+
+// AddDepIndex adds i to the "dep_index" field.
+func (dru *DependencyResolutionUpdate) AddDepIndex(i int) *DependencyResolutionUpdate {
+	dru.mutation.AddDepIndex(i)
+	return dru
+}
+
 // SetCapabilityRequired sets the "capability_required" field.
 func (dru *DependencyResolutionUpdate) SetCapabilityRequired(s string) *DependencyResolutionUpdate {
 	dru.mutation.SetCapabilityRequired(s)
@@ -289,6 +310,11 @@ func (dru *DependencyResolutionUpdate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (dru *DependencyResolutionUpdate) check() error {
+	if v, ok := dru.mutation.DepIndex(); ok {
+		if err := dependencyresolution.DepIndexValidator(v); err != nil {
+			return &ValidationError{Name: "dep_index", err: fmt.Errorf(`ent: validator failed for field "DependencyResolution.dep_index": %w`, err)}
+		}
+	}
 	if v, ok := dru.mutation.Status(); ok {
 		if err := dependencyresolution.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "DependencyResolution.status": %w`, err)}
@@ -314,6 +340,12 @@ func (dru *DependencyResolutionUpdate) sqlSave(ctx context.Context) (n int, err 
 	}
 	if value, ok := dru.mutation.ConsumerFunctionName(); ok {
 		_spec.SetField(dependencyresolution.FieldConsumerFunctionName, field.TypeString, value)
+	}
+	if value, ok := dru.mutation.DepIndex(); ok {
+		_spec.SetField(dependencyresolution.FieldDepIndex, field.TypeInt, value)
+	}
+	if value, ok := dru.mutation.AddedDepIndex(); ok {
+		_spec.AddField(dependencyresolution.FieldDepIndex, field.TypeInt, value)
 	}
 	if value, ok := dru.mutation.CapabilityRequired(); ok {
 		_spec.SetField(dependencyresolution.FieldCapabilityRequired, field.TypeString, value)
@@ -465,6 +497,27 @@ func (druo *DependencyResolutionUpdateOne) SetNillableConsumerFunctionName(s *st
 	if s != nil {
 		druo.SetConsumerFunctionName(*s)
 	}
+	return druo
+}
+
+// SetDepIndex sets the "dep_index" field.
+func (druo *DependencyResolutionUpdateOne) SetDepIndex(i int) *DependencyResolutionUpdateOne {
+	druo.mutation.ResetDepIndex()
+	druo.mutation.SetDepIndex(i)
+	return druo
+}
+
+// SetNillableDepIndex sets the "dep_index" field if the given value is not nil.
+func (druo *DependencyResolutionUpdateOne) SetNillableDepIndex(i *int) *DependencyResolutionUpdateOne {
+	if i != nil {
+		druo.SetDepIndex(*i)
+	}
+	return druo
+}
+
+// AddDepIndex adds i to the "dep_index" field.
+func (druo *DependencyResolutionUpdateOne) AddDepIndex(i int) *DependencyResolutionUpdateOne {
+	druo.mutation.AddDepIndex(i)
 	return druo
 }
 
@@ -712,6 +765,11 @@ func (druo *DependencyResolutionUpdateOne) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (druo *DependencyResolutionUpdateOne) check() error {
+	if v, ok := druo.mutation.DepIndex(); ok {
+		if err := dependencyresolution.DepIndexValidator(v); err != nil {
+			return &ValidationError{Name: "dep_index", err: fmt.Errorf(`ent: validator failed for field "DependencyResolution.dep_index": %w`, err)}
+		}
+	}
 	if v, ok := druo.mutation.Status(); ok {
 		if err := dependencyresolution.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "DependencyResolution.status": %w`, err)}
@@ -754,6 +812,12 @@ func (druo *DependencyResolutionUpdateOne) sqlSave(ctx context.Context) (_node *
 	}
 	if value, ok := druo.mutation.ConsumerFunctionName(); ok {
 		_spec.SetField(dependencyresolution.FieldConsumerFunctionName, field.TypeString, value)
+	}
+	if value, ok := druo.mutation.DepIndex(); ok {
+		_spec.SetField(dependencyresolution.FieldDepIndex, field.TypeInt, value)
+	}
+	if value, ok := druo.mutation.AddedDepIndex(); ok {
+		_spec.AddField(dependencyresolution.FieldDepIndex, field.TypeInt, value)
 	}
 	if value, ok := druo.mutation.CapabilityRequired(); ok {
 		_spec.SetField(dependencyresolution.FieldCapabilityRequired, field.TypeString, value)

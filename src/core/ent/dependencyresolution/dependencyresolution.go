@@ -19,6 +19,8 @@ const (
 	FieldConsumerAgentID = "consumer_agent_id"
 	// FieldConsumerFunctionName holds the string denoting the consumer_function_name field in the database.
 	FieldConsumerFunctionName = "consumer_function_name"
+	// FieldDepIndex holds the string denoting the dep_index field in the database.
+	FieldDepIndex = "dep_index"
 	// FieldCapabilityRequired holds the string denoting the capability_required field in the database.
 	FieldCapabilityRequired = "capability_required"
 	// FieldTagsRequired holds the string denoting the tags_required field in the database.
@@ -70,6 +72,7 @@ var Columns = []string{
 	FieldID,
 	FieldConsumerAgentID,
 	FieldConsumerFunctionName,
+	FieldDepIndex,
 	FieldCapabilityRequired,
 	FieldTagsRequired,
 	FieldVersionRequired,
@@ -94,6 +97,10 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultDepIndex holds the default value on creation for the "dep_index" field.
+	DefaultDepIndex int
+	// DepIndexValidator is a validator for the "dep_index" field. It is called by the builders before save.
+	DepIndexValidator func(int) error
 	// DefaultNamespaceRequired holds the default value on creation for the "namespace_required" field.
 	DefaultNamespaceRequired string
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -147,6 +154,11 @@ func ByConsumerAgentID(opts ...sql.OrderTermOption) OrderOption {
 // ByConsumerFunctionName orders the results by the consumer_function_name field.
 func ByConsumerFunctionName(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldConsumerFunctionName, opts...).ToFunc()
+}
+
+// ByDepIndex orders the results by the dep_index field.
+func ByDepIndex(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDepIndex, opts...).ToFunc()
 }
 
 // ByCapabilityRequired orders the results by the capability_required field.

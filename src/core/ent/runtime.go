@@ -65,16 +65,22 @@ func init() {
 	capability.UpdateDefaultUpdatedAt = capabilityDescUpdatedAt.UpdateDefault.(func() time.Time)
 	dependencyresolutionFields := schema.DependencyResolution{}.Fields()
 	_ = dependencyresolutionFields
+	// dependencyresolutionDescDepIndex is the schema descriptor for dep_index field.
+	dependencyresolutionDescDepIndex := dependencyresolutionFields[2].Descriptor()
+	// dependencyresolution.DefaultDepIndex holds the default value on creation for the dep_index field.
+	dependencyresolution.DefaultDepIndex = dependencyresolutionDescDepIndex.Default.(int)
+	// dependencyresolution.DepIndexValidator is a validator for the "dep_index" field. It is called by the builders before save.
+	dependencyresolution.DepIndexValidator = dependencyresolutionDescDepIndex.Validators[0].(func(int) error)
 	// dependencyresolutionDescNamespaceRequired is the schema descriptor for namespace_required field.
-	dependencyresolutionDescNamespaceRequired := dependencyresolutionFields[5].Descriptor()
+	dependencyresolutionDescNamespaceRequired := dependencyresolutionFields[6].Descriptor()
 	// dependencyresolution.DefaultNamespaceRequired holds the default value on creation for the namespace_required field.
 	dependencyresolution.DefaultNamespaceRequired = dependencyresolutionDescNamespaceRequired.Default.(string)
 	// dependencyresolutionDescCreatedAt is the schema descriptor for created_at field.
-	dependencyresolutionDescCreatedAt := dependencyresolutionFields[11].Descriptor()
+	dependencyresolutionDescCreatedAt := dependencyresolutionFields[12].Descriptor()
 	// dependencyresolution.DefaultCreatedAt holds the default value on creation for the created_at field.
 	dependencyresolution.DefaultCreatedAt = dependencyresolutionDescCreatedAt.Default.(func() time.Time)
 	// dependencyresolutionDescUpdatedAt is the schema descriptor for updated_at field.
-	dependencyresolutionDescUpdatedAt := dependencyresolutionFields[12].Descriptor()
+	dependencyresolutionDescUpdatedAt := dependencyresolutionFields[13].Descriptor()
 	// dependencyresolution.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	dependencyresolution.DefaultUpdatedAt = dependencyresolutionDescUpdatedAt.Default.(func() time.Time)
 	// dependencyresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

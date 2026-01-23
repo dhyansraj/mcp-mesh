@@ -105,6 +105,7 @@ var (
 	DependencyResolutionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
 		{Name: "consumer_function_name", Type: field.TypeString},
+		{Name: "dep_index", Type: field.TypeInt, Default: 0},
 		{Name: "capability_required", Type: field.TypeString},
 		{Name: "tags_required", Type: field.TypeJSON, Nullable: true},
 		{Name: "version_required", Type: field.TypeString, Nullable: true},
@@ -126,13 +127,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "dependency_resolutions_agents_dependency_resolutions",
-				Columns:    []*schema.Column{DependencyResolutionsColumns[12]},
+				Columns:    []*schema.Column{DependencyResolutionsColumns[13]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
 				Symbol:     "dependency_resolutions_agents_provider_agent",
-				Columns:    []*schema.Column{DependencyResolutionsColumns[13]},
+				Columns:    []*schema.Column{DependencyResolutionsColumns[14]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -141,27 +142,32 @@ var (
 			{
 				Name:    "dependencyresolution_consumer_agent_id_consumer_function_name",
 				Unique:  false,
-				Columns: []*schema.Column{DependencyResolutionsColumns[12], DependencyResolutionsColumns[1]},
+				Columns: []*schema.Column{DependencyResolutionsColumns[13], DependencyResolutionsColumns[1]},
+			},
+			{
+				Name:    "dependencyresolution_consumer_agent_id_consumer_function_name_dep_index",
+				Unique:  false,
+				Columns: []*schema.Column{DependencyResolutionsColumns[13], DependencyResolutionsColumns[1], DependencyResolutionsColumns[2]},
 			},
 			{
 				Name:    "dependencyresolution_provider_agent_id",
 				Unique:  false,
-				Columns: []*schema.Column{DependencyResolutionsColumns[13]},
+				Columns: []*schema.Column{DependencyResolutionsColumns[14]},
 			},
 			{
 				Name:    "dependencyresolution_capability_required",
 				Unique:  false,
-				Columns: []*schema.Column{DependencyResolutionsColumns[2]},
+				Columns: []*schema.Column{DependencyResolutionsColumns[3]},
 			},
 			{
 				Name:    "dependencyresolution_status",
 				Unique:  false,
-				Columns: []*schema.Column{DependencyResolutionsColumns[8]},
+				Columns: []*schema.Column{DependencyResolutionsColumns[9]},
 			},
 			{
 				Name:    "dependencyresolution_consumer_agent_id_status",
 				Unique:  false,
-				Columns: []*schema.Column{DependencyResolutionsColumns[12], DependencyResolutionsColumns[8]},
+				Columns: []*schema.Column{DependencyResolutionsColumns[13], DependencyResolutionsColumns[9]},
 			},
 		},
 	}
