@@ -181,6 +181,7 @@ type EntService struct {
 	validator   *AgentRegistrationValidator
 	logger      *logger.Logger
 	hookManager *AgentStatusChangeHookManager
+	matcher     *Matcher
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -205,6 +206,9 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	// Initialize status change hook manager
 	hookManager := NewAgentStatusChangeHookManager(logger, true) // Enable hooks by default
 
+	// Create Matcher for dependency resolution
+	matcher := NewMatcher(logger)
+
 	// Create EntService instance
 	service := &EntService{
 		entDB:       entDB,
@@ -213,6 +217,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 		validator:   NewAgentRegistrationValidator(),
 		logger:      logger,
 		hookManager: hookManager,
+		matcher:     matcher,
 	}
 
 	// Register status change hooks with the database client
@@ -1756,17 +1761,8 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		return nil
 	}
 
-	// Convert to candidates structure
-	var candidates []struct {
-		AgentID      string
-		FunctionName string
-		Capability   string
-		Version      string
-		Tags         []string
-		HttpHost     string
-		HttpPort     int
-		UpdatedAt    time.Time
-	}
+	// Convert to candidates using the Candidate type (eliminates repeated anonymous structs)
+	var candidates []Candidate
 
 	for _, cap := range capabilities {
 		if cap.Edges.Agent == nil {
@@ -1781,16 +1777,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			continue // Skip unhealthy agents
 		}
 
-		candidate := struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}{
+		candidates = append(candidates, Candidate{
 			AgentID:      cap.Edges.Agent.ID,
 			FunctionName: cap.FunctionName,
 			Capability:   cap.Capability,
@@ -1798,63 +1785,32 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			Tags:         cap.Tags,
 			HttpHost:     cap.Edges.Agent.HTTPHost,
 			HttpPort:     cap.Edges.Agent.HTTPPort,
-			UpdatedAt:    cap.Edges.Agent.UpdatedAt,
-		}
-		candidates = append(candidates, candidate)
+		})
 	}
 
 	s.logger.Debug("Total candidates found for %s: %d", dep.Capability, len(candidates))
 
-	// Filter by version constraint if specified
+	// Filter by version constraint using Matcher
 	if dep.Version != "" && len(candidates) > 0 {
-		filtered := make([]struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}, 0)
-
+		filtered := make([]Candidate, 0)
 		for _, c := range candidates {
-			if matchesVersion(c.Version, dep.Version) {
+			if s.matcher.MatchVersion(c.Version, dep.Version) {
 				filtered = append(filtered, c)
 			}
 		}
 		candidates = filtered
 	}
 
-	// Filter by tags using enhanced tag matching with priority scoring
-	if len(dep.Tags) > 0 && len(candidates) > 0 {
-		type candidateWithScore struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-			Score        int // Priority score from enhanced tag matching
-		}
-
-		scoredCandidates := make([]candidateWithScore, 0)
+	// Filter by tags using Matcher with priority scoring
+	if (len(dep.Tags) > 0 || len(dep.TagAlternatives) > 0) && len(candidates) > 0 {
+		scoredCandidates := make([]ScoredCandidate, 0)
 
 		for _, c := range candidates {
-			matches, score := matchesEnhancedTags(c.Tags, dep.Tags, dep.TagAlternatives)
+			matches, score := s.matcher.MatchTags(c.Tags, dep.Tags, dep.TagAlternatives)
 			if matches {
-				scoredCandidates = append(scoredCandidates, candidateWithScore{
-					AgentID:      c.AgentID,
-					FunctionName: c.FunctionName,
-					Capability:   c.Capability,
-					Version:      c.Version,
-					Tags:         c.Tags,
-					HttpHost:     c.HttpHost,
-					HttpPort:     c.HttpPort,
-					UpdatedAt:    c.UpdatedAt,
-					Score:        score,
+				scoredCandidates = append(scoredCandidates, ScoredCandidate{
+					Candidate: c,
+					Score:     score,
 				})
 			}
 		}
@@ -1868,38 +1824,10 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			}
 		}
 
-		// Convert back to original candidate format
-		candidates = make([]struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}, len(scoredCandidates))
-
+		// Extract candidates from scored list
+		candidates = make([]Candidate, len(scoredCandidates))
 		for i, sc := range scoredCandidates {
-			candidates[i] = struct {
-				AgentID      string
-				FunctionName string
-				Capability   string
-				Version      string
-				Tags         []string
-				HttpHost     string
-				HttpPort     int
-				UpdatedAt    time.Time
-			}{
-				AgentID:      sc.AgentID,
-				FunctionName: sc.FunctionName,
-				Capability:   sc.Capability,
-				Version:      sc.Version,
-				Tags:         sc.Tags,
-				HttpHost:     sc.HttpHost,
-				HttpPort:     sc.HttpPort,
-				UpdatedAt:    sc.UpdatedAt,
-			}
+			candidates[i] = sc.Candidate
 		}
 	}
 
@@ -2058,169 +1986,6 @@ func parseVersionConstraint(version string) (*semver.Constraints, error) {
 		return nil, nil
 	}
 	return semver.NewConstraint(version)
-}
-
-func matchesVersion(version, constraint string) bool {
-	// Handle empty cases
-	if constraint == "" || version == "" {
-		return version == constraint
-	}
-
-	// Parse the version
-	v, err := semver.NewVersion(version)
-	if err != nil {
-		// If version parsing fails, fall back to string comparison
-		return version == constraint
-	}
-
-	// Parse the constraint
-	c, err := semver.NewConstraint(constraint)
-	if err != nil {
-		// If constraint parsing fails, fall back to string comparison
-		return version == constraint
-	}
-
-	// Check if version satisfies constraint
-	return c.Check(v)
-}
-
-func hasAllTags(available, required []string) bool {
-	for _, req := range required {
-		found := false
-		for _, avail := range available {
-			if avail == req {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-// matchesEnhancedTags implements enhanced tag matching with +/- operators and OR alternatives
-// Returns (matches, score) where:
-// - matches: true if the provider satisfies all constraints
-// - score: numeric score for ranking providers (higher = better match)
-//
-// Tag prefixes:
-// - No prefix: Required tag (must be present)
-// - "+": Preferred tag (bonus points if present, no penalty if missing)
-// - "-": Excluded tag (must NOT be present, fails if found)
-//
-// OR Alternatives (tagAlternatives):
-// Each []string in tagAlternatives is an OR group - at least one must match.
-// e.g., tagAlternatives: [["python", "typescript"]] means (python OR typescript)
-//
-// Examples:
-// - "claude" = required
-// - "+opus" = preferred (bonus if present)
-// - "-experimental" = excluded (fail if present)
-// - tagAlternatives: [["python", "typescript"]] = (python OR typescript)
-func matchesEnhancedTags(providerTags, requiredTags []string, tagAlternatives ...[][]string) (bool, int) {
-	score := 0
-
-	// Helper function to check if a tag exists in provider tags
-	containsTag := func(tags []string, tag string) bool {
-		for _, t := range tags {
-			if t == tag {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Process required tags (simple string tags with +/- operators)
-	for _, reqTag := range requiredTags {
-		if len(reqTag) == 0 {
-			continue // Skip empty tags
-		}
-
-		switch reqTag[0] {
-		case '-':
-			// Excluded tag: must NOT be present
-			excludedTag := reqTag[1:]
-			if excludedTag != "" && containsTag(providerTags, excludedTag) {
-				return false, 0 // Hard failure if excluded tag is present
-			}
-			// No score change for excluded tags (they don't add value, just filter)
-
-		case '+':
-			// Preferred tag: bonus points if present, no penalty if missing
-			preferredTag := reqTag[1:]
-			if preferredTag != "" && containsTag(providerTags, preferredTag) {
-				score += 10 // Bonus points for preferred tags
-			}
-			// No penalty if preferred tag is missing
-
-		default:
-			// Required tag: must be present
-			if containsTag(providerTags, reqTag) {
-				score += 5 // Base points for required tags
-			} else {
-				return false, 0 // Hard failure if required tag is missing
-			}
-		}
-	}
-
-	// Process OR alternatives (if provided)
-	// Each OR group must have at least one matching tag
-	// Supports +/- operators within OR groups:
-	// - No prefix: required alternative
-	// - "+": preferred alternative (bonus score if matched)
-	// - "-": excluded (fail if this tag is present)
-	if len(tagAlternatives) > 0 && len(tagAlternatives[0]) > 0 {
-		for _, orGroup := range tagAlternatives[0] {
-			if len(orGroup) == 0 {
-				continue // Skip empty OR groups
-			}
-
-			// At least one tag in this OR group must match
-			matched := false
-			matchScore := 0
-			for _, altTag := range orGroup {
-				if len(altTag) == 0 {
-					continue
-				}
-
-				switch altTag[0] {
-				case '-':
-					// Excluded alternative: fail if present
-					excludedTag := altTag[1:]
-					if excludedTag != "" && containsTag(providerTags, excludedTag) {
-						return false, 0 // Hard failure if excluded tag is present
-					}
-					// Don't count as "matched" - exclusions are filters, not matches
-
-				case '+':
-					// Preferred alternative: bonus score if matched
-					preferredTag := altTag[1:]
-					if preferredTag != "" && containsTag(providerTags, preferredTag) {
-						matched = true
-						matchScore = 10 // Bonus for preferred
-					}
-
-				default:
-					// Required alternative: base score if matched
-					if containsTag(providerTags, altTag) {
-						matched = true
-						if matchScore < 5 { // Don't override higher score from preferred
-							matchScore = 5
-						}
-					}
-				}
-			}
-
-			if !matched {
-				return false, 0 // Hard failure if no alternative in OR group matched
-			}
-			score += matchScore
-		}
-	}
-
-	return true, score
 }
 
 // countTotalDependenciesInMetadata counts the total number of dependencies across all tools in metadata
