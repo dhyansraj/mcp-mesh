@@ -182,7 +182,17 @@ export class MeshAgent {
         const result = await runWithTraceContext(traceContext, async () => {
           return await execute(cleanArgs, ...depsArray);
         });
-        return result;
+
+        // Auto-serialize non-string results (like Python SDK does)
+        // This allows users to return natural types (numbers, objects, arrays)
+        // without manually calling JSON.stringify() or String()
+        if (typeof result === "string") {
+          return result;
+        } else if (result === undefined || result === null) {
+          return "";
+        } else {
+          return JSON.stringify(result);
+        }
       } catch (err) {
         success = false;
         error = err instanceof Error ? err.message : String(err);
