@@ -93,10 +93,11 @@ type DependencySpec struct {
 // IndexedResolution is the result of resolving a positional dependency.
 // Contains the position (DepIndex), the spec that matched, and the resolution result.
 type IndexedResolution struct {
-	DepIndex   int                   // Position in dependency array (0-indexed)
-	Spec       DependencySpec        // The spec that matched (or first spec if unresolved)
-	Resolution *DependencyResolution // nil if unresolved
-	Status     string                // "available", "unavailable", "unresolved"
+	FunctionName string                // Function that declared this dependency
+	DepIndex     int                   // Position in dependency array (0-indexed)
+	Spec         DependencySpec        // The spec that matched (or first spec if unresolved)
+	Resolution   *DependencyResolution // nil if unresolved
+	Status       string                // "available", "unavailable", "unresolved"
 }
 
 // parseDependencySpec parses a map into a DependencySpec
@@ -487,20 +488,25 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		return nil, fmt.Errorf("failed to register agent: %w", err)
 	}
 
-	// Now that capabilities are saved, resolve dependencies for both response AND database counts
-	dependenciesResolved, err := s.ResolveAllDependenciesFromMetadata(req.Metadata)
-	if err != nil {
-		s.logger.Warning("Failed to resolve dependencies for response: %v", err)
-		dependenciesResolved = make(map[string][]*DependencyResolution)
-	}
+	// Resolve dependencies once using IndexedResolution (single source of truth)
+	indexedResolutions := s.ResolveAllDependenciesIndexed(req.Metadata)
 
-	// Calculate totals from the resolution map (single source of truth)
-	totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+	// Convert to API response format (map[functionName][]*DependencyResolution)
+	dependenciesResolved := make(map[string][]*DependencyResolution)
 	resolvedDeps := 0
-	for _, deps := range dependenciesResolved {
-		resolvedDeps += len(deps)
+	for _, res := range indexedResolutions {
+		if res.Resolution != nil {
+			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
+			resolvedDeps++
+		} else {
+			// Ensure function exists in map even if no resolutions
+			if _, exists := dependenciesResolved[res.FunctionName]; !exists {
+				dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
+			}
+		}
 	}
 
+	totalDeps := len(indexedResolutions)
 	s.logger.Debug("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedDeps)
 
 	// Update dependency counts in agent record (outside transaction)
@@ -517,8 +523,8 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 	s.logger.Info("Agent %s registered successfully", req.AgentID)
 
-	// Store dependency resolutions in database
-	err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+	// Store pre-resolved dependency resolutions in database (no re-resolution)
+	err = s.StoreDependencyResolutions(ctx, req.AgentID, indexedResolutions)
 	if err != nil {
 		s.logger.Warning("Failed to store dependency resolutions: %v", err)
 		// Don't fail registration over this
@@ -555,26 +561,14 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	}, nil
 }
 
-// StoreDependencyResolutions persists dependency resolution information to the database.
-// This function uses resolveAtPosition to handle both single specs and OR alternatives,
-// ensuring each dependency is stored with its correct dep_index for positional integrity.
+// StoreDependencyResolutions persists pre-resolved dependency information to the database.
+// This is a PURE PERSISTENCE function - no resolution logic here.
+// Resolution is done by ResolveAllDependenciesIndexed; this function just stores the results.
 func (s *EntService) StoreDependencyResolutions(
 	ctx context.Context,
 	agentID string,
-	metadata map[string]interface{},
-	dependenciesResolved map[string][]*DependencyResolution,
+	resolutions []IndexedResolution,
 ) error {
-	// Extract tools from metadata to get requested dependencies
-	toolsData, exists := metadata["tools"]
-	if !exists {
-		return nil // No tools means no dependencies
-	}
-
-	toolsList, ok := toolsData.([]interface{})
-	if !ok {
-		return fmt.Errorf("tools is not an array")
-	}
-
 	// Delete existing dependency resolutions for this agent
 	_, err := s.entDB.DependencyResolution.Delete().
 		Where(dependencyresolution.ConsumerAgentIDEQ(agentID)).
@@ -583,97 +577,59 @@ func (s *EntService) StoreDependencyResolutions(
 		return fmt.Errorf("failed to delete old dependency resolutions: %w", err)
 	}
 
-	// Process each tool and store its dependency resolutions
-	for _, toolData := range toolsList {
-		toolMap, ok := toolData.(map[string]interface{})
-		if !ok {
-			continue
+	// Nothing to store
+	if len(resolutions) == 0 {
+		return nil
+	}
+
+	// Store each pre-resolved dependency
+	for _, result := range resolutions {
+		// Determine namespace
+		namespace := result.Spec.Namespace
+		if namespace == "" {
+			namespace = "default"
 		}
 
-		functionName, ok := toolMap["function_name"].(string)
-		if !ok {
-			continue
+		// Create dependency resolution record with correct dep_index
+		create := s.entDB.DependencyResolution.Create().
+			SetConsumerAgentID(agentID).
+			SetConsumerFunctionName(result.FunctionName).
+			SetDepIndex(result.DepIndex).
+			SetCapabilityRequired(result.Spec.Capability).
+			SetNamespaceRequired(namespace)
+
+		if len(result.Spec.Tags) > 0 {
+			create = create.SetTagsRequired(result.Spec.Tags)
+		}
+		if result.Spec.Version != "" {
+			create = create.SetVersionRequired(result.Spec.Version)
 		}
 
-		// Get requested dependencies for this function
-		deps, exists := toolMap["dependencies"]
-		if !exists {
-			continue // Tool has no dependencies
+		if result.Resolution != nil {
+			// Dependency was resolved
+			create = create.
+				SetNillableProviderAgentID(&result.Resolution.AgentID).
+				SetNillableProviderFunctionName(&result.Resolution.FunctionName).
+				SetNillableEndpoint(&result.Resolution.Endpoint).
+				SetStatus(dependencyresolution.StatusAvailable).
+				SetResolvedAt(time.Now().UTC())
+		} else {
+			// Dependency is unresolved - still store with correct dep_index
+			create = create.SetStatus(dependencyresolution.StatusUnresolved)
 		}
 
-		// Handle both []interface{} and []map[string]interface{} types
-		var depsSlice []interface{}
-		switch v := deps.(type) {
-		case []interface{}:
-			depsSlice = v
-		case []map[string]interface{}:
-			// Convert []map[string]interface{} to []interface{}
-			depsSlice = make([]interface{}, len(v))
-			for i, m := range v {
-				depsSlice[i] = m
-			}
-		default:
-			s.logger.Warning("  Tool %s dependencies has unexpected type: %T", functionName, deps)
-			continue
-		}
-
-		if len(depsSlice) == 0 {
-			continue // No dependencies
-		}
-
-		// Process each dependency at its position using resolveAtPosition
-		// This handles both single specs and OR alternatives correctly
-		for depIndex, depData := range depsSlice {
-			// Use resolveAtPosition which is the single source of truth for resolution
-			result := s.resolveAtPosition(depIndex, depData)
-
-			// Determine namespace
-			namespace := result.Spec.Namespace
-			if namespace == "" {
-				namespace = "default"
-			}
-
-			// Create dependency resolution record with correct dep_index
-			create := s.entDB.DependencyResolution.Create().
-				SetConsumerAgentID(agentID).
-				SetConsumerFunctionName(functionName).
-				SetDepIndex(depIndex). // Store positional index
-				SetCapabilityRequired(result.Spec.Capability).
-				SetNamespaceRequired(namespace)
-
-			if len(result.Spec.Tags) > 0 {
-				create = create.SetTagsRequired(result.Spec.Tags)
-			}
-			if result.Spec.Version != "" {
-				create = create.SetVersionRequired(result.Spec.Version)
-			}
-
+		savedResolution, err := create.Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to save dependency resolution for %s/%s[%d]: %v",
+				agentID, result.FunctionName, result.DepIndex, err)
+			// Continue processing other dependencies
+		} else {
+			providerFn := "(unresolved)"
 			if result.Resolution != nil {
-				// Dependency was resolved
-				create = create.
-					SetNillableProviderAgentID(&result.Resolution.AgentID).
-					SetNillableProviderFunctionName(&result.Resolution.FunctionName).
-					SetNillableEndpoint(&result.Resolution.Endpoint).
-					SetStatus(dependencyresolution.StatusAvailable).
-					SetResolvedAt(time.Now().UTC())
-			} else {
-				// Dependency is unresolved - still store with correct dep_index
-				create = create.SetStatus(dependencyresolution.StatusUnresolved)
+				providerFn = result.Resolution.FunctionName
 			}
-
-			savedResolution, err := create.Save(ctx)
-			if err != nil {
-				s.logger.Warning("Failed to save dependency resolution for %s/%s[%d]: %v",
-					agentID, functionName, depIndex, err)
-				// Continue processing other dependencies
-			} else {
-				providerFn := "(unresolved)"
-				if result.Resolution != nil {
-					providerFn = result.Resolution.FunctionName
-				}
-				s.logger.Debug("Saved dependency resolution: %s/%s[%d] -> %s => %s (status: %s)",
-					agentID, functionName, depIndex, result.Spec.Capability, providerFn, savedResolution.Status)
-			}
+			s.logger.Debug("Saved dependency resolution: %s/%s[%d] -> %s => %s (status: %s)",
+				agentID, result.FunctionName, result.DepIndex, result.Spec.Capability, providerFn, savedResolution.Status)
 		}
 	}
 
@@ -1224,20 +1180,24 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}, nil
 			}
 
-			// Resolve dependencies after transaction commits
-			dependenciesResolved, err = s.ResolveAllDependenciesFromMetadata(req.Metadata)
-			if err != nil {
-				s.logger.Warning("Failed to resolve dependencies for response: %v", err)
-				dependenciesResolved = make(map[string][]*DependencyResolution)
-			}
+			// Resolve dependencies once using IndexedResolution (single source of truth)
+			indexedResolutions := s.ResolveAllDependenciesIndexed(req.Metadata)
 
-			// Calculate dependency counts and update agent record
-			totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+			// Convert to API response format
+			dependenciesResolved = make(map[string][]*DependencyResolution)
 			resolvedDeps := 0
-			for _, deps := range dependenciesResolved {
-				resolvedDeps += len(deps)
+			for _, res := range indexedResolutions {
+				if res.Resolution != nil {
+					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
+					resolvedDeps++
+				} else {
+					if _, exists := dependenciesResolved[res.FunctionName]; !exists {
+						dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
+					}
+				}
 			}
 
+			totalDeps := len(indexedResolutions)
 			_, err = s.entDB.Agent.UpdateOneID(req.AgentID).
 				SetTotalDependencies(totalDeps).
 				SetDependenciesResolved(resolvedDeps).
@@ -1246,8 +1206,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				s.logger.Warning("Failed to update dependency counts: %v", err)
 			}
 
-			// Store dependency resolutions in database
-			err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+			// Store pre-resolved dependency resolutions in database (no re-resolution)
+			err = s.StoreDependencyResolutions(ctx, req.AgentID, indexedResolutions)
 			if err != nil {
 				s.logger.Warning("Failed to store dependency resolutions: %v", err)
 				// Don't fail heartbeat over this
@@ -1562,19 +1522,21 @@ func (s *EntService) Health() map[string]interface{} {
 }
 
 // ResolveAllDependenciesFromMetadata resolves dependencies using the tools metadata from registration
-// Implements strict dependency resolution: ALL dependencies must resolve or function fails
-func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]interface{}) (map[string][]*DependencyResolution, error) {
-	resolved := make(map[string][]*DependencyResolution)
+// ResolveAllDependenciesIndexed resolves all dependencies and returns full IndexedResolution data.
+// This is the single source of truth for dependency resolution - includes spec, position, and resolution.
+// Use this for database storage. Use ResolveAllDependenciesFromMetadata for API responses.
+func (s *EntService) ResolveAllDependenciesIndexed(metadata map[string]interface{}) []IndexedResolution {
+	var allResolutions []IndexedResolution
 
 	// Extract tools from metadata
 	toolsData, exists := metadata["tools"]
 	if !exists {
-		return resolved, nil
+		return allResolutions
 	}
 
 	toolsList, ok := toolsData.([]interface{})
 	if !ok {
-		return resolved, nil
+		return allResolutions
 	}
 
 	// Process each tool and resolve its dependencies
@@ -1589,46 +1551,50 @@ func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]inte
 			continue
 		}
 
-		// Get dependencies for this function
-		var resolvedDeps []*DependencyResolution
-
 		if deps, exists := toolMap["dependencies"]; exists {
 			// Handle []interface{} - each item can be:
 			// - map[string]interface{} : single spec
 			// - []interface{} : OR alternatives (array of specs)
 			if depsSlice, ok := deps.([]interface{}); ok {
 				for depIndex, depData := range depsSlice {
-					// Use resolveAtPosition which handles both single specs and OR alternatives
 					result := s.resolveAtPosition(depIndex, depData)
-
-					if result.Resolution != nil {
-						resolvedDeps = append(resolvedDeps, result.Resolution)
-					} else {
-						s.logger.Debug("Dependency at position %d unresolved for function %s (capability: %s)",
-							depIndex, functionName, result.Spec.Capability)
-					}
+					result.FunctionName = functionName
+					allResolutions = append(allResolutions, result)
 				}
 			} else if depsMapSlice, ok := deps.([]map[string]interface{}); ok {
 				// Handle direct []map[string]interface{} (backward compatibility)
 				for depIndex, depMap := range depsMapSlice {
 					result := s.resolveAtPosition(depIndex, depMap)
-					if result.Resolution != nil {
-						resolvedDeps = append(resolvedDeps, result.Resolution)
-					}
+					result.FunctionName = functionName
+					allResolutions = append(allResolutions, result)
 				}
 			}
 		}
+	}
 
-		// Always include function in resolved map, even if some dependencies are unresolved
-		// This allows partial dependency resolution tracking
-		resolved[functionName] = resolvedDeps
-		if len(resolvedDeps) == 0 && len(toolMap) > 0 {
-			// Only log if function had dependencies but none were resolved
-			if deps, exists := toolMap["dependencies"]; exists {
-				if depsList, ok := deps.([]interface{}); ok && len(depsList) > 0 {
-					s.logger.Debug("Function %s excluded due to unresolvable dependencies", functionName)
-				}
+	return allResolutions
+}
+
+// ResolveAllDependenciesFromMetadata resolves dependencies and returns map for API responses.
+// Internally uses ResolveAllDependenciesIndexed and extracts just the resolved dependencies.
+// Implements strict dependency resolution: ALL dependencies must resolve or function fails
+func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]interface{}) (map[string][]*DependencyResolution, error) {
+	resolved := make(map[string][]*DependencyResolution)
+
+	// Use the indexed resolver as single source of truth
+	allResolutions := s.ResolveAllDependenciesIndexed(metadata)
+
+	// Group by function name and extract only resolved dependencies
+	for _, res := range allResolutions {
+		if res.Resolution != nil {
+			resolved[res.FunctionName] = append(resolved[res.FunctionName], res.Resolution)
+		} else {
+			// Ensure function exists in map even if no resolutions
+			if _, exists := resolved[res.FunctionName]; !exists {
+				resolved[res.FunctionName] = []*DependencyResolution{}
 			}
+			s.logger.Debug("Dependency at position %d unresolved for function %s (capability: %s)",
+				res.DepIndex, res.FunctionName, res.Spec.Capability)
 		}
 	}
 

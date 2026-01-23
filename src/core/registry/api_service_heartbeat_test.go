@@ -16,6 +16,22 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
+// makeStringTag creates a MeshToolDependencyRegistration_Tags_Item from a string
+func makeStringTag(s string) generated.MeshToolDependencyRegistration_Tags_Item {
+	var item generated.MeshToolDependencyRegistration_Tags_Item
+	_ = item.FromMeshToolDependencyRegistrationTags0(s)
+	return item
+}
+
+// makeStringTags creates a slice of MeshToolDependencyRegistration_Tags_Item from strings
+func makeStringTags(tags ...string) *[]generated.MeshToolDependencyRegistration_Tags_Item {
+	items := make([]generated.MeshToolDependencyRegistration_Tags_Item, len(tags))
+	for i, tag := range tags {
+		items[i] = makeStringTag(tag)
+	}
+	return &items
+}
+
 // setupTestRouter creates a test router with real handlers connected to EntService
 func setupTestRouter(t *testing.T, service *EntService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -49,7 +65,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 					Dependencies: &[]generated.MeshToolDependencyRegistration{
 						{
 							Capability: "pdf-extractor",
-							Tags:       &[]string{"processing"},
+							Tags:       makeStringTags("processing"),
 						},
 					},
 				},
