@@ -653,7 +653,11 @@ func (m *Matcher) MatchVersion(version, constraint string) bool {
 }
 #+end_src
 
-** TODO Phase 11: Refactor ent_service.go (2686 lines → Multiple Files)
+** DONE Phase 11: Refactor ent_service.go (2686 lines → Multiple Files)
+   CLOSED: [2026-01-23]
+   - Created resolver.go with resolution functions
+   - ent_service.go reduced from 2686 to 2020 lines (~25% reduction)
+   - matcher.go already created in Phase 9
 
 *** Current Structure
 
@@ -721,7 +725,10 @@ func (m *Matcher) MatchVersion(version, constraint string) bool {
 - normalizeName
 - convertToLLMToolFilter, convertToLLMProvider
 
-** TODO Phase 12: Clean Up Repeated Anonymous Structs
+** DONE Phase 12: Clean Up Repeated Anonymous Structs
+   CLOSED: [2026-01-23]
+   - Candidate and ScoredCandidate types introduced in Phase 9
+   - No inline anonymous structs remain in core code
 
 *** Problem
 
@@ -764,7 +771,10 @@ type ScoredCandidate struct {
 }
 #+end_src
 
-** TODO Phase 13: Consolidate Dependency Types
+** DEFERRED Phase 13: Consolidate Dependency Types
+   - Dependency and DependencySpec are similar but DependencySpec has Namespace
+   - Would require changing findHealthyProviderWithTTL signature
+   - Lower priority - current code works correctly
 
 *** Problem
 
