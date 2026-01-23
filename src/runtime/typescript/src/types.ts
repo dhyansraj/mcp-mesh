@@ -34,13 +34,21 @@ export type {
  * ]
  * ```
  */
+/**
+ * Tag specification - can be a simple string or array of strings for OR alternatives.
+ * e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
+ */
+export type TagSpec = string | string[];
+
 export type DependencySpec =
   | string
   | {
       /** Capability name to depend on */
       capability: string;
-      /** Tags for filtering (e.g., ["+fast", "-deprecated"]) */
-      tags?: string[];
+      /** Tags for filtering. Supports OR alternatives via nested arrays.
+       * e.g., ["+fast", "-deprecated"] or ["api", ["v1", "v2"]] for api AND (v1 OR v2)
+       */
+      tags?: TagSpec[];
       /** Version constraint (e.g., ">=2.0.0") */
       version?: string;
     };
@@ -50,7 +58,7 @@ export type DependencySpec =
  */
 export interface NormalizedDependency {
   capability: string;
-  tags: string[];
+  tags: TagSpec[];
   version?: string;
 }
 

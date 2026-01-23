@@ -30,7 +30,7 @@
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import type { DependencySpec, McpMeshTool, DependencyKwargs } from "./types.js";
+import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
 import { normalizeDependency } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
 
@@ -89,10 +89,10 @@ export interface RouteMetadata {
   method: string;
   /** Route path pattern */
   path: string;
-  /** Normalized dependencies */
+  /** Normalized dependencies (tags may include OR alternatives) */
   dependencies: Array<{
     capability: string;
-    tags: string[];
+    tags: TagSpec[];
     version?: string;
   }>;
   /** Per-dependency kwargs */

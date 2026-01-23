@@ -23,9 +23,10 @@ import (
 // Dependency represents a tool dependency with constraints
 // Replaces the old database.Dependency from GORM models
 type Dependency struct {
-	Capability string   `json:"capability"`
-	Version    string   `json:"version,omitempty"` // e.g., ">=1.0.0"
-	Tags       []string `json:"tags,omitempty"`    // e.g., ["production", "US_EAST"]
+	Capability      string     `json:"capability"`
+	Version         string     `json:"version,omitempty"`         // e.g., ">=1.0.0"
+	Tags            []string   `json:"tags,omitempty"`            // e.g., ["production", "US_EAST"]
+	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives, e.g., [["python", "typescript"]]
 }
 
 // RegistryConfig holds registry-specific configuration
@@ -79,11 +80,14 @@ type DependencyResolution struct {
 }
 
 // DependencySpec represents a single dependency requirement (capability + tags + version)
+// Tags can include OR alternatives via TagAlternatives field.
+// e.g., tags: ["addition", ["python", "typescript"]] means addition AND (python OR typescript)
 type DependencySpec struct {
-	Capability string   `json:"capability"`
-	Tags       []string `json:"tags,omitempty"`
-	Version    string   `json:"version,omitempty"`
-	Namespace  string   `json:"namespace,omitempty"`
+	Capability      string     `json:"capability"`
+	Tags            []string   `json:"tags,omitempty"`            // Simple required tags
+	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives (each inner array is an OR group)
+	Version         string     `json:"version,omitempty"`
+	Namespace       string     `json:"namespace,omitempty"`
 }
 
 // IndexedResolution is the result of resolving a positional dependency.
@@ -96,6 +100,8 @@ type IndexedResolution struct {
 }
 
 // parseDependencySpec parses a map into a DependencySpec
+// Supports OR alternatives in tags via nested arrays:
+// tags: ["required", ["python", "typescript"]] = required AND (python OR typescript)
 func parseDependencySpec(m map[string]interface{}) DependencySpec {
 	spec := DependencySpec{}
 
@@ -111,13 +117,32 @@ func parseDependencySpec(m map[string]interface{}) DependencySpec {
 		spec.Namespace = namespace
 	}
 
-	// Handle tags - can be []interface{} or []string
+	// Handle tags - can be []interface{} or []string, with nested arrays for OR alternatives
 	if tags, exists := m["tags"]; exists {
 		if tagsList, ok := tags.([]interface{}); ok {
 			spec.Tags = make([]string, 0, len(tagsList))
+			spec.TagAlternatives = make([][]string, 0)
+
 			for _, tag := range tagsList {
 				if tagStr, ok := tag.(string); ok {
+					// Simple string tag - required
 					spec.Tags = append(spec.Tags, tagStr)
+				} else if tagArr, ok := tag.([]interface{}); ok {
+					// Nested array - OR alternatives
+					orGroup := make([]string, 0, len(tagArr))
+					for _, t := range tagArr {
+						if s, ok := t.(string); ok {
+							orGroup = append(orGroup, s)
+						}
+					}
+					if len(orGroup) > 0 {
+						spec.TagAlternatives = append(spec.TagAlternatives, orGroup)
+					}
+				} else if stringArr, ok := tag.([]string); ok {
+					// Direct []string nested array
+					if len(stringArr) > 0 {
+						spec.TagAlternatives = append(spec.TagAlternatives, stringArr)
+					}
 				}
 			}
 		} else if stringSlice, ok := tags.([]string); ok {
@@ -1852,7 +1877,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		scoredCandidates := make([]candidateWithScore, 0)
 
 		for _, c := range candidates {
-			matches, score := matchesEnhancedTags(c.Tags, dep.Tags)
+			matches, score := matchesEnhancedTags(c.Tags, dep.Tags, dep.TagAlternatives)
 			if matches {
 				scoredCandidates = append(scoredCandidates, candidateWithScore{
 					AgentID:      c.AgentID,
@@ -1941,9 +1966,10 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 func (s *EntService) resolveSingle(spec DependencySpec) *DependencyResolution {
 	// Convert DependencySpec to Dependency for the existing findHealthyProviderWithTTL
 	dep := Dependency{
-		Capability: spec.Capability,
-		Version:    spec.Version,
-		Tags:       spec.Tags,
+		Capability:      spec.Capability,
+		Version:         spec.Version,
+		Tags:            spec.Tags,
+		TagAlternatives: spec.TagAlternatives,
 	}
 	return s.findHealthyProviderWithTTL(dep)
 }
@@ -2108,7 +2134,7 @@ func hasAllTags(available, required []string) bool {
 	return true
 }
 
-// matchesEnhancedTags implements enhanced tag matching with +/- operators
+// matchesEnhancedTags implements enhanced tag matching with +/- operators and OR alternatives
 // Returns (matches, score) where:
 // - matches: true if the provider satisfies all constraints
 // - score: numeric score for ranking providers (higher = better match)
@@ -2118,17 +2144,17 @@ func hasAllTags(available, required []string) bool {
 // - "+": Preferred tag (bonus points if present, no penalty if missing)
 // - "-": Excluded tag (must NOT be present, fails if found)
 //
+// OR Alternatives (tagAlternatives):
+// Each []string in tagAlternatives is an OR group - at least one must match.
+// e.g., tagAlternatives: [["python", "typescript"]] means (python OR typescript)
+//
 // Examples:
 // - "claude" = required
 // - "+opus" = preferred (bonus if present)
 // - "-experimental" = excluded (fail if present)
-func matchesEnhancedTags(providerTags, requiredTags []string) (bool, int) {
+// - tagAlternatives: [["python", "typescript"]] = (python OR typescript)
+func matchesEnhancedTags(providerTags, requiredTags []string, tagAlternatives ...[][]string) (bool, int) {
 	score := 0
-
-	// Handle empty cases
-	if len(requiredTags) == 0 {
-		return true, 0 // No constraints = always match with zero score
-	}
 
 	// Helper function to check if a tag exists in provider tags
 	containsTag := func(tags []string, tag string) bool {
@@ -2140,7 +2166,7 @@ func matchesEnhancedTags(providerTags, requiredTags []string) (bool, int) {
 		return false
 	}
 
-	// Process each required tag constraint
+	// Process required tags (simple string tags with +/- operators)
 	for _, reqTag := range requiredTags {
 		if len(reqTag) == 0 {
 			continue // Skip empty tags
@@ -2170,6 +2196,61 @@ func matchesEnhancedTags(providerTags, requiredTags []string) (bool, int) {
 			} else {
 				return false, 0 // Hard failure if required tag is missing
 			}
+		}
+	}
+
+	// Process OR alternatives (if provided)
+	// Each OR group must have at least one matching tag
+	// Supports +/- operators within OR groups:
+	// - No prefix: required alternative
+	// - "+": preferred alternative (bonus score if matched)
+	// - "-": excluded (fail if this tag is present)
+	if len(tagAlternatives) > 0 && len(tagAlternatives[0]) > 0 {
+		for _, orGroup := range tagAlternatives[0] {
+			if len(orGroup) == 0 {
+				continue // Skip empty OR groups
+			}
+
+			// At least one tag in this OR group must match
+			matched := false
+			matchScore := 0
+			for _, altTag := range orGroup {
+				if len(altTag) == 0 {
+					continue
+				}
+
+				switch altTag[0] {
+				case '-':
+					// Excluded alternative: fail if present
+					excludedTag := altTag[1:]
+					if excludedTag != "" && containsTag(providerTags, excludedTag) {
+						return false, 0 // Hard failure if excluded tag is present
+					}
+					// Don't count as "matched" - exclusions are filters, not matches
+
+				case '+':
+					// Preferred alternative: bonus score if matched
+					preferredTag := altTag[1:]
+					if preferredTag != "" && containsTag(providerTags, preferredTag) {
+						matched = true
+						matchScore = 10 // Bonus for preferred
+					}
+
+				default:
+					// Required alternative: base score if matched
+					if containsTag(providerTags, altTag) {
+						matched = true
+						if matchScore < 5 { // Don't override higher score from preferred
+							matchScore = 5
+						}
+					}
+				}
+			}
+
+			if !matched {
+				return false, 0 // Hard failure if no alternative in OR group matched
+			}
+			score += matchScore
 		}
 	}
 

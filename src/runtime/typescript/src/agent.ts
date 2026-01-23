@@ -470,10 +470,12 @@ export class MeshAgent {
           tags: meta.tags,
           description: meta.description,
           // Pass dependencies to Rust core for registry resolution
+          // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
+          // Cast to string[] for Rust binding - JSON serialization preserves nested structure
           dependencies: meta.dependencies.map(
             (dep): JsDependencySpec => ({
               capability: dep.capability,
-              tags: dep.tags,
+              tags: dep.tags as string[],
               version: dep.version,
             })
           ),

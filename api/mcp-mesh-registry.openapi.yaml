@@ -430,7 +430,12 @@ components:
     MeshToolDependencyRegistration:
       type: object
       required: [capability]
-      description: Dependency specification for a tool function
+      description: |
+        Dependency specification for a tool function.
+
+        Tags support OR alternatives via nested arrays:
+        - ["addition", ["python", "typescript"]] means: addition AND (python OR typescript)
+        - ["fast"] means: just require "fast" tag
       properties:
         capability:
           type: string
@@ -440,10 +445,16 @@ components:
         tags:
           type: array
           items:
-            type: string
+            oneOf:
+              - type: string
+              - type: array
+                items:
+                  type: string
           default: []
-          example: ["system", "general"]
-          description: Tags for smart matching
+          example: ["addition", ["python", "typescript"]]
+          description: |
+            Tags for smart matching. Supports OR alternatives via nested arrays.
+            Example: ["addition", ["python", "typescript"]] = addition AND (python OR typescript)
         version:
           type: string
           example: ">=1.0.0"

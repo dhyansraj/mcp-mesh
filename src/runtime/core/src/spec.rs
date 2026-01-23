@@ -13,8 +13,9 @@ pub struct DependencySpec {
     /// Capability name to depend on
     pub capability: String,
 
-    /// Tags for filtering (e.g., ["+fast", "-deprecated"])
-    pub tags: Vec<String>,
+    /// Tags for filtering - JSON string to support nested arrays for OR alternatives
+    /// e.g., '["addition", ["python", "typescript"]]' means addition AND (python OR typescript)
+    pub tags: String,
 
     /// Version constraint (e.g., ">=2.0.0")
     pub version: Option<String>,
@@ -25,7 +26,7 @@ pub struct DependencySpec {
 impl DependencySpec {
     #[new]
     #[pyo3(signature = (capability, tags=None, version=None))]
-    pub fn py_new(capability: String, tags: Option<Vec<String>>, version: Option<String>) -> Self {
+    pub fn py_new(capability: String, tags: Option<String>, version: Option<String>) -> Self {
         Self::new(capability, tags, version)
     }
 
@@ -36,10 +37,10 @@ impl DependencySpec {
 
 impl DependencySpec {
     /// Create a new DependencySpec (language-agnostic)
-    pub fn new(capability: String, tags: Option<Vec<String>>, version: Option<String>) -> Self {
+    pub fn new(capability: String, tags: Option<String>, version: Option<String>) -> Self {
         Self {
             capability,
-            tags: tags.unwrap_or_default(),
+            tags: tags.unwrap_or_else(|| "[]".to_string()),
             version,
         }
     }

@@ -117,9 +117,12 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         # Build dependency specs
         deps = []
         for dep_info in tool_metadata.get("dependencies", []):
+            # Serialize tags to JSON to support nested arrays for OR alternatives
+            # e.g., ["addition", ["python", "typescript"]] -> addition AND (python OR typescript)
+            tags_json = json.dumps(dep_info.get("tags", []))
             dep_spec = core.DependencySpec(
                 capability=dep_info.get("capability", ""),
-                tags=dep_info.get("tags", []),
+                tags=tags_json,
                 version=dep_info.get("version"),
             )
             deps.append(dep_spec)

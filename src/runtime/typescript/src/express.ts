@@ -70,10 +70,12 @@ function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
       version: "1.0.0",
       tags: [],
       description: "",
+      // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
+      // Cast to string[] for Rust binding - JSON serialization preserves nested structure
       dependencies: route.dependencies.map(
         (dep): JsDependencySpec => ({
           capability: dep.capability,
-          tags: dep.tags,
+          tags: dep.tags as string[],
           version: dep.version,
         })
       ),

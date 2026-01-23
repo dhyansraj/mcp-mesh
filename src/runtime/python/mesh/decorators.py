@@ -566,12 +566,25 @@ def tool(
                         raise ValueError("dependency capability must be a string")
 
                     # Validate optional dependency fields
+                    # Tags can be strings or arrays of strings (OR alternatives)
+                    # e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
                     dep_tags = dep.get("tags", [])
                     if not isinstance(dep_tags, list):
                         raise ValueError("dependency tags must be a list")
                     for tag in dep_tags:
-                        if not isinstance(tag, str):
-                            raise ValueError("all dependency tags must be strings")
+                        if isinstance(tag, str):
+                            continue  # Simple tag - OK
+                        elif isinstance(tag, list):
+                            # OR alternative - validate inner tags are all strings
+                            for inner_tag in tag:
+                                if not isinstance(inner_tag, str):
+                                    raise ValueError(
+                                        "OR alternative tags must be strings"
+                                    )
+                        else:
+                            raise ValueError(
+                                "tags must be strings or arrays of strings (OR alternatives)"
+                            )
 
                     dep_version = dep.get("version")
                     if dep_version is not None and not isinstance(dep_version, str):
@@ -1044,12 +1057,25 @@ def route(
                         raise ValueError("dependency capability must be a string")
 
                     # Validate optional dependency fields
+                    # Tags can be strings or arrays of strings (OR alternatives)
+                    # e.g., ["required", ["python", "typescript"]] = required AND (python OR typescript)
                     dep_tags = dep.get("tags", [])
                     if not isinstance(dep_tags, list):
                         raise ValueError("dependency tags must be a list")
                     for tag in dep_tags:
-                        if not isinstance(tag, str):
-                            raise ValueError("all dependency tags must be strings")
+                        if isinstance(tag, str):
+                            continue  # Simple tag - OK
+                        elif isinstance(tag, list):
+                            # OR alternative - validate inner tags are all strings
+                            for inner_tag in tag:
+                                if not isinstance(inner_tag, str):
+                                    raise ValueError(
+                                        "OR alternative tags must be strings"
+                                    )
+                        else:
+                            raise ValueError(
+                                "tags must be strings or arrays of strings (OR alternatives)"
+                            )
 
                     dep_version = dep.get("version")
                     if dep_version is not None and not isinstance(dep_version, str):

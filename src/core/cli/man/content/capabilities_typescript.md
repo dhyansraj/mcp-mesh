@@ -25,7 +25,7 @@ MCP Mesh uses a unified syntax for selecting capabilities throughout the framewo
 **Shorthand** (capability name only):
 
 ```typescript
-dependencies: ["date_service", "weather_data"]
+dependencies: ["date_service", "weather_data"];
 ```
 
 **Full form** (with filters):
@@ -35,7 +35,7 @@ dependencies: [
   { capability: "date_service" },
   { capability: "weather_data", tags: ["+fast", "-deprecated"] },
   { capability: "api_client", version: ">=2.0.0" },
-]
+];
 ```
 
 ### Where This Syntax Is Used
@@ -58,12 +58,31 @@ dependencies: [
 
 ### Selector Logic (AND/OR)
 
-| Syntax                         | Semantics                             |
-| ------------------------------ | ------------------------------------- |
-| `tags: ["a", "b", "c"]`        | a AND b AND c (all required)          |
-| `tags: ["+a", "+b"]`           | Prefer a, prefer b (neither required) |
-| `tags: ["a", "-x"]`            | Must have a, must NOT have x          |
-| `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors)           |
+| Syntax                         | Semantics                                |
+| ------------------------------ | ---------------------------------------- |
+| `tags: ["a", "b", "c"]`        | a AND b AND c (all required)             |
+| `tags: ["+a", "+b"]`           | Prefer a, prefer b (neither required)    |
+| `tags: ["a", "-x"]`            | Must have a, must NOT have x             |
+| `tags: ["a", ["b", "c"]]`      | a AND (b OR c) - tag-level OR            |
+| `tags: [["a"], ["b"]]`         | a OR b (full OR)                         |
+| `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors - LLM filter) |
+
+**Tag-Level OR** (v0.8.0+):
+
+Use nested arrays in tags for OR alternatives with fallback behavior:
+
+```typescript
+dependencies: [
+  // Prefer python implementation, fallback to typescript
+  { capability: "math", tags: ["addition", ["python", "typescript"]] },
+];
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is unresolved
 
 See `meshctl man tags` for detailed tag matching behavior.
 
@@ -74,10 +93,10 @@ import { z } from "zod";
 
 agent.addTool({
   name: "get_weather",
-  capability: "weather_data",           // Capability name
+  capability: "weather_data", // Capability name
   description: "Provides weather info", // Human-readable description
-  version: "1.0.0",                     // Semantic version
-  tags: ["weather", "current", "api"],  // Tags for filtering
+  version: "1.0.0", // Semantic version
+  tags: ["weather", "current", "api"], // Tags for filtering
   parameters: z.object({
     city: z.string(),
   }),
@@ -107,7 +126,9 @@ agent1.addTool({
   capability: "weather_data",
   tags: ["weather", "openweather", "free"],
   parameters: z.object({ city: z.string() }),
-  execute: async ({ city }) => { /* ... */ },
+  execute: async ({ city }) => {
+    /* ... */
+  },
 });
 
 // Agent 2: Premium weather implementation
@@ -116,7 +137,9 @@ agent2.addTool({
   capability: "weather_data",
   tags: ["weather", "premium", "accurate"],
   parameters: z.object({ city: z.string() }),
-  execute: async ({ city }) => { /* ... */ },
+  execute: async ({ city }) => {
+    /* ... */
+  },
 });
 ```
 
@@ -195,7 +218,7 @@ agent.addTool({
 Consumers can specify version constraints:
 
 ```typescript
-dependencies: [{ capability: "api_client", version: ">=2.0.0" }]
+dependencies: [{ capability: "api_client", version: ">=2.0.0" }];
 ```
 
 ## See Also

@@ -344,7 +344,22 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 					depData["namespace"] = *dep.Namespace
 				}
 				if dep.Tags != nil {
-					depData["tags"] = *dep.Tags
+					// Convert union type items to actual values (string or []string for OR alternatives)
+					tags := make([]interface{}, len(*dep.Tags))
+					for k, tagItem := range *dep.Tags {
+						// Try to extract as string first
+						if str, err := tagItem.AsMeshToolDependencyRegistrationTags0(); err == nil {
+							tags[k] = str
+						} else if arr, err := tagItem.AsMeshToolDependencyRegistrationTags1(); err == nil {
+							// OR alternative: convert []string to []interface{} for parseDependencySpec
+							arrInterface := make([]interface{}, len(arr))
+							for m, s := range arr {
+								arrInterface[m] = s
+							}
+							tags[k] = arrInterface
+						}
+					}
+					depData["tags"] = tags
 				}
 				if dep.Version != nil {
 					depData["version"] = *dep.Version
