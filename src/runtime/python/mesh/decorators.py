@@ -95,8 +95,75 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             app = FastAPI(title="MCP Mesh Agent (Starting)")
             logger.debug("📦 IMMEDIATE UVICORN: Created minimal FastAPI app")
 
-        # Add trace context middleware for distributed tracing BEFORE app starts
-        # This must be done before uvicorn.run() since middleware can't be added after start
+        # Add middleware to strip trace arguments from tool calls BEFORE app starts
+        # This must be done unconditionally because meshctl --trace sends trace args
+        # regardless of agent's tracing configuration
+        try:
+            import json as json_module
+
+            class TraceArgumentStripperMiddleware:
+                """Pure ASGI middleware to strip trace arguments from tool calls.
+
+                This middleware ALWAYS runs to strip _trace_id and _parent_span from
+                MCP tool arguments, preventing Pydantic validation errors when
+                meshctl --trace is used with agents that don't have tracing enabled.
+                """
+
+                def __init__(self, app):
+                    self.app = app
+
+                async def __call__(self, scope, receive, send):
+                    if scope["type"] != "http":
+                        await self.app(scope, receive, send)
+                        return
+
+                    async def receive_with_trace_stripping():
+                        message = await receive()
+                        if message["type"] == "http.request":
+                            body = message.get("body", b"")
+                            if body:
+                                try:
+                                    payload = json_module.loads(body.decode("utf-8"))
+                                    if payload.get("method") == "tools/call":
+                                        arguments = payload.get("params", {}).get(
+                                            "arguments", {}
+                                        )
+                                        # Strip trace context fields from arguments
+                                        if (
+                                            "_trace_id" in arguments
+                                            or "_parent_span" in arguments
+                                        ):
+                                            arguments.pop("_trace_id", None)
+                                            arguments.pop("_parent_span", None)
+                                            modified_body = json_module.dumps(
+                                                payload
+                                            ).encode("utf-8")
+                                            logger.debug(
+                                                "[TRACE] Stripped trace fields from arguments"
+                                            )
+                                            return {
+                                                **message,
+                                                "body": modified_body,
+                                            }
+                                except Exception as e:
+                                    logger.debug(
+                                        f"[TRACE] Failed to process body for stripping: {e}"
+                                    )
+                        return message
+
+                    await self.app(scope, receive_with_trace_stripping, send)
+
+            app.add_middleware(TraceArgumentStripperMiddleware)
+            logger.debug(
+                "📦 IMMEDIATE UVICORN: Added trace argument stripper middleware"
+            )
+        except Exception as e:
+            logger.warning(
+                f"⚠️ IMMEDIATE UVICORN: Failed to add trace argument stripper middleware: {e}"
+            )
+
+        # Add trace context middleware for distributed tracing (optional)
+        # This handles trace propagation and header injection when tracing is enabled
         try:
             import os
 
@@ -171,11 +238,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                         except Exception as e:
                             logger.warning(f"Failed to set trace context: {e}")
 
-                        # Create body-modifying receive wrapper to strip trace fields from arguments
-                        # This handles the case where trace context is passed in JSON-RPC arguments
+                        # Create receive wrapper to extract trace context from arguments
+                        # Note: Argument stripping is handled by TraceArgumentStripperMiddleware
                         import json as json_module
 
-                        async def receive_with_trace_stripping():
+                        async def receive_with_trace_extraction():
                             message = await receive()
                             if message["type"] == "http.request":
                                 body = message.get("body", b"")
@@ -226,29 +293,14 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                                         parent_span = (
                                                             current_trace.parent_span
                                                         )
+                                                    logger.debug(
+                                                        f"[TRACE] Extracted trace context from arguments: trace_id={arg_trace_id}"
+                                                    )
                                                 except Exception:
                                                     pass
-
-                                            # Strip trace context fields from arguments
-                                            if (
-                                                "_trace_id" in arguments
-                                                or "_parent_span" in arguments
-                                            ):
-                                                arguments.pop("_trace_id", None)
-                                                arguments.pop("_parent_span", None)
-                                                modified_body = json_module.dumps(
-                                                    payload
-                                                ).encode("utf-8")
-                                                logger.debug(
-                                                    "[TRACE] Stripped trace fields from arguments"
-                                                )
-                                                return {
-                                                    **message,
-                                                    "body": modified_body,
-                                                }
                                     except Exception as e:
                                         logger.debug(
-                                            f"[TRACE] Failed to process body: {e}"
+                                            f"[TRACE] Failed to process body for extraction: {e}"
                                         )
                             return message
 
@@ -268,7 +320,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                             await send(message)
 
                         await self.app(
-                            scope, receive_with_trace_stripping, send_with_trace_headers
+                            scope, receive_with_trace_extraction, send_with_trace_headers
                         )
 
                 app.add_middleware(TraceContextMiddleware)
