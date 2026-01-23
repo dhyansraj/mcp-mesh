@@ -504,7 +504,7 @@ The registry tries alternatives in order, using the first match.
 
 * Cleanup & Refactoring
 
-** TODO Phase 8: Fix StoreDependencyResolutions (Critical)
+** DONE Phase 8: Fix StoreDependencyResolutions (Critical) [2026-01-23]
 
 *** Problem
 
@@ -606,7 +606,9 @@ func (m *Matcher) MatchVersion(version, constraint string) bool
 func (m *Matcher) MatchTags(providerTags, requiredTags []string, alternatives [][]string) (bool, int)
 #+end_src
 
-** TODO Phase 10: Improve Semver Support
+** DONE Phase 10: Improve Semver Support
+   CLOSED: [2026-01-23]
+   - Implemented in Phase 9 as part of Matcher.MatchVersion()
 
 *** Current Issues
 
