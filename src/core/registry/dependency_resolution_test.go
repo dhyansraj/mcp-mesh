@@ -225,10 +225,10 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		response, err := service.RegisterAgent(req)
 		require.NoError(t, err)
 
-		// Should have empty dependencies array
+		// When a function has no dependencies declared, it should not appear in dependenciesResolved
+		// The map only contains functions that have declared dependencies (resolved or not)
 		depsResolved := response.DependenciesResolved
-		assert.Contains(t, depsResolved, "standalone_function")
-		assert.Equal(t, 0, len(depsResolved["standalone_function"]), "Should have no dependencies")
+		assert.Empty(t, depsResolved, "Should have empty dependencies map when no dependencies declared")
 
 		t.Logf("✅ No dependencies case handled correctly")
 	})

@@ -11,6 +11,31 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
+// containsDepTag checks if a tag string exists in a dependency union type slice
+// Handles both simple strings (Tags0) and OR alternatives (Tags1)
+func containsDepTag(tags *[]generated.MeshToolDependencyRegistration_Tags_Item, needle string) bool {
+	if tags == nil {
+		return false
+	}
+	for _, item := range *tags {
+		// Try as simple string
+		if str, err := item.AsMeshToolDependencyRegistrationTags0(); err == nil {
+			if str == needle {
+				return true
+			}
+		}
+		// Try as OR alternatives array
+		if arr, err := item.AsMeshToolDependencyRegistrationTags1(); err == nil {
+			for _, s := range arr {
+				if s == needle {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // TestComprehensiveJSONParsing validates all JSON files in our test data directory
 func TestComprehensiveJSONParsing(t *testing.T) {
 	t.Run("ParseAllAgentRegistrationJSONs", func(t *testing.T) {
@@ -168,7 +193,7 @@ func TestJSONSchemaValidation(t *testing.T) {
 		assert.NotNil(t, dep.Namespace)
 		assert.Equal(t, "test", *dep.Namespace)
 		assert.NotNil(t, dep.Tags)
-		assert.Contains(t, *dep.Tags, "production")
+		assert.True(t, containsDepTag(dep.Tags, "production"), "Tags should contain 'production'")
 	})
 }
 
