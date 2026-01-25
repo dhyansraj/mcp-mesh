@@ -95,7 +95,7 @@ async def calculate(
         "a": a,
         "b": b,
         "operator": operator,
-        "result": None,
+        "resuglt": None,
         "source": None,
         "error": None,
     }
