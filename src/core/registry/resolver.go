@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"mcp-mesh/src/core/ent"
@@ -260,14 +261,10 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			}
 		}
 
-		// Sort by score descending (highest score = best match first)
-		for i := 0; i < len(scoredCandidates); i++ {
-			for j := i + 1; j < len(scoredCandidates); j++ {
-				if scoredCandidates[j].Score > scoredCandidates[i].Score {
-					scoredCandidates[i], scoredCandidates[j] = scoredCandidates[j], scoredCandidates[i]
-				}
-			}
-		}
+		// Sort by score descending (highest score = best match first) - O(n log n)
+		sort.Slice(scoredCandidates, func(i, j int) bool {
+			return scoredCandidates[i].Score > scoredCandidates[j].Score
+		})
 
 		// Extract candidates from scored list
 		candidates = make([]Candidate, len(scoredCandidates))
