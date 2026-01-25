@@ -1,0 +1,32 @@
+# Helm values for deploying openai-provider-ts with mcp-mesh-agent chart
+# Usage: helm install openai-provider-ts oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+
+image:
+  repository: your-registry/openai-provider-ts
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: openai-provider-ts
+  runtime: typescript
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+mesh:
+  enabled: true
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+
+env:
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: openai-api-key
+
+secrets: []

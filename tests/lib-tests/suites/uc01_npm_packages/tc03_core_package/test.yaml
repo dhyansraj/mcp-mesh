@@ -1,0 +1,57 @@
+# Test Case: @mcpmesh/core Package
+# Verifies the core package exists on npm and is installable
+
+name: "@mcpmesh/core Package Verification"
+description: "Test that @mcpmesh/core package exists and installs correctly"
+tags:
+  - npm
+  - core
+  - package
+timeout: 120
+
+test:
+  # Check package exists on npm registry
+  - handler: shell
+    command: |
+      echo "Checking @mcpmesh/core@${config.packages.core_version} on npm..."
+      npm view @mcpmesh/core@${config.packages.core_version} version
+    capture: npm_view_output
+
+  # Create temp directory and install package
+  - handler: shell
+    command: |
+      TMPDIR=$(mktemp -d)
+      cd $TMPDIR
+      npm init -y > /dev/null
+      echo "Installing @mcpmesh/core@${config.packages.core_version} in $TMPDIR..."
+      npm install @mcpmesh/core@${config.packages.core_version}
+      echo "TMPDIR=$TMPDIR"
+    capture: install_output
+
+  # Verify package is installed
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      cd $TMPDIR
+      ls node_modules/@mcpmesh/core/package.json
+    capture: package_check
+
+  # Clean up
+  - handler: shell
+    command: |
+      TMPDIR=$(echo "${captured.install_output}" | grep "TMPDIR=" | cut -d= -f2)
+      rm -rf $TMPDIR
+    ignore_errors: true
+
+assertions:
+  # Package version should match
+  - expr: ${captured.npm_view_output} contains '${config.packages.core_version}'
+    message: "npm view should return correct version"
+
+  # Install should succeed
+  - expr: ${captured.install_output} contains '@mcpmesh/core'
+    message: "npm install should succeed"
+
+  # Package.json should exist
+  - expr: ${captured.package_check} contains 'package.json'
+    message: "Package should be installed with package.json"

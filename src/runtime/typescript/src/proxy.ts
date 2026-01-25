@@ -5,7 +5,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { McpMeshTool, DependencyKwargs } from "./types.js";
+import type { McpMeshTool, DependencyKwargs, DependencySpec, NormalizedDependency } from "./types.js";
 import type { TraceContext } from "./tracing.js";
 import {
   generateSpanId,
@@ -392,10 +392,9 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Normalize a DependencySpec to canonical form.
+ * Handles both simple string dependencies and full specs with tag-level OR alternatives.
  */
-export function normalizeDependency(
-  dep: string | { capability: string; tags?: string[]; version?: string }
-): { capability: string; tags: string[]; version?: string } {
+export function normalizeDependency(dep: DependencySpec): NormalizedDependency {
   if (typeof dep === "string") {
     return { capability: dep, tags: [] };
   }

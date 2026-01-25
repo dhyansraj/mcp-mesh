@@ -1,0 +1,77 @@
+# Test Case: Scaffold Python Agent
+# Verifies that meshctl can scaffold a Python agent with correct structure
+
+name: "Scaffold Python Agent"
+description: "Test scaffolding a Python agent and verify generated files"
+tags:
+  - smoke
+  - scaffolding
+  - python
+timeout: 300 # 5 minutes (includes npm install)
+
+# Pre-run: Setup environment
+pre_run:
+  # Setup Node.js and install meshctl
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+# Main test steps
+test:
+  # Scaffold the agent
+  - name: "Scaffold Python agent"
+    handler: shell
+    command: "meshctl scaffold --name test-python-agent --agent-type tool --lang python"
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-python-agent -type f | sort"
+    capture: generated_files
+
+  # Check main.py content
+  - name: "Check main.py content"
+    handler: shell
+    command: "cat test-python-agent/main.py"
+    capture: main_content
+
+  # Check helm-values.yaml content
+  - name: "Check helm-values.yaml content"
+    handler: shell
+    command: "cat test-python-agent/helm-values.yaml"
+    capture: helm_values
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # main.py exists
+  - expr: "${captured.generated_files} contains 'main.py'"
+    message: "main.py should be created"
+
+  # requirements.txt exists
+  - expr: "${captured.generated_files} contains 'requirements.txt'"
+    message: "requirements.txt should be created"
+
+  # Dockerfile exists
+  - expr: "${captured.generated_files} contains 'Dockerfile'"
+    message: "Dockerfile should be created"
+
+  # helm-values.yaml exists
+  - expr: "${captured.generated_files} contains 'helm-values.yaml'"
+    message: "helm-values.yaml should be created"
+
+  # main.py contains mesh import
+  - expr: "${captured.main_content} contains 'import mesh'"
+    message: "main.py should import mesh"
+
+  # helm-values contains agent name
+  - expr: "${captured.helm_values} contains 'test-python-agent'"
+    message: "helm-values.yaml should contain agent name"
+
+# Post-run: Cleanup
+post_run:
+  - routine: global.cleanup_workspace

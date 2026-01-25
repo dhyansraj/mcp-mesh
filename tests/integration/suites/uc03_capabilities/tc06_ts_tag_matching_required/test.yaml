@@ -1,0 +1,98 @@
+# Test Case: TypeScript Tag Matching - Required
+# Tests that TS consumer requiring a tag only matches providers with that tag.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Tag Matching - Required"
+description: "Verify TS consumer requiring tag matches provider with that tag"
+tags:
+  - capabilities
+  - tags
+  - required
+  - typescript
+timeout: 180
+
+pre_run:
+  # TypeScript-only test - just need Node.js + meshctl (no Python venv)
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy TypeScript artifacts
+  - name: "Copy TypeScript artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-fast-provider /workspace/
+      cp -r /uc-artifacts/ts-tag-consumer /workspace/
+    capture: copy_output
+
+  # Install npm dependencies (handler auto-detects local/published mode)
+  - name: "Install fast provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-fast-provider
+
+  - name: "Install tag consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-tag-consumer
+
+  # Start provider
+  - name: "Start TS fast provider"
+    handler: shell
+    command: "meshctl start ts-fast-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_provider
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 10
+
+  # Start consumer
+  - name: "Start TS tag consumer"
+    handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents registered
+  - name: "Verify both agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Call fetch_required which requires "api" tag
+  - name: "Call fetch_required with api tag"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "TS_FAST"; then
+        echo "PASS: Matched TS provider with required 'api' tag"
+      else
+        echo "FAIL: Expected TS_FAST provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_required
+
+assertions:
+  - expr: "${captured.list_output} contains 'ts-fast-provider'"
+    message: "TS Fast provider should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-tag-consumer'"
+    message: "TS Consumer should be registered"
+
+  - expr: "${captured.call_required} contains 'PASS'"
+    message: "Should match TS provider with required tag"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

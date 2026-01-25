@@ -54,6 +54,33 @@ async def generate_report(
     return await formatter(data=data)
 ```
 
+### OR Alternatives (Tag-Level)
+
+Use nested arrays in tags to specify fallback providers:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="calculator",
+    dependencies=[
+        # Prefer python provider, fallback to typescript
+        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+    ],
+)
+async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
+    result = await math(a=a, b=b)
+    return result
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is unresolved (injected as `None`)
+
+This is useful when you have multiple implementations of the same capability
+and want to prefer one but fallback to another if unavailable.
+
 ## Injection Types
 
 ### mesh.McpMeshTool

@@ -1,0 +1,198 @@
+# Test Case: OR Alternatives with Fallback (Issue #471)
+# Tests the nested array OR alternatives syntax for dependencies.
+#
+# Scenario:
+#   - py-math-agent: math_operations capability with "python" tag
+#   - ts-math-agent: math_operations capability with "typescript" tag
+#   - py-calculator-agent: uses OR alternatives [[python], [typescript]]
+#
+# Test cases:
+#   1. Both py + ts running -> uses primary (py-math-agent)
+#   2. Only ts running -> uses fallback (ts-math-agent)
+#   Both tests verify: 10 + 5 = 15 (same result regardless of provider)
+#
+# Uses TC-level artifacts from /artifacts
+
+name: "OR Alternatives with Fallback (Python Consumer)"
+description: "Verify OR alternatives resolves primary first, falls back when primary unavailable"
+tags:
+  - capabilities
+  - tags
+  - or-alternatives
+  - issue-471
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/py-math-agent /workspace/
+      cp -r /artifacts/ts-math-agent /workspace/
+      cp -r /artifacts/py-calculator-agent /workspace/
+    capture: copy_output
+
+  # Install TypeScript dependencies
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # === TEST 1: Both providers available - should use primary (py-math-agent) ===
+  - name: "Test 1: Start py-math-agent (primary)"
+    handler: shell
+    command: "meshctl start py-math-agent/main.py -d"
+    workdir: /workspace
+    capture: start_py_math
+
+  - name: "Wait for py-math-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Test 1: Start ts-math-agent (fallback)"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_ts_math
+
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 1: Start py-calculator-agent (consumer)"
+    handler: shell
+    command: "meshctl start py-calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calculator_1
+
+  - name: "Wait for calculator to wire"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 1: Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_all
+
+  - name: "Test 1: Call calculate with both available (10 + 5 = 15)"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call calculate '{"a": 10, "b": 5, "operator": "+"}' 2>&1)
+      echo "With both available: $RESULT"
+      # Check result is 15 and source is injected (not local)
+      if echo "$RESULT" | grep -q '"result": 15' || echo "$RESULT" | grep -q '"result":15'; then
+        if echo "$RESULT" | grep -q '"source": "injected"' || echo "$RESULT" | grep -q '"source":"injected"'; then
+          echo "PASS: Result is 15 from injected dependency"
+        else
+          echo "FAIL: Result correct but source not injected"
+          exit 1
+        fi
+      else
+        echo "FAIL: Expected result 15"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_both_available
+
+  # Stop only py-math-agent for fallback test
+  - name: "Stop py-math-agent (keep ts-math-agent running)"
+    handler: shell
+    command: "meshctl stop py-math-agent 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for py-math-agent to unregister"
+    handler: wait
+    seconds: 5
+
+  # Stop calculator to re-wire with new dependencies
+  - name: "Stop calculator for re-wiring"
+    handler: shell
+    command: "meshctl stop py-calculator-agent 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for cleanup"
+    handler: wait
+    seconds: 3
+
+  # === TEST 2: Only fallback (ts-math-agent) available ===
+  - name: "Test 2: Verify only ts-math-agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_ts_only
+
+  - name: "Test 2: Re-start py-calculator-agent (will wire to ts-math-agent)"
+    handler: shell
+    command: "meshctl start py-calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calculator_2
+
+  - name: "Wait for calculator to re-wire"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 2: Verify calculator is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_fallback
+
+  - name: "Test 2: Call calculate with only ts available (10 + 5 = 15)"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call calculate '{"a": 10, "b": 5, "operator": "+"}' 2>&1)
+      echo "With only ts available: $RESULT"
+      # Check result is still 15 (fallback worked) and source is injected
+      if echo "$RESULT" | grep -q '"result": 15' || echo "$RESULT" | grep -q '"result":15'; then
+        if echo "$RESULT" | grep -q '"source": "injected"' || echo "$RESULT" | grep -q '"source":"injected"'; then
+          echo "PASS: Fallback worked - result is 15 from injected dependency"
+        else
+          echo "FAIL: Result correct but source not injected (fallback may have failed)"
+          exit 1
+        fi
+      else
+        echo "FAIL: Expected result 15 from fallback"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_fallback
+
+assertions:
+  # Test 1: Both available
+  - expr: "${captured.list_all} contains 'py-math-agent'"
+    message: "py-math-agent should be registered"
+
+  - expr: "${captured.list_all} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.list_all} contains 'py-calculator-agent'"
+    message: "py-calculator-agent should be registered"
+
+  - expr: "${captured.test_both_available} contains 'PASS'"
+    message: "With both providers: should get result 15 from injected dependency"
+
+  # Test 2: Only fallback available
+  - expr: "${captured.list_ts_only} contains 'ts-math-agent'"
+    message: "ts-math-agent should still be running"
+
+  - expr: "${captured.test_fallback} contains 'PASS'"
+    message: "With only ts-math-agent: fallback should work, result 15 from injected dependency"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

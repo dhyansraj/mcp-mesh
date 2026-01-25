@@ -1,0 +1,183 @@
+# Test Case: OR Alternatives with Fallback (Issue #471)
+# Tests the nested array OR alternatives syntax for dependencies.
+#
+# Scenario:
+#   - py-math-agent: math_operations capability with "python" tag
+#   - ts-math-agent: math_operations capability with "typescript" tag
+#   - ts-calculator-agent: uses OR alternatives with +typescript (prefers typescript)
+#
+# Test cases:
+#   1. Both py + ts running -> uses preferred (ts-math-agent)
+#   2. Only py running -> uses fallback (py-math-agent)
+#   Both tests verify: 10 + 5 = 15 (same result regardless of provider)
+#
+# Uses TC-level artifacts from /artifacts
+
+name: "OR Alternatives with Fallback (TypeScript Consumer)"
+description: "Verify OR alternatives resolves preferred (+typescript) first, falls back when preferred unavailable"
+tags:
+  - capabilities
+  - tags
+  - or-alternatives
+  - issue-471
+  - typescript
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/py-math-agent /workspace/
+      cp -r /artifacts/ts-math-agent /workspace/
+      cp -r /artifacts/ts-calculator-agent /workspace/
+    capture: copy_output
+
+  # Install TypeScript dependencies
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install ts-calculator-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  # === TEST 1: Both providers available - should use preferred (ts-math-agent) ===
+  - name: "Test 1: Start py-math-agent (fallback)"
+    handler: shell
+    command: "meshctl start py-math-agent/main.py -d"
+    workdir: /workspace
+    capture: start_py_math
+
+  - name: "Wait for py-math-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Test 1: Start ts-math-agent (preferred)"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_ts_math
+
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 1: Start ts-calculator-agent (consumer)"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_calculator_1
+
+  - name: "Wait for calculator to wire"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 1: Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_all
+
+  - name: "Test 1: Call calculate with both available (10 + 5 = 15)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 10, "b": 5, "operator": "+"}'''
+    workdir: /workspace
+    capture: test_both_available
+
+  # Stop only ts-math-agent for fallback test
+  - name: "Stop ts-math-agent (keep py-math-agent running)"
+    handler: shell
+    command: "meshctl stop ts-math-agent 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for ts-math-agent to unregister"
+    handler: wait
+    seconds: 5
+
+  # Stop calculator to re-wire with new dependencies
+  - name: "Stop calculator for re-wiring"
+    handler: shell
+    command: "meshctl stop ts-calculator-agent 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for cleanup"
+    handler: wait
+    seconds: 3
+
+  # === TEST 2: Only fallback (py-math-agent) available ===
+  - name: "Test 2: Verify only py-math-agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_py_only
+
+  - name: "Test 2: Re-start ts-calculator-agent (will wire to py-math-agent)"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_calculator_2
+
+  - name: "Wait for calculator to re-wire"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 2: Verify calculator is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_fallback
+
+  - name: "Test 2: Call calculate with only py available (10 + 5 = 15)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 10, "b": 5, "operator": "+"}'''
+    workdir: /workspace
+    capture: test_fallback
+
+assertions:
+  # Test 1: Both available - all agents registered
+  - expr: "${captured.list_all} contains 'py-math-agent'"
+    message: "py-math-agent should be registered"
+
+  - expr: "${captured.list_all} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.list_all} contains 'ts-calculator-agent'"
+    message: "ts-calculator-agent should be registered"
+
+  # Test 1: Result should be 15 from injected dependency
+  # TypeScript FastMCP returns result in content[0].text as JSON string
+  - expr: ${jq:captured.test_both_available:.content[0].text | fromjson | .result} == 15
+    message: "Test 1: Result should be 15"
+
+  - expr: "${jq:captured.test_both_available:.content[0].text | fromjson | .source} == 'injected'"
+    message: "Test 1: Source should be injected (not local)"
+
+  # Test 2: Only fallback available
+  - expr: "${captured.list_py_only} contains 'py-math-agent'"
+    message: "py-math-agent should still be running"
+
+  # Test 2: Fallback should work - result 15 from injected dependency
+  - expr: ${jq:captured.test_fallback:.content[0].text | fromjson | .result} == 15
+    message: "Test 2: Fallback should return result 15"
+
+  - expr: "${jq:captured.test_fallback:.content[0].text | fromjson | .source} == 'injected'"
+    message: "Test 2: Fallback source should be injected"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

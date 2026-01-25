@@ -1,0 +1,102 @@
+# Test Case: Build TypeScript SDK (@mcpmesh/sdk)
+# Builds the TypeScript SDK npm package
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build TypeScript SDK"
+description: "Build @mcpmesh/sdk npm tarball from source using docker run"
+tags:
+  - build
+  - typescript
+  - sdk
+timeout: 300
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${suite_path}/${config.output.packages}"
+      echo "Output directory ready: ${suite_path}/${config.output.packages}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check TypeScript SDK source on host"
+    handler: shell
+    command: |
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/src/runtime/typescript" ]; then
+        echo "Found TypeScript SDK source at $SOURCE_PATH/src/runtime/typescript"
+        ls -la "$SOURCE_PATH/src/runtime/typescript/"
+        cat "$SOURCE_PATH/src/runtime/typescript/package.json"
+      else
+        echo "ERROR: TypeScript SDK source not found at $SOURCE_PATH/src/runtime/typescript"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build TypeScript and create npm tarball using docker run
+  - name: "Build and pack TypeScript SDK"
+    handler: shell
+    command: |
+      # Get absolute paths for docker volume mounts (relative to suite_path)
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Source: $SOURCE_ABS"
+      echo "Output: $OUTPUT_ABS"
+
+      echo "Building TypeScript SDK inside container (clean build)..."
+      # Optimized: Only copy required files instead of entire repo
+      # TypeScript SDK needs: typescript/ (package.json, tsconfig.json, src/) + core/typescript/ (local dep)
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core && \
+          cp /src-host/src/runtime/typescript/package.json /src/mcp-mesh/src/runtime/typescript/ && \
+          cp /src-host/src/runtime/typescript/tsconfig.json /src/mcp-mesh/src/runtime/typescript/ && \
+          cp -r /src-host/src/runtime/typescript/src /src/mcp-mesh/src/runtime/typescript/ && \
+          cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \
+          cd /src/mcp-mesh/src/runtime/typescript && \
+          npm install && npm run build && npm pack --pack-destination /out/packages
+        "
+
+      echo "TypeScript build complete"
+      echo "npm pack complete"
+    capture: build_output
+    timeout: 180
+
+  # List built packages on host
+  - name: "List built packages"
+    handler: shell
+    command: |
+      echo "Built packages:"
+      ls -la "${suite_path}/${config.output.packages}"/*.tgz
+    capture: package_list
+
+  # Verify package contents
+  - name: "Verify package contents"
+    handler: shell
+    command: |
+      cd "${suite_path}/${config.output.packages}"
+      SDK_PKG=$(ls mcpmesh-sdk-*.tgz 2>/dev/null | head -1)
+      echo "Verifying SDK package: $SDK_PKG"
+      echo "Package contents (total files: $(tar -tzf $SDK_PKG | wc -l))"
+      tar -tzf $SDK_PKG | grep -E "(package.json|index.js|README)" || tar -tzf $SDK_PKG | head -20
+    capture: contents_output
+
+assertions:
+  - expr: ${captured.build_output} contains 'build complete'
+    message: "TypeScript build should complete"
+
+  - expr: ${captured.build_output} contains 'npm pack complete'
+    message: "npm pack should complete"
+
+  - expr: ${captured.package_list} contains '.tgz'
+    message: "npm tarball should be created"
+
+  - expr: ${captured.contents_output} contains 'package.json'
+    message: "Package should contain package.json"

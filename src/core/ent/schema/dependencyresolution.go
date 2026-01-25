@@ -24,6 +24,10 @@ func (DependencyResolution) Fields() []ent.Field {
 			Comment("Agent ID that requires this dependency"),
 		field.String("consumer_function_name").
 			Comment("Function/tool name that requires this dependency"),
+		field.Int("dep_index").
+			Default(0).
+			NonNegative().
+			Comment("Position of this dependency in the tool's dependency array (0-indexed). Maintains positional integrity for SDK injection."),
 
 		// Required dependency specification
 		field.String("capability_required").
@@ -101,6 +105,8 @@ func (DependencyResolution) Indexes() []ent.Index {
 	return []ent.Index{
 		// Fast lookup of all dependencies for a consumer agent
 		index.Fields("consumer_agent_id", "consumer_function_name"),
+		// Fast lookup by position (for ordered dependency retrieval)
+		index.Fields("consumer_agent_id", "consumer_function_name", "dep_index"),
 		// Fast lookup when provider agent goes offline
 		index.Fields("provider_agent_id"),
 		// Query by capability

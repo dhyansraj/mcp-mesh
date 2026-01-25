@@ -161,10 +161,16 @@ pub struct ToolRegistration {
 #[derive(Debug, Clone, Serialize)]
 pub struct DependencyRegistration {
     pub capability: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    /// Tags can be nested arrays for OR alternatives: ["addition", ["python", "typescript"]]
+    #[serde(skip_serializing_if = "is_empty_tags")]
+    pub tags: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+/// Helper to check if tags array is empty
+fn is_empty_tags(v: &serde_json::Value) -> bool {
+    v.as_array().map_or(true, |a| a.is_empty())
 }
 
 /// LLM agent registration for heartbeat request.
@@ -218,7 +224,8 @@ impl HeartbeatRequest {
                     .iter()
                     .map(|d| DependencyRegistration {
                         capability: d.capability.clone(),
-                        tags: d.tags.clone(),
+                        // Parse tags JSON string to Value for nested array support
+                        tags: serde_json::from_str(&d.tags).unwrap_or(serde_json::Value::Array(vec![])),
                         version: d.version.clone(),
                     })
                     .collect(),

@@ -23,9 +23,10 @@ import (
 // Dependency represents a tool dependency with constraints
 // Replaces the old database.Dependency from GORM models
 type Dependency struct {
-	Capability string   `json:"capability"`
-	Version    string   `json:"version,omitempty"` // e.g., ">=1.0.0"
-	Tags       []string `json:"tags,omitempty"`    // e.g., ["production", "US_EAST"]
+	Capability      string     `json:"capability"`
+	Version         string     `json:"version,omitempty"`         // e.g., ">=1.0.0"
+	Tags            []string   `json:"tags,omitempty"`            // e.g., ["production", "US_EAST"]
+	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives, e.g., [["python", "typescript"]]
 }
 
 // RegistryConfig holds registry-specific configuration
@@ -78,6 +79,81 @@ type DependencyResolution struct {
 	Status       string `json:"status"`
 }
 
+// DependencySpec represents a single dependency requirement (capability + tags + version)
+// Tags can include OR alternatives via TagAlternatives field.
+// e.g., tags: ["addition", ["python", "typescript"]] means addition AND (python OR typescript)
+type DependencySpec struct {
+	Capability      string     `json:"capability"`
+	Tags            []string   `json:"tags,omitempty"`            // Simple required tags
+	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives (each inner array is an OR group)
+	Version         string     `json:"version,omitempty"`
+	Namespace       string     `json:"namespace,omitempty"`
+}
+
+// IndexedResolution is the result of resolving a positional dependency.
+// Contains the position (DepIndex), the spec that matched, and the resolution result.
+type IndexedResolution struct {
+	FunctionName string                // Function that declared this dependency
+	DepIndex     int                   // Position in dependency array (0-indexed)
+	Spec         DependencySpec        // The spec that matched (or first spec if unresolved)
+	Resolution   *DependencyResolution // nil if unresolved
+	Status       string                // "available", "unavailable", "unresolved"
+}
+
+// parseDependencySpec parses a map into a DependencySpec
+// Supports OR alternatives in tags via nested arrays:
+// tags: ["required", ["python", "typescript"]] = required AND (python OR typescript)
+func parseDependencySpec(m map[string]interface{}) DependencySpec {
+	spec := DependencySpec{}
+
+	if cap, ok := m["capability"].(string); ok {
+		spec.Capability = cap
+	}
+
+	if version, ok := m["version"].(string); ok {
+		spec.Version = version
+	}
+
+	if namespace, ok := m["namespace"].(string); ok {
+		spec.Namespace = namespace
+	}
+
+	// Handle tags - can be []interface{} or []string, with nested arrays for OR alternatives
+	if tags, exists := m["tags"]; exists {
+		if tagsList, ok := tags.([]interface{}); ok {
+			spec.Tags = make([]string, 0, len(tagsList))
+			spec.TagAlternatives = make([][]string, 0)
+
+			for _, tag := range tagsList {
+				if tagStr, ok := tag.(string); ok {
+					// Simple string tag - required
+					spec.Tags = append(spec.Tags, tagStr)
+				} else if tagArr, ok := tag.([]interface{}); ok {
+					// Nested array - OR alternatives
+					orGroup := make([]string, 0, len(tagArr))
+					for _, t := range tagArr {
+						if s, ok := t.(string); ok {
+							orGroup = append(orGroup, s)
+						}
+					}
+					if len(orGroup) > 0 {
+						spec.TagAlternatives = append(spec.TagAlternatives, orGroup)
+					}
+				} else if stringArr, ok := tag.([]string); ok {
+					// Direct []string nested array
+					if len(stringArr) > 0 {
+						spec.TagAlternatives = append(spec.TagAlternatives, stringArr)
+					}
+				}
+			}
+		} else if stringSlice, ok := tags.([]string); ok {
+			spec.Tags = stringSlice
+		}
+	}
+
+	return spec
+}
+
 // HeartbeatRequest matches Python HeartbeatRequest exactly
 type HeartbeatRequest struct {
 	AgentID  string                 `json:"agent_id" binding:"required"`
@@ -105,6 +181,7 @@ type EntService struct {
 	validator   *AgentRegistrationValidator
 	logger      *logger.Logger
 	hookManager *AgentStatusChangeHookManager
+	matcher     *Matcher
 }
 
 // NewEntService creates a new Ent-based registry service instance
@@ -129,6 +206,9 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	// Initialize status change hook manager
 	hookManager := NewAgentStatusChangeHookManager(logger, true) // Enable hooks by default
 
+	// Create Matcher for dependency resolution
+	matcher := NewMatcher(logger)
+
 	// Create EntService instance
 	service := &EntService{
 		entDB:       entDB,
@@ -137,6 +217,7 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 		validator:   NewAgentRegistrationValidator(),
 		logger:      logger,
 		hookManager: hookManager,
+		matcher:     matcher,
 	}
 
 	// Register status change hooks with the database client
@@ -412,20 +493,25 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		return nil, fmt.Errorf("failed to register agent: %w", err)
 	}
 
-	// Now that capabilities are saved, resolve dependencies for both response AND database counts
-	dependenciesResolved, err := s.ResolveAllDependenciesFromMetadata(req.Metadata)
-	if err != nil {
-		s.logger.Warning("Failed to resolve dependencies for response: %v", err)
-		dependenciesResolved = make(map[string][]*DependencyResolution)
-	}
+	// Resolve dependencies once using IndexedResolution (single source of truth)
+	indexedResolutions := s.ResolveAllDependenciesIndexed(req.Metadata)
 
-	// Calculate totals from the resolution map (single source of truth)
-	totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+	// Convert to API response format (map[functionName][]*DependencyResolution)
+	dependenciesResolved := make(map[string][]*DependencyResolution)
 	resolvedDeps := 0
-	for _, deps := range dependenciesResolved {
-		resolvedDeps += len(deps)
+	for _, res := range indexedResolutions {
+		if res.Resolution != nil {
+			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
+			resolvedDeps++
+		} else {
+			// Ensure function exists in map even if no resolutions
+			if _, exists := dependenciesResolved[res.FunctionName]; !exists {
+				dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
+			}
+		}
 	}
 
+	totalDeps := len(indexedResolutions)
 	s.logger.Debug("Agent %s: %d total dependencies, %d resolved", req.AgentID, totalDeps, resolvedDeps)
 
 	// Update dependency counts in agent record (outside transaction)
@@ -442,8 +528,8 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 	s.logger.Info("Agent %s registered successfully", req.AgentID)
 
-	// Store dependency resolutions in database
-	err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+	// Store pre-resolved dependency resolutions in database (no re-resolution)
+	err = s.StoreDependencyResolutions(ctx, req.AgentID, indexedResolutions)
 	if err != nil {
 		s.logger.Warning("Failed to store dependency resolutions: %v", err)
 		// Don't fail registration over this
@@ -480,24 +566,14 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	}, nil
 }
 
-// StoreDependencyResolutions persists dependency resolution information to the database
+// StoreDependencyResolutions persists pre-resolved dependency information to the database.
+// This is a PURE PERSISTENCE function - no resolution logic here.
+// Resolution is done by ResolveAllDependenciesIndexed; this function just stores the results.
 func (s *EntService) StoreDependencyResolutions(
 	ctx context.Context,
 	agentID string,
-	metadata map[string]interface{},
-	dependenciesResolved map[string][]*DependencyResolution,
+	resolutions []IndexedResolution,
 ) error {
-	// Extract tools from metadata to get requested dependencies
-	toolsData, exists := metadata["tools"]
-	if !exists {
-		return nil // No tools means no dependencies
-	}
-
-	toolsList, ok := toolsData.([]interface{})
-	if !ok {
-		return fmt.Errorf("tools is not an array")
-	}
-
 	// Delete existing dependency resolutions for this agent
 	_, err := s.entDB.DependencyResolution.Delete().
 		Where(dependencyresolution.ConsumerAgentIDEQ(agentID)).
@@ -506,113 +582,59 @@ func (s *EntService) StoreDependencyResolutions(
 		return fmt.Errorf("failed to delete old dependency resolutions: %w", err)
 	}
 
-	// Process each tool and store its dependency resolutions
-	for _, toolData := range toolsList {
-		toolMap, ok := toolData.(map[string]interface{})
-		if !ok {
-			continue
+	// Nothing to store
+	if len(resolutions) == 0 {
+		return nil
+	}
+
+	// Store each pre-resolved dependency
+	for _, result := range resolutions {
+		// Determine namespace
+		namespace := result.Spec.Namespace
+		if namespace == "" {
+			namespace = "default"
 		}
 
-		functionName, ok := toolMap["function_name"].(string)
-		if !ok {
-			continue
+		// Create dependency resolution record with correct dep_index
+		create := s.entDB.DependencyResolution.Create().
+			SetConsumerAgentID(agentID).
+			SetConsumerFunctionName(result.FunctionName).
+			SetDepIndex(result.DepIndex).
+			SetCapabilityRequired(result.Spec.Capability).
+			SetNamespaceRequired(namespace)
+
+		if len(result.Spec.Tags) > 0 {
+			create = create.SetTagsRequired(result.Spec.Tags)
+		}
+		if result.Spec.Version != "" {
+			create = create.SetVersionRequired(result.Spec.Version)
 		}
 
-		// Get requested dependencies for this function
-		deps, exists := toolMap["dependencies"]
-		if !exists {
-			continue // Tool has no dependencies
+		if result.Resolution != nil {
+			// Dependency was resolved
+			create = create.
+				SetNillableProviderAgentID(&result.Resolution.AgentID).
+				SetNillableProviderFunctionName(&result.Resolution.FunctionName).
+				SetNillableEndpoint(&result.Resolution.Endpoint).
+				SetStatus(dependencyresolution.StatusAvailable).
+				SetResolvedAt(time.Now().UTC())
+		} else {
+			// Dependency is unresolved - still store with correct dep_index
+			create = create.SetStatus(dependencyresolution.StatusUnresolved)
 		}
 
-		// Handle both []interface{} and []map[string]interface{} types
-		var depsSlice []interface{}
-		switch v := deps.(type) {
-		case []interface{}:
-			depsSlice = v
-		case []map[string]interface{}:
-			// Convert []map[string]interface{} to []interface{}
-			depsSlice = make([]interface{}, len(v))
-			for i, m := range v {
-				depsSlice[i] = m
+		savedResolution, err := create.Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to save dependency resolution for %s/%s[%d]: %v",
+				agentID, result.FunctionName, result.DepIndex, err)
+			// Continue processing other dependencies
+		} else {
+			providerFn := "(unresolved)"
+			if result.Resolution != nil {
+				providerFn = result.Resolution.FunctionName
 			}
-		default:
-			s.logger.Warning("  Tool %s dependencies has unexpected type: %T", functionName, deps)
-			continue
-		}
-
-		if len(depsSlice) == 0 {
-			continue // No dependencies
-		}
-
-		// Get resolved dependencies for this function
-		resolved, hasResolved := dependenciesResolved[functionName]
-
-		// Process each requested dependency
-		for _, depData := range depsSlice {
-			depMap, ok := depData.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			capability := getString(depMap, "capability")
-			if capability == "" {
-				continue
-			}
-
-			tags := getStringSlice(depMap, "tags")
-			version := getString(depMap, "version")
-			namespace := getString(depMap, "namespace")
-			if namespace == "" {
-				namespace = "default"
-			}
-
-			// Find matching resolved dependency (if any)
-			var matchedResolution *DependencyResolution
-			if hasResolved {
-				for _, res := range resolved {
-					if res.Capability == capability {
-						matchedResolution = res
-						break
-					}
-				}
-			}
-
-			// Create dependency resolution record
-			create := s.entDB.DependencyResolution.Create().
-				SetConsumerAgentID(agentID).
-				SetConsumerFunctionName(functionName).
-				SetCapabilityRequired(capability).
-				SetNamespaceRequired(namespace)
-
-			if len(tags) > 0 {
-				create = create.SetTagsRequired(tags)
-			}
-			if version != "" {
-				create = create.SetVersionRequired(version)
-			}
-
-			if matchedResolution != nil {
-				// Dependency was resolved
-				create = create.
-					SetNillableProviderAgentID(&matchedResolution.AgentID).
-					SetNillableProviderFunctionName(&matchedResolution.FunctionName).
-					SetNillableEndpoint(&matchedResolution.Endpoint).
-					SetStatus(dependencyresolution.StatusAvailable).
-					SetResolvedAt(time.Now().UTC())
-			} else {
-				// Dependency is unresolved
-				create = create.SetStatus(dependencyresolution.StatusUnresolved)
-			}
-
-			savedResolution, err := create.Save(ctx)
-			if err != nil {
-				s.logger.Warning("Failed to save dependency resolution for %s/%s: %v",
-					agentID, functionName, err)
-				// Continue processing other dependencies
-			} else {
-				s.logger.Debug("Saved dependency resolution: %s/%s -> %s (status: %s)",
-					agentID, functionName, capability, savedResolution.Status)
-			}
+			s.logger.Debug("Saved dependency resolution: %s/%s[%d] -> %s => %s (status: %s)",
+				agentID, result.FunctionName, result.DepIndex, result.Spec.Capability, providerFn, savedResolution.Status)
 		}
 	}
 
@@ -1163,20 +1185,24 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}, nil
 			}
 
-			// Resolve dependencies after transaction commits
-			dependenciesResolved, err = s.ResolveAllDependenciesFromMetadata(req.Metadata)
-			if err != nil {
-				s.logger.Warning("Failed to resolve dependencies for response: %v", err)
-				dependenciesResolved = make(map[string][]*DependencyResolution)
-			}
+			// Resolve dependencies once using IndexedResolution (single source of truth)
+			indexedResolutions := s.ResolveAllDependenciesIndexed(req.Metadata)
 
-			// Calculate dependency counts and update agent record
-			totalDeps := countTotalDependenciesInMetadata(req.Metadata)
+			// Convert to API response format
+			dependenciesResolved = make(map[string][]*DependencyResolution)
 			resolvedDeps := 0
-			for _, deps := range dependenciesResolved {
-				resolvedDeps += len(deps)
+			for _, res := range indexedResolutions {
+				if res.Resolution != nil {
+					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
+					resolvedDeps++
+				} else {
+					if _, exists := dependenciesResolved[res.FunctionName]; !exists {
+						dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
+					}
+				}
 			}
 
+			totalDeps := len(indexedResolutions)
 			_, err = s.entDB.Agent.UpdateOneID(req.AgentID).
 				SetTotalDependencies(totalDeps).
 				SetDependenciesResolved(resolvedDeps).
@@ -1185,8 +1211,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				s.logger.Warning("Failed to update dependency counts: %v", err)
 			}
 
-			// Store dependency resolutions in database
-			err = s.StoreDependencyResolutions(ctx, req.AgentID, req.Metadata, dependenciesResolved)
+			// Store pre-resolved dependency resolutions in database (no re-resolution)
+			err = s.StoreDependencyResolutions(ctx, req.AgentID, indexedResolutions)
 			if err != nil {
 				s.logger.Warning("Failed to store dependency resolutions: %v", err)
 				// Don't fail heartbeat over this
@@ -1500,194 +1526,6 @@ func (s *EntService) Health() map[string]interface{} {
 	}
 }
 
-// ResolveAllDependenciesFromMetadata resolves dependencies using the tools metadata from registration
-// Implements strict dependency resolution: ALL dependencies must resolve or function fails
-func (s *EntService) ResolveAllDependenciesFromMetadata(metadata map[string]interface{}) (map[string][]*DependencyResolution, error) {
-	resolved := make(map[string][]*DependencyResolution)
-
-	// Extract tools from metadata
-	toolsData, exists := metadata["tools"]
-	if !exists {
-		return resolved, nil
-	}
-
-	toolsList, ok := toolsData.([]interface{})
-	if !ok {
-		return resolved, nil
-	}
-
-	// Process each tool and resolve its dependencies
-	for _, toolData := range toolsList {
-		toolMap, ok := toolData.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		functionName := getStringFromMap(toolMap, "function_name", "")
-		if functionName == "" {
-			continue
-		}
-
-		// Get dependencies for this function
-		var resolvedDeps []*DependencyResolution
-
-		if deps, exists := toolMap["dependencies"]; exists {
-			// Handle both []interface{} and []map[string]interface{} types
-			var depsList []map[string]interface{}
-
-			if depsSlice, ok := deps.([]interface{}); ok {
-				depsList = make([]map[string]interface{}, len(depsSlice))
-				for i, item := range depsSlice {
-					if depMap, ok := item.(map[string]interface{}); ok {
-						depsList[i] = depMap
-					}
-				}
-			} else if depsMapSlice, ok := deps.([]map[string]interface{}); ok {
-				depsList = depsMapSlice
-			} else {
-				depsList = nil
-			}
-
-			if depsList != nil {
-				for _, depMap := range depsList {
-					// Extract dependency info
-					requiredCapability, _ := depMap["capability"].(string)
-					if requiredCapability == "" {
-						continue
-					}
-
-					// Create dependency object
-					dep := Dependency{
-						Capability: requiredCapability,
-					}
-
-					if version, exists := depMap["version"]; exists {
-						if vStr, ok := version.(string); ok {
-							dep.Version = vStr
-						}
-					}
-
-					if tags, exists := depMap["tags"]; exists {
-						s.logger.Debug("Found tags in dependency: %T = %v", tags, tags)
-						if tagsList, ok := tags.([]interface{}); ok {
-							dep.Tags = make([]string, len(tagsList))
-							for i, tag := range tagsList {
-								if tagStr, ok := tag.(string); ok {
-									dep.Tags[i] = tagStr
-								}
-							}
-						} else if stringSlice, ok := tags.([]string); ok {
-							// Handle direct []string case
-							dep.Tags = stringSlice
-						}
-					}
-
-					// Find provider with TTL and strict matching using Ent
-					s.logger.Debug("About to call findHealthyProviderWithTTL for %s with tags %v", dep.Capability, dep.Tags)
-					provider := s.findHealthyProviderWithTTL(dep)
-					if provider != nil {
-						resolvedDeps = append(resolvedDeps, provider)
-					} else {
-						// Dependency cannot be resolved - log but continue with other dependencies
-						s.logger.Debug("Failed to resolve dependency %s for function %s", dep.Capability, functionName)
-						// Continue processing other dependencies instead of breaking
-					}
-				}
-			}
-		}
-
-		// Always include function in resolved map, even if some dependencies are unresolved
-		// This allows partial dependency resolution tracking
-		resolved[functionName] = resolvedDeps
-		if len(resolvedDeps) == 0 && len(toolMap) > 0 {
-			// Only log if function had dependencies but none were resolved
-			if deps, exists := toolMap["dependencies"]; exists {
-				if depsList, ok := deps.([]interface{}); ok && len(depsList) > 0 {
-					s.logger.Debug("Function %s excluded due to unresolvable dependencies", functionName)
-				}
-			}
-		}
-	}
-
-	return resolved, nil
-}
-
-// ResolveLLMToolsFromMetadata resolves LLM tools for functions with llm_filter
-func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID string, metadata map[string]interface{}) (map[string][]LLMToolInfo, error) {
-	llmTools := make(map[string][]LLMToolInfo)
-
-	// Extract tools from metadata
-	toolsData, exists := metadata["tools"]
-	if !exists {
-		return llmTools, nil
-	}
-
-	toolsList, ok := toolsData.([]interface{})
-	if !ok {
-		return llmTools, nil
-	}
-
-	// Process each tool and check for llm_filter
-	for _, toolData := range toolsList {
-		toolMap, ok := toolData.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		functionName := getStringFromMap(toolMap, "function_name", "")
-		if functionName == "" {
-			continue
-		}
-
-		// Check if tool has llm_filter
-		llmFilterData, exists := toolMap["llm_filter"]
-		if !exists {
-			continue
-		}
-
-		llmFilterMap, ok := llmFilterData.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Extract filter array
-		filterData, exists := llmFilterMap["filter"]
-		if !exists {
-			s.logger.Warning("No filter array in llm_filter for %s", functionName)
-			continue
-		}
-
-		filterArray, ok := filterData.([]interface{})
-		if !ok {
-			s.logger.Warning("filter is not an array for %s: %T", functionName, filterData)
-			continue
-		}
-
-		// Extract filter_mode (default to "all")
-		filterMode := "all"
-		if filterModeData, exists := llmFilterMap["filter_mode"]; exists {
-			if fm, ok := filterModeData.(string); ok {
-				filterMode = fm
-			}
-		}
-
-		// Call FilterToolsForLLM to get filtered tools (excluding this agent's own tools)
-		filteredTools, err := FilterToolsForLLM(ctx, s.entDB.Client, filterArray, filterMode, agentID)
-		if err != nil {
-			continue
-		}
-
-		// Add to result map
-		// IMPORTANT: Always add function key, even if filteredTools is empty.
-		// This supports standalone LLM agents that don't need tools (filter=None case).
-		// The Python client needs to receive {"function_name": []} to create
-		// a MeshLlmAgent with empty tools (answers using only model + system prompt).
-		llmTools[functionName] = filteredTools
-	}
-
-	return llmTools, nil
-}
-
 // GetAgentWithCapabilities retrieves agent data with capabilities for testing
 func (s *EntService) GetAgentWithCapabilities(agentID string) (map[string]interface{}, error) {
 	ctx := context.Background()
@@ -1726,217 +1564,6 @@ func (s *EntService) GetAgentWithCapabilities(agentID string) (map[string]interf
 	return result, nil
 }
 
-// findHealthyProviderWithTTL finds a healthy provider using TTL check and strict matching using Ent queries
-func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResolution {
-	ctx := context.Background()
-
-	// Use Info level to ensure it gets logged
-	s.logger.Debug("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
-
-	// Calculate TTL threshold
-	// Health status checking is now handled by the health monitor
-	// No need for TTL threshold calculations here
-
-	// Query capabilities with healthy agents using Ent with retry logic for database locks
-	var capabilities []*ent.Capability
-	var err error
-	maxRetries := 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		capabilities, err = s.entDB.Capability.Query().
-			Where(capability.CapabilityEQ(dep.Capability)).
-			WithAgent().
-			All(ctx)
-
-		if err == nil {
-			break // Success
-		}
-
-		// Check if it's a database lock error
-		if isDatabaseLockError(err) {
-			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
-			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
-			continue
-		}
-
-		// Non-lock error, don't retry
-		break
-	}
-
-	if err != nil {
-		s.logger.Error("Error finding healthy providers for %s after %d attempts: %v", dep.Capability, maxRetries, err)
-		return nil
-	}
-
-	// Convert to candidates structure
-	var candidates []struct {
-		AgentID      string
-		FunctionName string
-		Capability   string
-		Version      string
-		Tags         []string
-		HttpHost     string
-		HttpPort     int
-		UpdatedAt    time.Time
-	}
-
-	for _, cap := range capabilities {
-		if cap.Edges.Agent == nil {
-			continue // Skip if agent not loaded
-		}
-
-		// Check agent health status - only return healthy agents as available
-		// Health monitor is responsible for marking agents unhealthy based on timestamps
-		if cap.Edges.Agent.Status != agent.StatusHealthy {
-			s.logger.Debug("Skipping unhealthy agent %s: Status=%v",
-				cap.Edges.Agent.ID, cap.Edges.Agent.Status)
-			continue // Skip unhealthy agents
-		}
-
-		candidate := struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}{
-			AgentID:      cap.Edges.Agent.ID,
-			FunctionName: cap.FunctionName,
-			Capability:   cap.Capability,
-			Version:      cap.Version,
-			Tags:         cap.Tags,
-			HttpHost:     cap.Edges.Agent.HTTPHost,
-			HttpPort:     cap.Edges.Agent.HTTPPort,
-			UpdatedAt:    cap.Edges.Agent.UpdatedAt,
-		}
-		candidates = append(candidates, candidate)
-	}
-
-	s.logger.Debug("Total candidates found for %s: %d", dep.Capability, len(candidates))
-
-	// Filter by version constraint if specified
-	if dep.Version != "" && len(candidates) > 0 {
-		filtered := make([]struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}, 0)
-
-		for _, c := range candidates {
-			if matchesVersion(c.Version, dep.Version) {
-				filtered = append(filtered, c)
-			}
-		}
-		candidates = filtered
-	}
-
-	// Filter by tags using enhanced tag matching with priority scoring
-	if len(dep.Tags) > 0 && len(candidates) > 0 {
-		type candidateWithScore struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-			Score        int // Priority score from enhanced tag matching
-		}
-
-		scoredCandidates := make([]candidateWithScore, 0)
-
-		for _, c := range candidates {
-			matches, score := matchesEnhancedTags(c.Tags, dep.Tags)
-			if matches {
-				scoredCandidates = append(scoredCandidates, candidateWithScore{
-					AgentID:      c.AgentID,
-					FunctionName: c.FunctionName,
-					Capability:   c.Capability,
-					Version:      c.Version,
-					Tags:         c.Tags,
-					HttpHost:     c.HttpHost,
-					HttpPort:     c.HttpPort,
-					UpdatedAt:    c.UpdatedAt,
-					Score:        score,
-				})
-			}
-		}
-
-		// Sort by score descending (highest score = best match first)
-		for i := 0; i < len(scoredCandidates); i++ {
-			for j := i + 1; j < len(scoredCandidates); j++ {
-				if scoredCandidates[j].Score > scoredCandidates[i].Score {
-					scoredCandidates[i], scoredCandidates[j] = scoredCandidates[j], scoredCandidates[i]
-				}
-			}
-		}
-
-		// Convert back to original candidate format
-		candidates = make([]struct {
-			AgentID      string
-			FunctionName string
-			Capability   string
-			Version      string
-			Tags         []string
-			HttpHost     string
-			HttpPort     int
-			UpdatedAt    time.Time
-		}, len(scoredCandidates))
-
-		for i, sc := range scoredCandidates {
-			candidates[i] = struct {
-				AgentID      string
-				FunctionName string
-				Capability   string
-				Version      string
-				Tags         []string
-				HttpHost     string
-				HttpPort     int
-				UpdatedAt    time.Time
-			}{
-				AgentID:      sc.AgentID,
-				FunctionName: sc.FunctionName,
-				Capability:   sc.Capability,
-				Version:      sc.Version,
-				Tags:         sc.Tags,
-				HttpHost:     sc.HttpHost,
-				HttpPort:     sc.HttpPort,
-				UpdatedAt:    sc.UpdatedAt,
-			}
-		}
-	}
-
-	// Return first match (deterministic selection)
-	if len(candidates) > 0 {
-		c := candidates[0]
-
-		// Build endpoint
-		endpoint := "stdio://" + c.AgentID // Default
-		if c.HttpHost != "" && c.HttpPort > 0 {
-			endpoint = fmt.Sprintf("http://%s:%d", c.HttpHost, c.HttpPort)
-		}
-
-		return &DependencyResolution{
-			AgentID:      c.AgentID,
-			FunctionName: c.FunctionName,
-			Endpoint:     endpoint,
-			Capability:   c.Capability,
-			Status:       "available",
-		}
-	}
-
-	s.logger.Debug("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
-	return nil
-}
-
 // Helper functions
 
 // isDatabaseLockError checks if an error is a SQLite database lock error
@@ -1962,114 +1589,6 @@ func parseVersionConstraint(version string) (*semver.Constraints, error) {
 		return nil, nil
 	}
 	return semver.NewConstraint(version)
-}
-
-func matchesVersion(version, constraint string) bool {
-	// Handle empty cases
-	if constraint == "" || version == "" {
-		return version == constraint
-	}
-
-	// Parse the version
-	v, err := semver.NewVersion(version)
-	if err != nil {
-		// If version parsing fails, fall back to string comparison
-		return version == constraint
-	}
-
-	// Parse the constraint
-	c, err := semver.NewConstraint(constraint)
-	if err != nil {
-		// If constraint parsing fails, fall back to string comparison
-		return version == constraint
-	}
-
-	// Check if version satisfies constraint
-	return c.Check(v)
-}
-
-func hasAllTags(available, required []string) bool {
-	for _, req := range required {
-		found := false
-		for _, avail := range available {
-			if avail == req {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-// matchesEnhancedTags implements enhanced tag matching with +/- operators
-// Returns (matches, score) where:
-// - matches: true if the provider satisfies all constraints
-// - score: numeric score for ranking providers (higher = better match)
-//
-// Tag prefixes:
-// - No prefix: Required tag (must be present)
-// - "+": Preferred tag (bonus points if present, no penalty if missing)
-// - "-": Excluded tag (must NOT be present, fails if found)
-//
-// Examples:
-// - "claude" = required
-// - "+opus" = preferred (bonus if present)
-// - "-experimental" = excluded (fail if present)
-func matchesEnhancedTags(providerTags, requiredTags []string) (bool, int) {
-	score := 0
-
-	// Handle empty cases
-	if len(requiredTags) == 0 {
-		return true, 0 // No constraints = always match with zero score
-	}
-
-	// Helper function to check if a tag exists in provider tags
-	containsTag := func(tags []string, tag string) bool {
-		for _, t := range tags {
-			if t == tag {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Process each required tag constraint
-	for _, reqTag := range requiredTags {
-		if len(reqTag) == 0 {
-			continue // Skip empty tags
-		}
-
-		switch reqTag[0] {
-		case '-':
-			// Excluded tag: must NOT be present
-			excludedTag := reqTag[1:]
-			if excludedTag != "" && containsTag(providerTags, excludedTag) {
-				return false, 0 // Hard failure if excluded tag is present
-			}
-			// No score change for excluded tags (they don't add value, just filter)
-
-		case '+':
-			// Preferred tag: bonus points if present, no penalty if missing
-			preferredTag := reqTag[1:]
-			if preferredTag != "" && containsTag(providerTags, preferredTag) {
-				score += 10 // Bonus points for preferred tags
-			}
-			// No penalty if preferred tag is missing
-
-		default:
-			// Required tag: must be present
-			if containsTag(providerTags, reqTag) {
-				score += 5 // Base points for required tags
-			} else {
-				return false, 0 // Hard failure if required tag is missing
-			}
-		}
-	}
-
-	return true, score
 }
 
 // countTotalDependenciesInMetadata counts the total number of dependencies across all tools in metadata

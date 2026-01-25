@@ -23,8 +23,9 @@ use crate::start_agent_internal;
 pub struct JsDependencySpec {
     /// Capability name to depend on
     pub capability: String,
-    /// Tags for filtering (e.g., ["+fast", "-deprecated"])
-    pub tags: Vec<String>,
+    /// Tags for filtering - JSON string to support nested arrays for OR alternatives
+    /// e.g., '["addition", ["python", "typescript"]]' means addition AND (python OR typescript)
+    pub tags: String,
     /// Version constraint (e.g., ">=2.0.0")
     pub version: Option<String>,
 }

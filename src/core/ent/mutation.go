@@ -2768,6 +2768,8 @@ type DependencyResolutionMutation struct {
 	typ                    string
 	id                     *int
 	consumer_function_name *string
+	dep_index              *int
+	adddep_index           *int
 	capability_required    *string
 	tags_required          *[]string
 	appendtags_required    []string
@@ -2957,6 +2959,62 @@ func (m *DependencyResolutionMutation) OldConsumerFunctionName(ctx context.Conte
 // ResetConsumerFunctionName resets all changes to the "consumer_function_name" field.
 func (m *DependencyResolutionMutation) ResetConsumerFunctionName() {
 	m.consumer_function_name = nil
+}
+
+// SetDepIndex sets the "dep_index" field.
+func (m *DependencyResolutionMutation) SetDepIndex(i int) {
+	m.dep_index = &i
+	m.adddep_index = nil
+}
+
+// DepIndex returns the value of the "dep_index" field in the mutation.
+func (m *DependencyResolutionMutation) DepIndex() (r int, exists bool) {
+	v := m.dep_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDepIndex returns the old "dep_index" field's value of the DependencyResolution entity.
+// If the DependencyResolution object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DependencyResolutionMutation) OldDepIndex(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDepIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDepIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDepIndex: %w", err)
+	}
+	return oldValue.DepIndex, nil
+}
+
+// AddDepIndex adds i to the "dep_index" field.
+func (m *DependencyResolutionMutation) AddDepIndex(i int) {
+	if m.adddep_index != nil {
+		*m.adddep_index += i
+	} else {
+		m.adddep_index = &i
+	}
+}
+
+// AddedDepIndex returns the value that was added to the "dep_index" field in this mutation.
+func (m *DependencyResolutionMutation) AddedDepIndex() (r int, exists bool) {
+	v := m.adddep_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDepIndex resets all changes to the "dep_index" field.
+func (m *DependencyResolutionMutation) ResetDepIndex() {
+	m.dep_index = nil
+	m.adddep_index = nil
 }
 
 // SetCapabilityRequired sets the "capability_required" field.
@@ -3537,12 +3595,15 @@ func (m *DependencyResolutionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *DependencyResolutionMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 14)
 	if m.consumer_agent != nil {
 		fields = append(fields, dependencyresolution.FieldConsumerAgentID)
 	}
 	if m.consumer_function_name != nil {
 		fields = append(fields, dependencyresolution.FieldConsumerFunctionName)
+	}
+	if m.dep_index != nil {
+		fields = append(fields, dependencyresolution.FieldDepIndex)
 	}
 	if m.capability_required != nil {
 		fields = append(fields, dependencyresolution.FieldCapabilityRequired)
@@ -3589,6 +3650,8 @@ func (m *DependencyResolutionMutation) Field(name string) (ent.Value, bool) {
 		return m.ConsumerAgentID()
 	case dependencyresolution.FieldConsumerFunctionName:
 		return m.ConsumerFunctionName()
+	case dependencyresolution.FieldDepIndex:
+		return m.DepIndex()
 	case dependencyresolution.FieldCapabilityRequired:
 		return m.CapabilityRequired()
 	case dependencyresolution.FieldTagsRequired:
@@ -3624,6 +3687,8 @@ func (m *DependencyResolutionMutation) OldField(ctx context.Context, name string
 		return m.OldConsumerAgentID(ctx)
 	case dependencyresolution.FieldConsumerFunctionName:
 		return m.OldConsumerFunctionName(ctx)
+	case dependencyresolution.FieldDepIndex:
+		return m.OldDepIndex(ctx)
 	case dependencyresolution.FieldCapabilityRequired:
 		return m.OldCapabilityRequired(ctx)
 	case dependencyresolution.FieldTagsRequired:
@@ -3668,6 +3733,13 @@ func (m *DependencyResolutionMutation) SetField(name string, value ent.Value) er
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetConsumerFunctionName(v)
+		return nil
+	case dependencyresolution.FieldDepIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDepIndex(v)
 		return nil
 	case dependencyresolution.FieldCapabilityRequired:
 		v, ok := value.(string)
@@ -3753,13 +3825,21 @@ func (m *DependencyResolutionMutation) SetField(name string, value ent.Value) er
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *DependencyResolutionMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.adddep_index != nil {
+		fields = append(fields, dependencyresolution.FieldDepIndex)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *DependencyResolutionMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case dependencyresolution.FieldDepIndex:
+		return m.AddedDepIndex()
+	}
 	return nil, false
 }
 
@@ -3768,6 +3848,13 @@ func (m *DependencyResolutionMutation) AddedField(name string) (ent.Value, bool)
 // type.
 func (m *DependencyResolutionMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case dependencyresolution.FieldDepIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDepIndex(v)
+		return nil
 	}
 	return fmt.Errorf("unknown DependencyResolution numeric field %s", name)
 }
@@ -3839,6 +3926,9 @@ func (m *DependencyResolutionMutation) ResetField(name string) error {
 		return nil
 	case dependencyresolution.FieldConsumerFunctionName:
 		m.ResetConsumerFunctionName()
+		return nil
+	case dependencyresolution.FieldDepIndex:
+		m.ResetDepIndex()
 		return nil
 	case dependencyresolution.FieldCapabilityRequired:
 		m.ResetCapabilityRequired()

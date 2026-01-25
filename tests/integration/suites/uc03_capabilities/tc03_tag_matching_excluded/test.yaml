@@ -1,0 +1,108 @@
+# Test Case: Tag Matching - Excluded
+# Tests that consumer excluding a tag avoids provider with that tag.
+#
+# Scenario:
+#   - py-deprecated-provider has tags ["api", "deprecated"]
+#   - py-fast-provider has tags ["api", "fast"]
+#   - Consumer excludes ["-deprecated"]
+#   - Should NOT match deprecated provider, should match fast provider
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Tag Matching - Excluded"
+description: "Verify consumer excluding tag avoids matching provider"
+tags:
+  - capabilities
+  - tags
+  - excluded
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-deprecated-provider /workspace/
+      cp -r /uc-artifacts/py-fast-provider /workspace/
+      cp -r /uc-artifacts/py-tag-consumer /workspace/
+    capture: copy_output
+
+  # Start deprecated provider first (would normally be matched first)
+  - name: "Start deprecated provider"
+    handler: shell
+    command: "meshctl start py-deprecated-provider/main.py -d"
+    workdir: /workspace
+    capture: start_deprecated
+
+  # Start fast provider
+  - name: "Start fast provider"
+    handler: shell
+    command: "meshctl start py-fast-provider/main.py -d"
+    workdir: /workspace
+    capture: start_fast
+
+  - name: "Wait for providers registration"
+    handler: wait
+    seconds: 10
+
+  # Start consumer
+  - name: "Start consumer"
+    handler: shell
+    command: "meshctl start py-tag-consumer/main.py -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  # Verify all agents registered
+  - name: "Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Call fetch_exclude_deprecated which excludes "-deprecated"
+  - name: "Call fetch_exclude_deprecated with excluded tag"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_exclude_deprecated '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      # Should NOT match deprecated provider
+      if echo "$RESULT" | grep -q "DEPRECATED"; then
+        echo "FAIL: Should have excluded deprecated provider"
+        exit 1
+      fi
+      # Should match fast provider instead
+      if echo "$RESULT" | grep -q "FAST"; then
+        echo "PASS: Excluded deprecated, matched fast provider"
+      else
+        echo "FAIL: Expected to match fast provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_excluded
+
+assertions:
+  - expr: "${captured.list_output} contains 'py-deprecated-provider'"
+    message: "Deprecated provider should be registered"
+
+  - expr: "${captured.list_output} contains 'py-fast-provider'"
+    message: "Fast provider should be registered"
+
+  - expr: "${captured.call_excluded} contains 'PASS'"
+    message: "Should exclude deprecated and match fast provider"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

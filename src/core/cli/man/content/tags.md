@@ -108,11 +108,11 @@ Stack multiple `+` tags to create priority ordering. The provider matching the m
 def my_llm_tool(): ...
 ```
 
-| Provider | Its Tags | Matches | Score |
-|----------|----------|---------|-------|
-| Claude | `["llm", "claude", "anthropic"]` | +claude, +anthropic | **+2** |
-| GPT | `["llm", "gpt", "openai"]` | +gpt | **+1** |
-| Llama | `["llm", "llama"]` | (none) | **+0** |
+| Provider | Its Tags                         | Matches             | Score  |
+| -------- | -------------------------------- | ------------------- | ------ |
+| Claude   | `["llm", "claude", "anthropic"]` | +claude, +anthropic | **+2** |
+| GPT      | `["llm", "gpt", "openai"]`       | +gpt                | **+1** |
+| Llama    | `["llm", "llama"]`               | (none)              | **+0** |
 
 Result: Claude (+2) > GPT (+1) > Llama (+0)
 
@@ -132,6 +132,40 @@ Filter which tools an LLM agent can access:
 )
 def smart_assistant(): ...
 ```
+
+## Tag OR Alternatives
+
+Use nested arrays in tags to express OR conditions with fallback behavior:
+
+```python
+# Single OR: require "api" AND (prefer "python" OR fallback to "typescript")
+tags: ["api", ["python", "typescript"]]
+
+# Multiple ORs: (fast OR cached) AND (sync OR async)
+tags: [["fast", "cached"], ["sync", "async"]]
+```
+
+### Fallback Behavior
+
+When using tag-level OR, alternatives are tried in order:
+
+```python
+@mesh.tool(
+    dependencies=[
+        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+    ],
+)
+def calculate(math: mesh.McpMeshTool = None): ...
+```
+
+Resolution:
+
+1. First, try to find provider with `addition` AND `python`
+2. If not found, try provider with `addition` AND `typescript`
+3. If neither found, dependency is unresolved
+
+This is useful when you have multiple implementations and want to prefer
+one but gracefully fallback to another when your preferred is unavailable.
 
 ## See Also
 

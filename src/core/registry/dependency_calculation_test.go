@@ -6,6 +6,11 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
+// makeDepTagsEmpty creates an empty MeshToolDependencyRegistration_Tags_Item slice
+func makeDepTagsEmpty() *[]generated.MeshToolDependencyRegistration_Tags_Item {
+	return &[]generated.MeshToolDependencyRegistration_Tags_Item{}
+}
+
 // TestDependencyCalculation tests the dependency counting logic in isolation
 func TestDependencyCalculation(t *testing.T) {
 	// Create test request (same structure as real request)
@@ -27,7 +32,7 @@ func TestDependencyCalculation(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTagsEmpty(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},
@@ -50,7 +55,7 @@ func TestDependencyCalculation(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTagsEmpty(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},
@@ -89,7 +94,7 @@ func TestDependencyCalculation(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTagsEmpty(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},

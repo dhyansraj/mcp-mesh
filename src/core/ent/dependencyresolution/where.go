@@ -65,6 +65,11 @@ func ConsumerFunctionName(v string) predicate.DependencyResolution {
 	return predicate.DependencyResolution(sql.FieldEQ(FieldConsumerFunctionName, v))
 }
 
+// DepIndex applies equality check predicate on the "dep_index" field. It's identical to DepIndexEQ.
+func DepIndex(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldEQ(FieldDepIndex, v))
+}
+
 // CapabilityRequired applies equality check predicate on the "capability_required" field. It's identical to CapabilityRequiredEQ.
 func CapabilityRequired(v string) predicate.DependencyResolution {
 	return predicate.DependencyResolution(sql.FieldEQ(FieldCapabilityRequired, v))
@@ -238,6 +243,46 @@ func ConsumerFunctionNameEqualFold(v string) predicate.DependencyResolution {
 // ConsumerFunctionNameContainsFold applies the ContainsFold predicate on the "consumer_function_name" field.
 func ConsumerFunctionNameContainsFold(v string) predicate.DependencyResolution {
 	return predicate.DependencyResolution(sql.FieldContainsFold(FieldConsumerFunctionName, v))
+}
+
+// DepIndexEQ applies the EQ predicate on the "dep_index" field.
+func DepIndexEQ(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldEQ(FieldDepIndex, v))
+}
+
+// DepIndexNEQ applies the NEQ predicate on the "dep_index" field.
+func DepIndexNEQ(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldNEQ(FieldDepIndex, v))
+}
+
+// DepIndexIn applies the In predicate on the "dep_index" field.
+func DepIndexIn(vs ...int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldIn(FieldDepIndex, vs...))
+}
+
+// DepIndexNotIn applies the NotIn predicate on the "dep_index" field.
+func DepIndexNotIn(vs ...int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldNotIn(FieldDepIndex, vs...))
+}
+
+// DepIndexGT applies the GT predicate on the "dep_index" field.
+func DepIndexGT(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldGT(FieldDepIndex, v))
+}
+
+// DepIndexGTE applies the GTE predicate on the "dep_index" field.
+func DepIndexGTE(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldGTE(FieldDepIndex, v))
+}
+
+// DepIndexLT applies the LT predicate on the "dep_index" field.
+func DepIndexLT(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldLT(FieldDepIndex, v))
+}
+
+// DepIndexLTE applies the LTE predicate on the "dep_index" field.
+func DepIndexLTE(v int) predicate.DependencyResolution {
+	return predicate.DependencyResolution(sql.FieldLTE(FieldDepIndex, v))
 }
 
 // CapabilityRequiredEQ applies the EQ predicate on the "capability_required" field.

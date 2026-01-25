@@ -63,6 +63,39 @@ agent.addTool({
 });
 ```
 
+### OR Alternatives (Tag-Level)
+
+Use nested arrays in tags to specify fallback providers:
+
+```typescript
+agent.addTool({
+  name: "calculate",
+  capability: "calculator",
+  dependencies: [
+    // Prefer python provider, fallback to typescript
+    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+  ],
+  parameters: z.object({
+    a: z.number(),
+    b: z.number(),
+  }),
+  execute: async ({ a, b }, { math }) => {
+    if (!math) return "Math service unavailable";
+    const result = await math({ a, b });
+    return result;
+  },
+});
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is injected as `null`
+
+This is useful when you have multiple implementations of the same capability
+and want to prefer one but fallback to another if unavailable.
+
 ## Injection Types
 
 ### McpMeshTool

@@ -1,0 +1,158 @@
+# Test Case: TypeScript Multi-Dependency Tool Call
+# Tests that a TypeScript tool with 4 dependencies (add, subtract, multiply, divide)
+# can correctly wire and call all dependent tools.
+#
+# Scenario:
+#   - ts-math-agent provides 4 tools: add, subtract, multiply, divide
+#   - ts-calculator-agent's calculate() depends on all 4
+#   - Call calculate with each operator to verify all dependencies work
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Multi-Dependency Tool Call"
+description: "Verify TypeScript tool with 4 dependencies wires and calls correctly"
+tags:
+  - tools
+  - multi-dependency
+  - dependency-injection
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+      cp -r /uc-artifacts/ts-calculator-agent /workspace/
+    capture: copy_output
+
+  # Install npm dependencies for both agents
+  - name: "Install math npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install calculator npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  # Start math agent first (provider of add, subtract, multiply, divide)
+  - name: "Start math agent (provider)"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_math
+
+  # Wait for math agent to register
+  - name: "Wait for math agent to register"
+    handler: wait
+    seconds: 8
+
+  # Start calculator agent (consumer with 4 dependencies)
+  - name: "Start calculator agent (consumer)"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  # Wait for calculator to register and wire
+  - name: "Wait for calculator to wire"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify calculate is available
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Test addition: 10 + 5 = 15
+  - name: "Test calculate with addition"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 10, "b": 5, "operator": "+"}'''
+    workdir: /workspace
+    capture: test_add
+
+  # Test subtraction: 20 - 7 = 13
+  - name: "Test calculate with subtraction"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 20, "b": 7, "operator": "-"}'''
+    workdir: /workspace
+    capture: test_subtract
+
+  # Test multiplication: 6 * 7 = 42
+  - name: "Test calculate with multiplication"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 6, "b": 7, "operator": "*"}'''
+    workdir: /workspace
+    capture: test_multiply
+
+  # Test division: 100 / 4 = 25
+  - name: "Test calculate with division"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 100, "b": 4, "operator": "/"}'''
+    workdir: /workspace
+    capture: test_divide
+
+assertions:
+  # Both agents should be registered
+  - expr: "${captured.list_output} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-calculator-agent'"
+    message: "ts-calculator-agent should be registered"
+
+  # calculate tool should be listed
+  - expr: "${captured.tools_output} contains 'calculate'"
+    message: "calculate tool should be listed"
+
+  # TypeScript FastMCP returns result in content[0].text as JSON string
+  # Use jq to parse: .content[0].text | fromjson | .result
+
+  # Addition: 10 + 5 = 15
+  - expr: ${jq:captured.test_add:.content[0].text | fromjson | .result} == 15
+    message: "Addition should return 15"
+
+  - expr: "${jq:captured.test_add:.content[0].text | fromjson | .source} == 'ts-math-agent'"
+    message: "Addition should use ts-math-agent (dependency injection)"
+
+  # Subtraction: 20 - 7 = 13
+  - expr: ${jq:captured.test_subtract:.content[0].text | fromjson | .result} == 13
+    message: "Subtraction should return 13"
+
+  - expr: "${jq:captured.test_subtract:.content[0].text | fromjson | .source} == 'ts-math-agent'"
+    message: "Subtraction should use ts-math-agent (dependency injection)"
+
+  # Multiplication: 6 * 7 = 42
+  - expr: ${jq:captured.test_multiply:.content[0].text | fromjson | .result} == 42
+    message: "Multiplication should return 42"
+
+  - expr: "${jq:captured.test_multiply:.content[0].text | fromjson | .source} == 'ts-math-agent'"
+    message: "Multiplication should use ts-math-agent (dependency injection)"
+
+  # Division: 100 / 4 = 25
+  - expr: ${jq:captured.test_divide:.content[0].text | fromjson | .result} == 25
+    message: "Division should return 25"
+
+  - expr: "${jq:captured.test_divide:.content[0].text | fromjson | .source} == 'ts-math-agent'"
+    message: "Division should use ts-math-agent (dependency injection)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

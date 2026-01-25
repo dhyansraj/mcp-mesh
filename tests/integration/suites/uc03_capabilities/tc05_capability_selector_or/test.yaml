@@ -1,0 +1,179 @@
+# Test Case: Capability Selector OR Logic
+# Tests that multiple matching providers all satisfy the dependency.
+#
+# Scenario:
+#   - Multiple providers with "api" tag
+#   - Consumer requires ["api"]
+#   - Any matching provider satisfies the dependency
+#   - Test with only fast, only accurate, and both
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Capability Selector OR Logic"
+description: "Verify any matching provider satisfies dependency"
+tags:
+  - capabilities
+  - tags
+  - or-logic
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-fast-provider /workspace/
+      cp -r /uc-artifacts/py-accurate-provider /workspace/
+      cp -r /uc-artifacts/py-tag-consumer /workspace/
+    capture: copy_output
+
+  # === TEST 1: Only fast provider available ===
+  - name: "Test 1: Start fast provider only"
+    handler: shell
+    command: "meshctl start py-fast-provider/main.py -d"
+    workdir: /workspace
+    capture: start_fast_only
+
+  - name: "Wait for fast provider registration"
+    handler: wait
+    seconds: 8
+
+  - name: "Test 1: Start consumer"
+    handler: shell
+    command: "meshctl start py-tag-consumer/main.py -d"
+    workdir: /workspace
+    capture: start_consumer_1
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 1: Call fetch_required with only fast available"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test1"}' 2>&1)
+      echo "With only fast: $RESULT"
+      if echo "$RESULT" | grep -q "FAST"; then
+        echo "PASS: Matched fast provider when only fast available"
+      else
+        echo "FAIL: Should match fast provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_fast_only
+
+  # Stop all for next test
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for cleanup"
+    handler: wait
+    seconds: 5
+
+  # === TEST 2: Only accurate provider available ===
+  - name: "Test 2: Start accurate provider only"
+    handler: shell
+    command: "meshctl start py-accurate-provider/main.py -d"
+    workdir: /workspace
+    capture: start_accurate_only
+
+  - name: "Wait for accurate provider registration"
+    handler: wait
+    seconds: 8
+
+  - name: "Test 2: Start consumer"
+    handler: shell
+    command: "meshctl start py-tag-consumer/main.py -d"
+    workdir: /workspace
+    capture: start_consumer_2
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 2: Call fetch_required with only accurate available"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test2"}' 2>&1)
+      echo "With only accurate: $RESULT"
+      if echo "$RESULT" | grep -q "ACCURATE"; then
+        echo "PASS: Matched accurate provider when only accurate available"
+      else
+        echo "FAIL: Should match accurate provider"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_accurate_only
+
+  # Stop all for next test
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Wait for cleanup"
+    handler: wait
+    seconds: 5
+
+  # === TEST 3: Both providers available ===
+  - name: "Test 3: Start both providers"
+    handler: shell
+    command: "meshctl start py-fast-provider/main.py py-accurate-provider/main.py -d"
+    workdir: /workspace
+    capture: start_both
+
+  - name: "Wait for providers registration"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 3: Start consumer"
+    handler: shell
+    command: "meshctl start py-tag-consumer/main.py -d"
+    workdir: /workspace
+    capture: start_consumer_3
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  - name: "Test 3: Call fetch_required with both available"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test3"}' 2>&1)
+      echo "With both: $RESULT"
+      # Either provider should work since both have "api" tag
+      if echo "$RESULT" | grep -q "FAST\|ACCURATE"; then
+        echo "PASS: Matched one of the providers when both available"
+      else
+        echo "FAIL: Should match one of the providers"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_both
+
+assertions:
+  - expr: "${captured.test_fast_only} contains 'PASS'"
+    message: "Should match fast when only fast available"
+
+  - expr: "${captured.test_accurate_only} contains 'PASS'"
+    message: "Should match accurate when only accurate available"
+
+  - expr: "${captured.test_both} contains 'PASS'"
+    message: "Should match one provider when both available"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

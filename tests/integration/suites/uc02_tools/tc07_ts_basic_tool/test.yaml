@@ -1,0 +1,123 @@
+# Test Case: TypeScript Basic Tool Call
+# Tests basic tool invocation via meshctl call with TypeScript agent.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Basic Tool Call"
+description: "Verify meshctl call invokes a TypeScript tool and returns result"
+tags:
+  - tools
+  - meshctl
+  - typescript
+  - basic
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+    capture: copy_output
+
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # Start agent
+  - name: "Start agent"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Call add tool
+  - name: "Call add tool"
+    handler: shell
+    command: 'meshctl call add ''{"a": 5, "b": 3}'''
+    workdir: /workspace
+    capture: call_add
+
+  # Call subtract tool
+  - name: "Call subtract tool"
+    handler: shell
+    command: 'meshctl call subtract ''{"a": 10, "b": 4}'''
+    workdir: /workspace
+    capture: call_subtract
+
+  # Call multiply tool
+  - name: "Call multiply tool"
+    handler: shell
+    command: 'meshctl call multiply ''{"a": 6, "b": 7}'''
+    workdir: /workspace
+    capture: call_multiply
+
+  # Call divide tool
+  - name: "Call divide tool"
+    handler: shell
+    command: 'meshctl call divide ''{"a": 20, "b": 4}'''
+    workdir: /workspace
+    capture: call_divide
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'ts-math-agent'"
+    message: "TypeScript agent should be registered"
+
+  # Tools are listed
+  - expr: "${captured.list_tools} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'subtract'"
+    message: "subtract tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'multiply'"
+    message: "multiply tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'divide'"
+    message: "divide tool should be listed"
+
+  # Tool calls succeeded
+  - expr: "${captured.call_add} contains '8'"
+    message: "add(5,3) should return 8"
+
+  - expr: "${captured.call_subtract} contains '6'"
+    message: "subtract(10,4) should return 6"
+
+  - expr: "${captured.call_multiply} contains '42'"
+    message: "multiply(6,7) should return 42"
+
+  - expr: "${captured.call_divide} contains '5'"
+    message: "divide(20,4) should return 5"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

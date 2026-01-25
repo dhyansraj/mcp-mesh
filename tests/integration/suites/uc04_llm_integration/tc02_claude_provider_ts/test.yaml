@@ -1,0 +1,102 @@
+# Test Case: Claude Provider Integration - TypeScript
+# Verifies Claude LLM provider using mesh.addLlmProvider()
+
+name: "Claude Provider Integration - TS"
+description: "Test Claude LLM provider scaffolded with meshctl (TypeScript)"
+tags:
+  - llm
+  - claude
+  - provider
+  - typescript
+timeout: 180
+
+# Note: Skip this test with --skip-tag llm if no API key is available
+
+pre_run:
+  # TypeScript test - need Node.js + meshctl
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace (including dotfiles like .env)
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/. /workspace/"
+    capture: copy_output
+
+  # Verify all files copied
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Install npm dependencies (handler auto-detects local/published mode)
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/claude-provider-ts
+
+  # Start the claude-provider-ts with env file
+  - name: "Start claude-provider-ts"
+    handler: shell
+    command: "meshctl start claude-provider-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=3020 -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call process_chat with a simple question
+  - name: "Call process_chat - capital of France"
+    handler: shell
+    command: |
+      meshctl call process_chat '{"request": {"messages": [{"role": "user", "content": "What is the capital of France? Reply with just the city name."}]}}'
+    workdir: /workspace
+    capture: llm_response
+
+  # Stop provider
+  - name: "Stop provider"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Provider started successfully
+  - expr: ${captured.list_output} contains 'claude-provider-ts'
+    message: "claude-provider-ts should appear in meshctl list"
+
+  # Tool is registered (TS uses process_chat as tool name)
+  - expr: ${captured.tools_output} contains 'process_chat'
+    message: "process_chat tool should be listed"
+
+  # Tool has correct capability
+  - expr: ${captured.tools_output} contains 'llm'
+    message: "Tool should have llm capability"
+
+  # LLM response contains Paris
+  - expr: ${captured.llm_response} contains 'Paris'
+    message: "LLM response should contain Paris"
+
+post_run:
+  # Stop any remaining providers
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

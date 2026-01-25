@@ -1,0 +1,126 @@
+# Test Case: Build Rust Core Node.js Bindings (@mcpmesh/core)
+# Builds the Rust core library with Node.js bindings via napi-rs
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build Rust Core (Node.js)"
+description: "Build @mcpmesh/core npm tarball with native bindings using napi-rs"
+tags:
+  - build
+  - rust
+  - nodejs
+  - napi
+timeout: 600
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${suite_path}/${config.output.packages}"
+      echo "Output directory ready: ${suite_path}/${config.output.packages}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check Rust core source on host"
+    handler: shell
+    command: |
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/src/runtime/core/typescript" ]; then
+        echo "Found @mcpmesh/core source at $SOURCE_PATH/src/runtime/core/typescript"
+        ls -la "$SOURCE_PATH/src/runtime/core/typescript/"
+        cat "$SOURCE_PATH/src/runtime/core/typescript/package.json"
+      else
+        echo "ERROR: @mcpmesh/core source not found at $SOURCE_PATH/src/runtime/core/typescript"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build with napi-rs using docker run
+  - name: "Build @mcpmesh/core native bindings"
+    handler: shell
+    command: |
+      # Get absolute paths for docker volume mounts (relative to suite_path)
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Source: $SOURCE_ABS"
+      echo "Output: $OUTPUT_ABS"
+
+      echo "Building @mcpmesh/core with napi-rs inside container (clean build)..."
+      # Optimized: Only copy required files instead of entire repo
+      # Rust core (Node.js) needs: Cargo.toml, Cargo.lock, src/, build.rs, typescript/
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/src/runtime/core && \
+          cp /src-host/src/runtime/core/Cargo.toml /src/mcp-mesh/src/runtime/core/ && \
+          cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/ 2>/dev/null || true && \
+          cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
+          cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
+          cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \
+          cd /src/mcp-mesh/src/runtime/core/typescript && \
+          npm install && npm run build && npm pack --pack-destination /out/packages
+        "
+
+      echo "napi-rs build complete"
+    capture: build_output
+    timeout: 480
+
+  # List built packages on host
+  - name: "List built packages"
+    handler: shell
+    command: |
+      echo "Built packages:"
+      ls -la "${suite_path}/${config.output.packages}"/*core*.tgz 2>/dev/null || \
+        ls -la "${suite_path}/${config.output.packages}"/*.tgz
+    capture: package_list
+
+  # Verify package contents (should contain .node file)
+  - name: "Verify package contents"
+    handler: shell
+    command: |
+      cd "${suite_path}/${config.output.packages}"
+      CORE_PKG=$(ls *core*.tgz 2>/dev/null | head -1)
+      if [ -n "$CORE_PKG" ]; then
+        echo "Package contents for $CORE_PKG:"
+        tar -tzf "$CORE_PKG" | head -20
+        echo "Checking for native binding..."
+        tar -tzf "$CORE_PKG" | grep -E "\.node$" && echo "Native binding found" || echo "WARNING: No .node file found"
+      else
+        echo "ERROR: No core package found"
+        exit 1
+      fi
+    capture: contents_output
+
+  # Verify native module can be loaded
+  - name: "Verify native module loads"
+    handler: shell
+    command: |
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      CORE_PKG=$(ls "${suite_path}/${config.output.packages}"/*core*.tgz 2>/dev/null | head -1)
+
+      echo "Testing @mcpmesh/core installation inside container..."
+      docker run --rm \
+        -v "$OUTPUT_ABS:/out:ro" \
+        ${config.build.image} \
+        bash -c "cd /tmp && npm init -y > /dev/null 2>&1 && \
+          npm install /out/packages/*core*.tgz && \
+          node -e \"const c = require('@mcpmesh/core'); console.log('core loaded');\""
+    capture: install_output
+
+assertions:
+  - expr: ${captured.build_output} contains 'napi-rs build complete'
+    message: "napi-rs build should complete successfully"
+
+  - expr: ${captured.package_list} contains '.tgz'
+    message: "npm tarball should be created"
+
+  - expr: ${captured.contents_output} contains 'package.json'
+    message: "Package should contain package.json"
+
+  - expr: ${captured.install_output} contains 'core loaded'
+    message: "@mcpmesh/core should load without errors"

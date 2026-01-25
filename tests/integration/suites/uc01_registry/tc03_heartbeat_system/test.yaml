@@ -1,0 +1,174 @@
+# Test Case: Heartbeat System
+# Tests agent heartbeat behavior:
+#   1. Graceful stop (meshctl stop) - agent unregisters immediately
+#   2. Abrupt kill (kill -9) - agent marked unhealthy after missed heartbeats
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Heartbeat System"
+description: "Verify heartbeat keeps agent alive and proper unregistration"
+tags:
+  - registry
+  - heartbeat
+  - health
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+    capture: copy_output
+
+  # === TEST 1: Graceful unregister ===
+
+  # Start agent
+  - name: "Start agent for graceful stop test"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_1
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 8
+
+  # Verify agent is registered
+  - name: "Verify agent is registered before graceful stop"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_before_stop
+
+  # Graceful stop
+  - name: "Graceful stop agent"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    capture: stop_output
+
+  # Short wait - unregister should be immediate
+  - name: "Wait for unregistration"
+    handler: wait
+    seconds: 5
+
+  # Verify agent is gone
+  - name: "Verify agent unregistered after graceful stop"
+    handler: shell
+    command: |
+      if meshctl list 2>/dev/null | grep -q "py-simple-agent"; then
+        echo "FAIL: Agent still registered after graceful stop"
+        meshctl list
+        exit 1
+      else
+        echo "PASS: Agent unregistered after graceful stop"
+      fi
+    workdir: /workspace
+    capture: graceful_check
+
+  # === TEST 2: Abrupt kill (missed heartbeats) ===
+
+  # Start agent again
+  - name: "Start agent for abrupt kill test"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_2
+
+  # Wait for registration
+  - name: "Wait for registration after restart"
+    handler: wait
+    seconds: 8
+
+  # Verify agent is registered
+  - name: "Verify agent is registered before abrupt kill"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_before_kill
+
+  # Get agent PID and kill abruptly (no cleanup/unregister)
+  - name: "Kill agent abruptly without cleanup"
+    handler: shell
+    command: |
+      # Find the python process for our agent using /proc (pgrep not available in slim image)
+      PID=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        # Skip PID 1 (init/shell) and check cmdline for our agent
+        if [ "$pid" != "1" ] && [ -f "$p/cmdline" ]; then
+          if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "py-simple-agent"; then
+            PID="$pid"
+            break
+          fi
+        fi
+      done
+
+      if [ -n "$PID" ]; then
+        echo "Killing agent PID: $PID"
+        kill -9 "$PID"
+        echo "Agent killed abruptly"
+      else
+        echo "WARN: Could not find agent PID"
+        echo "Processes in /proc:"
+        for p in /proc/[0-9]*; do
+          pid="${p##*/}"
+          if [ -f "$p/cmdline" ]; then
+            echo "  PID $pid: $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | head -c 100)"
+          fi
+        done
+      fi
+    workdir: /workspace
+    capture: kill_output
+
+  # Wait for missed heartbeats (default timeout ~20s = 4 missed 5s heartbeats)
+  - name: "Wait for missed heartbeats timeout"
+    handler: wait
+    seconds: 25
+
+  # Verify agent is marked unhealthy or gone
+  - name: "Verify agent removed after missed heartbeats"
+    handler: shell
+    command: |
+      # Check if agent is gone or marked unhealthy
+      if meshctl list 2>/dev/null | grep -q "py-simple-agent"; then
+        echo "FAIL: Agent still showing as healthy after kill"
+        meshctl list
+        exit 1
+      else
+        echo "PASS: Agent removed after missed heartbeats"
+      fi
+    workdir: /workspace
+    capture: abrupt_check
+
+assertions:
+  # Agent was registered before graceful stop
+  - expr: "${captured.list_before_stop} contains 'py-simple-agent'"
+    message: "Agent should be registered before graceful stop"
+
+  # Graceful unregister worked
+  - expr: "${captured.graceful_check} contains 'PASS'"
+    message: "Agent should unregister immediately on graceful stop"
+
+  # Agent was registered before abrupt kill
+  - expr: "${captured.list_before_kill} contains 'py-simple-agent'"
+    message: "Agent should be registered before abrupt kill"
+
+  # Abrupt kill detection worked
+  - expr: "${captured.abrupt_check} contains 'PASS'"
+    message: "Agent should be removed after missed heartbeats"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

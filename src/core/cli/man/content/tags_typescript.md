@@ -28,7 +28,7 @@ import { z } from "zod";
 agent.addTool({
   name: "get_weather",
   capability: "weather_data",
-  tags: ["weather", "current", "api", "free"],  // Plain strings
+  tags: ["weather", "current", "api", "free"], // Plain strings
   parameters: z.object({ city: z.string() }),
   execute: async ({ city }) => {
     return JSON.stringify({ city, temp: 72 });
@@ -44,9 +44,7 @@ agent.addTool({
 agent.addTool({
   name: "my_tool",
   capability: "my_capability",
-  dependencies: [
-    { capability: "weather_data", tags: ["api"] },
-  ],
+  dependencies: [{ capability: "weather_data", tags: ["api"] }],
   parameters: z.object({}),
   execute: async ({}, { weather_data }) => {
     if (weather_data) {
@@ -67,10 +65,10 @@ agent.addTool({
     {
       capability: "weather_data",
       tags: [
-        "api",           // Required: must have "api" tag
-        "+accurate",     // Preferred: bonus if "accurate"
-        "+fast",         // Preferred: bonus if "fast"
-        "-deprecated",   // Excluded: fail if "deprecated"
+        "api", // Required: must have "api" tag
+        "+accurate", // Preferred: bonus if "accurate"
+        "+fast", // Preferred: bonus if "fast"
+        "-deprecated", // Excluded: fail if "deprecated"
       ],
     },
   ],
@@ -136,11 +134,11 @@ agent.addTool({
 });
 ```
 
-| Provider | Its Tags | Matches | Score |
-|----------|----------|---------|-------|
-| Claude | `["llm", "claude", "anthropic"]` | +claude, +anthropic | **+2** |
-| GPT | `["llm", "gpt", "openai"]` | +gpt | **+1** |
-| Llama | `["llm", "llama"]` | (none) | **+0** |
+| Provider | Its Tags                         | Matches             | Score  |
+| -------- | -------------------------------- | ------------------- | ------ |
+| Claude   | `["llm", "claude", "anthropic"]` | +claude, +anthropic | **+2** |
+| GPT      | `["llm", "gpt", "openai"]`       | +gpt                | **+1** |
+| Llama    | `["llm", "llama"]`               | (none)              | **+0** |
 
 Result: Claude (+2) > GPT (+1) > Llama (+0)
 
@@ -156,10 +154,10 @@ agent.addTool({
   ...mesh.llm({
     provider: { capability: "llm" },
     filter: [
-      { tags: ["executor", "tools"] },    // Tools with these tags
-      { capability: "calculator" },        // Or this specific capability
+      { tags: ["executor", "tools"] }, // Tools with these tags
+      { capability: "calculator" }, // Or this specific capability
     ],
-    filterMode: "all",  // Include all matching
+    filterMode: "all", // Include all matching
     systemPrompt: "You are a helpful assistant.",
   }),
   capability: "assistant",
@@ -194,12 +192,12 @@ agent.addTool({
     {
       capability: "weather_data",
       tags: [
-        "api",           // Must have API access
-        "+accurate",     // Prefer accurate
-        "+fast",         // Prefer fast
-        "+premium",      // Prefer premium
-        "-deprecated",   // Never use deprecated
-        "-beta",         // Avoid beta services
+        "api", // Must have API access
+        "+accurate", // Prefer accurate
+        "+fast", // Prefer fast
+        "+premium", // Prefer premium
+        "-deprecated", // Never use deprecated
+        "-beta", // Avoid beta services
       ],
     },
   ],
@@ -220,6 +218,49 @@ agent.addTool({
   },
 });
 ```
+
+## Tag OR Alternatives
+
+Use nested arrays in tags to express OR conditions with fallback behavior:
+
+```typescript
+// Single OR: require "api" AND (prefer "python" OR fallback to "typescript")
+tags: ["api", ["python", "typescript"]];
+
+// Multiple ORs: (fast OR cached) AND (sync OR async)
+tags: [
+  ["fast", "cached"],
+  ["sync", "async"],
+];
+```
+
+### Fallback Behavior
+
+When using tag-level OR, alternatives are tried in order:
+
+```typescript
+agent.addTool({
+  name: "calculate",
+  capability: "calculator",
+  dependencies: [
+    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+  ],
+  parameters: z.object({ a: z.number(), b: z.number() }),
+  execute: async ({ a, b }, { math }) => {
+    if (!math) return "Service unavailable";
+    return await math({ a, b });
+  },
+});
+```
+
+Resolution:
+
+1. First, try to find provider with `addition` AND `python`
+2. If not found, try provider with `addition` AND `typescript`
+3. If neither found, dependency is injected as `null`
+
+This is useful when you have multiple implementations and want to prefer
+one but gracefully fallback to another when your preferred is unavailable.
 
 ## See Also
 

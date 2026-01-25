@@ -33,6 +33,20 @@ func (drc *DependencyResolutionCreate) SetConsumerFunctionName(s string) *Depend
 	return drc
 }
 
+// SetDepIndex sets the "dep_index" field.
+func (drc *DependencyResolutionCreate) SetDepIndex(i int) *DependencyResolutionCreate {
+	drc.mutation.SetDepIndex(i)
+	return drc
+}
+
+// SetNillableDepIndex sets the "dep_index" field if the given value is not nil.
+func (drc *DependencyResolutionCreate) SetNillableDepIndex(i *int) *DependencyResolutionCreate {
+	if i != nil {
+		drc.SetDepIndex(*i)
+	}
+	return drc
+}
+
 // SetCapabilityRequired sets the "capability_required" field.
 func (drc *DependencyResolutionCreate) SetCapabilityRequired(s string) *DependencyResolutionCreate {
 	drc.mutation.SetCapabilityRequired(s)
@@ -216,6 +230,10 @@ func (drc *DependencyResolutionCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (drc *DependencyResolutionCreate) defaults() {
+	if _, ok := drc.mutation.DepIndex(); !ok {
+		v := dependencyresolution.DefaultDepIndex
+		drc.mutation.SetDepIndex(v)
+	}
 	if _, ok := drc.mutation.NamespaceRequired(); !ok {
 		v := dependencyresolution.DefaultNamespaceRequired
 		drc.mutation.SetNamespaceRequired(v)
@@ -241,6 +259,14 @@ func (drc *DependencyResolutionCreate) check() error {
 	}
 	if _, ok := drc.mutation.ConsumerFunctionName(); !ok {
 		return &ValidationError{Name: "consumer_function_name", err: errors.New(`ent: missing required field "DependencyResolution.consumer_function_name"`)}
+	}
+	if _, ok := drc.mutation.DepIndex(); !ok {
+		return &ValidationError{Name: "dep_index", err: errors.New(`ent: missing required field "DependencyResolution.dep_index"`)}
+	}
+	if v, ok := drc.mutation.DepIndex(); ok {
+		if err := dependencyresolution.DepIndexValidator(v); err != nil {
+			return &ValidationError{Name: "dep_index", err: fmt.Errorf(`ent: validator failed for field "DependencyResolution.dep_index": %w`, err)}
+		}
 	}
 	if _, ok := drc.mutation.CapabilityRequired(); !ok {
 		return &ValidationError{Name: "capability_required", err: errors.New(`ent: missing required field "DependencyResolution.capability_required"`)}
@@ -294,6 +320,10 @@ func (drc *DependencyResolutionCreate) createSpec() (*DependencyResolution, *sql
 	if value, ok := drc.mutation.ConsumerFunctionName(); ok {
 		_spec.SetField(dependencyresolution.FieldConsumerFunctionName, field.TypeString, value)
 		_node.ConsumerFunctionName = value
+	}
+	if value, ok := drc.mutation.DepIndex(); ok {
+		_spec.SetField(dependencyresolution.FieldDepIndex, field.TypeInt, value)
+		_node.DepIndex = value
 	}
 	if value, ok := drc.mutation.CapabilityRequired(); ok {
 		_spec.SetField(dependencyresolution.FieldCapabilityRequired, field.TypeString, value)

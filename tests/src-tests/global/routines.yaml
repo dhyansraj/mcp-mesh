@@ -1,0 +1,47 @@
+# Global Routines for Source Build Suite
+
+routines:
+  # Clone source if not mounted
+  ensure_source:
+    description: "Ensure mcp-mesh source is available"
+    steps:
+      - handler: shell
+        command: |
+          if [ -d "/src/mcp-mesh" ]; then
+            echo "Source already available at /src/mcp-mesh"
+          else
+            echo "Cloning mcp-mesh repository..."
+            git clone ${config.source.git.repo} /src/mcp-mesh
+            cd /src/mcp-mesh
+            git checkout ${config.source.git.branch}
+          fi
+
+  # Setup Python build environment
+  setup_python_build:
+    description: "Setup Python build tools"
+    steps:
+      - handler: shell
+        command: |
+          pip install --upgrade pip build wheel maturin
+          pip --version
+          maturin --version
+
+  # Setup Node.js build environment
+  setup_node_build:
+    description: "Setup Node.js build tools"
+    steps:
+      - handler: shell
+        command: |
+          npm install -g typescript
+          node --version
+          npm --version
+          tsc --version
+
+  # Cleanup build artifacts
+  cleanup_build:
+    description: "Remove all build artifacts"
+    steps:
+      - handler: shell
+        command: |
+          rm -rf /out/bin/* /out/wheels/* /out/packages/*
+          echo "Build artifacts cleaned"

@@ -7,6 +7,15 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
+// makeDepTags creates a slice of MeshToolDependencyRegistration_Tags_Item from strings
+func makeDepTags(tags ...string) *[]generated.MeshToolDependencyRegistration_Tags_Item {
+	items := make([]generated.MeshToolDependencyRegistration_Tags_Item, len(tags))
+	for i, tag := range tags {
+		_ = items[i].FromMeshToolDependencyRegistrationTags0(tag)
+	}
+	return &items
+}
+
 // TestEntDependencyResolution tests the complete dependency resolution flow with in-memory SQLite
 func TestEntDependencyResolution(t *testing.T) {
 	// Use the common test setup
@@ -31,7 +40,7 @@ func TestEntDependencyResolution(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTags(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},
@@ -54,7 +63,7 @@ func TestEntDependencyResolution(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTags(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},
@@ -93,7 +102,7 @@ func TestEntDependencyResolution(t *testing.T) {
 				Dependencies: &[]generated.MeshToolDependencyRegistration{
 					{
 						Capability: "time_service",
-						Tags:       &[]string{},
+						Tags:       makeDepTags(),
 						Version:    stringPtr(""),
 						Namespace:  stringPtr("default"),
 					},

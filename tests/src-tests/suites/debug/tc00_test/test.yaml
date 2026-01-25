@@ -1,0 +1,12 @@
+name: "Debug artifacts_path"
+description: "Check artifacts_path value"
+tags: [test]
+timeout: 30
+
+test:
+  - handler: shell
+    command: |
+      echo "suite_path='${suite_path}'"
+      echo "test_id='${test_id}'"
+      echo "artifacts_path='${artifacts_path}'"
+    capture: debug

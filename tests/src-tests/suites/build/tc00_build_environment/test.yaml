@@ -1,0 +1,147 @@
+# Test Case: Build src-build:latest Image
+# Builds the Docker image with all build tools (Go, Rust, Python, Node.js)
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Must run before tc01-tc06
+
+name: "Build src-build Image"
+description: "Build Docker image with build tools for compiling MCP Mesh packages"
+tags:
+  - docker
+  - build
+  - image
+  - setup
+timeout: 600 # 10 minutes for image build
+
+test:
+  # Debug paths
+  - name: "Debug paths"
+    handler: shell
+    command: |
+      echo "suite_path='${suite_path}'"
+      echo "artifacts_path='${artifacts_path}'"
+      echo "test_id='${test_id}'"
+    capture: debug_paths
+
+  # Verify Docker is available
+  - name: "Verify Docker is available"
+    handler: shell
+    command: |
+      docker --version
+      docker info > /dev/null 2>&1 && echo "Docker daemon is running"
+    capture: docker_check
+
+  # Verify Dockerfile exists in artifacts
+  - name: "Verify Dockerfile exists"
+    handler: shell
+    command: |
+      DOCKERFILE="${artifacts_path}/Dockerfile"
+      if [ -f "$DOCKERFILE" ]; then
+        echo "Dockerfile found: $DOCKERFILE"
+        head -20 "$DOCKERFILE"
+      else
+        echo "ERROR: Dockerfile not found at $DOCKERFILE"
+        echo "artifacts_path was: '${artifacts_path}'"
+        exit 1
+      fi
+    capture: dockerfile_check
+
+  # Build the src-build image
+  - name: "Build src-build:latest image"
+    handler: shell
+    command: |
+      IMAGE_NAME="${config.build.image}"
+      echo "Building image: $IMAGE_NAME"
+
+      docker build --no-cache -t $IMAGE_NAME -f "${artifacts_path}/Dockerfile" "${artifacts_path}"
+
+      echo "Build complete: $IMAGE_NAME"
+    capture: build_output
+    timeout: 480
+
+  # Verify image was created
+  - name: "Verify image was created"
+    handler: shell
+    command: |
+      docker images ${config.build.image} --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
+    capture: image_info
+
+  # Verify build tools in image
+  - name: "Verify Go"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} go version
+    capture: go_version
+
+  - name: "Verify Rust"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} rustc --version
+    capture: rust_version
+
+  - name: "Verify Python"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} python --version
+    capture: python_version
+
+  - name: "Verify Node.js"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} node --version
+    capture: node_version
+
+  - name: "Verify maturin"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} maturin --version
+    capture: maturin_version
+
+  # Print summary
+  - name: "Print summary"
+    handler: shell
+    command: |
+      echo ""
+      echo "=========================================="
+      echo "src-build:latest built successfully!"
+      echo "=========================================="
+      echo ""
+      echo "Image: ${config.build.image}"
+      echo "Go: ${captured.go_version}"
+      echo "Rust: ${captured.rust_version}"
+      echo "Python: ${captured.python_version}"
+      echo "Node.js: ${captured.node_version}"
+      echo "maturin: ${captured.maturin_version}"
+      echo ""
+      echo "Ready to build MCP Mesh packages."
+      echo "=========================================="
+    capture: summary
+
+assertions:
+  # Docker should be available
+  - expr: ${captured.docker_check} contains 'Docker daemon is running'
+    message: "Docker daemon should be running"
+
+  # Image should be built
+  - expr: ${captured.build_output} contains 'Build complete'
+    message: "Docker build should succeed"
+
+  # Image should exist
+  - expr: ${captured.image_info} contains 'src-build'
+    message: "Image should be created"
+
+  # Build tools should be available
+  - expr: ${captured.go_version} contains 'go version'
+    message: "Go should be installed"
+
+  - expr: ${captured.rust_version} contains 'rustc'
+    message: "Rust should be installed"
+
+  - expr: ${captured.python_version} contains 'Python'
+    message: "Python should be installed"
+
+  - expr: ${captured.node_version} contains 'v'
+    message: "Node.js should be installed"
+
+  - expr: ${captured.maturin_version} contains 'maturin'
+    message: "maturin should be installed"

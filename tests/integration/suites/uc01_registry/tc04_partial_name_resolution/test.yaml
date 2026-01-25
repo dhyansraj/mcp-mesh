@@ -1,0 +1,154 @@
+# Test Case: Partial Name Resolution
+# Tests that meshctl status accepts partial agent names when they resolve to a unique agent.
+#
+# Examples:
+#   - "py-simple" resolves to "py-simple-agent-abc123" (unique match)
+#   - "simple" is ambiguous if both py-simple-agent and ts-simple-agent are running
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Partial Name Resolution"
+description: "Verify meshctl status works with partial agent names"
+tags:
+  - registry
+  - discovery
+  - meshctl
+  - partial-name
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy UC-level artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+      cp -r /uc-artifacts/ts-simple-agent /workspace/
+    capture: copy_output
+
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-simple-agent
+
+  # Start both agents
+  - name: "Start both agents"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py ts-simple-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_agents
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are registered
+  - name: "Verify both agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # === TEST 1: Unique partial name "py-simple" should work ===
+  - name: "Test partial name py-simple resolves"
+    handler: shell
+    command: |
+      if meshctl status py-simple 2>&1; then
+        echo "PASS: py-simple resolved correctly"
+      else
+        echo "FAIL: py-simple did not resolve"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: py_partial
+
+  # === TEST 2: Unique partial name "ts-simple" should work ===
+  - name: "Test partial name ts-simple resolves"
+    handler: shell
+    command: |
+      if meshctl status ts-simple 2>&1; then
+        echo "PASS: ts-simple resolved correctly"
+      else
+        echo "FAIL: ts-simple did not resolve"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: ts_partial
+
+  # === TEST 3: Shorter unique partial "py" should work ===
+  - name: "Test short partial name py resolves"
+    handler: shell
+    command: |
+      if meshctl status py 2>&1; then
+        echo "PASS: py resolved correctly"
+      else
+        echo "FAIL: py did not resolve"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: py_short
+
+  # === TEST 4: Ambiguous partial "simple" should fail (matches both agents) ===
+  - name: "Test ambiguous partial name is rejected"
+    handler: shell
+    command: |
+      # This should fail because "simple" matches both py-simple-agent and ts-simple-agent
+      if meshctl status simple 2>&1; then
+        echo "FAIL: Ambiguous name 'simple' should not resolve"
+        exit 1
+      else
+        echo "PASS: Ambiguous name 'simple' correctly rejected"
+      fi
+    workdir: /workspace
+    capture: ambiguous_check
+
+  # === TEST 5: Non-existent partial should fail ===
+  - name: "Test non-existent partial name is rejected"
+    handler: shell
+    command: |
+      if meshctl status nonexistent 2>&1; then
+        echo "FAIL: Non-existent name should not resolve"
+        exit 1
+      else
+        echo "PASS: Non-existent name correctly rejected"
+      fi
+    workdir: /workspace
+    capture: nonexistent_check
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_output} contains 'py-simple-agent'"
+    message: "Python agent should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-simple-agent'"
+    message: "TypeScript agent should be registered"
+
+  # Partial name resolution works
+  - expr: "${captured.py_partial} contains 'PASS'"
+    message: "Partial name 'py-simple' should resolve to py-simple-agent"
+
+  - expr: "${captured.ts_partial} contains 'PASS'"
+    message: "Partial name 'ts-simple' should resolve to ts-simple-agent"
+
+  - expr: "${captured.py_short} contains 'PASS'"
+    message: "Short partial 'py' should resolve to py-simple-agent"
+
+  # Ambiguous and non-existent names rejected
+  - expr: "${captured.ambiguous_check} contains 'PASS'"
+    message: "Ambiguous partial name should be rejected"
+
+  - expr: "${captured.nonexistent_check} contains 'PASS'"
+    message: "Non-existent partial name should be rejected"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

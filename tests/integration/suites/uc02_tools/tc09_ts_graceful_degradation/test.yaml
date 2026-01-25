@@ -1,0 +1,136 @@
+# Test Case: TypeScript Graceful Degradation
+# Tests that a TypeScript agent with optional dependency handles unavailable services.
+#
+# Scenario:
+#   1. Start agent without its optional dependency (calculator)
+#   2. Verify agent still works with local fallback
+#   3. Start the dependency (calculator)
+#   4. Verify agent now uses the dependency
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Graceful Degradation"
+description: "Verify TypeScript agent handles optional unavailable dependency gracefully"
+tags:
+  - tools
+  - optional-dependency
+  - graceful-degradation
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-optional-dep-agent /workspace/
+      cp -r /uc-artifacts/ts-calculator-agent /workspace/
+    capture: copy_output
+
+  # Install npm dependencies for both agents
+  - name: "Install optional-dep npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-optional-dep-agent
+
+  - name: "Install calculator npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  # === PHASE 1: Start agent WITHOUT its optional dependency ===
+
+  - name: "Start agent without optional dependency"
+    handler: shell
+    command: "meshctl start ts-optional-dep-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_without_dep
+
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_without_dep
+
+  # Check calculator is not available
+  - name: "Check calculator is not available"
+    handler: shell
+    command: "meshctl call check_calculator"
+    workdir: /workspace
+    capture: check_without_dep
+
+  # Call smart_add - should use local fallback
+  - name: "Call smart_add with local fallback"
+    handler: shell
+    command: 'meshctl call smart_add ''{"a": 5, "b": 3}'''
+    workdir: /workspace
+    capture: call_without_dep
+
+  # === PHASE 2: Start the dependency (calculator) ===
+
+  - name: "Start calculator dependency"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  - name: "Wait for calculator registration"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are now registered
+  - name: "Verify calculator is now registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_with_dep
+
+  # Check calculator is now available
+  - name: "Check calculator is now available"
+    handler: shell
+    command: "meshctl call check_calculator"
+    workdir: /workspace
+    capture: check_with_dep
+
+  # Call smart_add - should now use calculator
+  - name: "Call smart_add with calculator"
+    handler: shell
+    command: 'meshctl call smart_add ''{"a": 10, "b": 7}'''
+    workdir: /workspace
+    capture: call_with_dep
+
+assertions:
+  # Phase 1: Without dependency
+  - expr: "${captured.list_without_dep} contains 'ts-optional-dep-agent'"
+    message: "ts-optional-dep-agent should be registered"
+
+  - expr: "${captured.check_without_dep} contains 'not available'"
+    message: "Calculator should be identified as not available initially"
+
+  - expr: "${captured.call_without_dep} contains 'Local result'"
+    message: "Agent should gracefully degrade to local calculation"
+
+  - expr: "${captured.call_without_dep} contains '8'"
+    message: "Local fallback should return correct result (5+3=8)"
+
+  # Phase 2: With dependency
+  - expr: "${captured.list_with_dep} contains 'ts-calculator-agent'"
+    message: "Calculator should be registered after starting"
+
+  - expr: "${captured.call_with_dep} contains '17'"
+    message: "Agent should return correct result 17 (10+7)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

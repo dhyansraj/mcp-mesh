@@ -1,0 +1,96 @@
+# Test Case: Build meshctl Go Binary
+# Builds the meshctl CLI from Go source code
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build meshctl CLI"
+description: "Build meshctl Go binary from source using docker run"
+tags:
+  - build
+  - go
+  - cli
+timeout: 300
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${suite_path}/${config.output.bin}"
+      echo "Output directory ready: ${suite_path}/${config.output.bin}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check source code on host"
+    handler: shell
+    command: |
+      # Resolve source path relative to suite directory
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/cmd/meshctl" ]; then
+        echo "Found meshctl source at $SOURCE_PATH/cmd/meshctl"
+        ls -la "$SOURCE_PATH/cmd/meshctl/"
+      else
+        echo "ERROR: Source not found at $SOURCE_PATH/cmd/meshctl"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build meshctl using docker run
+  - name: "Build meshctl binary"
+    handler: shell
+    command: |
+      # Get absolute paths for docker volume mounts (relative to suite_path)
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Source: $SOURCE_ABS"
+      echo "Output: $OUTPUT_ABS"
+
+      echo "Building meshctl inside container (clean build)..."
+      # Optimized: Only copy required files instead of entire repo
+      # meshctl needs: go.mod, go.sum, cmd/meshctl/, src/core/
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/cmd /src/mcp-mesh/src && \
+          cp /src-host/go.mod /src-host/go.sum /src/mcp-mesh/ && \
+          cp -r /src-host/cmd/meshctl /src/mcp-mesh/cmd/ && \
+          cp -r /src-host/src/core /src/mcp-mesh/src/ && \
+          cd /src/mcp-mesh && go build -o /out/bin/meshctl ./cmd/meshctl/
+        "
+
+      echo "Build complete"
+    capture: build_output
+    timeout: 180
+
+  # Verify binary was created on host
+  - name: "Verify meshctl binary"
+    handler: shell
+    command: |
+      ls -la "${suite_path}/${config.output.bin}/meshctl"
+      file "${suite_path}/${config.output.bin}/meshctl"
+    capture: verify_output
+
+  # Test the binary on host (if compatible)
+  - name: "Test meshctl binary"
+    handler: shell
+    command: |
+      # Try to run the binary - may fail if built for different arch
+      if "${suite_path}/${config.output.bin}/meshctl" --version 2>/dev/null; then
+        echo "meshctl runs on host"
+        "${suite_path}/${config.output.bin}/meshctl" --version
+      else
+        echo "meshctl built but may be for different architecture (expected in cross-platform builds)"
+        echo "Binary exists: $(ls "${suite_path}/${config.output.bin}/meshctl")"
+      fi
+    capture: test_output
+
+assertions:
+  - expr: ${captured.build_output} contains 'Build complete'
+    message: "meshctl build should complete successfully"
+
+  - expr: ${captured.verify_output} contains 'meshctl'
+    message: "meshctl binary should exist"

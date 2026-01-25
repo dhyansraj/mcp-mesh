@@ -1,4 +1,16 @@
 #!/bin/bash
+# ============================================================================
+# ⚠️  DON'T RUN THIS SCRIPT DIRECTLY - Use: make generate-go
+# ============================================================================
+#
+# Running this script directly may cause CI pipeline failures due to:
+# - Version mismatches with oapi-codegen
+# - Missing Go module dependencies (Ent version mismatch)
+# - Python environment differences
+#
+# The Makefile target ensures proper environment setup.
+#
+# ============================================================================
 # Code Generation Script for MCP Mesh Contract-First Development
 #
 # This script generates Go server stubs from Registry OpenAPI spec.
@@ -7,15 +19,17 @@
 # which uses a manually written client (auto-generated Rust clients are too verbose).
 #
 # WHAT THIS SCRIPT DOES:
-# 1. Validates the OpenAPI specification
-# 2. Generates Go registry server handlers from registry spec
-# 3. Validates generated code compiles
+# 1. Downloads Go dependencies (ensures Ent version matches go.mod)
+# 2. Validates the OpenAPI specification
+# 3. Generates Go registry server handlers from registry spec
+# 4. Validates generated code compiles
 #
 # IF THIS SCRIPT FAILS:
 # - Check OpenAPI spec syntax and schema
-# - Ensure oapi-codegen is installed
+# - Ensure oapi-codegen is installed (go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest)
 # - Verify output directories exist and are writable
 # - Check that generated code matches expected interfaces
+# ============================================================================
 
 set -euo pipefail
 
@@ -63,8 +77,13 @@ check_prerequisites() {
 
     # Check if PyYAML module is available (required for YAML parsing)
     if ! python3 -c 'import yaml' &> /dev/null; then
-        log_error "PyYAML module not found. Install with:"
-        log_error "pip install pyyaml"
+        log_error "PyYAML module not found."
+        log_error ""
+        log_error "Is your venv activated? Try:"
+        log_error "  source .venv/bin/activate"
+        log_error ""
+        log_error "Or install PyYAML with:"
+        log_error "  pip install pyyaml"
         exit 1
     fi
 
@@ -74,6 +93,22 @@ check_prerequisites() {
     fi
 
     log_success "Prerequisites check passed"
+}
+
+# Download Go dependencies to ensure version consistency
+download_go_dependencies() {
+    log_info "Downloading Go dependencies (ensures Ent version matches go.mod)..."
+
+    cd "$PROJECT_ROOT"
+    if ! go mod download 2>/dev/null; then
+        log_warning "go mod download had issues, continuing anyway..."
+    fi
+
+    # Show Ent version for debugging
+    local ent_version=$(grep 'entgo.io/ent ' go.mod 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log_info "Using Ent version: $ent_version"
+
+    log_success "Go dependencies downloaded"
 }
 
 # Validate OpenAPI specification
@@ -112,6 +147,7 @@ except Exception as e:
             fi
         else
             log_warning "openapi-spec-validator not installed. Using basic validation only."
+            log_warning "For full validation, activate venv and install: pip install openapi-spec-validator"
         fi
     fi
 
@@ -207,6 +243,7 @@ main() {
     case "$target" in
         "go"|"all"|"")
             check_prerequisites
+            download_go_dependencies
             validate_openapi_spec "$REGISTRY_SPEC" "Registry"
             generate_go_registry_server
             validate_generated_code
@@ -233,6 +270,9 @@ main() {
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     echo "MCP Mesh Code Generation Script"
     echo ""
+    echo "⚠️  RECOMMENDED: Use 'make generate-go' instead of running this script directly."
+    echo "    This ensures proper environment setup and avoids CI pipeline failures."
+    echo ""
     echo "Usage: $0 [target]"
     echo ""
     echo "Targets:"
@@ -240,8 +280,9 @@ if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     echo "  all  - Generate all code (same as go)"
     echo ""
     echo "Examples:"
-    echo "  $0        # Generate Go server from OpenAPI spec"
-    echo "  $0 go     # Same as above"
+    echo "  make generate-go  # Recommended way"
+    echo "  $0                # Direct execution (not recommended)"
+    echo "  $0 go             # Same as above"
     echo ""
     echo "Note: Python/TypeScript SDKs use Rust core for registry communication."
     echo "      The Rust client is manually written (not auto-generated)."

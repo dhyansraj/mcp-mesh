@@ -1,0 +1,91 @@
+# Test Case: Verify All Build Artifacts
+# Ensures all packages are built and ready for use
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# All artifacts should exist in ${suite_path}/${config.output.base}
+
+name: "Verify Build Artifacts"
+description: "Verify all build artifacts are present and valid"
+tags:
+  - build
+  - verify
+timeout: 60
+
+test:
+  # Check meshctl binary
+  - name: "Verify meshctl binary"
+    handler: shell
+    command: |
+      echo "=== meshctl binary ==="
+      ls -la "${suite_path}/${config.output.bin}/meshctl"
+      file "${suite_path}/${config.output.bin}/meshctl"
+    capture: meshctl_check
+
+  # Check Python wheels
+  - name: "Verify Python wheels"
+    handler: shell
+    command: |
+      echo "=== Python wheels ==="
+      ls -la "${suite_path}/${config.output.wheels}"/*.whl
+      echo ""
+      echo "Wheel count: $(ls "${suite_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)"
+    capture: wheels_check
+
+  # Check npm packages
+  - name: "Verify npm packages"
+    handler: shell
+    command: |
+      echo "=== npm packages ==="
+      ls -la "${suite_path}/${config.output.packages}"/*.tgz
+      echo ""
+      echo "Package count: $(ls "${suite_path}/${config.output.packages}"/*.tgz 2>/dev/null | wc -l)"
+    capture: packages_check
+
+  # Summary
+  - name: "Build summary"
+    handler: shell
+    command: |
+      echo "=========================================="
+      echo "BUILD ARTIFACTS SUMMARY"
+      echo "=========================================="
+      echo ""
+      echo "Output directory: ${suite_path}/${config.output.base}"
+      echo ""
+      echo "Binary:"
+      if [ -f "${suite_path}/${config.output.bin}/meshctl" ]; then
+        echo "  [OK] meshctl"
+      else
+        echo "  [MISSING] meshctl"
+      fi
+      echo ""
+      echo "Python wheels:"
+      for whl in "${suite_path}/${config.output.wheels}"/*.whl; do
+        if [ -f "$whl" ]; then
+          echo "  [OK] $(basename $whl)"
+        fi
+      done
+      echo ""
+      echo "npm packages:"
+      for tgz in "${suite_path}/${config.output.packages}"/*.tgz; do
+        if [ -f "$tgz" ]; then
+          echo "  [OK] $(basename $tgz)"
+        fi
+      done
+      echo ""
+      echo "=========================================="
+      echo "All artifacts ready for image build"
+      echo "=========================================="
+    capture: summary
+
+assertions:
+  - expr: ${captured.meshctl_check} contains 'meshctl'
+    message: "meshctl binary should exist"
+
+  - expr: ${captured.wheels_check} contains '.whl'
+    message: "Python wheels should exist"
+
+  - expr: ${captured.packages_check} contains '.tgz'
+    message: "npm packages should exist"
+
+  - expr: ${captured.summary} contains 'All artifacts ready'
+    message: "All artifacts should be ready"

@@ -113,6 +113,23 @@ build-windows:
 	GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME)-windows-amd64.exe ./$(DEV_CMD_DIR)
 	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-windows-amd64.exe and $(BUILD_DIR)/$(DEV_NAME)-windows-amd64.exe"
 
+# Build Rust core NAPI bindings (required for TypeScript SDK)
+# This compiles the Rust runtime and generates the .node binary for Node.js
+# Prerequisites: Rust toolchain, Node.js, npm
+.PHONY: build-rust-core
+build-rust-core:
+	@echo "🦀 Building Rust core NAPI bindings for TypeScript SDK..."
+	@cd src/runtime/core/typescript && npm install --silent && npm run build
+	@echo "✅ Rust core built: src/runtime/core/typescript/mcp-mesh-core.*.node"
+
+# Build TypeScript SDK (requires build-rust-core first)
+# Compiles TypeScript source to JavaScript
+.PHONY: build-ts-sdk
+build-ts-sdk:
+	@echo "📘 Building TypeScript SDK..."
+	@cd src/runtime/typescript && npm run build
+	@echo "✅ TypeScript SDK built: src/runtime/typescript/dist/"
+
 # Development build (no optimizations, includes debug info)
 .PHONY: build-dev
 build-dev:
@@ -474,6 +491,8 @@ help:
 	@echo "  build         - Build for current platform"
 	@echo "  build-all     - Build for all platforms (Linux, macOS, Windows)"
 	@echo "  build-dev     - Build development version with debug info"
+	@echo "  build-rust-core - Build Rust core NAPI bindings (for TypeScript SDK)"
+	@echo "  build-ts-sdk  - Build TypeScript SDK (requires build-rust-core)"
 	@echo "  run           - Build and run the application"
 	@echo "  run-dev       - Build and run in development mode"
 	@echo "  test          - Run tests"

@@ -136,8 +136,11 @@ export interface JsAgentSpec {
 export interface JsDependencySpec {
   /** Capability name to depend on */
   capability: string
-  /** Tags for filtering (e.g., ["+fast", "-deprecated"]) */
-  tags: Array<string>
+  /**
+   * Tags for filtering - JSON string to support nested arrays for OR alternatives
+   * e.g., '["addition", ["python", "typescript"]]' means addition AND (python OR typescript)
+   */
+  tags: string
   /** Version constraint (e.g., ">=2.0.0") */
   version?: string
 }

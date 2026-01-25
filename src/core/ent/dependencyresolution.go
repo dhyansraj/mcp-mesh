@@ -23,6 +23,8 @@ type DependencyResolution struct {
 	ConsumerAgentID string `json:"consumer_agent_id,omitempty"`
 	// Function/tool name that requires this dependency
 	ConsumerFunctionName string `json:"consumer_function_name,omitempty"`
+	// Position of this dependency in the tool's dependency array (0-indexed). Maintains positional integrity for SDK injection.
+	DepIndex int `json:"dep_index,omitempty"`
 	// Required capability name (e.g., 'date_service', 'weather_info')
 	CapabilityRequired string `json:"capability_required,omitempty"`
 	// Required tags for smart matching
@@ -91,7 +93,7 @@ func (*DependencyResolution) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case dependencyresolution.FieldTagsRequired:
 			values[i] = new([]byte)
-		case dependencyresolution.FieldID:
+		case dependencyresolution.FieldID, dependencyresolution.FieldDepIndex:
 			values[i] = new(sql.NullInt64)
 		case dependencyresolution.FieldConsumerAgentID, dependencyresolution.FieldConsumerFunctionName, dependencyresolution.FieldCapabilityRequired, dependencyresolution.FieldVersionRequired, dependencyresolution.FieldNamespaceRequired, dependencyresolution.FieldProviderAgentID, dependencyresolution.FieldProviderFunctionName, dependencyresolution.FieldEndpoint, dependencyresolution.FieldStatus:
 			values[i] = new(sql.NullString)
@@ -129,6 +131,12 @@ func (dr *DependencyResolution) assignValues(columns []string, values []any) err
 				return fmt.Errorf("unexpected type %T for field consumer_function_name", values[i])
 			} else if value.Valid {
 				dr.ConsumerFunctionName = value.String
+			}
+		case dependencyresolution.FieldDepIndex:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field dep_index", values[i])
+			} else if value.Valid {
+				dr.DepIndex = int(value.Int64)
 			}
 		case dependencyresolution.FieldCapabilityRequired:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -253,6 +261,9 @@ func (dr *DependencyResolution) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("consumer_function_name=")
 	builder.WriteString(dr.ConsumerFunctionName)
+	builder.WriteString(", ")
+	builder.WriteString("dep_index=")
+	builder.WriteString(fmt.Sprintf("%v", dr.DepIndex))
 	builder.WriteString(", ")
 	builder.WriteString("capability_required=")
 	builder.WriteString(dr.CapabilityRequired)
