@@ -39,6 +39,29 @@ func isAgentFile(path string) bool {
 	}
 }
 
+// resolveAllAgentPaths resolves folder paths to entry point files.
+// Supports both folder names (auto-detect entry point) and full file paths.
+// Returns resolved file paths or error if any path cannot be resolved.
+//
+// Examples:
+//
+//	["my-agent"]                    → ["/abs/path/my-agent/main.py"]
+//	["my-agent/src/index.ts"]       → ["/abs/path/my-agent/src/index.ts"]
+//	["agent1", "agent2/main.py"]    → ["/abs/path/agent1/main.py", "/abs/path/agent2/main.py"]
+func resolveAllAgentPaths(args []string) ([]string, error) {
+	resolved := make([]string, 0, len(args))
+
+	for _, arg := range args {
+		resolvedPath, _, err := handlers.ResolveEntryPoint(arg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve %q: %w", arg, err)
+		}
+		resolved = append(resolved, resolvedPath)
+	}
+
+	return resolved, nil
+}
+
 // NewStartCommand creates the start command
 func NewStartCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -173,12 +196,23 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Resolve folder paths to entry point files (issue #474)
+	// This allows `meshctl start my-agent` instead of `meshctl start my-agent/main.py`
+	resolvedArgs := args
+	if len(args) > 0 {
+		var err error
+		resolvedArgs, err = resolveAllAgentPaths(args)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Run pre-flight checks BEFORE forking to background (issue #444)
 	// This ensures validation errors are shown to the user, not hidden in log files
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	skipChecks, _ := cmd.Flags().GetBool("skip-checks")
-	if !skipChecks && len(args) > 0 {
-		if err := runPrerequisiteValidation(cmd, args, quiet); err != nil {
+	if !skipChecks && len(resolvedArgs) > 0 {
+		if err := runPrerequisiteValidation(cmd, resolvedArgs, quiet); err != nil {
 			return err
 		}
 	}
@@ -186,7 +220,7 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	// Handle detach mode FIRST - before other modes
 	// This ensures log redirection is set up before any other processing
 	if detach {
-		return startBackgroundMode(cmd, args, config)
+		return startBackgroundMode(cmd, resolvedArgs, config)
 	}
 
 	// Handle registry-only mode
@@ -199,17 +233,17 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		if registryURL == "" {
 			return fmt.Errorf("--registry-url required with --connect-only")
 		}
-		return startConnectOnlyMode(cmd, args, registryURL, config)
+		return startConnectOnlyMode(cmd, resolvedArgs, registryURL, config)
 	}
 
 	// If no agents provided, start registry only
-	if len(args) == 0 {
+	if len(resolvedArgs) == 0 {
 		fmt.Println("No agents specified, starting registry only")
 		return startRegistryOnlyMode(cmd, config)
 	}
 
 	// Standard agent startup mode
-	return startStandardMode(cmd, args, config)
+	return startStandardMode(cmd, resolvedArgs, config)
 }
 
 // Environment file loading

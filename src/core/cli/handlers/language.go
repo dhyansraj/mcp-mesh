@@ -136,3 +136,80 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// EntryPointCandidate defines a potential entry point file with its language
+type EntryPointCandidate struct {
+	RelativePath string // Path relative to the folder (e.g., "main.py", "src/index.ts")
+	Language     string // "python" or "typescript"
+}
+
+// entryPointPriority defines the search order for auto-detecting entry points.
+// Python main.py takes priority, then TypeScript in src/, then root TypeScript.
+// Note: .tsx and .jsx are intentionally not supported (React-specific).
+var entryPointPriority = []EntryPointCandidate{
+	{"main.py", "python"},
+	{"src/index.ts", "typescript"},
+	{"src/index.js", "typescript"},
+	{"index.ts", "typescript"},
+	{"index.js", "typescript"},
+}
+
+// ResolveEntryPoint resolves a path (file or folder) to an executable entry point.
+// Returns (resolvedPath, language, error).
+//
+// If path is a file: returns it as-is with detected language.
+// If path is a folder: scans for entry points in priority order.
+//
+// Entry point priority (from issue #474):
+//  1. main.py         → python
+//  2. src/index.ts    → typescript
+//  3. src/index.js    → typescript
+//  4. index.ts        → typescript
+//  5. index.js        → typescript
+func ResolveEntryPoint(path string) (string, string, error) {
+	// Get absolute path for consistent handling
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid path %q: %w", path, err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", fmt.Errorf("path does not exist: %s", path)
+		}
+		return "", "", fmt.Errorf("cannot access path %q: %w", path, err)
+	}
+
+	// If it's a file, detect language from extension and return
+	if !info.IsDir() {
+		handler := DetectLanguage(absPath)
+		lang := handler.Language()
+
+		// Validate file extension
+		ext := strings.ToLower(filepath.Ext(absPath))
+		switch ext {
+		case ".py", ".ts", ".js":
+			return absPath, lang, nil
+		default:
+			return "", "", fmt.Errorf("unsupported file type %q: use .py, .ts, or .js", ext)
+		}
+	}
+
+	// It's a directory - scan for entry points in priority order
+	var checkedPaths []string
+	for _, candidate := range entryPointPriority {
+		candidatePath := filepath.Join(absPath, candidate.RelativePath)
+		if fileExists(candidatePath) {
+			return candidatePath, candidate.Language, nil
+		}
+		checkedPaths = append(checkedPaths, candidate.RelativePath)
+	}
+
+	// No entry point found - provide helpful error
+	return "", "", fmt.Errorf(
+		"no entry point found in folder %q\n\nChecked (in order):\n  - %s\n\nCreate one of these files or specify the full path to your agent script",
+		path,
+		strings.Join(checkedPaths, "\n  - "),
+	)
+}

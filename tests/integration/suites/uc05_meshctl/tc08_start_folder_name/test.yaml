@@ -1,0 +1,149 @@
+# Test Case: tc08_start_folder_name
+# Verifies meshctl start accepts folder names with auto language detection
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/474
+#
+# Tests:
+# 1. Start Python agents using folder name (resolves main.py)
+# 2. Start TypeScript agents using folder name (resolves src/index.ts)
+# 3. Start all 4 agents in a single command with folder names
+
+name: "Start with Folder Name Auto Detection"
+description: "Verify meshctl start accepts folder names and auto-detects entry points"
+tags:
+  - meshctl
+  - start
+  - folder-name
+  - auto-detect
+  - issue-474
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-math-agent /workspace/
+      cp -r /uc-artifacts/py-calculator-agent /workspace/
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+      cp -r /uc-artifacts/ts-calculator-agent /workspace/
+    capture: copy_output
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install ts-calculator-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  # === Test 1: Start all 4 agents using FOLDER NAMES only ===
+  # This is the key test for issue #474 - no file paths, just folder names
+  - name: "Start all agents with folder names"
+    handler: shell
+    command: "meshctl start py-math-agent py-calculator-agent ts-math-agent ts-calculator-agent -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for all agents to register
+  - name: "Wait for agents to register"
+    handler: wait
+    seconds: 15
+
+  # Verify all agents registered
+  - name: "List all agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Verify specific agent status
+  - name: "Check py-math-agent status"
+    handler: shell
+    command: "meshctl status py-math-agent"
+    workdir: /workspace
+    capture: py_math_status
+
+  - name: "Check ts-math-agent status"
+    handler: shell
+    command: "meshctl status ts-math-agent"
+    workdir: /workspace
+    capture: ts_math_status
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+  # Wait for cleanup
+  - name: "Wait for cleanup"
+    handler: wait
+    seconds: 3
+
+  # === Test 2: Mixed folder and full path ===
+  - name: "Start with mixed folder and full path"
+    handler: shell
+    command: "meshctl start py-math-agent ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: mixed_start_output
+
+  - name: "Wait for mixed agents to register"
+    handler: wait
+    seconds: 10
+
+  - name: "List agents after mixed start"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: mixed_agent_list
+
+assertions:
+  # Start command should succeed
+  - expr: ${steps.start_output.exit_code} == 0
+    message: "meshctl start with folder names should succeed"
+
+  # All 4 agents should be registered
+  - expr: "${captured.agent_list} contains 'py-math-agent'"
+    message: "py-math-agent should be registered (resolved from folder)"
+
+  - expr: "${captured.agent_list} contains 'py-calculator-agent'"
+    message: "py-calculator-agent should be registered (resolved from folder)"
+
+  - expr: "${captured.agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered (resolved from folder)"
+
+  - expr: "${captured.agent_list} contains 'ts-calculator-agent'"
+    message: "ts-calculator-agent should be registered (resolved from folder)"
+
+  # Status checks should succeed
+  - expr: ${steps.py_math_status.exit_code} == 0
+    message: "Python agent status check should succeed"
+
+  - expr: ${steps.ts_math_status.exit_code} == 0
+    message: "TypeScript agent status check should succeed"
+
+  # Mixed start should succeed
+  - expr: ${steps.mixed_start_output.exit_code} == 0
+    message: "Mixed folder and full path start should succeed"
+
+  - expr: "${captured.mixed_agent_list} contains 'py-math-agent'"
+    message: "py-math-agent should be registered (mixed start)"
+
+  - expr: "${captured.mixed_agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered (mixed start)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

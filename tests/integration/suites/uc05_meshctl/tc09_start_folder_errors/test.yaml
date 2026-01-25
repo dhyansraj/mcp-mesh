@@ -1,0 +1,87 @@
+# Test Case: tc09_start_folder_errors
+# Verifies meshctl start shows clear error messages for invalid folder paths
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/474
+#
+# Tests:
+# 1. Non-existent folder → "path does not exist"
+# 2. Empty folder (no entry point) → lists checked paths
+
+name: "Start Folder Name Error Handling"
+description: "Verify meshctl start shows clear errors for invalid folders"
+tags:
+  - meshctl
+  - start
+  - folder-name
+  - error-handling
+  - issue-474
+timeout: 60
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # === Test 1: Non-existent folder ===
+  - name: "Try to start non-existent folder"
+    handler: shell
+    command: "meshctl start nonexistent-agent 2>&1 || true"
+    workdir: /workspace
+    capture: nonexistent_output
+
+  # === Test 2: Empty folder (no entry point) ===
+  - name: "Create empty folder"
+    handler: shell
+    command: "mkdir -p /workspace/empty-agent"
+
+  - name: "Try to start empty folder"
+    handler: shell
+    command: "meshctl start empty-agent 2>&1 || true"
+    workdir: /workspace
+    capture: empty_folder_output
+
+  # === Test 3: Folder with wrong file type ===
+  - name: "Create folder with unsupported file"
+    handler: shell
+    command: |
+      mkdir -p /workspace/wrong-type-agent
+      echo "package main" > /workspace/wrong-type-agent/main.go
+
+  - name: "Try to start folder with wrong file type"
+    handler: shell
+    command: "meshctl start wrong-type-agent 2>&1 || true"
+    workdir: /workspace
+    capture: wrong_type_output
+
+assertions:
+  # Test 1: Non-existent folder error
+  - expr: "${captured.nonexistent_output} contains 'path does not exist'"
+    message: "Should show 'path does not exist' for non-existent folder"
+
+  - expr: "${captured.nonexistent_output} contains 'nonexistent-agent'"
+    message: "Error should mention the folder name"
+
+  # Test 2: Empty folder error - should list what was checked
+  - expr: "${captured.empty_folder_output} contains 'no entry point found'"
+    message: "Should show 'no entry point found' for empty folder"
+
+  - expr: "${captured.empty_folder_output} contains 'main.py'"
+    message: "Error should list main.py as checked path"
+
+  - expr: "${captured.empty_folder_output} contains 'src/index.ts'"
+    message: "Error should list src/index.ts as checked path"
+
+  - expr: "${captured.empty_folder_output} contains 'index.ts'"
+    message: "Error should list index.ts as checked path"
+
+  # Test 3: Wrong file type - should still show no entry point
+  - expr: "${captured.wrong_type_output} contains 'no entry point found'"
+    message: "Should show 'no entry point found' when only unsupported files exist"
+
+post_run:
+  - handler: shell
+    command: "rm -rf /workspace/empty-agent /workspace/wrong-type-agent 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -46,7 +46,7 @@ repos:
         additional_dependencies:
           - mcp>=1.9.0
         args: [--ignore-missing-imports]
-        exclude: ^src/runtime/python/_mcp_mesh/generated/
+        exclude: ^(src/runtime/python/_mcp_mesh/generated/|tests/integration/suites/.*/artifacts/)
 
   - repo: https://github.com/pycqa/bandit
     rev: 1.8.0

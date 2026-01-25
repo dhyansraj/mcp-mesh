@@ -441,3 +441,318 @@ func TestGetAllHandlers(t *testing.T) {
 		t.Error("GetAllHandlers() missing TypeScript handler")
 	}
 }
+
+// ============================================================================
+// ResolveEntryPoint Tests (Issue #474)
+// ============================================================================
+
+func TestResolveEntryPoint_PythonFile(t *testing.T) {
+	// Create temp directory with a Python file
+	tmpDir, err := os.MkdirTemp("", "test-resolve-py-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	pyFile := filepath.Join(tmpDir, "agent.py")
+	if err := os.WriteFile(pyFile, []byte("# Python agent"), 0644); err != nil {
+		t.Fatalf("Failed to create Python file: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(pyFile)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", pyFile, err)
+	}
+	if lang != "python" {
+		t.Errorf("language = %q, want %q", lang, "python")
+	}
+	if resolved != pyFile {
+		t.Errorf("resolved = %q, want %q", resolved, pyFile)
+	}
+}
+
+func TestResolveEntryPoint_TypeScriptFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-ts-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tsFile := filepath.Join(tmpDir, "index.ts")
+	if err := os.WriteFile(tsFile, []byte("// TypeScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create TypeScript file: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tsFile)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tsFile, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != tsFile {
+		t.Errorf("resolved = %q, want %q", resolved, tsFile)
+	}
+}
+
+func TestResolveEntryPoint_JavaScriptFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-js-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	jsFile := filepath.Join(tmpDir, "index.js")
+	if err := os.WriteFile(jsFile, []byte("// JavaScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create JavaScript file: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(jsFile)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", jsFile, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != jsFile {
+		t.Errorf("resolved = %q, want %q", resolved, jsFile)
+	}
+}
+
+func TestResolveEntryPoint_FolderWithMainPy(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-folder-py-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create main.py
+	mainPy := filepath.Join(tmpDir, "main.py")
+	if err := os.WriteFile(mainPy, []byte("# Python agent"), 0644); err != nil {
+		t.Fatalf("Failed to create main.py: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "python" {
+		t.Errorf("language = %q, want %q", lang, "python")
+	}
+	if resolved != mainPy {
+		t.Errorf("resolved = %q, want %q", resolved, mainPy)
+	}
+}
+
+func TestResolveEntryPoint_FolderWithSrcIndexTs(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-folder-ts-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create src/index.ts
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("Failed to create src dir: %v", err)
+	}
+	indexTs := filepath.Join(srcDir, "index.ts")
+	if err := os.WriteFile(indexTs, []byte("// TypeScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create index.ts: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != indexTs {
+		t.Errorf("resolved = %q, want %q", resolved, indexTs)
+	}
+}
+
+func TestResolveEntryPoint_FolderWithSrcIndexJs(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-folder-js-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create src/index.js (no .ts file)
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("Failed to create src dir: %v", err)
+	}
+	indexJs := filepath.Join(srcDir, "index.js")
+	if err := os.WriteFile(indexJs, []byte("// JavaScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create index.js: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != indexJs {
+		t.Errorf("resolved = %q, want %q", resolved, indexJs)
+	}
+}
+
+func TestResolveEntryPoint_FolderWithRootIndexTs(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-folder-root-ts-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create index.ts in root (no src/ directory)
+	indexTs := filepath.Join(tmpDir, "index.ts")
+	if err := os.WriteFile(indexTs, []byte("// TypeScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create index.ts: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != indexTs {
+		t.Errorf("resolved = %q, want %q", resolved, indexTs)
+	}
+}
+
+func TestResolveEntryPoint_FolderWithRootIndexJs(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-folder-root-js-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create index.js in root (no src/ or .ts file)
+	indexJs := filepath.Join(tmpDir, "index.js")
+	if err := os.WriteFile(indexJs, []byte("// JavaScript agent"), 0644); err != nil {
+		t.Fatalf("Failed to create index.js: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != indexJs {
+		t.Errorf("resolved = %q, want %q", resolved, indexJs)
+	}
+}
+
+func TestResolveEntryPoint_PythonWinsOverTypeScript(t *testing.T) {
+	// Per issue #474: Python main.py takes priority over TypeScript
+	tmpDir, err := os.MkdirTemp("", "test-resolve-priority-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create both main.py and src/index.ts
+	mainPy := filepath.Join(tmpDir, "main.py")
+	if err := os.WriteFile(mainPy, []byte("# Python agent"), 0644); err != nil {
+		t.Fatalf("Failed to create main.py: %v", err)
+	}
+
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("Failed to create src dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "index.ts"), []byte("// TS"), 0644); err != nil {
+		t.Fatalf("Failed to create index.ts: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "python" {
+		t.Errorf("language = %q, want %q (Python should win)", lang, "python")
+	}
+	if resolved != mainPy {
+		t.Errorf("resolved = %q, want %q", resolved, mainPy)
+	}
+}
+
+func TestResolveEntryPoint_SrcIndexTsWinsOverRootIndexTs(t *testing.T) {
+	// src/index.ts should take priority over index.ts in root
+	tmpDir, err := os.MkdirTemp("", "test-resolve-ts-priority-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create both src/index.ts and index.ts
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("Failed to create src dir: %v", err)
+	}
+	srcIndexTs := filepath.Join(srcDir, "index.ts")
+	if err := os.WriteFile(srcIndexTs, []byte("// src TS"), 0644); err != nil {
+		t.Fatalf("Failed to create src/index.ts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "index.ts"), []byte("// root TS"), 0644); err != nil {
+		t.Fatalf("Failed to create index.ts: %v", err)
+	}
+
+	resolved, lang, err := ResolveEntryPoint(tmpDir)
+	if err != nil {
+		t.Fatalf("ResolveEntryPoint(%q) error = %v", tmpDir, err)
+	}
+	if lang != "typescript" {
+		t.Errorf("language = %q, want %q", lang, "typescript")
+	}
+	if resolved != srcIndexTs {
+		t.Errorf("resolved = %q, want %q (src/index.ts should win)", resolved, srcIndexTs)
+	}
+}
+
+func TestResolveEntryPoint_EmptyFolder(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-empty-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, _, err = ResolveEntryPoint(tmpDir)
+	if err == nil {
+		t.Error("ResolveEntryPoint(empty folder) expected error, got nil")
+	}
+}
+
+func TestResolveEntryPoint_NonExistentPath(t *testing.T) {
+	_, _, err := ResolveEntryPoint("/nonexistent/path/to/agent")
+	if err == nil {
+		t.Error("ResolveEntryPoint(nonexistent) expected error, got nil")
+	}
+}
+
+func TestResolveEntryPoint_UnsupportedFileType(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-resolve-unsupported-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	goFile := filepath.Join(tmpDir, "agent.go")
+	if err := os.WriteFile(goFile, []byte("package main"), 0644); err != nil {
+		t.Fatalf("Failed to create Go file: %v", err)
+	}
+
+	_, _, err = ResolveEntryPoint(goFile)
+	if err == nil {
+		t.Error("ResolveEntryPoint(.go file) expected error, got nil")
+	}
+}
