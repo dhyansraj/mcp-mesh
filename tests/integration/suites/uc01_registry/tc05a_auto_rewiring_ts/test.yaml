@@ -32,16 +32,10 @@ test:
       cp -r /uc-artifacts/ts-simple-agent /workspace/
     capture: copy_output
 
-  # Install dependencies
-  - name: "Install TypeScript agent dependencies"
-    handler: shell
-    command: |
-      cd ts-simple-agent
-      npm install --silent 2>&1 | tail -5
-      echo "Dependencies installed"
-    workdir: /workspace
-    capture: npm_install
-    timeout: 60
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-simple-agent
 
   # Start agent (registry auto-starts on port 8000)
   - name: "Start agent with auto-starting registry"
