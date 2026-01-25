@@ -1,0 +1,102 @@
+# Test Case: Build Python SDK (mcp-mesh)
+# Builds the mcp-mesh Python package wheel
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build Python SDK"
+description: "Build mcp-mesh Python wheel from source using docker run"
+tags:
+  - build
+  - python
+  - sdk
+timeout: 300
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${suite_path}/${config.output.wheels}"
+      echo "Output directory ready: ${suite_path}/${config.output.wheels}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check Python SDK source on host"
+    handler: shell
+    command: |
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/src/runtime/python" ]; then
+        echo "Found Python SDK source at $SOURCE_PATH/src/runtime/python"
+        ls -la "$SOURCE_PATH/src/runtime/python/"
+        cat "$SOURCE_PATH/src/runtime/python/pyproject.toml"
+      else
+        echo "ERROR: Python SDK source not found at $SOURCE_PATH/src/runtime/python"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build wheel using docker run
+  - name: "Build mcp-mesh wheel"
+    handler: shell
+    command: |
+      # Get absolute paths for docker volume mounts (relative to suite_path)
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Source: $SOURCE_ABS"
+      echo "Output: $OUTPUT_ABS"
+
+      echo "Building Python wheel inside container (clean build)..."
+      # Optimized: Only copy required files instead of entire repo
+      # Python SDK needs: pyproject.toml, mesh/, _mcp_mesh/, README.md
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/src/runtime/python && \
+          cp /src-host/src/runtime/python/pyproject.toml /src/mcp-mesh/src/runtime/python/ && \
+          cp /src-host/src/runtime/python/README.md /src/mcp-mesh/src/runtime/python/ 2>/dev/null || true && \
+          cp -r /src-host/src/runtime/python/mesh /src/mcp-mesh/src/runtime/python/ && \
+          cp -r /src-host/src/runtime/python/_mcp_mesh /src/mcp-mesh/src/runtime/python/ && \
+          cd /src/mcp-mesh/src/runtime/python && pip wheel . --no-deps -w /out/wheels
+        "
+
+      echo "Python wheel build complete"
+    capture: build_output
+    timeout: 180
+
+  # List built wheels on host
+  - name: "List built wheels"
+    handler: shell
+    command: |
+      echo "Built wheels:"
+      ls -la "${suite_path}/${config.output.wheels}"/mcp_mesh*.whl 2>/dev/null || echo "Looking for any wheels..."
+      ls -la "${suite_path}/${config.output.wheels}"/*.whl
+    capture: wheel_list
+
+  # Verify wheel can be installed (needs mcp-mesh-core first)
+  - name: "Verify wheel installation"
+    handler: shell
+    command: |
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Testing wheel installation inside container..."
+      docker run --rm \
+        -v "$OUTPUT_ABS:/out:ro" \
+        ${config.build.image} \
+        bash -c "pip install /out/wheels/mcp_mesh*.whl && \
+          python -c 'import mesh; print(\"mesh imported\")'"
+    capture: install_output
+    timeout: 180
+
+assertions:
+  - expr: ${captured.build_output} contains 'wheel build complete'
+    message: "Python wheel build should complete"
+
+  - expr: ${captured.wheel_list} contains '.whl'
+    message: "Wheel file should be created"
+
+  - expr: ${captured.install_output} contains 'imported successfully'
+    message: "mesh module should be importable"
