@@ -122,5 +122,5 @@ assertions:
   - expr: ${captured.contents_output} contains 'package.json'
     message: "Package should contain package.json"
 
-  - expr: ${captured.install_output} contains 'loaded successfully'
+  - expr: ${captured.install_output} contains 'core loaded'
     message: "@mcpmesh/core should load without errors"

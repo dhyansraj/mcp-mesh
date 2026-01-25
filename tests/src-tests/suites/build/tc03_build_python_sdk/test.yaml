@@ -98,5 +98,5 @@ assertions:
   - expr: ${captured.wheel_list} contains '.whl'
     message: "Wheel file should be created"
 
-  - expr: ${captured.install_output} contains 'imported successfully'
+  - expr: ${captured.install_output} contains 'mesh imported'
     message: "mesh module should be importable"
