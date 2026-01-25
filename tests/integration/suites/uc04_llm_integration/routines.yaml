@@ -1,0 +1,44 @@
+# LLM Integration Test Routines
+# UC-level routines for setting up and testing LLM providers
+
+routines:
+  setup_claude_provider:
+    description: "Setup Claude provider with API key"
+    steps:
+      - handler: shell
+        command: |
+          echo "Checking ANTHROPIC_API_KEY..."
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "WARNING: ANTHROPIC_API_KEY not set"
+            exit 0
+          fi
+          echo "ANTHROPIC_API_KEY is set (length: ${#ANTHROPIC_API_KEY})"
+        capture: key_check
+
+  setup_openai_provider:
+    description: "Setup OpenAI provider with API key"
+    steps:
+      - handler: shell
+        command: |
+          echo "Checking OPENAI_API_KEY..."
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "WARNING: OPENAI_API_KEY not set"
+            exit 0
+          fi
+          echo "OPENAI_API_KEY is set (length: ${#OPENAI_API_KEY})"
+        capture: key_check
+
+  verify_llm_response:
+    description: "Verify LLM response contains expected content"
+    params:
+      response:
+        type: string
+        required: true
+      expected_keywords:
+        type: array
+        required: false
+    steps:
+      - handler: shell
+        command: |
+          echo "Response received, verifying..."
+          echo "${params.response}"

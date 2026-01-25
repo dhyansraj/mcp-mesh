@@ -1,0 +1,80 @@
+# UC-level routines for Agent Lifecycle tests
+# Reference as: uc.routine_name
+
+routines:
+  # Scaffold and setup a Python agent
+  scaffold_python_agent:
+    description: "Scaffold a Python agent for lifecycle testing"
+    params:
+      name:
+        type: string
+        required: true
+        description: "Agent name"
+    steps:
+      - handler: shell
+        command: "meshctl scaffold agent --name ${params.name} --language python"
+        workdir: /workspace
+
+  # Start an agent in background
+  start_agent:
+    description: "Start an agent and capture its PID"
+    params:
+      name:
+        type: string
+        required: true
+      port:
+        type: integer
+        default: 3000
+    steps:
+      - handler: shell
+        command: |
+          cd /workspace/${params.name}
+          pip install -e . -q
+          nohup python main.py --port ${params.port} > /workspace/${params.name}.log 2>&1 &
+          echo $!
+        capture: agent_pid
+      - handler: wait
+        seconds: 3
+
+  # Wait for agent to be ready
+  wait_agent_ready:
+    description: "Wait for agent HTTP endpoint to be ready"
+    params:
+      port:
+        type: integer
+        default: 3000
+      timeout:
+        type: integer
+        default: 30
+    steps:
+      - handler: wait
+        type: http
+        url: "http://localhost:${params.port}/health"
+        timeout: ${params.timeout}
+        interval: 2
+
+  # Stop an agent by PID
+  stop_agent:
+    description: "Stop a running agent"
+    params:
+      pid:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: "kill ${params.pid} 2>/dev/null || true"
+        ignore_errors: true
+      - handler: wait
+        seconds: 1
+
+  # Check agent status via meshctl
+  check_agent_status:
+    description: "Check agent status using meshctl"
+    params:
+      name:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: "meshctl status ${params.name}"
+        capture: status_output

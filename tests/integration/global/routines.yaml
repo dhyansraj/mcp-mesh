@@ -1,0 +1,312 @@
+# Global Routines - Available to all tests
+# Reference as: global.routine_name or just routine_name
+#
+# IMPORTANT: These routines assume tsuite-mesh image is used (from lib-tests or src-tests)
+# The image must have pre-installed: meshctl, node, mesh module
+# If any prerequisite is missing, tests will fail immediately.
+
+routines:
+  #############################################################################
+  # PREREQUISITE CHECKS
+  # These verify the image has required tools - fail fast if not
+  #############################################################################
+
+  # Verify meshctl is installed
+  check_meshctl:
+    description: "Verify meshctl CLI is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          meshctl --version
+        capture: meshctl_version
+
+  # Verify Node.js is installed
+  check_node:
+    description: "Verify Node.js is available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          node --version && npm --version
+        capture: node_version
+
+  # Verify mesh module is installed
+  check_mesh_module:
+    description: "Verify mesh Python module is available"
+    steps:
+      - handler: shell
+        command: |
+          python -c "import mesh" 2>/dev/null
+          if [ $? -ne 0 ]; then
+            echo "ERROR: mesh module not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          python -c "import mesh; print(f'mesh module OK')"
+        capture: mesh_check
+
+  #############################################################################
+  # PYTHON SETUP
+  #############################################################################
+
+  # Create Python virtual environment linked to system mesh module
+  setup_python_venv:
+    description: "Create .venv in workspace linked to system mesh module"
+    steps:
+      - handler: shell
+        command: |
+          cd /workspace
+          python -m venv .venv
+          # Link to system-installed mesh package
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          echo "Created .venv in /workspace (linked to system mesh)"
+      - handler: shell
+        command: '/workspace/.venv/bin/python -c "import mesh; print(''venv mesh OK'')"'
+        capture: venv_check
+
+  # Install pip dependencies from a directory
+  install_pip_deps:
+    description: "Install Python dependencies for a scaffolded agent"
+    params:
+      path:
+        type: string
+        required: true
+        description: "Path to agent directory"
+    steps:
+      - handler: pip-install
+        path: ${params.path}
+        venv: /workspace/.venv
+
+  #############################################################################
+  # NODE.JS SETUP
+  #############################################################################
+
+  # Install npm dependencies from a directory
+  install_npm_deps:
+    description: "Run npm install in a directory"
+    params:
+      path:
+        type: string
+        required: true
+        description: "Path to directory with package.json"
+    steps:
+      - handler: npm-install
+        path: ${params.path}
+
+  #############################################################################
+  # COMBINED SETUP ROUTINES
+  #############################################################################
+
+  # Setup for scaffolding tests - just verify prerequisites
+  setup_for_scaffold:
+    description: "Verify prerequisites for scaffolding tests"
+    steps:
+      - handler: shell
+        command: |
+          # Verify meshctl
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          # Verify node
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
+
+  # Setup for Python agent tests
+  setup_for_python_agent:
+    description: "Setup for running Python agents"
+    steps:
+      - handler: shell
+        command: |
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          python -c "import mesh" 2>/dev/null || {
+            echo "ERROR: mesh module not found - use tsuite-mesh image"
+            exit 1
+          }
+          # Create venv linked to system mesh
+          cd /workspace
+          python -m venv .venv
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          /workspace/.venv/bin/python -c "import mesh; print('Setup complete: mesh module available')"
+        capture: setup_result
+        timeout: 60
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  # Setup for TypeScript agent tests
+  setup_for_typescript_agent:
+    description: "Setup for running TypeScript agents"
+    steps:
+      - handler: shell
+        command: |
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
+        timeout: 30
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  #############################################################################
+  # LEGACY (for backward compatibility)
+  #############################################################################
+
+  # Legacy setup_environment - now just verifies prerequisites
+  setup_environment:
+    description: "Verify test environment prerequisites"
+    params:
+      meshctl_version:
+        type: string
+        required: false # Ignored - version comes from image
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          if ! command -v node &> /dev/null; then
+            echo "ERROR: node not found - use tsuite-mesh image"
+            exit 1
+          fi
+          echo "Environment OK"
+          meshctl --version
+        capture: meshctl_version
+        timeout: 30
+
+  #############################################################################
+  # UTILITIES
+  #############################################################################
+
+  # Cleanup workspace
+  cleanup_workspace:
+    description: "Remove all files from workspace directory"
+    steps:
+      - handler: shell
+        command: "rm -rf /workspace/* /workspace/.* 2>/dev/null || true"
+        ignore_errors: true
+
+  # Verify expected files exist
+  verify_files_exist:
+    description: "Check that all expected files exist"
+    params:
+      files:
+        type: string
+        required: true
+        description: "Space-separated list of file paths"
+    steps:
+      - handler: shell
+        command: |
+          for f in ${params.files}; do
+            if [ ! -e "$f" ]; then
+              echo "Missing: $f"
+              exit 1
+            fi
+            echo "Found: $f"
+          done
+
+  #############################################################################
+  # OBSERVABILITY
+  # Redis + Tempo for distributed tracing tests
+  #############################################################################
+
+  # Start observability services (Redis + Tempo)
+  start_observability:
+    description: "Start Redis and Tempo for distributed tracing"
+    steps:
+      - handler: shell
+        command: |
+          echo "Starting Redis..."
+          redis-server --daemonize yes --port 6379
+          sleep 1
+          redis-cli ping || { echo "ERROR: Redis not responding"; exit 1; }
+          echo "Redis started"
+
+          echo "Starting Tempo..."
+          mkdir -p /var/tempo
+          tempo -config.file=/etc/tempo/tempo.yaml > /var/log/tempo.log 2>&1 &
+
+          # Wait for Tempo to become ready (ingester needs ~15-20s to stabilize)
+          echo "Waiting for Tempo to become ready..."
+          for i in $(seq 1 30); do
+            if wget -q --spider http://localhost:3200/ready 2>/dev/null; then
+              echo "Tempo ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Tempo not ready after 30s"
+              cat /var/log/tempo.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Observability services started:"
+          echo "  Redis: localhost:6379"
+          echo "  Tempo OTLP gRPC: localhost:4317"
+          echo "  Tempo OTLP HTTP: localhost:4318"
+          echo "  Tempo API: localhost:3200"
+        capture: observability_start
+        timeout: 60
+
+  # Stop observability services
+  stop_observability:
+    description: "Stop Redis and Tempo services"
+    steps:
+      - handler: shell
+        command: |
+          echo "Stopping observability services..."
+          redis-cli shutdown 2>/dev/null || true
+          pkill -f tempo 2>/dev/null || true
+          echo "Observability services stopped"
+        capture: observability_stop
+        ignore_errors: true
+
+  # Check observability services status
+  check_observability:
+    description: "Check if Redis and Tempo are running"
+    steps:
+      - handler: shell
+        command: |
+          REDIS_OK=false
+          TEMPO_OK=false
+
+          redis-cli ping > /dev/null 2>&1 && REDIS_OK=true
+          wget -q --spider http://localhost:3200/ready 2>/dev/null && TEMPO_OK=true
+
+          echo "Redis: $REDIS_OK"
+          echo "Tempo: $TEMPO_OK"
+
+          if [ "$REDIS_OK" = "true" ] && [ "$TEMPO_OK" = "true" ]; then
+            echo "STATUS: OK"
+          else
+            echo "STATUS: INCOMPLETE"
+            exit 1
+          fi
+        capture: observability_status

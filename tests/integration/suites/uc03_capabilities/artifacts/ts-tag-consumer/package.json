@@ -1,0 +1,15 @@
+{
+  "name": "ts-tag-consumer",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "0.8.0-beta.6",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}

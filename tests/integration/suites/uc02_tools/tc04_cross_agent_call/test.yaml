@@ -1,0 +1,138 @@
+# Test Case: Cross-Agent Call
+# Tests that Agent A can call Agent B's tools via dependency injection.
+#
+# Scenario:
+#   - py-calculator-agent provides calc_add and calc_multiply tools
+#   - py-report-agent depends on "calculator" capability
+#   - Calling sum_report triggers cross-agent calls to calc_add
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Cross-Agent Call"
+description: "Verify agent can call another agent's tools via dependency"
+tags:
+  - tools
+  - cross-agent
+  - dependency
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-calculator-agent /workspace/
+      cp -r /uc-artifacts/py-report-agent /workspace/
+    capture: copy_output
+
+  # Start calculator agent first (provider)
+  - name: "Start calculator agent (provider)"
+    handler: shell
+    command: "meshctl start py-calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  # Wait for calculator to register
+  - name: "Wait for calculator to register"
+    handler: wait
+    seconds: 8
+
+  # Start report agent (consumer)
+  - name: "Start report agent (consumer)"
+    handler: shell
+    command: "meshctl start py-report-agent/main.py -d"
+    workdir: /workspace
+    capture: start_report
+
+  # Wait for report agent to register and wire
+  - name: "Wait for report agent to register and wire"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are registered
+  - name: "Verify both agents are registered"
+    handler: shell
+    command: |
+      meshctl list
+      if meshctl list 2>/dev/null | grep -q "py-calculator-agent" && \
+         meshctl list 2>/dev/null | grep -q "py-report-agent"; then
+        echo "PASS: Both agents registered"
+      else
+        echo "FAIL: Not all agents registered"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: both_registered
+
+  # Check wiring status - report-agent should depend on calculator
+  - name: "Check wiring status"
+    handler: shell
+    command: |
+      meshctl status
+      echo "=== Checking dependencies ==="
+      STATUS=$(meshctl status 2>&1)
+      if echo "$STATUS" | grep -q "calculator"; then
+        echo "PASS: Dependency on calculator visible"
+      else
+        echo "INFO: Dependency might be implicit"
+        echo "PASS: Status check complete"
+      fi
+    workdir: /workspace
+    capture: wiring_status
+
+  # Call sum_report which internally calls calc_add
+  - name: "Call sum_report (cross-agent)"
+    handler: shell
+    command: |
+      echo "=== Calling sum_report ==="
+      RESULT=$(meshctl call sum_report '{"numbers": [1, 2, 3, 4, 5]}' 2>&1)
+      echo "Result: $RESULT"
+      # Sum of 1+2+3+4+5 = 15
+      if echo "$RESULT" | grep -q "15"; then
+        echo "PASS: sum_report cross-agent call worked"
+      else
+        echo "FAIL: Expected sum of 15"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: sum_report_call
+
+  # Call product_report which internally calls calc_multiply
+  - name: "Call product_report (cross-agent)"
+    handler: shell
+    command: |
+      echo "=== Calling product_report ==="
+      RESULT=$(meshctl call product_report '{"numbers": [2, 3, 4]}' 2>&1)
+      echo "Result: $RESULT"
+      # Product of 2*3*4 = 24
+      if echo "$RESULT" | grep -q "24"; then
+        echo "PASS: product_report cross-agent call worked"
+      else
+        echo "FAIL: Expected product of 24"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: product_report_call
+
+assertions:
+  - expr: "${captured.both_registered} contains 'PASS'"
+    message: "Both agents should be registered"
+
+  - expr: "${captured.sum_report_call} contains 'PASS'"
+    message: "sum_report should call calculator and return correct sum"
+
+  - expr: "${captured.product_report_call} contains 'PASS'"
+    message: "product_report should call calculator and return correct product"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

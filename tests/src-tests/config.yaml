@@ -1,0 +1,43 @@
+# Source Build Suite Configuration
+# Builds MCP Mesh packages from source code
+#
+# This suite runs in STANDALONE mode on the host.
+# Build commands run inside Docker containers via `docker run`.
+# Final image is built with `docker build`.
+
+suite:
+  name: "MCP Mesh Source Build"
+  mode: standalone # Runs on host, uses docker run for builds
+
+# Source code location (host path)
+source:
+  # Path to mcp-mesh repository on host (relative to suite directory)
+  path: "../.."
+
+# Output directories (host paths, relative to suite directory)
+output:
+  base: "./out"
+  bin: "./out/bin"
+  wheels: "./out/wheels"
+  packages: "./out/packages"
+
+# Build image with all necessary tools
+build:
+  image: "src-build:latest"
+
+# Docker settings
+docker:
+  # Build tools image (Go, Rust, maturin, Node.js)
+  build_image: "src-build:latest"
+
+  # Output image name
+  output_image: "tsuite-mesh:local"
+
+defaults:
+  timeout: 600 # 10 minutes per test
+  parallel: 1 # Build sequentially
+packages:
+  mode: local
+  cli_version: __DELETE__
+  sdk_python_version: __DELETE__
+  sdk_typescript_version: __DELETE__

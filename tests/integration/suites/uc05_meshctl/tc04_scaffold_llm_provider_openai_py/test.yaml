@@ -1,0 +1,68 @@
+# Test Case: Scaffold LLM Provider - OpenAI Python
+# Verifies meshctl scaffold generates OpenAI provider with correct model version
+
+name: "Scaffold LLM Provider - OpenAI Py"
+description: "Verify OpenAI Python provider scaffold uses current model (gpt-4o)"
+tags:
+  - scaffolding
+  - meshctl
+  - openai
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold OpenAI LLM provider
+  - name: "Scaffold OpenAI provider"
+    handler: shell
+    command: "meshctl scaffold --name openai-test --agent-type llm-provider --model openai/gpt-4o --lang python"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find openai-test -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check main.py for model version
+  - name: "Check main.py content"
+    handler: shell
+    command: "cat openai-test/main.py"
+    workdir: /workspace
+    capture: main_content
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # main.py exists
+  - expr: "${captured.generated_files} contains 'main.py'"
+    message: "main.py should be created"
+
+  # requirements.txt exists
+  - expr: "${captured.generated_files} contains 'requirements.txt'"
+    message: "requirements.txt should be created"
+
+  # main.py imports mesh
+  - expr: "${captured.main_content} contains 'import mesh'"
+    message: "main.py should import mesh"
+
+  # main.py has llm_provider decorator
+  - expr: "${captured.main_content} contains '@mesh.llm_provider'"
+    message: "main.py should have @mesh.llm_provider decorator"
+
+  # Model should be gpt-4o
+  - expr: "${captured.main_content} contains 'gpt-4o'"
+    message: "Should use gpt-4o model"
+
+  # Should have openai in model path
+  - expr: "${captured.main_content} contains 'openai/'"
+    message: "Model should have openai/ prefix"
+
+post_run:
+  - routine: global.cleanup_workspace

@@ -256,3 +256,7 @@ src/runtime/core/index.js
 src/runtime/core/index.d.ts
 test/
 scaffold-test/
+
+# Test suite build outputs
+tests/src-tests/out/
+tests/lib-tests/out/

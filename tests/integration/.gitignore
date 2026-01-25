@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Reports (generated)
+reports/
+
+# Node
+node_modules/
+package-lock.json
+
+# SQLite databases
+*.db
+
+# OS
+.DS_Store

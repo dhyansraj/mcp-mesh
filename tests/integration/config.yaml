@@ -1,0 +1,57 @@
+# MCP Mesh Integration Test Suite Configuration
+# Update version here before running release tests
+
+# Suite settings
+suite:
+  name: "MCP Mesh Integration Tests"
+  mode: "docker" # 'docker' or 'standalone'
+
+# Package versions to test
+packages:
+  # Mode: "local", "published", or "auto"
+  # - local: Use /wheels and /packages from SDK image
+  # - published: Pull from PyPI/npm
+  # - auto: Auto-detect based on presence of /wheels, /packages
+  mode: "local"
+
+  # Published versions (used when mode=published or as fallback)
+  local:
+    wheels_dir: "/wheels"
+    packages_dir: "/packages"
+
+# Docker settings
+# Use tsuite-mesh image built by mcp-mesh-lib-test-suites for faster tests
+# Run lib-test-suites first: tsuite --all --suite-path ../mcp-mesh-lib-test-suites
+docker:
+  # Use tsuite-mesh:local (from src-tests) or tsuite-mesh:X.Y.Z (from lib-tests)
+  # Both images have meshctl, mesh module, and node pre-installed
+  # - tsuite-mesh:local     -> local mode (packages from /wheels, /packages)
+  # - tsuite-mesh:0.8.0-beta.9 -> published mode (packages from PyPI/npm)
+  base_image: "tsuite-mesh:local"
+  network: "bridge"
+
+  # No mounts needed - packages are baked into the image
+  # To test with different packages, rebuild the image via src-tests or lib-tests
+
+# Execution settings
+execution:
+  max_workers: 8 # concurrent tests in docker mode
+  timeout: 300 # seconds per test
+
+# Legacy defaults (for compatibility)
+defaults:
+  timeout: 120 # seconds per step
+  parallel: 1 # deprecated, use execution.max_workers
+  retry: 0 # retry failed tests
+
+# Report settings
+reports:
+  output_dir: "./reports"
+  formats:
+    - html
+    - json
+  keep_last: 10
+
+# Aliases for expressions (shortcuts)
+aliases:
+  mesh_version: "${packages.cli_version}"

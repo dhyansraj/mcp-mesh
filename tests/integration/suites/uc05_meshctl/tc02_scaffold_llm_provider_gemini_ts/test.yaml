@@ -1,0 +1,76 @@
+# Test Case: Scaffold LLM Provider - Gemini TypeScript
+# Verifies meshctl scaffold generates Gemini TS provider with correct model version
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/447
+
+name: "Scaffold LLM Provider - Gemini TS"
+description: "Verify Gemini TypeScript provider scaffold uses current model (gemini-2.5-pro)"
+tags:
+  - scaffolding
+  - meshctl
+  - gemini
+  - typescript
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold Gemini LLM provider
+  - name: "Scaffold Gemini provider"
+    handler: shell
+    command: "meshctl scaffold --name gemini-test-ts --agent-type llm-provider --model gemini/gemini-2.5-pro --lang typescript"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find gemini-test-ts -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check index.ts for model version
+  - name: "Check index.ts content"
+    handler: shell
+    command: "cat gemini-test-ts/src/index.ts"
+    workdir: /workspace
+    capture: index_content
+
+  # Check package.json
+  - name: "Check package.json"
+    handler: shell
+    command: "cat gemini-test-ts/package.json"
+    workdir: /workspace
+    capture: package_json
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # src/index.ts exists
+  - expr: "${captured.generated_files} contains 'src/index.ts'"
+    message: "src/index.ts should be created"
+
+  # package.json exists
+  - expr: "${captured.generated_files} contains 'package.json'"
+    message: "package.json should be created"
+
+  # index.ts imports @mcpmesh/sdk
+  - expr: "${captured.index_content} contains '@mcpmesh/sdk'"
+    message: "index.ts should import @mcpmesh/sdk"
+
+  # Model should be gemini-2.5-pro (not outdated 1.5-flash)
+  - expr: "${captured.index_content} contains 'gemini-2.5-pro'"
+    message: "Should use gemini-2.5-pro model"
+
+  # Should NOT contain outdated model
+  - expr: "${captured.index_content} not contains 'gemini-1.5-flash'"
+    message: "Should NOT use outdated gemini-1.5-flash model"
+
+  # package.json should have @mcpmesh/sdk dependency
+  - expr: "${captured.package_json} contains '@mcpmesh/sdk'"
+    message: "package.json should have @mcpmesh/sdk dependency"
+
+post_run:
+  - routine: global.cleanup_workspace

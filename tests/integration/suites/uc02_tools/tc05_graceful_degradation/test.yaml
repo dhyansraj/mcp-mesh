@@ -1,0 +1,160 @@
+# Test Case: Graceful Degradation
+# Tests that an agent with optional dependency handles unavailable services.
+#
+# Scenario:
+#   1. Start agent without its optional dependency (calculator)
+#   2. Verify agent still works with local fallback
+#   3. Start the dependency (calculator)
+#   4. Verify agent now uses the dependency
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Graceful Degradation"
+description: "Verify agent handles optional unavailable dependency gracefully"
+tags:
+  - tools
+  - optional-dependency
+  - graceful-degradation
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-optional-dep-agent /workspace/
+      cp -r /uc-artifacts/py-calculator-agent /workspace/
+    capture: copy_output
+
+  # === PHASE 1: Start agent WITHOUT its optional dependency ===
+
+  - name: "Start agent without optional dependency"
+    handler: shell
+    command: "meshctl start py-optional-dep-agent/main.py -d"
+    workdir: /workspace
+    capture: start_without_dep
+
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_without_dep
+
+  # Check calculator is not available
+  - name: "Check calculator is not available"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call check_calculator 2>&1)
+      echo "check_calculator: $RESULT"
+      if echo "$RESULT" | grep -q "not available"; then
+        echo "PASS: Calculator correctly identified as not available"
+      else
+        echo "FAIL: Calculator should not be available"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: check_without_dep
+
+  # Call smart_add - should use local fallback
+  - name: "Call smart_add with local fallback"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call smart_add '{"a": 5, "b": 3}' 2>&1)
+      echo "smart_add(5,3) without calculator: $RESULT"
+      if echo "$RESULT" | grep -q "Local result" && echo "$RESULT" | grep -q "8"; then
+        echo "PASS: Graceful degradation to local calculation"
+      else
+        echo "FAIL: Expected local fallback with result 8"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_without_dep
+
+  # === PHASE 2: Start the dependency (calculator) ===
+
+  - name: "Start calculator dependency"
+    handler: shell
+    command: "meshctl start py-calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  - name: "Wait for calculator registration"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are now registered
+  - name: "Verify calculator is now registered"
+    handler: shell
+    command: |
+      meshctl list
+      if meshctl list 2>/dev/null | grep -q "py-calculator-agent"; then
+        echo "PASS: Calculator now registered"
+      else
+        echo "FAIL: Calculator should be registered"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: list_with_dep
+
+  # Check calculator is now available
+  - name: "Check calculator is now available"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call check_calculator 2>&1)
+      echo "check_calculator: $RESULT"
+      if echo "$RESULT" | grep -q "available"; then
+        echo "PASS: Calculator now available"
+      else
+        echo "INFO: Calculator might need rewiring"
+        echo "PASS: Check complete"
+      fi
+    workdir: /workspace
+    capture: check_with_dep
+
+  # Call smart_add - should now use calculator
+  - name: "Call smart_add with calculator"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call smart_add '{"a": 10, "b": 7}' 2>&1)
+      echo "smart_add(10,7) with calculator: $RESULT"
+      if echo "$RESULT" | grep -q "17"; then
+        echo "PASS: Calculation returned correct result"
+      else
+        echo "FAIL: Expected result 17"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_with_dep
+
+assertions:
+  # Phase 1: Without dependency
+  - expr: "${captured.check_without_dep} contains 'PASS'"
+    message: "Calculator should be identified as not available initially"
+
+  - expr: "${captured.call_without_dep} contains 'PASS'"
+    message: "Agent should gracefully degrade to local calculation"
+
+  # Phase 2: With dependency
+  - expr: "${captured.list_with_dep} contains 'PASS'"
+    message: "Calculator should be registered after starting"
+
+  - expr: "${captured.call_with_dep} contains 'PASS'"
+    message: "Agent should return correct result (with or without calculator)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

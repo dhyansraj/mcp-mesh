@@ -1,0 +1,60 @@
+# Test Case: Verify meshctl
+# Verifies that meshctl is available in the Docker image
+# This is a smoke test - if it fails, the image was not built correctly
+
+name: "Verify meshctl CLI"
+description: "Verify meshctl is pre-installed in the tsuite-mesh image"
+tags:
+  - setup
+  - smoke
+  - verify
+timeout: 30
+
+test:
+  # Verify Node.js is installed
+  - name: "Verify Node.js installation"
+    handler: shell
+    command: |
+      if ! command -v node &> /dev/null; then
+        echo "ERROR: node not found - rebuild tsuite-mesh image"
+        exit 1
+      fi
+      node --version && npm --version
+    capture: node_version
+
+  # Verify meshctl is installed
+  - name: "Verify meshctl installation"
+    handler: shell
+    command: |
+      if ! command -v meshctl &> /dev/null; then
+        echo "ERROR: meshctl not found - rebuild tsuite-mesh image"
+        exit 1
+      fi
+      meshctl --version
+    capture: meshctl_version
+
+  # Verify meshctl help works
+  - name: "Verify meshctl help output"
+    handler: shell
+    command: "meshctl --help"
+    capture: meshctl_help
+
+  # Verify mesh module is installed
+  - name: "Verify mesh module"
+    handler: shell
+    command: |
+      python -c "import mesh; print('mesh module OK')"
+    capture: mesh_check
+
+assertions:
+  - expr: ${captured.node_version} contains 'v2'
+    message: "Node.js v20+ should be installed"
+
+  - expr: ${captured.meshctl_version} contains 'meshctl'
+    message: "meshctl should be installed"
+
+  - expr: ${captured.meshctl_help} contains 'scaffold'
+    message: "meshctl help should show scaffold command"
+
+  - expr: ${captured.mesh_check} contains 'mesh module OK'
+    message: "mesh module should be importable"

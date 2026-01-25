@@ -1,0 +1,127 @@
+# Test Case: TypeScript Cross-Agent Call
+# Tests that TypeScript Agent A can call Agent B's tools via dependency injection.
+#
+# Scenario:
+#   - ts-calculator-agent provides calc_add and calc_multiply tools
+#   - ts-report-agent depends on "calculator" capability
+#   - Calling sum_report triggers cross-agent calls to calc_add
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Cross-Agent Call"
+description: "Verify TypeScript agent can call another agent's tools via dependency"
+tags:
+  - tools
+  - cross-agent
+  - dependency
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-calculator-agent /workspace/
+      cp -r /uc-artifacts/ts-report-agent /workspace/
+    capture: copy_output
+
+  # Install npm dependencies for both agents
+  - name: "Install calculator npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  - name: "Install report npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-report-agent
+
+  # Start calculator agent first (provider)
+  - name: "Start calculator agent (provider)"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  # Wait for calculator to register
+  - name: "Wait for calculator to register"
+    handler: wait
+    seconds: 8
+
+  # Start report agent (consumer)
+  - name: "Start report agent (consumer)"
+    handler: shell
+    command: "meshctl start ts-report-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_report
+
+  # Wait for report agent to register and wire
+  - name: "Wait for report agent to register and wire"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call sum_report which internally calls calc_add
+  - name: "Call sum_report (cross-agent)"
+    handler: shell
+    command: 'meshctl call sum_report ''{"numbers": [1, 2, 3, 4, 5]}'''
+    workdir: /workspace
+    capture: sum_report_call
+
+  # Call product_report which internally calls calc_multiply
+  - name: "Call product_report (cross-agent)"
+    handler: shell
+    command: 'meshctl call product_report ''{"numbers": [2, 3, 4]}'''
+    workdir: /workspace
+    capture: product_report_call
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_output} contains 'ts-calculator-agent'"
+    message: "ts-calculator-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-report-agent'"
+    message: "ts-report-agent should be registered"
+
+  # Tools are listed
+  - expr: "${captured.tools_output} contains 'sum_report'"
+    message: "sum_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'product_report'"
+    message: "product_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'calc_add'"
+    message: "calc_add tool should be listed"
+
+  # Cross-agent calls work correctly
+  # Sum of 1+2+3+4+5 = 15
+  - expr: "${captured.sum_report_call} contains '15'"
+    message: "sum_report should return sum of 15"
+
+  # Product of 2*3*4 = 24
+  - expr: "${captured.product_report_call} contains '24'"
+    message: "product_report should return product of 24"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

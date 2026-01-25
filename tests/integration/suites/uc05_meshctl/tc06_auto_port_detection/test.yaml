@@ -1,0 +1,132 @@
+# Test Case: Auto Port Detection
+# Verifies that auto-assigned port (http_port=0) is correctly reported to registry
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/457
+#
+# When using http_port=0, the SDK should:
+# 1. Get a random port from the OS
+# 2. Report the ACTUAL port to registry (not 9999 or 0)
+
+name: "Auto Port Detection"
+description: "Verify auto-assigned port is correctly reported to registry"
+tags:
+  - meshctl
+  - port
+  - registry
+  - auto-port
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy TC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/py-auto-port-agent /workspace/"
+    capture: copy_output
+
+  # Verify artifact copied
+  - name: "Verify artifact"
+    handler: shell
+    command: "cat /workspace/py-auto-port-agent/main.py"
+    capture: main_content
+
+  # Start agent with auto-port (http_port=0) - force HTTP mode with env var
+  - name: "Start agent with auto-port"
+    handler: shell
+    command: "meshctl start py-auto-port-agent/main.py --env MCP_MESH_HTTP_PORT=0 -d --debug"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for agent to register
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 8
+
+  # List agents to verify registration
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Get JSON output for detailed port check
+  - name: "Get agent JSON"
+    handler: shell
+    command: "meshctl list --json"
+    workdir: /workspace
+    capture: list_json
+
+  # Extract port from endpoint using shell for debugging
+  - name: "Extract endpoint port"
+    handler: shell
+    command: |
+      # Get JSON and extract endpoint
+      json=$(meshctl list --json)
+      endpoint=$(echo "$json" | jq -r '.agents[0].endpoint // empty')
+      echo "Endpoint: $endpoint"
+
+      # Extract port from URL (e.g., http://172.17.0.2:52488 -> 52488)
+      port=$(echo "$endpoint" | sed -E 's/.*:([0-9]+)$/\1/')
+      echo "Port: $port"
+
+      # Check if port is valid (not 0, not 9999)
+      if [ "$port" = "0" ]; then
+        echo "FAIL: Port is 0 (not detected)"
+        exit 1
+      elif [ "$port" = "9999" ]; then
+        echo "FAIL: Port is 9999 (wrong detection - bug #457)"
+        exit 1
+      elif [ -z "$port" ] || [ "$port" = "null" ]; then
+        echo "FAIL: Could not extract port"
+        exit 1
+      else
+        echo "PASS: Auto-assigned port $port correctly reported"
+      fi
+    workdir: /workspace
+    capture: port_check
+
+  # Cleanup
+  - name: "Stop agent"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Agent artifact has enable_http=True
+  - expr: "${captured.main_content} contains 'enable_http=True'"
+    message: "Agent should be configured with enable_http=True"
+
+  # Agent started successfully
+  - expr: "${captured.start_output} contains 'py-auto-port-agent'"
+    message: "Agent should start successfully"
+
+  # Agent is registered
+  - expr: "${captured.list_output} contains 'py-auto-port-agent'"
+    message: "Agent should appear in meshctl list"
+
+  # JSON output exists and has agents
+  - expr: ${jq:captured.list_json:.agents | length} > 0
+    message: "Should have at least one agent in JSON output"
+
+  # Endpoint should NOT be port 9999 (the bug)
+  - expr: "${jq:captured.list_json:.agents[0].endpoint} not contains ':9999'"
+    message: "Endpoint should NOT report port 9999 (bug #457)"
+
+  # Endpoint should NOT be port 0
+  - expr: "${jq:captured.list_json:.agents[0].endpoint} not contains ':0'"
+    message: "Endpoint should NOT report port 0"
+
+  # Port check passed
+  - expr: "${captured.port_check} contains 'PASS'"
+    message: "Auto-assigned port should be correctly detected and reported"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

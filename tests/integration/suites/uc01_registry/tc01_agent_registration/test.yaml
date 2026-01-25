@@ -1,0 +1,126 @@
+# Test Case: Agent Registration
+# Tests that Python and TypeScript agents register with the registry on startup.
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - py-simple-agent: Single-file Python agent
+#   - ts-simple-agent: Minimal TypeScript agent
+
+name: "Agent Registration"
+description: "Verify Python and TypeScript agents register with registry"
+tags:
+  - registry
+  - registration
+  - python
+  - typescript
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy UC-level artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+      cp -r /uc-artifacts/ts-simple-agent /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-simple-agent
+
+  # Start Python agent in detached mode using meshctl (auto-starts registry)
+  - name: "Start Python agent in detached mode"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: py_start
+
+  # Wait for Python agent to register
+  - name: "Wait for Python agent to register"
+    handler: wait
+    seconds: 8
+
+  # Check Python agent is registered
+  - name: "Check Python agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_after_py
+
+  # Start TypeScript agent in detached mode
+  - name: "Start TypeScript agent in detached mode"
+    handler: shell
+    command: "meshctl start ts-simple-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: ts_start
+
+  # Wait for TypeScript agent to register
+  - name: "Wait for TypeScript agent to register"
+    handler: wait
+    seconds: 8
+
+  # Check both agents are registered
+  - name: "Check both agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_both
+
+  # Verify agent count
+  - name: "Verify agent count"
+    handler: shell
+    command: |
+      count=$(meshctl list 2>/dev/null | grep -c "simple-agent" || echo "0")
+      echo "Agent count: $count"
+      if [ "$count" -ge 2 ]; then
+        echo "PASS: Both agents registered"
+      else
+        echo "FAIL: Expected 2 agents, found $count"
+        meshctl list
+        exit 1
+      fi
+    workdir: /workspace
+    capture: agent_count
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.copy_output} contains 'py-simple-agent'"
+    message: "Python agent should be copied to workspace"
+
+  - expr: "${captured.copy_output} contains 'ts-simple-agent'"
+    message: "TypeScript agent should be copied to workspace"
+
+  - expr: "${captured.py_start} contains 'py-simple-agent'"
+    message: "Python agent should start successfully"
+
+  - expr: "${captured.list_after_py} contains 'py-simple-agent'"
+    message: "Python agent should appear in meshctl list"
+
+  - expr: "${captured.list_both} contains 'py-simple-agent'"
+    message: "Python agent should still be registered"
+
+  - expr: "${captured.list_both} contains 'ts-simple-agent'"
+    message: "TypeScript agent should appear in meshctl list"
+
+  - expr: "${captured.agent_count} contains 'PASS'"
+    message: "Both agents should be registered"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

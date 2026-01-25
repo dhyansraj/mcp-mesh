@@ -1,0 +1,180 @@
+# Test Case: Auto Rewiring / Registry Independence
+# Tests that wired agents continue working even when registry is down.
+#
+# Scenario:
+#   1. Start agents (registry auto-starts)
+#   2. Agents register and wire together
+#   3. Stop the registry process (but keep agents running)
+#   4. Use curl to call an agent directly - should still work
+#
+# This proves agents don't need registry for direct HTTP calls.
+# Registry is only needed for discovery (meshctl list/call/status).
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Auto Rewiring"
+description: "Verify agents work independently of registry after wiring"
+tags:
+  - registry
+  - wiring
+  - resilience
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+    capture: copy_output
+
+  # Start agent (registry auto-starts on port 8000)
+  - name: "Start agent with auto-starting registry"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_before
+
+  # Get agent port for direct curl call
+  - name: "Get agent port"
+    handler: shell
+    command: |
+      # py-simple-agent runs on port 9000 (hardcoded in main.py)
+      echo "Agent port: 9000"
+    capture: agent_port
+
+  # Test meshctl call works (via registry)
+  - name: "Test meshctl call via registry"
+    handler: shell
+    command: |
+      echo "Attempting meshctl call..."
+      timeout 10 meshctl call greet '{"name": "Before"}' 2>&1 || echo "Call timed out or failed"
+    workdir: /workspace
+    timeout: 15
+    capture: call_before
+
+  # Stop the registry process (but keep agent running)
+  - name: "Stop registry process"
+    handler: shell
+    command: |
+      echo "Stopping registry..."
+      meshctl stop registry
+      echo "Registry stopped"
+    workdir: /workspace
+    capture: kill_registry
+
+  # Short wait for registry to die
+  - name: "Wait for registry to stop"
+    handler: wait
+    seconds: 2
+
+  # Verify meshctl list fails (registry is down)
+  - name: "Verify meshctl list fails without registry"
+    handler: shell
+    command: |
+      if timeout 5 meshctl list 2>&1; then
+        echo "UNEXPECTED: meshctl list worked without registry"
+      else
+        echo "EXPECTED: meshctl list failed (registry down)"
+      fi
+    workdir: /workspace
+    timeout: 10
+    capture: list_after_kill
+
+  # === KEY TEST: Direct curl call should still work ===
+  - name: "Test direct curl call without registry"
+    handler: shell
+    command: |
+      # Call the agent directly via curl (bypassing registry)
+      RESPONSE=$(curl -s --max-time 10 -X POST http://localhost:9000/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/call",
+          "params": {
+            "name": "greet",
+            "arguments": {"name": "DirectCall"}
+          }
+        }' 2>&1)
+
+      echo "Curl response: $RESPONSE"
+
+      if echo "$RESPONSE" | grep -q "DirectCall"; then
+        echo "PASS: Agent responded to direct curl call without registry"
+      elif echo "$RESPONSE" | grep -q "Hello"; then
+        echo "PASS: Agent responded to direct curl call without registry"
+      else
+        echo "FAIL: Agent did not respond correctly"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: curl_call
+
+  # Also test tools/list via curl
+  - name: "Test tools/list via curl without registry"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s --max-time 10 -X POST http://localhost:9000/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/list",
+          "params": {}
+        }' 2>&1)
+
+      echo "Tools list response: $RESPONSE"
+
+      if echo "$RESPONSE" | grep -q "greet"; then
+        echo "PASS: Agent tools/list works without registry"
+      else
+        echo "FAIL: Agent tools/list failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: curl_list
+
+assertions:
+  # Agent was registered before killing registry
+  - expr: "${captured.list_before} contains 'py-simple-agent'"
+    message: "Agent should be registered before stopping registry"
+
+  # meshctl call worked before (via registry)
+  - expr: "${captured.call_before} contains 'Hello'"
+    message: "meshctl call should work when registry is up"
+
+  # Direct curl call works without registry
+  - expr: "${captured.curl_call} contains 'PASS'"
+    message: "Direct curl call should work without registry"
+
+  # tools/list via curl works without registry
+  - expr: "${captured.curl_list} contains 'PASS'"
+    message: "Direct tools/list should work without registry"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

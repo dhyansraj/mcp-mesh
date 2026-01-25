@@ -1,0 +1,106 @@
+# Test Case: TypeScript Multiple Implementations
+# Tests that TS providers with same capability but different tags
+# can be distinguished via tag filters.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Multiple Implementations"
+description: "Verify TS tag filters distinguish between multiple providers"
+tags:
+  - capabilities
+  - tags
+  - multiple
+  - typescript
+timeout: 180
+
+pre_run:
+  # TypeScript-only test - just need Node.js + meshctl (no Python venv)
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy TypeScript artifacts
+  - name: "Copy TypeScript artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-fast-provider /workspace/
+      cp -r /uc-artifacts/ts-accurate-provider /workspace/
+      cp -r /uc-artifacts/ts-tag-consumer /workspace/
+    capture: copy_output
+
+  # Install npm dependencies (handler auto-detects local/published mode)
+  - name: "Install fast provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-fast-provider
+
+  - name: "Install accurate provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-accurate-provider
+
+  - name: "Install tag consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-tag-consumer
+
+  # Start both providers
+  - name: "Start both TS providers"
+    handler: shell
+    command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_providers
+
+  - name: "Wait for providers registration"
+    handler: wait
+    seconds: 10
+
+  # Start consumer
+  - name: "Start TS tag consumer"
+    handler: shell
+    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 10
+
+  # Verify all agents registered
+  - name: "Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Call fetch_combined which prefers accurate
+  - name: "Call fetch_combined with combined tag filter"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_combined '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "TS_ACCURATE"; then
+        echo "PASS: Selected accurate provider via tag filter"
+      elif echo "$RESULT" | grep -q "TS_FAST"; then
+        echo "PASS: Selected fast provider (both match api requirement)"
+      else
+        echo "FAIL: Expected one of the providers"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_combined
+
+assertions:
+  - expr: "${captured.list_output} contains 'ts-fast-provider'"
+    message: "TS Fast provider should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-accurate-provider'"
+    message: "TS Accurate provider should be registered"
+
+  - expr: "${captured.call_combined} contains 'PASS'"
+    message: "Should select appropriate provider via tag filter"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

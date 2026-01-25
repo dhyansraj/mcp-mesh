@@ -1,0 +1,137 @@
+# Test Case: Status Healthy Resolution
+# Verifies meshctl status resolves to healthy agent when multiple match prefix
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/460
+#
+# When multiple agents match a name prefix but only ONE is healthy,
+# meshctl status should automatically resolve to the healthy agent
+# instead of showing a disambiguation error.
+
+name: "Status Healthy Resolution"
+description: "Verify meshctl status resolves to healthy agent when only one matches"
+tags:
+  - meshctl
+  - status
+  - resolution
+  - health
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy simple agent artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-simple-agent /workspace/"
+    capture: copy_output
+
+  # === First instance ===
+
+  # Start agent (first instance)
+  - name: "Start agent (first instance)"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_1
+
+  # Wait for registration
+  - name: "Wait for first registration"
+    handler: wait
+    seconds: 5
+
+  # Verify first instance is registered
+  - name: "List agents after first start"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_after_first
+
+  # Stop first instance (becomes unhealthy in registry)
+  - name: "Stop first instance"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    capture: stop_1
+
+  # Short wait
+  - name: "Wait after stop"
+    handler: wait
+    seconds: 2
+
+  # === Second instance ===
+
+  # Start agent again (second instance with different ID)
+  - name: "Start agent (second instance)"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d"
+    workdir: /workspace
+    capture: start_2
+
+  # Wait for registration
+  - name: "Wait for second registration"
+    handler: wait
+    seconds: 5
+
+  # List all agents - should show multiple matching py-simple-agent
+  - name: "List all agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_all
+
+  # List with --healthy-only flag if available
+  - name: "List healthy agents only"
+    handler: shell
+    command: "meshctl list --healthy-only 2>/dev/null || meshctl list"
+    workdir: /workspace
+    capture: list_healthy
+
+  # === Key test: meshctl status with prefix ===
+
+  # This should resolve to the healthy agent, not error
+  - name: "Status with prefix - should resolve to healthy"
+    handler: shell
+    command: "meshctl status py-simple-agent"
+    workdir: /workspace
+    capture: status_output
+
+  # Cleanup
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # First instance was registered
+  - expr: "${captured.list_after_first} contains 'py-simple-agent'"
+    message: "First agent instance should be registered"
+
+  # Second instance is registered (list should show agent)
+  - expr: "${captured.list_all} contains 'py-simple-agent'"
+    message: "Agent should appear in meshctl list"
+
+  # Status command should succeed (not error with "multiple agents match")
+  - expr: ${steps.status_output.exit_code} == 0
+    message: "meshctl status should succeed when only one healthy agent matches"
+
+  # Status should NOT show disambiguation error
+  - expr: "${captured.status_output} not contains 'multiple agents match'"
+    message: "Should not show 'multiple agents match' error"
+
+  # Status should NOT ask to specify more precise name
+  - expr: "${captured.status_output} not contains 'specify a more precise'"
+    message: "Should not ask to specify more precise name"
+
+  # Status should show agent info (healthy status)
+  - expr: "${captured.status_output} contains 'healthy'"
+    message: "Status should show healthy agent info"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
