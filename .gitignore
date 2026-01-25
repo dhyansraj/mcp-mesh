@@ -260,3 +260,6 @@ scaffold-test/
 # Test suite build outputs
 tests/src-tests/out/
 tests/lib-tests/out/
+
+# Allow test suite build artifacts
+!tests/**/build/

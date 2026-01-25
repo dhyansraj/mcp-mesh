@@ -26,16 +26,10 @@ test:
       ls -la /workspace/ts-simple-agent/
     capture: copy_output
 
-  # Install dependencies
-  - name: "Install TypeScript agent dependencies"
-    handler: shell
-    command: |
-      cd ts-simple-agent
-      npm install --silent 2>&1 | tail -5
-      echo "Dependencies installed"
-    workdir: /workspace
-    capture: npm_install
-    timeout: 60
+  # Install TypeScript dependencies (handler auto-detects local/published mode)
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-simple-agent
 
   # === TEST 1: Graceful unregister ===
 
@@ -58,10 +52,10 @@ test:
     workdir: /workspace
     capture: list_before_stop
 
-  # Graceful stop
+  # Graceful stop - use explicit agent name
   - name: "Graceful stop agent"
     handler: shell
-    command: "meshctl stop"
+    command: "meshctl stop ts-simple-agent"
     workdir: /workspace
     capture: stop_output
 
@@ -109,25 +103,30 @@ test:
   - name: "Kill agent abruptly without cleanup"
     handler: shell
     command: |
-      # Find the node process for our agent using /proc
-      PID=""
+      # Find the process group leader for our agent using /proc
+      # We need to kill the entire process group (npm -> tsx -> node)
+      PGID=""
       for p in /proc/[0-9]*; do
         pid="${p##*/}"
-        # Skip PID 1 (init/shell) and check cmdline for our agent
+        # Skip PID 1 (tini) and check cmdline for our agent
         if [ "$pid" != "1" ] && [ -f "$p/cmdline" ]; then
           if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "ts-simple-agent"; then
-            PID="$pid"
-            break
+            # Get the PGID from /proc/[pid]/status (more reliable than stat)
+            if [ -f "$p/status" ]; then
+              PGID=$(grep -E '^NSpgid:|^Pgid:' "$p/status" | head -1 | awk '{print $2}')
+              echo "Found agent process PID: $pid, PGID: $PGID"
+              break
+            fi
           fi
         fi
       done
 
-      if [ -n "$PID" ]; then
-        echo "Killing agent PID: $PID"
-        kill -9 "$PID"
-        echo "Agent killed abruptly"
+      if [ -n "$PGID" ] && [ "$PGID" != "1" ]; then
+        echo "Killing process group PGID: $PGID"
+        kill -9 -"$PGID"
+        echo "Agent process group killed abruptly"
       else
-        echo "WARN: Could not find agent PID"
+        echo "WARN: Could not find agent PGID"
         echo "Processes in /proc:"
         for p in /proc/[0-9]*; do
           pid="${p##*/}"

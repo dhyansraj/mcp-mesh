@@ -356,28 +356,37 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 	return nil
 }
 
-// stopProcess gracefully stops a process (SIGTERM, then SIGKILL after timeout)
+// stopProcess gracefully stops a process and its entire process group
+// (SIGTERM to process group, then SIGKILL after timeout)
+// This ensures child processes (e.g., npx -> tsx -> node) are also terminated
 func stopProcess(pid int, timeout time.Duration, force bool) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("process not found: %w", err)
+	// Verify process exists
+	if !IsProcessAlive(pid) {
+		return nil // Already dead
 	}
 
-	// If force, skip graceful shutdown
+	// If force, skip graceful shutdown - kill entire process group immediately
 	if force {
-		if err := process.Kill(); err != nil {
-			return fmt.Errorf("failed to kill process: %w", err)
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+			// Try single process kill as fallback
+			if process, err := os.FindProcess(pid); err == nil {
+				process.Kill()
+			}
 		}
 		return nil
 	}
 
-	// Send SIGTERM for graceful shutdown
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		// Process might already be dead
-		if !IsProcessAlive(pid) {
-			return nil
+	// Send SIGTERM to the entire process group for graceful shutdown
+	// The negative PID means "kill process group with PGID = abs(pid)"
+	// This works because we set Setpgid: true when starting, making PID = PGID
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
+		// Process group might not exist (old agent without Setpgid)
+		// Fall back to single process termination
+		if process, err := os.FindProcess(pid); err == nil {
+			process.Signal(syscall.SIGTERM)
+		} else if !IsProcessAlive(pid) {
+			return nil // Process already dead
 		}
-		return fmt.Errorf("failed to send SIGTERM: %w", err)
 	}
 
 	// Wait for process to exit
@@ -389,12 +398,17 @@ func stopProcess(pid int, timeout time.Duration, force bool) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Timeout reached, force kill
-	if err := process.Kill(); err != nil {
-		if !IsProcessAlive(pid) {
-			return nil // Process already dead
+	// Timeout reached, force kill the entire process group
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		// Fall back to single process kill
+		if process, err := os.FindProcess(pid); err == nil {
+			process.Kill()
 		}
-		return fmt.Errorf("failed to kill process after timeout: %w", err)
+	}
+
+	// Final check
+	if IsProcessAlive(pid) {
+		return fmt.Errorf("failed to kill process after timeout")
 	}
 
 	return nil

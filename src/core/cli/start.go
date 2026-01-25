@@ -1428,6 +1428,11 @@ func createTypeScriptAgentCommand(agentPath string, env []string, workingDir, us
 	cmd.Stdin = os.Stdin
 	cmd.Dir = finalWorkingDir
 
+	// Set up process group for proper signal handling (Unix only)
+	// This ensures that when we stop the agent, we kill the entire process tree
+	// (npx -> tsx -> node) rather than just the parent process
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	// Set user and group (Unix only)
 	if user != "" || group != "" {
 		if err := setProcessCredentials(cmd, user, group); err != nil {
@@ -1533,11 +1538,9 @@ func createPythonAgentCommand(agentPath string, env []string, workingDir, user, 
 	cmd.Stdin = os.Stdin
 	cmd.Dir = finalWorkingDir
 
-	// NOTE: Process group setup temporarily disabled due to stdio logging issues
-	// TODO: Re-enable with proper stdio handling for background threads
 	// Set up process group for proper signal handling (Unix only)
-	// platformManager := NewPlatformProcessManager()
-	// platformManager.setProcessGroup(cmd)
+	// This ensures that when we stop the agent, we kill the entire process tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Set user and group (Unix only)
 	if user != "" || group != "" {

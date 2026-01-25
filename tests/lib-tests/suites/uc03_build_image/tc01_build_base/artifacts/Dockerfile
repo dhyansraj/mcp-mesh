@@ -14,13 +14,14 @@ ARG PIP_VERSION
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     if [ -z "$PIP_VERSION" ]; then echo "PIP_VERSION build arg is required" && exit 1; fi
 
-# Install system dependencies and Node.js 22
+# Install system dependencies, tini (init), and Node.js 22
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
     git \
     build-essential \
     redis-server \
+    tini \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -72,6 +73,9 @@ LABEL org.opencontainers.image.version="${VERSION}"
 LABEL mcp-mesh.cli.version="${VERSION}"
 LABEL mcp-mesh.sdk.version="${VERSION}"
 LABEL mcp-mesh.pip.version="${PIP_VERSION}"
+
+# Use tini as init to properly reap zombie processes
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Default command
 CMD ["bash"]
