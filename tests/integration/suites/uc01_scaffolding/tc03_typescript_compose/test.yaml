@@ -1,0 +1,102 @@
+# Test Case: Scaffold TypeScript Agent with Docker Compose
+# Verifies that meshctl scaffold --compose generates correct configuration for TypeScript agents
+# Related to issue #470: TypeScript agent Docker Compose startup failures
+
+name: "Scaffold TypeScript Agent Docker Compose"
+description: "Test scaffolding a TypeScript agent and verify docker-compose.yml configuration"
+tags:
+  - smoke
+  - scaffolding
+  - typescript
+  - docker-compose
+timeout: 300 # 5 minutes
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+# Main test steps
+test:
+  # Scaffold a TypeScript agent
+  - name: "Scaffold TypeScript agent"
+    handler: shell
+    command: "meshctl scaffold --name test-ts-agent --agent-type tool --lang typescript"
+    capture: scaffold_output
+
+  # Generate docker-compose.yml
+  - name: "Generate docker-compose.yml"
+    handler: shell
+    command: "meshctl scaffold --compose --project-name test-compose"
+    capture: compose_output
+
+  # Check docker-compose.yml exists
+  - name: "Check docker-compose.yml exists"
+    handler: shell
+    command: "cat docker-compose.yml"
+    capture: compose_content
+
+  # Check TypeScript volume mount (should NOT have :ro)
+  - name: "Check TypeScript volume mount line"
+    handler: shell
+    command: "grep -A1 'volumes:' docker-compose.yml | grep 'test-ts-agent:/app' | head -1"
+    capture: volume_mount
+
+  # Check startup command has home directory creation
+  - name: "Check home directory creation in command"
+    handler: shell
+    command: "grep 'mkdir -p /home/mcp-mesh' docker-compose.yml || echo 'NOT_FOUND'"
+    capture: home_dir_cmd
+
+  # Check package.json for SDK reference
+  - name: "Check package.json SDK reference"
+    handler: shell
+    command: "cat test-ts-agent/package.json"
+    capture: package_json
+
+  # Negative check: volume should NOT be read-only
+  - name: "Check volume is NOT read-only"
+    handler: shell
+    command: "grep 'test-ts-agent:/app:ro' docker-compose.yml && echo 'FOUND_RO' || echo 'NO_RO'"
+    capture: ro_check
+
+  # Negative check: package.json should NOT have file: reference
+  - name: "Check no file: SDK reference"
+    handler: shell
+    command: "grep 'file:' test-ts-agent/package.json && echo 'FOUND_FILE_REF' || echo 'NO_FILE_REF'"
+    capture: file_ref_check
+
+# Assertions
+assertions:
+  # Last command succeeded (file_ref_check)
+  - expr: ${last.exit_code} == 0
+    message: "All test commands should succeed"
+
+  # docker-compose.yml contains TypeScript agent service
+  - expr: "${captured.compose_content} contains 'test-ts-agent'"
+    message: "docker-compose.yml should contain test-ts-agent service"
+
+  # Volume mount exists and points to /app
+  - expr: "${captured.volume_mount} contains '/app'"
+    message: "TypeScript agent should have /app volume mount"
+
+  # Volume mount should NOT be read-only (issue #470 fix)
+  - expr: "${captured.ro_check} contains 'NO_RO'"
+    message: "TypeScript volume mount should NOT be read-only (:ro)"
+
+  # Home directory creation should be in startup command (issue #470 fix)
+  - expr: "${captured.home_dir_cmd} contains 'mkdir -p /home/mcp-mesh'"
+    message: "Startup command should create /home/mcp-mesh directory"
+
+  # package.json should have @mcpmesh/sdk
+  - expr: "${captured.package_json} contains '@mcpmesh/sdk'"
+    message: "package.json should reference @mcpmesh/sdk"
+
+  # package.json should NOT have file: reference (issue #470 fix)
+  - expr: "${captured.file_ref_check} contains 'NO_FILE_REF'"
+    message: "package.json should NOT use file: reference for SDK"
+
+# Post-run: Cleanup
+post_run:
+  - routine: global.cleanup_workspace
