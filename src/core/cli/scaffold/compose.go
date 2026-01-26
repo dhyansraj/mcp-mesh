@@ -926,11 +926,11 @@ const agentServicesTemplate = `{{- range .Agents }}
   ports:
     - "{{ .Port }}:{{ .Port }}"
   volumes:
-    - ./{{ .Dir }}:/app:ro
+    - ./{{ .Dir }}:/app
     - {{ .Name }}-node_modules:/app/node_modules
   working_dir: /app
   entrypoint: ["sh", "-c"]
-  command: ["chown -R mcp-mesh:mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
+  command: ["mkdir -p /home/mcp-mesh && chown -R mcp-mesh:mcp-mesh /home/mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
   environment:
     NODE_ENV: development
     MCP_MESH_REGISTRY_URL: http://registry:8000
@@ -1668,11 +1668,11 @@ services:
     ports:
       - "{{ .Port }}:{{ .Port }}"
     volumes:
-      - ./{{ .Dir }}:/app:ro
+      - ./{{ .Dir }}:/app
       - {{ .Name }}-node_modules:/app/node_modules
     working_dir: /app
     entrypoint: ["sh", "-c"]
-    command: ["chown -R mcp-mesh:mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
+    command: ["mkdir -p /home/mcp-mesh && chown -R mcp-mesh:mcp-mesh /home/mcp-mesh /app/node_modules && su mcp-mesh -c 'npm install --silent 2>/dev/null && npx tsx src/index.ts'"]
     environment:
       NODE_ENV: development
       MCP_MESH_REGISTRY_URL: http://registry:8000
