@@ -24,7 +24,7 @@ const server = new FastMCP({
 // Wrap with MCP Mesh
 const agent = mesh(server, {
   name: "calculator",
-  port: 9002,
+  httpPort: 9002,
   description: "A simple calculator agent",
 });
 

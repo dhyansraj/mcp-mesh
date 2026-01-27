@@ -20,7 +20,7 @@ const server = new FastMCP({ name: "Greeter", version: "1.0.0" });
 
 const agent = mesh(server, {
   name: "greeter",
-  port: 9005,
+  httpPort: 9005,
   description: "Greeter agent with dependency injection example",
 });
 
