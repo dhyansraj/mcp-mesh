@@ -104,9 +104,10 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         # Build dependency specs
         deps = []
         for dep_cap in dependencies:
+            # Tags must be serialized to JSON string (Rust core expects string, not list)
             dep_spec = core.DependencySpec(
                 capability=dep_cap,
-                tags=[],
+                tags=json.dumps([]),
                 version=None,
             )
             deps.append(dep_spec)
@@ -272,6 +273,8 @@ async def _handle_api_dependency_change(
                 )
                 if not current_service_id:
                     # Use config resolver for consistent env var handling
+                    from ...shared.config_resolver import get_config_value
+
                     current_service_id = get_config_value("MCP_MESH_AGENT_ID")
 
                 is_self_dependency = (
