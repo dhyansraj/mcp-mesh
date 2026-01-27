@@ -1,0 +1,149 @@
+# Test Case: tc04_ts_express_api
+# Tests TypeScript Express API with mesh.route() dependency injection
+# Architecture: Express REST API -> calculator agent -> greeter agent
+
+name: "TypeScript Express API Integration"
+description: "Test Express apps using mesh.route() to consume MCP agent capabilities"
+tags:
+  - typescript
+  - express
+  - mesh_route
+  - dependency_injection
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/express-api /workspace/
+      cp -r /uc-artifacts/calculator /workspace/
+      cp -r /uc-artifacts/greeter /workspace/
+    capture: copy_output
+
+  - name: "Install calculator dependencies"
+    handler: npm-install
+    path: /workspace/calculator
+
+  - name: "Install greeter dependencies"
+    handler: npm-install
+    path: /workspace/greeter
+
+  - name: "Install express-api dependencies"
+    handler: npm-install
+    path: /workspace/express-api
+
+  # Start MCP agents first (they provide capabilities)
+  - name: "Start calculator agent"
+    handler: shell
+    command: "meshctl start calculator/index.ts -d"
+    workdir: /workspace
+
+  - name: "Start greeter agent"
+    handler: shell
+    command: "meshctl start greeter/index.ts -d"
+    workdir: /workspace
+
+  - name: "Wait for MCP agents to register"
+    handler: wait
+    seconds: 10
+
+  # Verify MCP agents registered
+  - name: "Verify MCP agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Start Express API (NOT via meshctl - it's a REST server)
+  - name: "Start Express API server"
+    handler: shell
+    command: |
+      cd express-api && PORT=3000 npx tsx index.ts > /tmp/express-api.log 2>&1 &
+      echo $! > /tmp/express-api.pid
+      sleep 5
+    workdir: /workspace
+    capture: express_start
+
+  # Test Express API endpoints with curl
+  - name: "Test root endpoint"
+    handler: shell
+    command: "curl -s http://localhost:3000/"
+    workdir: /workspace
+    capture: root_result
+
+  - name: "Test health endpoint"
+    handler: shell
+    command: "curl -s http://localhost:3000/health"
+    workdir: /workspace
+    capture: health_result
+
+  - name: "Test add endpoint (calculator capability)"
+    handler: shell
+    command: 'curl -s -X POST http://localhost:3000/api/add -H "Content-Type: application/json" -d ''{"a": 10, "b": 5}'''
+    workdir: /workspace
+    capture: add_result
+
+  - name: "Test multiply endpoint (calculator capability)"
+    handler: shell
+    command: 'curl -s -X POST http://localhost:3000/api/multiply -H "Content-Type: application/json" -d ''{"a": 6, "b": 7}'''
+    workdir: /workspace
+    capture: multiply_result
+
+  - name: "Test greet endpoint (greeter capability)"
+    handler: shell
+    command: 'curl -s -X POST http://localhost:3000/api/greet -H "Content-Type: application/json" -d ''{"name": "TestUser"}'''
+    workdir: /workspace
+    capture: greet_result
+
+  - name: "Test greet/age endpoint (greeter with calculator dependency)"
+    handler: shell
+    command: 'curl -s -X POST http://localhost:3000/api/greet/age -H "Content-Type: application/json" -d ''{"name": "Alice", "birthYear": 1990}'''
+    workdir: /workspace
+    capture: greet_age_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'calculator'"
+    message: "calculator agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'greeter'"
+    message: "greeter agent should be registered"
+
+  - expr: "${captured.root_result} contains 'Express API with MCP Mesh'"
+    message: "Root endpoint should return API info"
+
+  - expr: "${captured.health_result} contains 'healthy'"
+    message: "Health endpoint should return healthy status"
+
+  - expr: "${captured.add_result} contains '\"result\":15'"
+    message: "Add endpoint should return 15 (10+5)"
+
+  - expr: "${captured.multiply_result} contains '\"result\":42'"
+    message: "Multiply endpoint should return 42 (6*7)"
+
+  - expr: "${captured.greet_result} contains 'Hello, TestUser'"
+    message: "Greet endpoint should return greeting"
+
+  - expr: "${captured.greet_age_result} contains 'years old'"
+    message: "Greet/age endpoint should return age calculation"
+
+post_run:
+  # Stop Express API
+  - handler: shell
+    command: |
+      if [ -f /tmp/express-api.pid ]; then
+        kill $(cat /tmp/express-api.pid) 2>/dev/null || true
+        rm /tmp/express-api.pid
+      fi
+    ignore_errors: true
+  # Stop MCP agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
