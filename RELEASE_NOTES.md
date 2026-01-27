@@ -187,7 +187,6 @@
 - **Add pre-flight validation to meshctl start** (#338): Validates environment before running agents
   - Requires `.venv` in current directory (no fallback to system Python)
   - Validates Python version >= 3.11
-  - Added `--skip-checks` flag to bypass validation
 
 - **Improve scaffold output** (#341): Better feedback after scaffolding
   - Display file tree of generated files
