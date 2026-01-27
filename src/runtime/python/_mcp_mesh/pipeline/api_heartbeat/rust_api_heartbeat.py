@@ -137,6 +137,7 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         http_port=http_port,
         http_host=http_host,
         namespace=namespace,
+        agent_type="api",  # API services only consume capabilities, not provide them
         tools=tools if tools else None,
         llm_agents=None,  # API services don't have LLM agents
         heartbeat_interval=heartbeat_interval,
