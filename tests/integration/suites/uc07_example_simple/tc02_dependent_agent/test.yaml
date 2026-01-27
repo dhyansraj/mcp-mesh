@@ -1,0 +1,118 @@
+# Test Case: tc02_dependent_agent
+# Tests dependent_agent with fastmcp_agent and system_agent dependency chain
+# Agents: system_agent -> fastmcp_agent -> dependent_agent
+
+name: "Test02 Dependent Agent"
+description: "Test dependent_agent with full dependency chain: system_agent -> fastmcp_agent -> dependent_agent"
+tags:
+  - example
+  - dependent_agent
+  - dependency_injection
+  - dependency_chain
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/simple /workspace/
+    capture: copy_output
+
+  # Start agents in dependency order
+  - name: "Start system_agent (base)"
+    handler: shell
+    command: "meshctl start simple/system_agent.py -d"
+    workdir: /workspace
+
+  - name: "Start fastmcp_agent (middle - depends on system_agent)"
+    handler: shell
+    command: "meshctl start simple/fastmcp_agent.py -d"
+    workdir: /workspace
+
+  - name: "Start dependent_agent (top - depends on fastmcp_agent)"
+    handler: shell
+    command: "meshctl start simple/dependent_agent.py -d"
+    workdir: /workspace
+
+  - name: "Wait for agents to register"
+    handler: wait
+    seconds: 15
+
+  # Verify agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Test tool calls on system_agent
+  - name: "Call get_current_time on system_agent"
+    handler: shell
+    command: "meshctl call system-agent:get_current_time"
+    workdir: /workspace
+    capture: time_result
+
+  # Test tool calls on fastmcp_agent
+  - name: "Call get_current_time on fastmcp_agent"
+    handler: shell
+    command: "meshctl call fastmcp-service:get_current_time"
+    workdir: /workspace
+    capture: fastmcp_time_result
+
+  - name: "Call get_enriched_system_info on fastmcp_agent"
+    handler: shell
+    command: "meshctl call fastmcp-service:get_enriched_system_info"
+    workdir: /workspace
+    capture: enriched_info_result
+
+  # Test tool calls on dependent_agent
+  - name: "Call generate_report on dependent_agent"
+    handler: shell
+    command: 'meshctl call dependent-service:generate_report ''{"title": "Test Report"}'''
+    workdir: /workspace
+    capture: report_result
+
+  - name: "Call analyze_data on dependent_agent"
+    handler: shell
+    command: 'meshctl call dependent-service:analyze_data ''{"data": [1,2,3,4,5]}'''
+    workdir: /workspace
+    capture: analysis_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'fastmcp-service'"
+    message: "fastmcp-service should be registered"
+
+  - expr: "${captured.agent_list} contains 'dependent-service'"
+    message: "dependent-service should be registered"
+
+  - expr: "${captured.time_result} contains 'text'"
+    message: "system-agent get_current_time should return a response"
+
+  - expr: "${captured.fastmcp_time_result} contains 'text'"
+    message: "fastmcp-service get_current_time should return a response"
+
+  - expr: "${captured.enriched_info_result} contains 'fastmcp_service_name'"
+    message: "get_enriched_system_info should return enriched data"
+
+  - expr: "${captured.report_result} contains 'Test Report'"
+    message: "generate_report should return report with title"
+
+  - expr: "${captured.analysis_result} contains 'analysis_type'"
+    message: "analyze_data should return analysis result"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

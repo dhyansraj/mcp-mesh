@@ -110,7 +110,7 @@ agent.addTool({
     a: z.number().describe("First number"),
     b: z.number().describe("Second number"),
   }),
-  Execute: async (
+  execute: async (
     { name, a, b },
     add: McpMeshTool | null = null,      // dependencies[0]
     multiply: McpMeshTool | null = null  // dependencies[1]

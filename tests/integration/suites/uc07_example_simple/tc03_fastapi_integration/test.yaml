@@ -1,0 +1,123 @@
+# Test Case: tc03_fastapi_integration
+# Tests FastAPI apps with @mesh.route dependency injection
+# Dependency chain: FastAPI app -> fastmcp_agent -> system_agent
+
+name: "Test03 FastAPI Integration"
+description: "Test FastAPI apps with @mesh.route decorator for dependency injection"
+tags:
+  - example
+  - fastapi
+  - mesh_route
+  - dependency_injection
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/simple /workspace/
+    capture: copy_output
+
+  # Start MCP agents that provide capabilities
+  - name: "Start system_agent (base)"
+    handler: shell
+    command: "meshctl start simple/system_agent.py -d"
+    workdir: /workspace
+
+  - name: "Start fastmcp_agent (provides time_service and system_info_service)"
+    handler: shell
+    command: "meshctl start simple/fastmcp_agent.py -d"
+    workdir: /workspace
+
+  - name: "Wait for MCP agents to register"
+    handler: wait
+    seconds: 10
+
+  # Verify MCP agents registered
+  - name: "Verify MCP agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Start FastAPI app (simple_fastapi_router.py) in background
+  - name: "Start simple_fastapi_router app"
+    handler: shell
+    command: |
+      cd simple
+      nohup python simple_fastapi_router.py </dev/null >/dev/null 2>&1 &
+      sleep 10
+      curl -s --max-time 5 http://localhost:8080/ || { echo "Server failed to start"; exit 1; }
+    workdir: /workspace
+
+  # Test FastAPI endpoints with curl
+  - name: "Test root endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/"
+    workdir: /workspace
+    capture: root_result
+
+  - name: "Test health endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/api/v1/health"
+    workdir: /workspace
+    capture: health_result
+
+  - name: "Test time endpoint (uses time_service dependency)"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/api/v1/time"
+    workdir: /workspace
+    capture: time_result
+
+  - name: "Test system-info endpoint (uses system_info_service dependency)"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/api/v1/system-info"
+    workdir: /workspace
+    capture: sysinfo_result
+
+  - name: "Test both endpoint (uses both dependencies)"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/api/v1/both"
+    workdir: /workspace
+    capture: both_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'fastmcp-service'"
+    message: "fastmcp-service should be registered"
+
+  - expr: "${captured.root_result} contains 'Simple FastAPI Router'"
+    message: "Root endpoint should return app info"
+
+  - expr: "${captured.health_result} contains 'healthy'"
+    message: "Health endpoint should return healthy status"
+
+  - expr: "${captured.time_result} contains 'time'"
+    message: "Time endpoint should return time data"
+
+  - expr: "${captured.sysinfo_result} contains 'status'"
+    message: "System-info endpoint should return status"
+
+  - expr: "${captured.both_result} contains 'dependencies_available'"
+    message: "Both endpoint should return dependency info"
+
+post_run:
+  # Stop FastAPI app (kill uvicorn)
+  - handler: shell
+    command: "pkill -f 'uvicorn' 2>/dev/null || true"
+    ignore_errors: true
+  # Stop MCP agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
