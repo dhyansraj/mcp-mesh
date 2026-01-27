@@ -129,7 +129,7 @@ assertions:
   - expr: "${captured.py_greet_before} contains 'Hello, TestUser!'"
     message: "Python greet before modification should return original greeting"
 
-  - expr: "${captured.py_greet_before} not_contains 'WATCH_RELOAD'"
+  - expr: "${captured.py_greet_before} not contains 'WATCH_RELOAD'"
     message: "Python greet before modification should NOT contain WATCH_RELOAD"
 
   - expr: "${captured.py_greet_after} contains 'WATCH_RELOAD'"

@@ -63,7 +63,7 @@ test:
 
   - name: "Wait for consumer registration"
     handler: wait
-    seconds: 10
+    seconds: 15
 
   - name: "Test 1: Call fetch_required with only fast available"
     handler: shell
