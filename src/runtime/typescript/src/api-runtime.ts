@@ -509,10 +509,11 @@ export function introspectExpressRoutes(app: unknown): number {
   const registry = RouteRegistry.getInstance();
   let updatedCount = 0;
 
-  // Access Express internal router (Express 5 uses .router, Express 4 uses ._router)
+  // Access Express internal router (Express 4 uses ._router, Express 5 uses .router)
+  // Note: Express 4 throws deprecation error if you access .router, so try _router first
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const expressApp = app as any;
-  const router = expressApp.router || expressApp._router;
+  const router = expressApp._router || expressApp.router;
 
   if (!router || !router.stack) {
     console.warn("Express router not found - routes may not be registered yet");

@@ -1,0 +1,89 @@
+# Test Case: tc01_hello_world
+# Tests hello_world agent with system_agent dependency
+# Agents: system_agent, hello_world
+
+name: "Test01 Hello World"
+description: "Test hello_world agent greeting tools with system_agent dependency injection"
+tags:
+  - example
+  - hello_world
+  - dependency_injection
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/simple /workspace/
+    capture: copy_output
+
+  # Start system_agent first (hello_world depends on it)
+  - name: "Start system_agent"
+    handler: shell
+    command: "meshctl start simple/system_agent.py -d"
+    workdir: /workspace
+
+  - name: "Start hello_world"
+    handler: shell
+    command: "meshctl start simple/hello_world.py -d"
+    workdir: /workspace
+
+  - name: "Wait for agents to register"
+    handler: wait
+    seconds: 10
+
+  # Verify agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Test tool calls
+  - name: "Call get_current_time on system_agent"
+    handler: shell
+    command: "meshctl call system-agent:get_current_time"
+    workdir: /workspace
+    capture: time_result
+
+  - name: "Call hello_mesh_simple on hello_world"
+    handler: shell
+    command: "meshctl call hello-world:hello_mesh_simple"
+    workdir: /workspace
+    capture: hello_simple_result
+
+  - name: "Call hello_mesh_typed on hello_world"
+    handler: shell
+    command: "meshctl call hello-world:hello_mesh_typed"
+    workdir: /workspace
+    capture: hello_typed_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'hello-world'"
+    message: "hello-world should be registered"
+
+  - expr: "${captured.time_result} contains 'text'"
+    message: "get_current_time should return a response"
+
+  - expr: "${captured.hello_simple_result} contains 'Hello from MCP Mesh'"
+    message: "hello_mesh_simple should return greeting"
+
+  - expr: "${captured.hello_typed_result} contains 'text'"
+    message: "hello_mesh_typed should return a response"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

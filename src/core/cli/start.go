@@ -128,9 +128,6 @@ Examples:
 	cmd.Flags().String("cert-file", "", "TLS certificate file")
 	cmd.Flags().String("key-file", "", "TLS private key file")
 
-	// Validation flags
-	cmd.Flags().Bool("skip-checks", false, "Skip prerequisite validation (Python version, mcp-mesh package)")
-
 	// Development flags
 	cmd.Flags().BoolP("watch", "w", false, "Watch files and restart on changes")
 
@@ -210,9 +207,8 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	// Run pre-flight checks BEFORE forking to background (issue #444)
 	// This ensures validation errors are shown to the user, not hidden in log files
 	quiet, _ := cmd.Flags().GetBool("quiet")
-	skipChecks, _ := cmd.Flags().GetBool("skip-checks")
-	if !skipChecks && len(resolvedArgs) > 0 {
-		if err := runPrerequisiteValidation(cmd, resolvedArgs, quiet); err != nil {
+	if len(resolvedArgs) > 0 {
+		if err := runPrerequisiteValidation(resolvedArgs, quiet); err != nil {
 			return err
 		}
 	}
@@ -564,24 +560,14 @@ func (e *PrerequisiteError) Error() string {
 	return e.Message
 }
 
-// runPrerequisiteValidation handles the --skip-checks flag and displays errors.
+// runPrerequisiteValidation validates agent prerequisites and displays errors.
 // Extracted to avoid duplication between startStandardMode and startConnectOnlyMode.
-func runPrerequisiteValidation(cmd *cobra.Command, agentPaths []string, quiet bool) error {
-	skipChecks, _ := cmd.Flags().GetBool("skip-checks")
-
-	if skipChecks {
-		if !quiet {
-			fmt.Println("⚠️  Skipping prerequisite checks (--skip-checks)")
-		}
-		return nil
-	}
-
+func runPrerequisiteValidation(agentPaths []string, quiet bool) error {
 	if err := validateAgentPrerequisites(agentPaths, quiet); err != nil {
 		if prereqErr, ok := err.(*PrerequisiteError); ok {
 			fmt.Printf("\n❌ Prerequisite check failed: %s\n\n", prereqErr.Check)
 			fmt.Printf("%s\n\n", prereqErr.Message)
 			fmt.Printf("%s\n", prereqErr.Remediation)
-			fmt.Printf("\nTip: Use --skip-checks to bypass prerequisite validation (not recommended).\n")
 			return fmt.Errorf("prerequisite check failed")
 		}
 		return err

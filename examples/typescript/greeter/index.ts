@@ -20,7 +20,7 @@ const server = new FastMCP({ name: "Greeter", version: "1.0.0" });
 
 const agent = mesh(server, {
   name: "greeter",
-  port: 9005,
+  httpPort: 9005,
   description: "Greeter agent with dependency injection example",
 });
 
@@ -110,7 +110,7 @@ agent.addTool({
     a: z.number().describe("First number"),
     b: z.number().describe("Second number"),
   }),
-  Execute: async (
+  execute: async (
     { name, a, b },
     add: McpMeshTool | null = null,      // dependencies[0]
     multiply: McpMeshTool | null = null  // dependencies[1]

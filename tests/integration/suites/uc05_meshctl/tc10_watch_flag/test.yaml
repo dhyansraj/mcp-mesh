@@ -1,0 +1,153 @@
+# Test Case: tc10_watch_flag
+# Tests meshctl start --watch flag for hot reload functionality
+# Verifies that agents reload when source files are modified
+
+name: "Watch Flag Hot Reload"
+description: "Test meshctl start -w flag - agents should reload when source files change"
+tags:
+  - meshctl
+  - watch
+  - hot-reload
+  - python
+  - typescript
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+    capture: copy_output
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # ========== PYTHON AGENT WATCH TEST ==========
+
+  - name: "Start py-simple-agent with watch flag"
+    handler: shell
+    command: "meshctl start py-simple-agent/main.py -d -w"
+    workdir: /workspace
+
+  - name: "Wait for py-simple-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify py-simple-agent registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: py_agent_list
+
+  - name: "Call greet before modification"
+    handler: shell
+    command: 'meshctl call py-simple-agent:greet ''{"name": "TestUser"}'''
+    workdir: /workspace
+    capture: py_greet_before
+
+  - name: "Modify py-simple-agent source with sed"
+    handler: shell
+    command: |
+      sed -i 's/Hello, {name}!/WATCH_RELOAD: Hello, {name}!/g' py-simple-agent/main.py
+    workdir: /workspace
+    capture: py_sed_output
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 8
+
+  - name: "Call greet after modification"
+    handler: shell
+    command: 'meshctl call py-simple-agent:greet ''{"name": "TestUser"}'''
+    workdir: /workspace
+    capture: py_greet_after
+
+  # ========== TYPESCRIPT AGENT WATCH TEST ==========
+
+  - name: "Start ts-math-agent with watch flag"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d -w"
+    workdir: /workspace
+
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Verify ts-math-agent registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: ts_agent_list
+
+  - name: "Call add before modification"
+    handler: shell
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    workdir: /workspace
+    capture: ts_add_before
+
+  - name: "Modify ts-math-agent source with sed"
+    handler: shell
+    command: |
+      sed -i 's/return a + b;/return a + b + 1000;/g' ts-math-agent/src/index.ts
+    workdir: /workspace
+    capture: ts_sed_output
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 10
+
+  - name: "Call add after modification"
+    handler: shell
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    workdir: /workspace
+    capture: ts_add_after
+
+  # Final verification
+  - name: "Final agent list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: final_agent_list
+
+assertions:
+  # Python agent assertions
+  - expr: "${captured.py_agent_list} contains 'py-simple-agent'"
+    message: "py-simple-agent should be registered initially"
+
+  - expr: "${captured.py_greet_before} contains 'Hello, TestUser!'"
+    message: "Python greet before modification should return original greeting"
+
+  - expr: "${captured.py_greet_before} not contains 'WATCH_RELOAD'"
+    message: "Python greet before modification should NOT contain WATCH_RELOAD"
+
+  - expr: "${captured.py_greet_after} contains 'WATCH_RELOAD'"
+    message: "Python greet after modification should contain WATCH_RELOAD (hot reload worked)"
+
+  # TypeScript agent assertions
+  - expr: "${captured.ts_agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered initially"
+
+  - expr: "${captured.ts_add_before} contains '8'"
+    message: "TypeScript add before modification should return 8 (5+3)"
+
+  - expr: "${captured.ts_add_after} contains '1008'"
+    message: "TypeScript add after modification should return 1008 (5+3+1000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop --agents 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

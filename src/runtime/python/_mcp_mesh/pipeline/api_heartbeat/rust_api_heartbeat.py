@@ -104,9 +104,10 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         # Build dependency specs
         deps = []
         for dep_cap in dependencies:
+            # Tags must be serialized to JSON string (Rust core expects string, not list)
             dep_spec = core.DependencySpec(
                 capability=dep_cap,
-                tags=[],
+                tags=json.dumps([]),
                 version=None,
             )
             deps.append(dep_spec)
@@ -136,6 +137,7 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         http_port=http_port,
         http_host=http_host,
         namespace=namespace,
+        agent_type="api",  # API services only consume capabilities, not provide them
         tools=tools if tools else None,
         llm_agents=None,  # API services don't have LLM agents
         heartbeat_interval=heartbeat_interval,
@@ -272,6 +274,8 @@ async def _handle_api_dependency_change(
                 )
                 if not current_service_id:
                     # Use config resolver for consistent env var handling
+                    from ...shared.config_resolver import get_config_value
+
                     current_service_id = get_config_value("MCP_MESH_AGENT_ID")
 
                 is_self_dependency = (
