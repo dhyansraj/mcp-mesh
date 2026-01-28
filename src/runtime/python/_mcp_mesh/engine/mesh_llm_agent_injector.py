@@ -65,6 +65,75 @@ class MeshLlmAgentInjector(BaseInjector):
         super().__init__()
         self._llm_agents: dict[str, dict[str, Any]] = {}
 
+    def initialize_direct_llm_agents(self) -> None:
+        """
+        Initialize LLM agents that use direct LiteLLM (no mesh delegation).
+
+        This handles the case where:
+        - provider is a string (e.g., "claude") - direct LiteLLM call
+        - filter is None or empty - no mesh tools needed
+
+        These agents don't need to wait for registry response since all
+        information is available at decorator time.
+        """
+        llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+
+        for function_id, llm_metadata in llm_agents.items():
+            config = llm_metadata.config
+            provider = config.get("provider")
+            filter_config = config.get("filter")
+
+            # Check if this is a direct LiteLLM agent (provider is string, not dict)
+            is_direct_llm = isinstance(provider, str)
+
+            # Check if no tools needed (filter is None or empty)
+            has_no_filter = filter_config is None or (
+                isinstance(filter_config, list) and len(filter_config) == 0
+            )
+
+            if is_direct_llm and has_no_filter:
+                # Skip if already initialized
+                if function_id in self._llm_agents:
+                    continue
+
+                logger.info(
+                    f"🔧 Initializing direct LiteLLM agent for '{function_id}' "
+                    f"(provider={provider}, no filter)"
+                )
+
+                # Initialize empty tools data for direct LiteLLM
+                self._llm_agents[function_id] = {
+                    "config": config,
+                    "output_type": llm_metadata.output_type,
+                    "param_name": llm_metadata.param_name,
+                    "tools_metadata": [],  # No tools for direct LiteLLM
+                    "tools_proxies": {},  # No tool proxies needed
+                    "function": llm_metadata.function,
+                    "provider_proxy": None,  # No mesh delegation
+                }
+
+                # Get the wrapper and update it with LLM agent
+                wrapper = llm_metadata.function
+                if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
+                    llm_agent = self._create_llm_agent(function_id)
+                    wrapper._mesh_update_llm_agent(llm_agent)
+                    logger.info(
+                        f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}' (direct LiteLLM mode)"
+                    )
+
+                    # Set factory for per-call context agent creation (template support)
+                    if config.get("is_template", False):
+                        def create_context_agent(
+                            context_value: Any, _func_id: str = function_id
+                        ) -> MeshLlmAgent:
+                            """Factory to create MeshLlmAgent with context for template rendering."""
+                            return self._create_llm_agent(_func_id, context_value=context_value)
+
+                        wrapper._mesh_create_context_agent = create_context_agent
+                        logger.info(
+                            f"🎯 Set context agent factory for template-based function '{function_id}' (direct LiteLLM mode)"
+                        )
+
     def _build_function_name_to_id_mapping(self) -> dict[str, str]:
         """
         Build mapping from function_name to function_id.
@@ -222,6 +291,22 @@ class MeshLlmAgentInjector(BaseInjector):
                 f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}'"
                 + (" (with tools)" if has_filter else " (simple LLM mode)")
             )
+
+            # Set factory for per-call context agent creation (template support)
+            # This is critical for filter=None cases where _process_function_tools isn't called
+            config_dict = llm_metadata.config if llm_metadata else {}
+            if config_dict.get("is_template", False):
+                # Capture function_id by value using default argument to avoid closure issues
+                def create_context_agent(
+                    context_value: Any, _func_id: str = function_id
+                ) -> MeshLlmAgent:
+                    """Factory to create MeshLlmAgent with context for template rendering."""
+                    return self._create_llm_agent(_func_id, context_value=context_value)
+
+                wrapper._mesh_create_context_agent = create_context_agent
+                logger.info(
+                    f"🎯 Set context agent factory for template-based function '{function_id}' (simple LLM mode)"
+                )
         elif wrapper and hasattr(wrapper, "_mesh_update_llm_agent") and has_filter:
             logger.debug(
                 f"⏳ Provider set for '{function_id}', waiting for tools before updating wrapper"
@@ -458,36 +543,60 @@ class MeshLlmAgentInjector(BaseInjector):
         def inject_llm_agent(func: Callable, args: tuple, kwargs: dict) -> tuple:
             """Inject LLM agent into kwargs if not provided."""
             if param_name not in kwargs or kwargs.get(param_name) is None:
-                # Phase 4: Check if templates are enabled
+                # Get config from runtime data or fallback to decorator registry.
+                # Runtime data (self._llm_agents) is populated during heartbeat and has
+                # tools/provider info. Decorator registry is populated at decorator time
+                # and always has config/context_param. For self-dependency calls that
+                # happen before heartbeat, we need the decorator registry fallback.
+                agent_data = None
+                config_dict = None
+
+                # Try runtime data first (has tools, provider from heartbeat)
                 if function_id in self._llm_agents:
                     agent_data = self._llm_agents[function_id]
-                    config_dict = agent_data["config"]
-                    is_template = config_dict.get("is_template", False)
+                    config_dict = agent_data.get("config")
 
-                    if is_template:
-                        # Templates enabled - create per-call agent with context
-                        # Import signature analyzer for context detection
-                        from .signature_analyzer import get_context_parameter_name
-
-                        # Detect context parameter
-                        context_param_name = config_dict.get("context_param")
-                        context_info = get_context_parameter_name(
-                            func, explicit_name=context_param_name
+                # Fallback to decorator registry (always available, has context_param)
+                # This is critical for self-dependency calls that happen before heartbeat
+                if config_dict is None:
+                    llm_agents_registry = DecoratorRegistry.get_mesh_llm_agents()
+                    if function_id in llm_agents_registry:
+                        llm_metadata = llm_agents_registry[function_id]
+                        config_dict = llm_metadata.config
+                        logger.debug(
+                            f"🔄 Using DecoratorRegistry fallback for '{function_id}' config (self-dependency before heartbeat)"
                         )
 
-                        # Extract context value from call
-                        context_value = None
-                        if context_info is not None:
-                            ctx_name, ctx_index = context_info
+                # Check if templates are enabled
+                is_template = config_dict.get("is_template", False) if config_dict else False
 
-                            # Try kwargs first
-                            if ctx_name in kwargs:
-                                context_value = kwargs[ctx_name]
-                            # Then try positional args
-                            elif ctx_index < len(args):
-                                context_value = args[ctx_index]
+                if is_template and config_dict:
+                    # Templates enabled - create per-call agent with context
+                    # Import signature analyzer for context detection
+                    from .signature_analyzer import get_context_parameter_name
 
-                        # Create agent with context for this call
+                    # Detect context parameter
+                    context_param_name = config_dict.get("context_param")
+                    context_info = get_context_parameter_name(
+                        func, explicit_name=context_param_name
+                    )
+
+                    # Extract context value from call
+                    context_value = None
+                    if context_info is not None:
+                        ctx_name, ctx_index = context_info
+
+                        # Try kwargs first
+                        if ctx_name in kwargs:
+                            context_value = kwargs[ctx_name]
+                        # Then try positional args
+                        elif ctx_index < len(args):
+                            context_value = args[ctx_index]
+
+                    # Create agent with context for this call
+                    # Note: _create_llm_agent requires function_id in self._llm_agents
+                    # If not available yet, use cached agent with context_value set directly
+                    if function_id in self._llm_agents:
                         current_agent = self._create_llm_agent(
                             function_id, context_value=context_value
                         )
@@ -495,22 +604,41 @@ class MeshLlmAgentInjector(BaseInjector):
                             f"🤖 Created MeshLlmAgent with context for {func.__name__}.{param_name}"
                         )
                     else:
-                        # No template - use cached agent (existing behavior)
+                        # Runtime data not yet available - use cached agent but log warning
+                        # The cached agent may have been created without context
                         current_agent = wrapper._mesh_llm_agent
                         if current_agent is not None:
-                            logger.debug(
-                                f"🤖 Injected MeshLlmAgent into {func.__name__}.{param_name}"
-                            )
+                            # Update context on the cached agent if possible
+                            if hasattr(current_agent, "_context_value"):
+                                current_agent._context_value = context_value
+                                logger.debug(
+                                    f"🤖 Updated context on cached MeshLlmAgent for {func.__name__}.{param_name}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"🤖 Injected cached MeshLlmAgent into {func.__name__}.{param_name} (context may not be applied)"
+                                )
                         else:
                             logger.warning(
                                 f"⚠️ MeshLlmAgent for {func.__name__}.{param_name} is None (tools not yet received from registry)"
                             )
+                elif config_dict:
+                    # No template - use cached agent (existing behavior)
+                    current_agent = wrapper._mesh_llm_agent
+                    if current_agent is not None:
+                        logger.debug(
+                            f"🤖 Injected MeshLlmAgent into {func.__name__}.{param_name}"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ MeshLlmAgent for {func.__name__}.{param_name} is None (tools not yet received from registry)"
+                        )
                 else:
-                    # No agent data - use cached (backward compatibility)
+                    # No config found anywhere - use cached (backward compatibility)
                     current_agent = wrapper._mesh_llm_agent
                     if current_agent is None:
                         logger.warning(
-                            f"⚠️ MeshLlmAgent for {func.__name__}.{param_name} is None (tools not yet received from registry)"
+                            f"⚠️ MeshLlmAgent for {func.__name__}.{param_name} is None (no config found)"
                         )
 
                 kwargs[param_name] = current_agent

@@ -272,6 +272,14 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
     if event_type == "agent_registered":
         logger.info(f"Agent registered with ID: {event.agent_id}")
 
+        # Initialize direct LiteLLM agents that don't need mesh delegation
+        # These agents have provider="string" and filter=None, so all info is
+        # available at decorator time - no need to wait for registry response
+        from ...engine.dependency_injector import get_global_injector
+
+        injector = get_global_injector()
+        injector.initialize_direct_llm_agents()
+
     elif event_type == "registration_failed":
         logger.error(f"Agent registration failed: {event.error}")
 

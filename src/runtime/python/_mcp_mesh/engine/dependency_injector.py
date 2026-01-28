@@ -348,6 +348,15 @@ class DependencyInjector:
         logger.debug(f"🤖 Creating LLM injection wrapper for {function_id}")
         return self._llm_injector.create_injection_wrapper(func, function_id)
 
+    def initialize_direct_llm_agents(self) -> None:
+        """
+        Initialize LLM agents that use direct LiteLLM (no mesh delegation).
+
+        This should be called during agent startup to initialize agents that
+        don't need to wait for registry response.
+        """
+        self._llm_injector.initialize_direct_llm_agents()
+
     def create_injection_wrapper(
         self, func: Callable, dependencies: list[str]
     ) -> Callable:
