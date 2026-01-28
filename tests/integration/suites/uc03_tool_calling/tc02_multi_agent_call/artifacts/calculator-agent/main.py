@@ -8,7 +8,7 @@ No hardcoded port - mesh auto-assigns an available port.
 
 import mesh
 from fastmcp import FastMCP
-from mesh.types import McpMeshAgent
+from mesh.types import McpMeshTool
 
 app = FastMCP("Calculator Agent")
 
@@ -21,7 +21,7 @@ app = FastMCP("Calculator Agent")
     dependencies=["add"],  # Depends on math-agent's add capability
 )
 async def sum_three(
-    a: float, b: float, c: float, add_svc: McpMeshAgent = None
+    a: float, b: float, c: float, add_svc: McpMeshTool = None
 ) -> float:
     """
     Add three numbers by calling math-agent's add tool twice.
@@ -43,7 +43,7 @@ async def sum_three(
     tags=["calculator"],
     dependencies=["multiply"],  # Depends on math-agent's multiply capability
 )
-async def square(n: float, multiply_svc: McpMeshAgent = None) -> float:
+async def square(n: float, multiply_svc: McpMeshTool = None) -> float:
     """Calculate n squared by calling math-agent's multiply."""
     return await multiply_svc(a=n, b=n)
 
@@ -58,8 +58,8 @@ async def square(n: float, multiply_svc: McpMeshAgent = None) -> float:
 async def sum_of_squares(
     a: float,
     b: float,
-    add_svc: McpMeshAgent = None,
-    multiply_svc: McpMeshAgent = None,
+    add_svc: McpMeshTool = None,
+    multiply_svc: McpMeshTool = None,
 ) -> float:
     """
     Calculate a^2 + b^2 using math-agent's tools.

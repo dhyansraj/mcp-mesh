@@ -2,8 +2,8 @@
 # Pre-built image with all MCP Mesh packages for faster test execution
 #
 # Build args:
-#   VERSION - The MCP Mesh version (e.g., 0.8.0-beta.6)
-#   PIP_VERSION - The pip version format (e.g., 0.8.0b6)
+#   VERSION - The MCP Mesh version (e.g., 0.8.0)
+#   PIP_VERSION - The pip version format (e.g., 0.8.0)
 
 FROM python:3.11-slim
 

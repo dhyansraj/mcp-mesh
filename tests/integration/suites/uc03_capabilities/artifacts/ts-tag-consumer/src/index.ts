@@ -2,7 +2,7 @@
  * Consumer agent that uses tag selectors for dependencies.
  */
 
-import { FastMCP, mesh, type McpMeshAgent } from "@mcpmesh/sdk";
+import { FastMCP, mesh, type McpMeshTool } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({
@@ -29,7 +29,7 @@ agent.addTool({
   }),
   execute: async (
     { query },
-    data_service: McpMeshAgent | null = null
+    data_service: McpMeshTool | null = null
   ) => {
     if (!data_service) {
       return "NO_PROVIDER";
@@ -53,7 +53,7 @@ agent.addTool({
   }),
   execute: async (
     { query },
-    data_service: McpMeshAgent | null = null
+    data_service: McpMeshTool | null = null
   ) => {
     if (!data_service) {
       return "NO_PROVIDER";
@@ -77,7 +77,7 @@ agent.addTool({
   }),
   execute: async (
     { query },
-    data_service: McpMeshAgent | null = null
+    data_service: McpMeshTool | null = null
   ) => {
     if (!data_service) {
       return "NO_PROVIDER";
@@ -101,7 +101,7 @@ agent.addTool({
   }),
   execute: async (
     { query },
-    data_service: McpMeshAgent | null = null
+    data_service: McpMeshTool | null = null
   ) => {
     if (!data_service) {
       return "NO_PROVIDER";
