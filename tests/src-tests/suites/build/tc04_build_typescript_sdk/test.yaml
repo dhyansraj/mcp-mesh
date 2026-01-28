@@ -56,6 +56,7 @@ test:
         ${config.build.image} \
         bash -c "
           mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core && \
+          mkdir -p /out/packages && \
           cp /src-host/src/runtime/typescript/package.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp /src-host/src/runtime/typescript/tsconfig.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp -r /src-host/src/runtime/typescript/src /src/mcp-mesh/src/runtime/typescript/ && \

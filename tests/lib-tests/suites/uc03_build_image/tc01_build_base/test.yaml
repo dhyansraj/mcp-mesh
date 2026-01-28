@@ -23,10 +23,10 @@ test:
   # Get the Dockerfile path (artifacts are in the same directory as test.yaml)
   - handler: shell
     command: |
-      # Find the Dockerfile in lib-tests suite
-      DOCKERFILE=$(find /Users/dhyanraj/workspace/github/mcp-mesh-test-suite/lib-tests -name "Dockerfile" -path "*tc01_build_base*" 2>/dev/null | head -1)
-      if [ -z "$DOCKERFILE" ] || [ ! -f "$DOCKERFILE" ]; then
-        echo "ERROR: Dockerfile not found"
+      # Dockerfile is in the artifacts directory
+      DOCKERFILE="${artifacts_path}/Dockerfile"
+      if [ ! -f "$DOCKERFILE" ]; then
+        echo "ERROR: Dockerfile not found at $DOCKERFILE"
         exit 1
       fi
       echo "Dockerfile: $DOCKERFILE"
