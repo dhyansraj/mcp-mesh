@@ -17,7 +17,7 @@ app = FastMCP("py-tag-consumer")
 )
 async def fetch_required(
     query: str,
-    data_service: mesh.McpMeshAgent = None,
+    data_service: mesh.McpMeshTool = None,
 ) -> str:
     """Fetch data from provider that has 'api' tag."""
     if data_service is None:
@@ -37,7 +37,7 @@ async def fetch_required(
 )
 async def fetch_prefer_fast(
     query: str,
-    data_service: mesh.McpMeshAgent = None,
+    data_service: mesh.McpMeshTool = None,
 ) -> str:
     """Fetch data preferring provider with 'fast' tag."""
     if data_service is None:
@@ -57,7 +57,7 @@ async def fetch_prefer_fast(
 )
 async def fetch_exclude_deprecated(
     query: str,
-    data_service: mesh.McpMeshAgent = None,
+    data_service: mesh.McpMeshTool = None,
 ) -> str:
     """Fetch data excluding provider with 'deprecated' tag."""
     if data_service is None:
@@ -77,7 +77,7 @@ async def fetch_exclude_deprecated(
 )
 async def fetch_combined(
     query: str,
-    data_service: mesh.McpMeshAgent = None,
+    data_service: mesh.McpMeshTool = None,
 ) -> str:
     """Fetch data requiring api, preferring accurate, excluding deprecated."""
     if data_service is None:

@@ -16,7 +16,7 @@ app = FastMCP("py-optional-dep-agent")
 async def smart_add(
     a: int,
     b: int,
-    calc_add: mesh.McpMeshAgent = None,  # Optional - will be None if not available
+    calc_add: mesh.McpMeshTool = None,  # Optional - will be None if not available
 ) -> str:
     """Add numbers using calc_add tool if available, otherwise do it locally."""
     if calc_add is not None:
@@ -37,7 +37,7 @@ async def smart_add(
     dependencies=["calc_add"],
 )
 async def check_calculator(
-    calc_add: mesh.McpMeshAgent = None,
+    calc_add: mesh.McpMeshTool = None,
 ) -> str:
     """Check if calc_add tool is wired."""
     if calc_add is not None:

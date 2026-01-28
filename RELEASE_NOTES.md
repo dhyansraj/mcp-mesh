@@ -1,13 +1,29 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0-beta.9)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0)
 
-## v0.8.0-beta.9 (2026-01-20)
+## v0.8.0 (2026-01-27)
+
+### ✨ New Features
+
+- **Full TypeScript SDK** with `@mcpmesh/sdk` npm package (#391, #398, #400, #403, #406)
+  - Express integration via `mesh.route()` for dependency injection (#396)
+  - LLM agent support with `mesh.llm()` and provider plugin architecture (#398, #400)
+  - Vercel AI SDK v6 compatibility (#412)
+  - meshctl TypeScript support - start, watch, and manage TS agents (#406)
+- **Gemini (Google AI) support** - New LLM provider alongside Claude/OpenAI (#416)
 
 ### 🔧 Improvements
 
+- **Rust core runtime** for multi-language FFI support (#388, #394)
 - **Gemini 2.5 Pro default** (#447) - Updated scaffold to use `gemini-2.5-pro` for parity with Claude Sonnet 4.5 and GPT-4o
-- **AGE and LAST SEEN columns** (#452) - `meshctl list` now shows AGE (time since registration) and LAST SEEN (time since heartbeat), following kubectl conventions
+- **Agent name prefix matching** (#417) - `meshctl call calc` matches `calculator-agent`
+- **AGE and LAST SEEN columns** (#452) - `meshctl list` now shows time since registration/heartbeat, following kubectl conventions
+- **Rename McpMeshAgent to McpMeshTool** (#431) - Dependency injection type renamed for clarity
+  - `McpMeshTool` is now the primary type for injected tool proxies
+  - `McpMeshAgent` remains as deprecated alias for backward compatibility
+  - Python: Shows runtime `DeprecationWarning` when `McpMeshAgent` is used
+  - TypeScript: `@deprecated` JSDoc annotation for IDE warnings
 - **Pre-flight checks before forking** (#444) - Validation errors now shown to user instead of hidden in log files when using `--detach`
 - **Shutdown order fix** (#442) - Agents now stop first (in parallel), then registry. Added retry logic with exponential backoff for SQLite lock errors
 - **Startup cleanup for stale agents** (#443) - Registry marks agents as unhealthy if no heartbeat within threshold (default 30s). Safe for multi-replica K8s deployments
@@ -17,35 +33,6 @@
 - **Python SDK race condition** (#448) - Fixed `provider_proxy` being wiped by tools update. Now uses field-level updates to preserve data
 - **TypeScript SDK template paths** (#449) - `file://` templates now resolve relative to package.json location, not `process.cwd()`
 - **Scaffold template cleanup** (#446, #450) - Removed redundant transitive dependencies (`@ai-sdk/*`, `zod`) from TypeScript templates
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.0-beta.8...v0.8.0-beta.9)
-
-## v0.8.0-beta.8 (2026-01-18)
-
-### 🎯 TypeScript SDK (Major)
-
-- **Full TypeScript support** with `@mcpmesh/sdk` npm package (#391, #398, #400, #403, #406)
-- **Rust core runtime** for multi-language FFI support (#388, #394)
-- **Express integration** via `mesh.route()` for dependency injection (#396)
-- **LLM agent support** with `mesh.llm()` and provider plugin architecture (#398, #400)
-- **Vercel AI SDK v6 compatibility** (#412)
-- **meshctl TypeScript support** - start, watch, and manage TS agents (#406)
-
-### ✨ New Features
-
-- **Gemini (Google AI) support** - New LLM provider alongside Claude/OpenAI (#416)
-- **Agent name prefix matching** - `meshctl call calc` matches `calculator-agent` (#417)
-
-### 🔧 Improvements
-
-- **Rename McpMeshAgent to McpMeshTool** (#431) - Dependency injection type renamed for clarity
-  - `McpMeshTool` is now the primary type for injected tool proxies
-  - `McpMeshAgent` remains as deprecated alias for backward compatibility
-  - Python: Shows runtime `DeprecationWarning` when `McpMeshAgent` is used
-  - TypeScript: `@deprecated` JSDoc annotation for IDE warnings
-
-### 🐛 Bug Fixes
-
 - **addLlmProviderTool** now respects the `name` parameter (#407)
 - **http_port=0 auto-assignment** (#430) - Fixed port auto-assignment in both Python and TypeScript SDKs
   - Python: Port detection now works correctly with uvicorn auto-assigned ports
@@ -56,7 +43,7 @@
 - README refresh with Python/TypeScript dual-language examples (#410)
 - Feature comparison table and proxy/LLM documentation updates (#410)
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.20...v0.7.21)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0)
 
 ## v0.7.21 (2026-01-07)
 

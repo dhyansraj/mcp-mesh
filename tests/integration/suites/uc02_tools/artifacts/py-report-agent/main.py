@@ -15,7 +15,7 @@ app = FastMCP("py-report-agent")
 )
 async def sum_report(
     numbers: list[int],
-    calc_add: mesh.McpMeshAgent = None,  # Injected tool (will be McpMeshTool)
+    calc_add: mesh.McpMeshTool = None,  # Injected tool (will be McpMeshTool)
 ) -> str:
     """Generate a report summing all numbers using calculator."""
     if not numbers:
@@ -44,7 +44,7 @@ async def sum_report(
 )
 async def product_report(
     numbers: list[int],
-    calc_multiply: mesh.McpMeshAgent = None,  # Injected tool
+    calc_multiply: mesh.McpMeshTool = None,  # Injected tool
 ) -> str:
     """Generate a report multiplying all numbers using calculator."""
     if not numbers:
