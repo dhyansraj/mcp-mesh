@@ -11,13 +11,11 @@ tags:
   - excluded
   - typescript
 timeout: 180
-
 pre_run:
   # TypeScript-only test - just need Node.js + meshctl (no Python venv)
   - routine: global.setup_environment
     params:
       meshctl_version: "${config.packages.cli_version}"
-
 test:
   # Copy TypeScript artifacts
   - name: "Copy TypeScript artifacts"
@@ -27,49 +25,40 @@ test:
       cp -r /uc-artifacts/ts-fast-provider /workspace/
       cp -r /uc-artifacts/ts-tag-consumer /workspace/
     capture: copy_output
-
   # Install npm dependencies (handler auto-detects local/published mode)
   - name: "Install deprecated provider dependencies"
     handler: npm-install
     path: /workspace/ts-deprecated-provider
-
   - name: "Install fast provider dependencies"
     handler: npm-install
     path: /workspace/ts-fast-provider
-
   - name: "Install tag consumer dependencies"
     handler: npm-install
     path: /workspace/ts-tag-consumer
-
   # Start both providers
   - name: "Start both TS providers"
     handler: shell
     command: "meshctl start ts-deprecated-provider/src/index.ts ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_providers
-
   - name: "Wait for providers registration"
     handler: wait
-    seconds: 10
-
+    seconds: 15
   # Start consumer
   - name: "Start TS tag consumer"
     handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer
-
   - name: "Wait for consumer registration"
     handler: wait
-    seconds: 10
-
+    seconds: 15
   # Verify all agents registered
   - name: "Verify all agents registered"
     handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
-
   # Call fetch_exclude_deprecated which excludes "-deprecated"
   - name: "Call fetch_exclude_deprecated with excluded tag"
     handler: shell
@@ -88,17 +77,13 @@ test:
       fi
     workdir: /workspace
     capture: call_excluded
-
 assertions:
   - expr: "${captured.list_output} contains 'ts-deprecated-provider'"
     message: "TS Deprecated provider should be registered"
-
   - expr: "${captured.list_output} contains 'ts-fast-provider'"
     message: "TS Fast provider should be registered"
-
   - expr: "${captured.call_excluded} contains 'PASS'"
     message: "Should exclude deprecated and match fast provider"
-
 post_run:
   - handler: shell
     command: "meshctl stop 2>/dev/null || true"
