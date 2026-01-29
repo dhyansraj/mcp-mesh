@@ -1,0 +1,125 @@
+# Test Case: tc02_context_self_dep_mesh
+# Tests context_param with self-dependency using mesh delegation (provider={"capability": "llm"})
+# Verifies the fix for context_param values being passed to Jinja2 template renderer via mesh
+
+name: "Context Self-Dependency - Mesh Delegation"
+description: "Test context_param works with self-dependency calls using mesh delegation to LLM provider"
+tags:
+  - llm
+  - mesh-delegation
+  - prompt-template
+  - self-dependency
+  - context-param
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace (including .env, prompts, and claude-provider)
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/. /workspace/
+    capture: copy_output
+
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Start the Claude provider first (mesh delegation target)
+  - name: "Start claude-provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9010 -d"
+    workdir: /workspace
+    capture: provider_start_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list
+
+  # Start the test agent (depends on provider for mesh delegation)
+  - name: "Start context-self-dep-mesh-test agent"
+    handler: shell
+    command: "meshctl start prompt-template-examples/test_008_context_self_dep_mesh.py -d"
+    workdir: /workspace
+    capture: agent_start_output
+
+  # Wait for agent to register and resolve dependencies
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are running
+  - name: "Verify agents are running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call the self-dependency context test tool (mesh delegation path)
+  - name: "Call test_context_self_dep_mesh"
+    handler: shell
+    command: "meshctl call test_context_self_dep_mesh '{}'"
+    workdir: /workspace
+    capture: test_result
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Provider registered successfully
+  - expr: ${captured.provider_list} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+
+  # Test agent registered successfully
+  - expr: ${captured.agent_list} contains 'context-self-dep-mesh-test'
+    message: "context-self-dep-mesh-test agent should appear in meshctl list"
+
+  # Tools are registered
+  - expr: ${captured.tools_output} contains 'test_context_self_dep_mesh'
+    message: "test_context_self_dep_mesh tool should be listed"
+
+  - expr: ${captured.tools_output} contains 'extract_memories_mesh'
+    message: "extract_memories_mesh tool should be listed"
+
+  - expr: ${captured.tools_output} contains 'claude_provider'
+    message: "claude_provider tool should be listed from provider"
+
+  # Test passed - context was passed through to template via mesh delegation
+  - expr: ${captured.test_result} contains 'test_passed'
+    message: "Test result should contain test_passed field"
+
+  - expr: ${captured.test_result} contains 'PASS'
+    message: "Test should pass - context_param should work with self-dependency (mesh delegation)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
