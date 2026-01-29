@@ -1,0 +1,76 @@
+# Test Case: tc03_ts_direct_vercel
+# Tests TypeScript LLM agent using direct Vercel AI SDK (no mesh delegation)
+# Verifies context_param works with TypeScript SDK direct mode
+
+name: "TypeScript Direct Vercel AI SDK"
+description: "Test TypeScript LLM agent calling Vercel AI SDK directly (provider: 'claude')"
+tags:
+  - typescript
+  - llm
+  - vercel
+  - direct
+  - prompt-template
+  - context-param
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/context-self-dep-ts-direct /workspace/
+      cp /uc-artifacts/.env /workspace/
+    capture: copy_output
+
+  - name: "Install dependencies"
+    handler: npm-install
+    path: /workspace/context-self-dep-ts-direct
+
+  - name: "Start direct agent"
+    handler: shell
+    command: "meshctl start context-self-dep-ts-direct/src/index.ts --env-file .env -d --debug"
+    workdir: /workspace
+
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify agent registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Test context_param: userName should appear in response (proves context reached template)
+  - name: "Call direct LLM tool with context"
+    handler: shell
+    command: |
+      meshctl call context_self_dep_ts_direct '{"ctx": {"inputText": "What is 2+2?", "userName": "TestUserBob"}}'
+    workdir: /workspace
+    capture: llm_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'context-self-dep-ts-direct'"
+    message: "Direct agent should be registered"
+
+  # Key assertion: userName from context must appear in response (proves context_param works)
+  - expr: "${captured.llm_result} contains 'TestUserBob'"
+    message: "Response should contain userName from context (proves context_param works)"
+
+  - expr: "${captured.llm_result} contains '4'"
+    message: "LLM response should contain the answer 4"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

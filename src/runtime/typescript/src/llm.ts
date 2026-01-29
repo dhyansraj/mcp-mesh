@@ -336,21 +336,40 @@ export function buildLlmAgentSpecs(): Array<{
   }> = [];
 
   for (const [, config] of registry.getAllConfigs()) {
-    // Serialize provider to JSON
+    // Apply MESH_LLM_* env var overrides (matches Python SDK behavior)
+    // ENV > config > defaults
+
+    // MESH_LLM_PROVIDER: Override provider for direct mode (not mesh delegation)
+    let resolvedProvider: string | object;
+    if (typeof config.provider === "string") {
+      resolvedProvider = process.env.MESH_LLM_PROVIDER || config.provider;
+    } else {
+      resolvedProvider = config.provider; // mesh delegation - no override
+    }
+
     const providerJson =
-      typeof config.provider === "string"
-        ? JSON.stringify({ direct: config.provider })
-        : JSON.stringify(config.provider);
+      typeof resolvedProvider === "string"
+        ? JSON.stringify({ direct: resolvedProvider })
+        : JSON.stringify(resolvedProvider);
 
     // Serialize filter to JSON if present
     const filterJson = config.filter ? JSON.stringify(config.filter) : undefined;
+
+    // MESH_LLM_FILTER_MODE: Override filter mode
+    const resolvedFilterMode =
+      process.env.MESH_LLM_FILTER_MODE || config.filterMode;
+
+    // MESH_LLM_MAX_ITERATIONS: Override max iterations
+    const resolvedMaxIterations = process.env.MESH_LLM_MAX_ITERATIONS
+      ? parseInt(process.env.MESH_LLM_MAX_ITERATIONS, 10)
+      : config.maxIterations;
 
     specs.push({
       functionId: config.functionId,
       provider: providerJson,
       filter: filterJson,
-      filterMode: config.filterMode,
-      maxIterations: config.maxIterations,
+      filterMode: resolvedFilterMode,
+      maxIterations: resolvedMaxIterations,
     });
   }
 

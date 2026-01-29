@@ -1,13 +1,16 @@
-# Test Case: tc02_mesh_delegation
-# Tests TypeScript LLM agent using mesh delegation to a claude provider
+# Test Case: tc04_ts_mesh_claude
+# Tests TypeScript LLM agent using mesh delegation to Claude provider
+# Verifies context_param works with TypeScript SDK mesh delegation
 
-name: "TypeScript Mesh LLM Delegation"
-description: "Test TypeScript LLM agent delegating to mesh provider"
+name: "TypeScript Mesh Claude Delegation"
+description: "Test TypeScript LLM agent delegating to Claude provider via mesh"
 tags:
   - typescript
   - llm
   - mesh
-  - delegation
+  - claude
+  - prompt-template
+  - context-param
 timeout: 300
 pre_run:
   - routine: global.setup_for_typescript_agent

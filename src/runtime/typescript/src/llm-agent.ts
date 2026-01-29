@@ -4,9 +4,15 @@
  * This class handles:
  * - System prompt rendering (with Handlebars templates)
  * - Agentic loop with tool execution
- * - LLM provider calls (direct LiteLLM or mesh delegation)
+ * - LLM provider calls (direct Vercel AI SDK or mesh delegation)
  * - Response parsing with Zod validation
  * - Metadata tracking (tokens, latency, tool calls)
+ *
+ * Configuration Hierarchy (ENV > Config):
+ * - MESH_LLM_PROVIDER: Override provider for direct mode (e.g., "claude", "openai", "gemini")
+ * - MESH_LLM_MODEL: Override model (e.g., "gpt-4o", "gemini-2.0-flash")
+ * - MESH_LLM_MAX_ITERATIONS: Override max agentic loop iterations
+ * - MESH_LLM_FILTER_MODE: Override tool filter mode ("all", "include", "exclude")
  *
  * @example
  * ```typescript
@@ -672,13 +678,21 @@ export class MeshLlmAgent<T = string> {
       }
     }
 
-    // Get effective options
-    const maxIterations = context.options?.maxIterations ?? this.config.maxIterations;
+    // Get effective options (runtime options > MESH_LLM_* env > config)
+    const maxIterations =
+      context.options?.maxIterations ??
+      (process.env.MESH_LLM_MAX_ITERATIONS
+        ? parseInt(process.env.MESH_LLM_MAX_ITERATIONS, 10)
+        : this.config.maxIterations);
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
-    // Determine model
-    const model = context.meshProvider?.model ?? this.config.model ?? this.getDefaultModel();
+    // Determine model (mesh provider > MESH_LLM_MODEL env > config > default)
+    const model =
+      context.meshProvider?.model ??
+      process.env.MESH_LLM_MODEL ??
+      this.config.model ??
+      this.getDefaultModel();
 
     // Build output schema for provider (Issue #459) - computed once before loop
     let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
@@ -833,6 +847,9 @@ export class MeshLlmAgent<T = string> {
 
   /**
    * Resolve the LLM provider to use.
+   *
+   * Configuration Hierarchy (ENV > Config):
+   * - MESH_LLM_PROVIDER: Override provider (only for direct mode, not mesh delegation)
    */
   private resolveProvider(context: AgentRunContext): LlmProvider {
     // If mesh provider is resolved, use it (mesh delegation)
@@ -844,10 +861,14 @@ export class MeshLlmAgent<T = string> {
     }
 
     // Use direct Vercel AI SDK provider
-    const providerSpec =
-      typeof this.config.provider === "string"
-        ? this.config.provider
-        : "claude"; // fallback default
+    // Check env var override first (only for string provider, not mesh delegation object)
+    let providerSpec: string;
+    if (typeof this.config.provider === "string") {
+      providerSpec =
+        process.env.MESH_LLM_PROVIDER || this.config.provider || "claude";
+    } else {
+      providerSpec = "claude"; // fallback default for non-mesh object config
+    }
     return new VercelDirectProvider(providerSpec);
   }
 
@@ -860,7 +881,8 @@ export class MeshLlmAgent<T = string> {
     }
 
     if (typeof this.config.provider === "string") {
-      return this.config.provider;
+      // Return env var override if set, otherwise config value
+      return process.env.MESH_LLM_PROVIDER || this.config.provider;
     }
 
     return `mesh:${this.config.provider.capability}`;

@@ -1,20 +1,20 @@
-# Test Case: tc01_direct_vercel
-# Tests TypeScript LLM agent using direct Vercel AI SDK (no mesh delegation)
+# Test Case: tc12_ts_direct_gemini
+# Tests TypeScript LLM agent using direct Gemini (via MESH_LLM_PROVIDER env var)
+# Verifies context_param works with TypeScript SDK direct mode and Gemini
 
-name: "TypeScript Direct Vercel AI SDK"
-description: "Test TypeScript LLM agent calling Vercel AI SDK directly (provider: 'claude')"
+name: "TypeScript Direct Gemini"
+description: "Test TypeScript LLM agent calling Gemini directly (via MESH_LLM_PROVIDER)"
 tags:
   - typescript
   - llm
-  - vercel
+  - gemini
   - direct
+  - prompt-template
+  - context-param
 timeout: 300
 
 pre_run:
   - routine: global.setup_for_typescript_agent
-    params:
-      meshctl_version: "${config.packages.cli_version}"
-  - routine: global.setup_for_python_agent
     params:
       meshctl_version: "${config.packages.cli_version}"
 
@@ -31,9 +31,10 @@ test:
     handler: npm-install
     path: /workspace/context-self-dep-ts-direct
 
-  - name: "Start direct agent"
+  # Start agent with MESH_LLM_PROVIDER=gemini
+  - name: "Start direct agent with Gemini"
     handler: shell
-    command: "meshctl start context-self-dep-ts-direct/src/index.ts --env-file .env -d --debug"
+    command: "meshctl start context-self-dep-ts-direct/src/index.ts --env-file .env --env MESH_LLM_PROVIDER=gemini -d"
     workdir: /workspace
 
   - name: "Wait for agent to register"
@@ -50,7 +51,7 @@ test:
   - name: "Call direct LLM tool with context"
     handler: shell
     command: |
-      meshctl call context_self_dep_ts_direct '{"ctx": {"inputText": "What is 2+2?", "userName": "TestUserBob"}}'
+      meshctl call context_self_dep_ts_direct '{"ctx": {"inputText": "What is 6+4?", "userName": "TestUserFoxtrot"}}'
     workdir: /workspace
     capture: llm_result
 
@@ -59,11 +60,11 @@ assertions:
     message: "Direct agent should be registered"
 
   # Key assertion: userName from context must appear in response (proves context_param works)
-  - expr: "${captured.llm_result} contains 'TestUserBob'"
-    message: "Response should contain userName from context (proves context_param works)"
+  - expr: "${captured.llm_result} contains 'TestUserFoxtrot'"
+    message: "Response should contain userName from context (proves context_param works with Gemini)"
 
-  - expr: "${captured.llm_result} contains '4'"
-    message: "LLM response should contain the answer 4"
+  - expr: "${captured.llm_result} contains '10'"
+    message: "LLM response should contain the answer 10"
 
 post_run:
   - handler: shell

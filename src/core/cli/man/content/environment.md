@@ -88,6 +88,38 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 
 # OpenAI
 export OPENAI_API_KEY=sk-your-key-here
+
+# Google Gemini
+export GOOGLE_GENERATIVE_AI_API_KEY=your-key-here
+```
+
+## LLM Agent Configuration
+
+Override `@mesh.llm` decorator parameters at runtime:
+
+```bash
+# Override LLM provider (direct mode only, not mesh delegation)
+# Values: claude, openai, gemini, anthropic, google
+export MESH_LLM_PROVIDER=openai
+
+# Override model
+export MESH_LLM_MODEL=gpt-4o
+
+# Override max agentic loop iterations
+export MESH_LLM_MAX_ITERATIONS=5
+
+# Override tool filter mode (all, include, exclude)
+export MESH_LLM_FILTER_MODE=all
+```
+
+**Use case**: Same agent code, different LLM backends per environment:
+
+```bash
+# Development - use cheaper/faster model
+meshctl start agent.py --env MESH_LLM_PROVIDER=openai --env MESH_LLM_MODEL=gpt-4o-mini
+
+# Production - use Claude
+meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claude-sonnet-4-5
 ```
 
 ## Observability

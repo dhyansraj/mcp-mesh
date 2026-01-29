@@ -1,16 +1,16 @@
-# Test Case: tc02_context_self_dep_mesh
-# Tests context_param with self-dependency using mesh delegation (provider={"capability": "llm"})
-# Verifies the fix for context_param values being passed to Jinja2 template renderer via mesh
+# Test Case: tc07_py_mesh_gemini
+# Tests Python agent with context_param using Gemini provider mesh delegation
+# Verifies context_param works with Python SDK and Gemini LLM
 
-name: "Context Self-Dependency - Mesh Delegation"
-description: "Test context_param works with self-dependency calls using mesh delegation to LLM provider"
+name: "Python Mesh Gemini Delegation"
+description: "Test Python LLM agent with context_param using Gemini provider delegation"
 tags:
   - llm
   - mesh-delegation
   - prompt-template
-  - self-dependency
   - context-param
   - python
+  - gemini
 timeout: 120
 
 pre_run:
@@ -20,7 +20,7 @@ pre_run:
       mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
-  # Copy artifacts to workspace (including .env, prompts, and claude-provider)
+  # Copy artifacts to workspace
   - name: "Copy artifacts to workspace"
     handler: shell
     command: |
@@ -33,10 +33,10 @@ test:
     command: "ls -la /workspace/"
     capture: ls_output
 
-  # Start the Claude provider first (mesh delegation target)
-  - name: "Start claude-provider"
+  # Start the Gemini provider first (mesh delegation target)
+  - name: "Start gemini-provider"
     handler: shell
-    command: "meshctl start claude-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9010 -d"
+    command: "meshctl start gemini-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9013 -d"
     workdir: /workspace
     capture: provider_start_output
 
@@ -85,16 +85,10 @@ test:
     workdir: /workspace
     capture: test_result
 
-  # Stop agents
-  - name: "Stop agents"
-    handler: shell
-    command: "meshctl stop"
-    workdir: /workspace
-
 assertions:
   # Provider registered successfully
-  - expr: ${captured.provider_list} contains 'claude-provider'
-    message: "claude-provider should appear in meshctl list"
+  - expr: ${captured.provider_list} contains 'gemini-provider'
+    message: "gemini-provider should appear in meshctl list"
 
   # Test agent registered successfully
   - expr: ${captured.agent_list} contains 'context-self-dep-mesh-test'
@@ -107,15 +101,15 @@ assertions:
   - expr: ${captured.tools_output} contains 'extract_memories_mesh'
     message: "extract_memories_mesh tool should be listed"
 
-  - expr: ${captured.tools_output} contains 'claude_provider'
-    message: "claude_provider tool should be listed from provider"
+  - expr: ${captured.tools_output} contains 'gemini_provider'
+    message: "gemini_provider tool should be listed from provider"
 
   # Test passed - context was passed through to template via mesh delegation
   - expr: ${captured.test_result} contains 'test_passed'
     message: "Test result should contain test_passed field"
 
   - expr: ${captured.test_result} contains 'PASS'
-    message: "Test should pass - context_param should work with self-dependency (mesh delegation)"
+    message: "Test should pass - context_param should work with Gemini provider"
 
 post_run:
   - handler: shell

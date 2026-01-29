@@ -1,0 +1,141 @@
+# Test Case: tc08_ts_mesh_gemini
+# Tests TypeScript LLM agent with context_param using Gemini provider mesh delegation
+# Verifies context_param values work with TypeScript SDK and Gemini LLM
+
+name: "TypeScript Mesh Gemini Delegation"
+description: "Test TypeScript LLM agent with context_param using Gemini provider delegation"
+tags:
+  - llm
+  - gemini
+  - typescript
+  - mesh-delegation
+  - prompt-template
+  - context-param
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy all UC artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/. /workspace/
+    capture: copy_output
+
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Install Gemini provider dependencies
+  - name: "Install gemini-provider-ts dependencies"
+    handler: npm-install
+    path: /workspace/gemini-provider-ts
+
+  # Install TypeScript agent dependencies
+  - name: "Install context-self-dep-ts-mesh dependencies"
+    handler: npm-install
+    path: /workspace/context-self-dep-ts-mesh
+
+  # Start Gemini provider first (mesh delegation target)
+  - name: "Start gemini-provider-ts"
+    handler: shell
+    command: "meshctl start gemini-provider-ts/src/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: provider_start_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list
+
+  # Start the TypeScript mesh agent (depends on provider)
+  - name: "Start context-self-dep-ts-mesh agent"
+    handler: shell
+    command: "meshctl start context-self-dep-ts-mesh/src/index.ts -d"
+    workdir: /workspace
+    capture: agent_start_output
+
+  # Wait for agent to register and resolve dependencies
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 15
+
+  # Verify both agents are running
+  - name: "Verify agents are running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Verify provider resolution in mesh
+  - name: "Verify provider resolution"
+    handler: shell
+    command: "meshctl status"
+    workdir: /workspace
+    capture: status_output
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call the TypeScript agent with context_param
+  # This tests: TypeScript agent -> mesh.llm() -> Gemini provider with context_param
+  - name: "Call context_self_dep_ts_mesh with context"
+    handler: shell
+    command: |
+      meshctl call context_self_dep_ts_mesh '{"ctx": {"inputText": "What is 8+7?", "userName": "TestUserDelta"}}'
+    workdir: /workspace
+    capture: test_result
+
+assertions:
+  # Provider registered successfully
+  - expr: ${captured.provider_list} contains 'gemini-provider-ts'
+    message: "gemini-provider-ts should appear in meshctl list"
+
+  # TypeScript agent registered successfully
+  - expr: ${captured.agent_list} contains 'context-self-dep-ts-mesh'
+    message: "context-self-dep-ts-mesh agent should appear in meshctl list"
+
+  # Provider resolved in mesh (TypeScript provider exposes 'llm' capability)
+  - expr: ${captured.status_output} contains 'process_chat'
+    message: "Gemini provider tool (process_chat) should be resolved in mesh status"
+
+  # Tools are registered
+  - expr: ${captured.tools_output} contains 'context_self_dep_ts_mesh'
+    message: "context_self_dep_ts_mesh tool should be listed"
+
+  # TypeScript Gemini provider exposes 'process_chat' tool
+  - expr: ${captured.tools_output} contains 'process_chat'
+    message: "process_chat tool should be listed from Gemini provider"
+
+  # Key assertion: userName from context must appear in response
+  # This proves context_param works through: TypeScript -> mesh -> Gemini
+  - expr: ${jq:captured.test_result:.content[0].text} contains 'TestUserDelta'
+    message: "Response should contain userName from context (proves context_param works with Gemini)"
+
+  # Verify LLM actually responded with answer
+  - expr: ${jq:captured.test_result:.content[0].text} contains '15'
+    message: "LLM response should contain the answer 15"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

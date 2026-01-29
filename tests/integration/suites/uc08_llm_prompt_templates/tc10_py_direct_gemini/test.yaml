@@ -1,14 +1,14 @@
-# Test Case: tc01_context_self_dep_direct
-# Tests context_param with self-dependency using direct LiteLLM (provider="claude")
-# Verifies the fix for context_param values being passed to Jinja2 template renderer
+# Test Case: tc10_py_direct_gemini
+# Tests Python agent with context_param using direct Gemini (via MESH_LLM_PROVIDER env var)
+# Verifies context_param works with Python SDK and direct Gemini LLM
 
-name: "Context Self-Dependency - Direct LiteLLM"
-description: "Test context_param works with self-dependency calls using direct LiteLLM provider"
+name: "Python Direct Gemini"
+description: "Test Python LLM agent with context_param using direct Gemini provider"
 tags:
   - llm
-  - claude
+  - gemini
+  - direct
   - prompt-template
-  - self-dependency
   - context-param
   - python
 timeout: 120
@@ -20,7 +20,7 @@ pre_run:
       mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
-  # Copy artifacts to workspace (including .env and prompts)
+  # Copy artifacts to workspace
   - name: "Copy artifacts to workspace"
     handler: shell
     command: |
@@ -33,10 +33,12 @@ test:
     command: "ls -la /workspace/"
     capture: ls_output
 
-  # Start the test agent with env file
-  - name: "Start context-self-dep-test agent"
+  # Start the test agent with MESH_LLM_PROVIDER=gemini
+  - name: "Start context-self-dep-test agent with Gemini"
     handler: shell
-    command: "meshctl start prompt-template-examples/test_007_context_self_dep.py --env-file .env -d"
+    command: |
+      meshctl start prompt-template-examples/test_007_context_self_dep.py \
+        --env-file .env --env MESH_LLM_PROVIDER=gemini -d
     workdir: /workspace
     capture: start_output
 
@@ -66,12 +68,6 @@ test:
     workdir: /workspace
     capture: test_result
 
-  # Stop agent
-  - name: "Stop agent"
-    handler: shell
-    command: "meshctl stop"
-    workdir: /workspace
-
 assertions:
   # Agent registered successfully
   - expr: ${captured.agent_list} contains 'context-self-dep-test'
@@ -89,7 +85,7 @@ assertions:
     message: "Test result should contain test_passed field"
 
   - expr: ${captured.test_result} contains 'PASS'
-    message: "Test should pass - context_param should work with self-dependency"
+    message: "Test should pass - context_param should work with Gemini direct"
 
 post_run:
   - handler: shell
