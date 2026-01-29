@@ -264,3 +264,4 @@ tests/lib-tests/out/
 # Allow test suite build artifacts
 !tests/**/build/
 .claude/
+*.org
