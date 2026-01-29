@@ -59,6 +59,7 @@ test:
           cp /src-host/src/runtime/core/Cargo.toml /src/mcp-mesh/src/runtime/core/ && \
           cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/ 2>/dev/null || true && \
           cp /src-host/src/runtime/core/pyproject.toml /src/mcp-mesh/src/runtime/core/ && \
+          cp /src-host/src/runtime/core/README.md /src/mcp-mesh/src/runtime/core/ && \
           cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/python /src/mcp-mesh/src/runtime/core/ && \

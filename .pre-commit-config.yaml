@@ -74,6 +74,7 @@ repos:
     rev: v1.37.0
     hooks:
       - id: yamllint
+        exclude: ^tests/
 
   # 🤖 CONTRACT-FIRST DEVELOPMENT HOOKS
   # These hooks enforce OpenAPI-first development

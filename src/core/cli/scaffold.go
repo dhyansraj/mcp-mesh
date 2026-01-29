@@ -14,8 +14,8 @@ import (
 func NewScaffoldCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scaffold",
-		Short: "Generate new MCP Mesh agent from template or LLM",
-		Long: `Generate a new MCP Mesh agent using templates or LLM-based generation.
+		Short: "Generate new MCP Mesh agent from templates",
+		Long: `Generate a new MCP Mesh agent using templates.
 
 Supports three input modes:
   1. Interactive: Run without --name to enter interactive wizard

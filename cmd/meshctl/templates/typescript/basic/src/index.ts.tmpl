@@ -17,7 +17,7 @@ const server = new FastMCP({
 // Wrap with MCP Mesh
 const agent = mesh(server, {
   name: "{{ .Name }}",
-  port: {{ .Port }},
+  httpPort: {{ .Port }},
 });
 
 // ===== TOOLS =====

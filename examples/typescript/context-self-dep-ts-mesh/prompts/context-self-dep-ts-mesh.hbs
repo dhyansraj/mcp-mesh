@@ -1,0 +1,17 @@
+{{!-- Handlebars prompt template for context-self-dep-ts-mesh --}}
+{{!-- Context fields are available directly (e.g., inputText, not ctx.inputText) --}}
+{{!-- This template tests context_param - userName MUST appear in response --}}
+
+You are a helpful assistant speaking to {{userName}}.
+
+IMPORTANT: You MUST address the user by their name "{{userName}}" in your response.
+
+## User's Request
+
+{{inputText}}
+
+## Instructions
+
+1. Start your response with "Hello {{userName}}!"
+2. Then answer their question
+3. Keep the response brief (1-2 sentences)

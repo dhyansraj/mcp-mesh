@@ -1,0 +1,125 @@
+# Test Case: Scaffold TypeScript LLM Agent
+# Verifies that meshctl can scaffold a TypeScript LLM agent with correct structure
+
+name: "TypeScript LLM Agent Scaffold"
+description: "Test scaffolding a TypeScript LLM agent and verify generated files"
+tags:
+  - scaffolding
+  - typescript
+  - llm-agent
+timeout: 300 # 5 minutes (includes npm install)
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+# Main test steps
+test:
+  # Scaffold the LLM agent
+  - name: "Scaffold TypeScript LLM agent"
+    handler: shell
+    command: |
+      meshctl scaffold --name test-llm-agent-ts --agent-type llm-agent \
+        --lang typescript --llm-selector openai --response-format text -o /workspace
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-llm-agent-ts -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check index.ts content
+  - name: "Check index.ts content"
+    handler: shell
+    command: "cat test-llm-agent-ts/src/index.ts"
+    workdir: /workspace
+    capture: index_content
+
+  # Check prompts directory exists and has template files
+  - name: "Check prompts directory"
+    handler: shell
+    command: "ls test-llm-agent-ts/prompts/ 2>/dev/null || echo 'no prompts dir'"
+    workdir: /workspace
+    capture: prompts_content
+
+  # Check package.json content
+  - name: "Check package.json content"
+    handler: shell
+    command: "cat test-llm-agent-ts/package.json"
+    workdir: /workspace
+    capture: package_json
+
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/test-llm-agent-ts
+
+  # Start the agent
+  - name: "Start LLM agent"
+    handler: shell
+    command: "meshctl start test-llm-agent-ts -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for agent to start
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  # Check if agent is running with meshctl list
+  - name: "Check agent is running with meshctl list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Show agent logs for debugging
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs test-llm-agent-ts 2>/dev/null | tail -20 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # src/index.ts exists
+  - expr: "${captured.generated_files} contains 'src/index.ts'"
+    message: "src/index.ts should be created"
+
+  # package.json exists
+  - expr: "${captured.generated_files} contains 'package.json'"
+    message: "package.json should be created"
+
+  # prompts directory has template files (.hbs)
+  - expr: "${captured.prompts_content} contains '.hbs'"
+    message: "Prompts directory should contain .hbs template files"
+
+  # index.ts contains mesh.llm( call
+  - expr: "${captured.index_content} contains 'mesh.llm('"
+    message: "index.ts should contain mesh.llm( call"
+
+  # package.json has correct name
+  - expr: "${captured.package_json} contains 'test-llm-agent-ts'"
+    message: "package.json should have correct name"
+
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'test-llm-agent-ts'
+    message: "Agent should appear in meshctl list"
+
+# Post-run: Cleanup
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

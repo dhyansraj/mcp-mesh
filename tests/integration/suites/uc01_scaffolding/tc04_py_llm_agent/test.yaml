@@ -1,0 +1,110 @@
+# Test Case: Scaffold Python LLM Agent
+# Verifies that meshctl can scaffold a Python LLM agent with correct structure
+
+name: "Python LLM Agent Scaffold"
+description: "Test scaffolding a Python LLM agent and verify generated files"
+tags:
+  - scaffolding
+  - python
+  - llm-agent
+timeout: 300 # 5 minutes
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+# Main test steps
+test:
+  # Scaffold the LLM agent
+  - name: "Scaffold Python LLM agent"
+    handler: shell
+    command: |
+      meshctl scaffold --name test-llm-agent --agent-type llm-agent \
+        --lang python --llm-selector claude --response-format json -o /workspace
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-llm-agent -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check main.py content
+  - name: "Check main.py content"
+    handler: shell
+    command: "cat test-llm-agent/main.py"
+    workdir: /workspace
+    capture: main_content
+
+  # Check prompts directory exists and has template files
+  - name: "Check prompts directory"
+    handler: shell
+    command: "ls test-llm-agent/prompts/ 2>/dev/null || echo 'no prompts dir'"
+    workdir: /workspace
+    capture: prompts_content
+
+  # Start the agent
+  - name: "Start LLM agent"
+    handler: shell
+    command: "meshctl start test-llm-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for agent to start
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  # Check if agent is running with meshctl list
+  - name: "Check agent is running with meshctl list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Show agent logs for debugging
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs test-llm-agent 2>/dev/null | tail -20 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # main.py exists
+  - expr: "${captured.generated_files} contains 'main.py'"
+    message: "main.py should be created"
+
+  # requirements.txt exists
+  - expr: "${captured.generated_files} contains 'requirements.txt'"
+    message: "requirements.txt should be created"
+
+  # prompts directory has template files (.jinja2 for Python)
+  - expr: "${captured.prompts_content} contains '.jinja2'"
+    message: "Prompts directory should contain .jinja2 template files"
+
+  # main.py contains @mesh.llm decorator
+  - expr: "${captured.main_content} contains '@mesh.llm'"
+    message: "main.py should contain @mesh.llm decorator"
+
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'test-llm-agent'
+    message: "Agent should appear in meshctl list"
+
+# Post-run: Cleanup
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

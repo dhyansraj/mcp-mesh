@@ -236,6 +236,7 @@ jobs:
             3.11
             3.12
             3.13
+            3.14
 
       - name: Install Zig
         if: matrix.use-zig
@@ -256,7 +257,10 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           container: ${{ matrix.use-zig && 'off' || '' }}
-          args: --release --out dist -i python3.11 python3.12 python3.13 ${{ matrix.use-zig && '--zig' || '' }}
+          args: >-
+            --release --out dist
+            -i python3.11 python3.12 python3.13 python3.14
+            ${{ matrix.use-zig && '--zig' || '' }}
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4

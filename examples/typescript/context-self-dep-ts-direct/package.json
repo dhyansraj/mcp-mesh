@@ -1,0 +1,24 @@
+{
+  "name": "context-self-dep-ts-direct",
+  "version": "1.0.0",
+  "description": "MCP Mesh LLM agent for context-self-dep-ts-direct",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "zod": "^3.24.1",
+    "fastmcp": "^3.26.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,110 @@
+# Test Case: Scaffold Python LLM Provider
+# Verifies that meshctl can scaffold a Python LLM provider with correct structure
+
+name: "Python LLM Provider Scaffold"
+description: "Test scaffolding a Python LLM provider and verify generated files"
+tags:
+  - scaffolding
+  - python
+  - llm-provider
+timeout: 300 # 5 minutes
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+# Main test steps
+test:
+  # Scaffold the LLM provider
+  - name: "Scaffold Python LLM provider"
+    handler: shell
+    command: |
+      meshctl scaffold --name test-llm-provider --agent-type llm-provider \
+        --lang python --model anthropic/claude-sonnet-4-5 -o /workspace
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-llm-provider -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check main.py content
+  - name: "Check main.py content"
+    handler: shell
+    command: "cat test-llm-provider/main.py"
+    workdir: /workspace
+    capture: main_content
+
+  # Start the agent
+  - name: "Start LLM provider"
+    handler: shell
+    command: "meshctl start test-llm-provider/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for agent to start
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  # Check if agent is running with meshctl list
+  - name: "Check agent is running with meshctl list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Check agent capabilities
+  - name: "Check agent has llm capability"
+    handler: shell
+    command: "meshctl list -a 2>/dev/null || meshctl list"
+    workdir: /workspace
+    capture: capabilities_output
+
+  # Show agent logs for debugging
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs test-llm-provider 2>/dev/null | tail -20 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # main.py exists
+  - expr: "${captured.generated_files} contains 'main.py'"
+    message: "main.py should be created"
+
+  # requirements.txt exists
+  - expr: "${captured.generated_files} contains 'requirements.txt'"
+    message: "requirements.txt should be created"
+
+  # main.py contains @mesh.llm_provider decorator
+  - expr: "${captured.main_content} contains '@mesh.llm_provider'"
+    message: "main.py should contain @mesh.llm_provider decorator"
+
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'test-llm-provider'
+    message: "Agent should appear in meshctl list"
+
+  # Agent has llm capability
+  - expr: ${captured.capabilities_output} contains 'llm'
+    message: "Agent should have llm capability"
+
+# Post-run: Cleanup
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

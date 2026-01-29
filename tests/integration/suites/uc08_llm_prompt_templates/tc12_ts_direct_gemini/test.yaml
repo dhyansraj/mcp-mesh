@@ -1,0 +1,74 @@
+# Test Case: tc12_ts_direct_gemini
+# Tests TypeScript LLM agent using direct Gemini (via MESH_LLM_PROVIDER env var)
+# Verifies context_param works with TypeScript SDK direct mode and Gemini
+
+name: "TypeScript Direct Gemini"
+description: "Test TypeScript LLM agent calling Gemini directly (via MESH_LLM_PROVIDER)"
+tags:
+  - typescript
+  - llm
+  - gemini
+  - direct
+  - prompt-template
+  - context-param
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/context-self-dep-ts-direct /workspace/
+      cp /uc-artifacts/.env /workspace/
+    capture: copy_output
+
+  - name: "Install dependencies"
+    handler: npm-install
+    path: /workspace/context-self-dep-ts-direct
+
+  # Start agent with MESH_LLM_PROVIDER=gemini
+  - name: "Start direct agent with Gemini"
+    handler: shell
+    command: "meshctl start context-self-dep-ts-direct/src/index.ts --env-file .env --env MESH_LLM_PROVIDER=gemini -d"
+    workdir: /workspace
+
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify agent registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # Test context_param: userName should appear in response (proves context reached template)
+  - name: "Call direct LLM tool with context"
+    handler: shell
+    command: |
+      meshctl call context_self_dep_ts_direct '{"ctx": {"inputText": "What is 6+4?", "userName": "TestUserFoxtrot"}}'
+    workdir: /workspace
+    capture: llm_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'context-self-dep-ts-direct'"
+    message: "Direct agent should be registered"
+
+  # Key assertion: userName from context must appear in response (proves context_param works)
+  - expr: "${captured.llm_result} contains 'TestUserFoxtrot'"
+    message: "Response should contain userName from context (proves context_param works with Gemini)"
+
+  - expr: "${captured.llm_result} contains '10'"
+    message: "LLM response should contain the answer 10"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

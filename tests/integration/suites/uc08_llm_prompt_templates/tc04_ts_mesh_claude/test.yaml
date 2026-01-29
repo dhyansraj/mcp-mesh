@@ -1,0 +1,85 @@
+# Test Case: tc04_ts_mesh_claude
+# Tests TypeScript LLM agent using mesh delegation to Claude provider
+# Verifies context_param works with TypeScript SDK mesh delegation
+
+name: "TypeScript Mesh Claude Delegation"
+description: "Test TypeScript LLM agent delegating to Claude provider via mesh"
+tags:
+  - typescript
+  - llm
+  - mesh
+  - claude
+  - prompt-template
+  - context-param
+timeout: 300
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/context-self-dep-ts-mesh /workspace/
+      cp -r /uc-artifacts/claude-provider /workspace/
+      cp /uc-artifacts/.env /workspace/
+    capture: copy_output
+  - name: "Install mesh agent dependencies"
+    handler: npm-install
+    path: /workspace/context-self-dep-ts-mesh
+  - name: "Install claude-provider dependencies"
+    handler: pip-install
+    path: /workspace/claude-provider
+  - name: "Start claude-provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    workdir: /workspace
+  - name: "Wait for claude-provider to register"
+    handler: wait
+    seconds: 15
+  - name: "Start mesh agent"
+    handler: shell
+    command: "meshctl start context-self-dep-ts-mesh/src/index.ts -d"
+    workdir: /workspace
+  - name: "Wait for mesh agent to register"
+    handler: wait
+    seconds: 15
+  - name: "Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+  - name: "Verify provider resolution"
+    handler: shell
+    command: "meshctl status"
+    workdir: /workspace
+    capture: status_output
+  # Test context_param: userName should appear in response (proves context reached template)
+  - name: "Call mesh LLM tool with context"
+    handler: shell
+    command: |
+      meshctl call context_self_dep_ts_mesh '{"ctx": {"inputText": "What is 3+5?", "userName": "TestUserAlice"}}'
+    workdir: /workspace
+    capture: llm_result
+assertions:
+  - expr: "${captured.agent_list} contains 'claude-provider'"
+    message: "Claude provider should be registered"
+  - expr: "${captured.agent_list} contains 'context-self-dep-ts-mesh'"
+    message: "Mesh agent should be registered"
+  - expr: "${captured.status_output} contains 'claude_provider'"
+    message: "Provider should be resolved in status"
+  # Key assertion: userName from context must appear in response (proves context_param works)
+  - expr: "${captured.llm_result} contains 'TestUserAlice'"
+    message: "Response should contain userName from context (proves context_param works)"
+  - expr: "${captured.llm_result} contains '8'"
+    message: "LLM response should contain the answer 8"
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
