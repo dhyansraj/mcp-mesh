@@ -144,7 +144,7 @@ export function extractModelName(model: string): string {
  * @param vendor - Vendor name (e.g., "anthropic", "openai")
  * @returns Provider create function or null if not available
  */
-async function loadProvider(
+export async function loadProvider(
   vendor: string
 ): Promise<((modelId: string) => unknown) | null> {
   // Normalize environment variables for cross-SDK compatibility

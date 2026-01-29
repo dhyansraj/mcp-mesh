@@ -49,6 +49,12 @@ import {
   ToolExecutionError,
 } from "./errors.js";
 import { parseSSEResponse } from "./sse.js";
+import {
+  loadProvider,
+  extractVendorFromModel,
+  extractModelName,
+} from "./llm-provider.js";
+import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -184,6 +190,220 @@ export class LiteLLMProvider implements LlmProvider {
     }
 
     return (await response.json()) as LlmCompletionResponse;
+  }
+}
+
+/**
+ * Default model mappings for provider shorthand names.
+ */
+const DEFAULT_MODELS: Record<string, string> = {
+  claude: "anthropic/claude-sonnet-4-20250514",
+  openai: "openai/gpt-4o",
+  anthropic: "anthropic/claude-sonnet-4-20250514",
+  gemini: "google/gemini-2.0-flash",
+  google: "google/gemini-2.0-flash",
+  gpt4: "openai/gpt-4o",
+  gpt35: "openai/gpt-3.5-turbo",
+};
+
+/**
+ * Direct Vercel AI SDK provider.
+ * Uses Vercel AI SDK (@ai-sdk/anthropic, @ai-sdk/openai, etc.) directly
+ * without needing a proxy server.
+ */
+export class VercelDirectProvider implements LlmProvider {
+  private providerSpec: string;
+  private cachedProvider: ((modelId: string) => unknown) | null = null;
+  private providerLoadAttempted = false;
+
+  constructor(providerSpec: string) {
+    this.providerSpec = providerSpec;
+  }
+
+  /**
+   * Resolve the full model string from provider spec.
+   * E.g., "claude" -> "anthropic/claude-sonnet-4-20250514"
+   */
+  private resolveModel(model?: string): string {
+    // If explicit model provided, use it
+    if (model && model !== "default") {
+      // If model already has vendor prefix, use as-is
+      if (model.includes("/")) {
+        return model;
+      }
+      // Otherwise, try to add vendor prefix from provider spec
+      const vendor = extractVendorFromModel(
+        DEFAULT_MODELS[this.providerSpec.toLowerCase()] ?? this.providerSpec
+      );
+      if (vendor) {
+        return `${vendor}/${model}`;
+      }
+      return model;
+    }
+
+    // Map shorthand provider to full model
+    const defaultModel = DEFAULT_MODELS[this.providerSpec.toLowerCase()];
+    if (defaultModel) {
+      return defaultModel;
+    }
+
+    // Assume provider spec is already a model identifier
+    return this.providerSpec;
+  }
+
+  async complete(
+    model: string,
+    messages: LlmMessage[],
+    tools?: LlmToolDefinition[],
+    options?: {
+      maxOutputTokens?: number;
+      temperature?: number;
+      topP?: number;
+      stop?: string[];
+      outputSchema?: { schema: Record<string, unknown>; name: string };
+    }
+  ): Promise<LlmCompletionResponse> {
+    const fullModel = this.resolveModel(model);
+    const vendor = extractVendorFromModel(fullModel);
+    const modelName = extractModelName(fullModel);
+
+    if (!vendor) {
+      throw new LLMAPIError(
+        400,
+        `Cannot determine vendor from model: ${fullModel}. Use format "vendor/model" (e.g., "anthropic/claude-sonnet-4-5")`,
+        "vercel"
+      );
+    }
+
+    // Load provider if not cached
+    if (!this.providerLoadAttempted) {
+      this.providerLoadAttempted = true;
+      this.cachedProvider = await loadProvider(vendor);
+    }
+
+    if (!this.cachedProvider) {
+      throw new LLMAPIError(
+        500,
+        `Vercel AI SDK provider for '${vendor}' not available. Install: npm install @ai-sdk/${vendor}`,
+        "vercel"
+      );
+    }
+
+    // Create the model instance
+    const aiModel = this.cachedProvider(modelName);
+
+    // Get vendor-specific handler for optimizations
+    const handler = ProviderHandlerRegistry.getHandler(vendor);
+
+    // Import generateText from ai package
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const aiModule = (await import("ai")) as any;
+    const generateText = aiModule.generateText;
+    const jsonSchema = aiModule.jsonSchema;
+
+    // Convert tools to Vercel AI SDK format
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let vercelTools: Record<string, any> | undefined;
+    if (tools && tools.length > 0) {
+      vercelTools = {};
+      for (const tool of tools) {
+        const rawSchema = tool.function.parameters ?? {
+          type: "object",
+          properties: {},
+        };
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { $schema, ...schemaWithoutMeta } = rawSchema as Record<
+          string,
+          unknown
+        >;
+        const cleanSchema = {
+          type: "object",
+          ...schemaWithoutMeta,
+        };
+        vercelTools[tool.function.name] = {
+          description: tool.function.description ?? "",
+          parameters: jsonSchema(cleanSchema),
+        };
+      }
+    }
+
+    // Apply vendor-specific request preparation
+    const preparedRequest = handler.prepareRequest(
+      messages,
+      null, // tools handled separately
+      options?.outputSchema ?? null,
+      {
+        temperature: options?.temperature,
+        maxOutputTokens: options?.maxOutputTokens,
+        topP: options?.topP,
+      }
+    );
+
+    // Build request options
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const requestOptions: Record<string, any> = {
+      model: aiModel,
+      messages: preparedRequest.messages,
+    };
+
+    if (vercelTools && Object.keys(vercelTools).length > 0) {
+      requestOptions.tools = vercelTools;
+    }
+
+    if (options?.maxOutputTokens) {
+      requestOptions.maxTokens = options.maxOutputTokens;
+    }
+    if (options?.temperature !== undefined) {
+      requestOptions.temperature = options.temperature;
+    }
+    if (options?.topP !== undefined) {
+      requestOptions.topP = options.topP;
+    }
+
+    try {
+      const result = await generateText(requestOptions);
+
+      // Convert Vercel AI SDK response to LlmCompletionResponse format
+      const response: LlmCompletionResponse = {
+        id: `vercel-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: fullModel,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: result.text || null,
+              tool_calls: result.toolCalls?.map(
+                (tc: { toolCallId: string; toolName: string; args: unknown }) => ({
+                  id: tc.toolCallId,
+                  type: "function" as const,
+                  function: {
+                    name: tc.toolName,
+                    arguments: JSON.stringify(tc.args ?? {}),
+                  },
+                })
+              ),
+            },
+            finish_reason: result.finishReason ?? "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: result.usage?.promptTokens ?? 0,
+          completion_tokens: result.usage?.completionTokens ?? 0,
+          total_tokens:
+            (result.usage?.promptTokens ?? 0) +
+            (result.usage?.completionTokens ?? 0),
+        },
+      };
+
+      return response;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      throw new LLMAPIError(500, `Vercel AI SDK error: ${message}`, "vercel");
+    }
   }
 }
 
@@ -615,7 +835,7 @@ export class MeshLlmAgent<T = string> {
    * Resolve the LLM provider to use.
    */
   private resolveProvider(context: AgentRunContext): LlmProvider {
-    // If mesh provider is resolved, use it
+    // If mesh provider is resolved, use it (mesh delegation)
     if (context.meshProvider) {
       return new MeshDelegatedProvider(
         context.meshProvider.endpoint,
@@ -623,8 +843,12 @@ export class MeshLlmAgent<T = string> {
       );
     }
 
-    // Use direct LiteLLM provider
-    return new LiteLLMProvider();
+    // Use direct Vercel AI SDK provider
+    const providerSpec =
+      typeof this.config.provider === "string"
+        ? this.config.provider
+        : "claude"; // fallback default
+    return new VercelDirectProvider(providerSpec);
   }
 
   /**

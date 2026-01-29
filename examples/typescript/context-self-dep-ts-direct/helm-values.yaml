@@ -1,0 +1,27 @@
+# Helm values for deploying context-self-dep-ts-direct with mcp-mesh-agent chart
+# Usage: helm install context-self-dep-ts-direct oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+
+image:
+  repository: your-registry/context-self-dep-ts-direct
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: context-self-dep-ts-direct
+  runtime: typescript
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+
+env: []
+
+secrets: []

@@ -151,7 +151,8 @@ export {
 // LLM Agent
 export {
   MeshLlmAgent,
-  LiteLLMProvider,
+  VercelDirectProvider,
+  LiteLLMProvider, // Deprecated: use VercelDirectProvider instead
   MeshDelegatedProvider,
   createLlmToolProxy,
   type MeshLlmAgentConfig,
@@ -162,6 +163,7 @@ export {
 // LLM Provider (Phase 4)
 export {
   llmProvider,
+  loadProvider,
   extractVendorFromModel,
   extractModelName,
   isLlmProviderTool,
