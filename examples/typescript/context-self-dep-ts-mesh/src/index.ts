@@ -42,14 +42,14 @@ const llmTool = mesh.llm({
   description: "Process input using LLM",
   tags: ["llm"],
 
-  // LLM Configuration
-  provider: { capability: "llm", tags: ["llm","+claude"] },
+  // LLM Configuration - mesh delegation to LLM provider (prefer claude)
+  provider: { capability: "llm", tags: ["+claude"] },
   maxIterations: 1,
   systemPrompt: "file://prompts/context-self-dep-ts-mesh.hbs",
   contextParam: "ctx",
 
-  // Tool filtering - which mesh tools the LLM can access
-  filter: [{"capability":"llm"}],
+  // Tool filtering - no tools for this test
+  filter: [],
   filterMode: "all",
 
   // Input/output schemas
