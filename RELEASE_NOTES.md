@@ -1,5 +1,29 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.0...v0.8.1)
+
+## v0.8.1 (2026-01-29)
+
+### 🔧 Improvements
+
+- **TypeScript SDK - MESH*LLM*\* environment variables** (#484)
+  - `MESH_LLM_PROVIDER`: Override LLM provider (direct mode only)
+  - `MESH_LLM_MODEL`: Override model at runtime
+  - `MESH_LLM_MAX_ITERATIONS`: Override max iterations
+  - `MESH_LLM_FILTER_MODE`: Override tool filter mode
+
+- **Python 3.13/3.14 support** (#485)
+  - Updated pyproject.toml classifiers
+  - Release workflow now builds wheels for Python 3.14
+
+- Added scaffold test matrix (tc04-tc07) for llm-agent and llm-provider types
+- New examples: context-self-dep-ts-direct, context-self-dep-ts-mesh
+- Added 12 UC08 LLM prompt template tests
+
+### 🐛 Bug Fixes
+
+- **Scaffold TypeScript templates** (#482): Fixed templates to use `httpPort` instead of `port`
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.7.21...v0.8.0)
 
 ## v0.8.0 (2026-01-27)

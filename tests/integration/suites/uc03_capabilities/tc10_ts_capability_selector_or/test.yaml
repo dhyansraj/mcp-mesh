@@ -14,13 +14,11 @@ tags:
   - or-logic
   - typescript
 timeout: 180
-
 pre_run:
   # TypeScript-only test - just need Node.js + meshctl (no Python venv)
   - routine: global.setup_environment
     params:
       meshctl_version: "${config.packages.cli_version}"
-
 test:
   # Copy TypeScript artifacts
   - name: "Copy TypeScript artifacts"
@@ -30,41 +28,33 @@ test:
       cp -r /uc-artifacts/ts-accurate-provider /workspace/
       cp -r /uc-artifacts/ts-tag-consumer /workspace/
     capture: copy_output
-
   # Install npm dependencies (handler auto-detects local/published mode)
   - name: "Install fast provider dependencies"
     handler: npm-install
     path: /workspace/ts-fast-provider
-
   - name: "Install accurate provider dependencies"
     handler: npm-install
     path: /workspace/ts-accurate-provider
-
   - name: "Install tag consumer dependencies"
     handler: npm-install
     path: /workspace/ts-tag-consumer
-
   # === TEST 1: Only fast provider available ===
   - name: "Test 1: Start fast provider only"
     handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_fast_only
-
   - name: "Wait for fast provider registration"
     handler: wait
-    seconds: 8
-
+    seconds: 15
   - name: "Test 1: Start consumer"
     handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_1
-
   - name: "Wait for consumer registration"
     handler: wait
     seconds: 15
-
   - name: "Test 1: Call fetch_required with only fast available"
     handler: shell
     command: |
@@ -78,39 +68,32 @@ test:
       fi
     workdir: /workspace
     capture: test_fast_only
-
   # Stop agents but keep registry running (avoids stale DB entries)
   - name: "Stop agents (keep registry running)"
     handler: shell
     command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
-
   - name: "Wait for cleanup"
     handler: wait
-    seconds: 5
-
+    seconds: 15
   # === TEST 2: Only accurate provider available ===
   - name: "Test 2: Start accurate provider only"
     handler: shell
     command: "meshctl start ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_accurate_only
-
   - name: "Wait for accurate provider registration"
     handler: wait
-    seconds: 8
-
+    seconds: 15
   - name: "Test 2: Start consumer"
     handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_2
-
   - name: "Wait for consumer registration"
     handler: wait
-    seconds: 10
-
+    seconds: 15
   - name: "Test 2: Call fetch_required with only accurate available"
     handler: shell
     command: |
@@ -124,39 +107,32 @@ test:
       fi
     workdir: /workspace
     capture: test_accurate_only
-
   # Stop agents but keep registry running
   - name: "Stop agents (keep registry running)"
     handler: shell
     command: "meshctl stop --agents 2>/dev/null || true"
     workdir: /workspace
     ignore_errors: true
-
   - name: "Wait for cleanup"
     handler: wait
-    seconds: 5
-
+    seconds: 15
   # === TEST 3: Both providers available ===
   - name: "Test 3: Start both providers"
     handler: shell
     command: "meshctl start ts-fast-provider/src/index.ts ts-accurate-provider/src/index.ts -d"
     workdir: /workspace
     capture: start_both
-
   - name: "Wait for providers registration"
     handler: wait
-    seconds: 10
-
+    seconds: 15
   - name: "Test 3: Start consumer"
     handler: shell
     command: "meshctl start ts-tag-consumer/src/index.ts -d"
     workdir: /workspace
     capture: start_consumer_3
-
   - name: "Wait for consumer registration"
     handler: wait
-    seconds: 10
-
+    seconds: 15
   - name: "Test 3: Call fetch_required with both available"
     handler: shell
     command: |
@@ -170,17 +146,13 @@ test:
       fi
     workdir: /workspace
     capture: test_both
-
 assertions:
   - expr: "${captured.test_fast_only} contains 'PASS'"
     message: "Should match TS fast when only fast available"
-
   - expr: "${captured.test_accurate_only} contains 'PASS'"
     message: "Should match TS accurate when only accurate available"
-
   - expr: "${captured.test_both} contains 'PASS'"
     message: "Should match one TS provider when both available"
-
 post_run:
   - handler: shell
     command: "meshctl stop 2>/dev/null || true"
