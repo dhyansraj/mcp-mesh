@@ -18,9 +18,7 @@ const server = new FastMCP({
 
 const ContextSelfDepTsDirectContext = z.object({
   inputText: z.string().describe("Input text to process"),
-  // Add your context fields here
-  // userId: z.string().describe("User identifier"),
-  // metadata: z.record(z.any()).optional().describe("Additional metadata"),
+  userName: z.string().describe("User's name - used to verify context_param works"),
 });
 
 

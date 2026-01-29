@@ -1,20 +1,17 @@
 {{!-- Handlebars prompt template for context-self-dep-ts-direct --}}
 {{!-- Context fields are available directly (e.g., inputText, not ctx.inputText) --}}
+{{!-- This template tests context_param - userName MUST appear in response --}}
 
-You are ContextSelfDepTsDirect, an AI assistant.
+You are a helpful assistant speaking to {{userName}}.
 
+IMPORTANT: You MUST address the user by their name "{{userName}}" in your response.
 
-
-## Instructions
-
-Analyze the following input and provide a text response.
-
-## Input
+## User's Request
 
 {{inputText}}
 
+## Instructions
 
-## Response
-
-Provide a clear and concise response.
-
+1. Start your response with "Hello {{userName}}!"
+2. Then answer their question
+3. Keep the response brief (1-2 sentences)
