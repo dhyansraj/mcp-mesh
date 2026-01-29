@@ -29,7 +29,7 @@ const agent = mesh(server, {
   name: "{{ .Name }}",
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}LLM Provider for {{ .Model }}{{ end }}",
-  port: {{ .Port }},
+  httpPort: {{ .Port }},
 });
 
 // ===== LLM PROVIDER =====

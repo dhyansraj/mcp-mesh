@@ -93,7 +93,7 @@ const agent = mesh(server, {
   name: "{{ .Name }}",
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh LLM agent{{ end }}",
-  port: {{ .Port }},
+  httpPort: {{ .Port }},
 });
 
 // No explicit start needed - auto-starts via process.nextTick()!
