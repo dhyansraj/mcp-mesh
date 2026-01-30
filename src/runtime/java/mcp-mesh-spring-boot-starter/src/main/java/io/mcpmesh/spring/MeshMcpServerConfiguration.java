@@ -96,13 +96,13 @@ public class MeshMcpServerConfiguration {
                 .build())
             .build();
 
-        // Register all tools from wrapper registry
-        for (MeshToolWrapper wrapper : wrapperRegistry.getAllWrappers()) {
-            registerTool(server, wrapper);
+        // Register all tools from wrapper registry (includes both @MeshTool and @MeshLlmProvider)
+        for (McpToolHandler handler : wrapperRegistry.getAllHandlers()) {
+            registerTool(server, handler);
         }
 
         log.info("Stateless MCP server initialized with {} tools for agent '{}'",
-            wrapperRegistry.size(), agentName);
+            wrapperRegistry.getAllHandlers().size(), agentName);
         return server;
     }
 
@@ -124,13 +124,13 @@ public class MeshMcpServerConfiguration {
     }
 
     /**
-     * Register a MeshToolWrapper as an MCP tool specification.
+     * Register a McpToolHandler as an MCP tool specification.
      */
-    private void registerTool(McpStatelessSyncServer server, MeshToolWrapper wrapper) {
+    private void registerTool(McpStatelessSyncServer server, McpToolHandler handler) {
         // Use method name as tool name to match what registry advertises
-        String toolName = wrapper.getMethodName();
-        String description = wrapper.getDescription();
-        Map<String, Object> inputSchema = wrapper.getInputSchema();
+        String toolName = handler.getMethodName();
+        String description = handler.getDescription();
+        Map<String, Object> inputSchema = handler.getInputSchema();
 
         // Create JsonSchema from input schema map
         JsonSchema jsonSchema = createJsonSchema(inputSchema);
@@ -146,12 +146,12 @@ public class MeshMcpServerConfiguration {
         McpStatelessServerFeatures.SyncToolSpecification toolSpec =
             new McpStatelessServerFeatures.SyncToolSpecification(
                 tool,
-                (context, request) -> handleToolCall(wrapper, request.arguments())
+                (context, request) -> handleToolCall(handler, request.arguments())
             );
 
         server.addTool(toolSpec);
         log.debug("Registered MCP tool: {} (capability: {}, funcId: {})",
-            toolName, wrapper.getCapability(), wrapper.getFuncId());
+            toolName, handler.getCapability(), handler.getFuncId());
     }
 
     /**
@@ -174,14 +174,14 @@ public class MeshMcpServerConfiguration {
     }
 
     /**
-     * Handle an MCP tool call by invoking the wrapper.
+     * Handle an MCP tool call by invoking the handler.
      */
-    private CallToolResult handleToolCall(MeshToolWrapper wrapper, Map<String, Object> args) {
+    private CallToolResult handleToolCall(McpToolHandler handler, Map<String, Object> args) {
         try {
-            log.debug("MCP tool call: {} with args: {}", wrapper.getCapability(), args);
+            log.debug("MCP tool call: {} with args: {}", handler.getCapability(), args);
 
-            // Invoke the wrapper
-            Object result = wrapper.invoke(args);
+            // Invoke the handler
+            Object result = handler.invoke(args);
 
             // Serialize result to JSON
             String resultJson;
@@ -200,7 +200,7 @@ public class MeshMcpServerConfiguration {
             );
 
         } catch (Exception e) {
-            log.error("Tool call failed for {}: {}", wrapper.getCapability(), e.getMessage(), e);
+            log.error("Tool call failed for {}: {}", handler.getCapability(), e.getMessage(), e);
 
             // Return error result
             return new CallToolResult(

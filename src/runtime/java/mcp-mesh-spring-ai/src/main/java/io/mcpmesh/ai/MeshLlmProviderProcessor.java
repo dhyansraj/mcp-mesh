@@ -3,14 +3,16 @@ package io.mcpmesh.ai;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlmProvider;
+import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
-import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.util.*;
 
@@ -21,7 +23,7 @@ import java.util.*;
  * <ol>
  *   <li>Extracts the model configuration</li>
  *   <li>Creates a Spring AI ChatClient for the model</li>
- *   <li>Registers an LLM tool capability with the mesh</li>
+ *   <li>Registers an LLM tool capability with the mesh (via llm_provider field)</li>
  *   <li>Handles incoming LLM generation requests</li>
  * </ol>
  *
@@ -39,15 +41,30 @@ import java.util.*;
  *   }
  * }
  * </pre>
+ *
+ * <h2>Heartbeat Registration</h2>
+ * <p>The tool spec includes an {@code llm_provider} JSON field that tells the
+ * Rust core this is a provider (not a consumer). Format:
+ * <pre>
+ * {
+ *   "capability": "llm",
+ *   "tags": ["llm", "claude", "anthropic", "provider"],
+ *   "version": "1.0.0",
+ *   "namespace": "default"
+ * }
+ * </pre>
  */
-@Component
 public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmProviderProcessor.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** Default tool name for LLM provider (matches Python/TypeScript SDKs). */
+    public static final String LLM_TOOL_NAME = "llm_generate";
+
     private ApplicationContext applicationContext;
     private final List<LlmProviderConfig> registeredProviders = new ArrayList<>();
+    private final List<AgentSpec.ToolSpec> toolSpecs = new ArrayList<>();
 
     @Override
     public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
@@ -56,12 +73,14 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        Class<?> beanClass = bean.getClass();
+        // Get the target class (unwrap CGLIB proxies)
+        Class<?> targetClass = AopUtils.getTargetClass(bean);
 
-        // Check for @MeshLlmProvider annotation
-        MeshLlmProvider providerAnnotation = beanClass.getAnnotation(MeshLlmProvider.class);
+        // Check for @MeshLlmProvider annotation (handle meta-annotations too)
+        MeshLlmProvider providerAnnotation = AnnotationUtils.findAnnotation(targetClass, MeshLlmProvider.class);
         if (providerAnnotation != null) {
-            processLlmProvider(beanClass, providerAnnotation);
+            log.info("Found @MeshLlmProvider on bean '{}' (class: {})", beanName, targetClass.getName());
+            processLlmProvider(targetClass, providerAnnotation);
         }
 
         return bean;
@@ -91,8 +110,131 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
         registeredProviders.add(config);
 
-        log.info("Registered LLM provider: {} ({}) with tags {}",
+        // Create ToolSpec for heartbeat registration
+        AgentSpec.ToolSpec toolSpec = createToolSpec(config);
+        toolSpecs.add(toolSpec);
+
+        log.info("Registered LLM provider: {} ({}) with tags {} - tool spec created for heartbeat",
             capability, model, Arrays.toString(tags));
+    }
+
+    /**
+     * Create a ToolSpec for the LLM provider.
+     *
+     * <p>This tool spec includes the {@code llm_provider} field that tells the
+     * Rust core to treat this as a provider (discoverable by consumers).
+     *
+     * @param config The provider configuration
+     * @return ToolSpec ready for heartbeat registration
+     */
+    private AgentSpec.ToolSpec createToolSpec(LlmProviderConfig config) {
+        AgentSpec.ToolSpec spec = new AgentSpec.ToolSpec();
+
+        // Tool name - used for MCP tool invocation
+        spec.setFunctionName(LLM_TOOL_NAME);
+
+        // Capability - used for mesh discovery
+        spec.setCapability(config.capability());
+
+        // Description for tool listing
+        spec.setDescription("Generate LLM response using " + config.provider() + "/" + config.modelName());
+
+        // Version from annotation
+        spec.setVersion(config.version());
+
+        // Tags for filtering
+        spec.setTags(new ArrayList<>(config.tags()));
+
+        // Input schema for the LLM request
+        spec.setInputSchema(buildInputSchemaJson());
+
+        // LLM provider spec - this is the key field that tells Rust core
+        // this is a provider (not a consumer)
+        spec.setLlmProvider(buildLlmProviderJson(config));
+
+        return spec;
+    }
+
+    /**
+     * Build the llm_provider JSON for heartbeat.
+     * Format matches Python/TypeScript SDKs.
+     */
+    private String buildLlmProviderJson(LlmProviderConfig config) {
+        try {
+            Map<String, Object> providerData = new LinkedHashMap<>();
+            providerData.put("capability", config.capability());
+            providerData.put("tags", config.tags());
+            providerData.put("version", config.version());
+            providerData.put("namespace", "default");
+            return objectMapper.writeValueAsString(providerData);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize llm_provider JSON", e);
+            return "{}";
+        }
+    }
+
+    /**
+     * Build the input schema JSON for the LLM tool.
+     */
+    private String buildInputSchemaJson() {
+        try {
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+
+            Map<String, Object> properties = new LinkedHashMap<>();
+
+            // messages parameter (required)
+            Map<String, Object> messagesSchema = new LinkedHashMap<>();
+            messagesSchema.put("type", "array");
+            messagesSchema.put("description", "Conversation messages");
+            Map<String, Object> messageItem = new LinkedHashMap<>();
+            messageItem.put("type", "object");
+            Map<String, Object> messageProps = new LinkedHashMap<>();
+            messageProps.put("role", Map.of("type", "string", "enum", List.of("system", "user", "assistant", "tool")));
+            messageProps.put("content", Map.of("type", "string"));
+            messageItem.put("properties", messageProps);
+            messageItem.put("required", List.of("role", "content"));
+            messagesSchema.put("items", messageItem);
+            properties.put("messages", messagesSchema);
+
+            // tools parameter (optional)
+            Map<String, Object> toolsSchema = new LinkedHashMap<>();
+            toolsSchema.put("type", "array");
+            toolsSchema.put("description", "Available tools (optional)");
+            properties.put("tools", toolsSchema);
+
+            // max_tokens parameter
+            properties.put("max_tokens", Map.of("type", "integer", "default", 4096, "description", "Maximum tokens to generate"));
+
+            // temperature parameter
+            properties.put("temperature", Map.of("type", "number", "default", 0.7, "description", "Sampling temperature"));
+
+            schema.put("properties", properties);
+            schema.put("required", List.of("messages"));
+
+            return objectMapper.writeValueAsString(schema);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize input schema", e);
+            return "{}";
+        }
+    }
+
+    /**
+     * Get tool specs for registered LLM providers.
+     *
+     * <p>Called by MeshAutoConfiguration to include in agent registration.
+     *
+     * @return List of tool specs with llm_provider field set
+     */
+    public List<AgentSpec.ToolSpec> getToolSpecs() {
+        return new ArrayList<>(toolSpecs);
+    }
+
+    /**
+     * Check if any LLM providers are registered.
+     */
+    public boolean hasProviders() {
+        return !registeredProviders.isEmpty();
     }
 
     /**
@@ -100,6 +242,31 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
      */
     public List<LlmProviderConfig> getRegisteredProviders() {
         return new ArrayList<>(registeredProviders);
+    }
+
+    /**
+     * Create tool wrappers for MCP server registration.
+     *
+     * <p>Called by MeshAutoConfiguration to get handlers that can process
+     * incoming MCP calls for the LLM tool.
+     *
+     * @return List of tool wrappers ready for MeshToolWrapperRegistry
+     */
+    public List<LlmProviderToolWrapper> createToolWrappers() {
+        List<LlmProviderToolWrapper> wrappers = new ArrayList<>();
+
+        for (LlmProviderConfig config : registeredProviders) {
+            LlmProviderToolWrapper wrapper = new LlmProviderToolWrapper(
+                config.capability(),
+                "Generate LLM response using " + config.provider() + "/" + config.modelName(),
+                config.version(),
+                config.tags(),
+                this
+            );
+            wrappers.add(wrapper);
+        }
+
+        return wrappers;
     }
 
     /**
@@ -111,6 +278,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> handleGenerateRequest(String capability, Map<String, Object> params) {
+        log.debug("handleGenerateRequest called with capability: {}", capability);
+
         // Find provider config
         LlmProviderConfig config = findProvider(capability);
         if (config == null) {
@@ -125,13 +294,24 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             throw new IllegalStateException("SpringAiLlmProvider not available", e);
         }
 
+        // Handle both direct format {"messages": [...]} and wrapped format {"request": {"messages": [...]}}
+        // The Python SDK sends wrapped format via mesh delegation
+        Map<String, Object> requestData = params;
+        if (params.containsKey("request") && params.get("request") instanceof Map) {
+            log.debug("Unwrapping 'request' envelope from mesh delegation");
+            requestData = (Map<String, Object>) params.get("request");
+        }
+
         // Extract request parameters
-        List<Map<String, Object>> messages = (List<Map<String, Object>>) params.get("messages");
-        List<Map<String, Object>> tools = (List<Map<String, Object>>) params.get("tools");
+        List<Map<String, Object>> messages = (List<Map<String, Object>>) requestData.get("messages");
+        List<Map<String, Object>> tools = (List<Map<String, Object>>) requestData.get("tools");
 
         // Build prompts from messages
         String systemPrompt = extractSystemPrompt(messages);
         String userPrompt = extractUserPrompt(messages);
+
+        log.debug("Generating response with provider={}, messageCount={}", config.provider(),
+            messages != null ? messages.size() : 0);
 
         // Generate response
         String content;

@@ -12,19 +12,23 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Registry for MeshToolWrapper instances.
+ * Registry for MeshToolWrapper and other McpToolHandler instances.
  *
  * <p>Stores wrappers by function ID and handles dependency updates using
  * composite keys (funcId:dep_N format).
  *
  * <p>This registry is the bridge between:
  * <ul>
- *   <li>MCP SDK registration (getAllWrappers)</li>
+ *   <li>MCP SDK registration (getAllHandlers)</li>
  *   <li>Heartbeat dependency updates (updateDependency)</li>
- *   <li>Tool invocation (getWrapper)</li>
+ *   <li>Tool invocation (getHandler)</li>
  * </ul>
  *
+ * <p>Supports both @MeshTool methods (via MeshToolWrapper) and @MeshLlmProvider
+ * classes (via LlmProviderToolWrapper from spring-ai module).
+ *
  * @see MeshToolWrapper
+ * @see McpToolHandler
  */
 public class MeshToolWrapperRegistry {
 
@@ -33,14 +37,20 @@ public class MeshToolWrapperRegistry {
     private static final String DEP_SEPARATOR = ":dep_";
     private static final String LLM_SEPARATOR = ":llm_";
 
-    // funcId → wrapper
+    // funcId → wrapper (MeshToolWrapper only, for dependency updates)
     private final Map<String, MeshToolWrapper> wrappers = new ConcurrentHashMap<>();
-
-    // capability → wrapper (for MCP SDK tool lookup by name)
-    private final Map<String, MeshToolWrapper> wrappersByCapability = new ConcurrentHashMap<>();
 
     // methodName → wrapper (for dependency resolution by function name from Rust core)
     private final Map<String, MeshToolWrapper> wrappersByMethodName = new ConcurrentHashMap<>();
+
+    // funcId → handler (all handlers including LLM providers)
+    private final Map<String, McpToolHandler> handlers = new ConcurrentHashMap<>();
+
+    // capability → handler (for MCP SDK tool lookup by name)
+    private final Map<String, McpToolHandler> handlersByCapability = new ConcurrentHashMap<>();
+
+    // methodName → handler (for MCP tool lookup by method name)
+    private final Map<String, McpToolHandler> handlersByMethodName = new ConcurrentHashMap<>();
 
     private final McpMeshToolProxyFactory proxyFactory;
 
@@ -49,7 +59,7 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
-     * Register a wrapper.
+     * Register a MeshToolWrapper (for @MeshTool methods).
      *
      * @param wrapper The wrapper to register
      */
@@ -58,16 +68,41 @@ public class MeshToolWrapperRegistry {
         String capability = wrapper.getCapability();
         String methodName = wrapper.getMethodName();
 
+        // Store in wrapper maps (for dependency updates)
         wrappers.put(funcId, wrapper);
-        wrappersByCapability.put(capability, wrapper);
         wrappersByMethodName.put(methodName, wrapper);
+
+        // Store in handler maps (for MCP server)
+        handlers.put(funcId, wrapper);
+        handlersByCapability.put(capability, wrapper);
+        handlersByMethodName.put(methodName, wrapper);
 
         log.info("Registered wrapper: {} (capability: {}, deps: {}, llm: {})",
             funcId, capability, wrapper.getDependencyCount(), wrapper.getLlmAgentCount());
     }
 
     /**
-     * Get a wrapper by function ID.
+     * Register a generic McpToolHandler (for LLM providers, etc.).
+     *
+     * <p>Use this for handlers that don't need dependency injection.
+     *
+     * @param handler The handler to register
+     */
+    public void registerHandler(McpToolHandler handler) {
+        String funcId = handler.getFuncId();
+        String capability = handler.getCapability();
+        String methodName = handler.getMethodName();
+
+        handlers.put(funcId, handler);
+        handlersByCapability.put(capability, handler);
+        handlersByMethodName.put(methodName, handler);
+
+        log.info("Registered handler: {} (capability: {}, method: {})",
+            funcId, capability, methodName);
+    }
+
+    /**
+     * Get a wrapper by function ID (for dependency updates).
      *
      * @param funcId The function ID
      * @return The wrapper, or null if not found
@@ -77,31 +112,52 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
-     * Get a wrapper by capability name.
+     * Get a handler by function ID.
      *
-     * @param capability The capability name
-     * @return The wrapper, or null if not found
+     * @param funcId The function ID
+     * @return The handler, or null if not found
      */
-    public MeshToolWrapper getWrapperByCapability(String capability) {
-        return wrappersByCapability.get(capability);
+    public McpToolHandler getHandler(String funcId) {
+        return handlers.get(funcId);
     }
 
     /**
-     * Get all registered wrappers.
+     * Get a handler by capability name.
      *
-     * @return Unmodifiable collection of all wrappers
+     * @param capability The capability name
+     * @return The handler, or null if not found
      */
+    public McpToolHandler getHandlerByCapability(String capability) {
+        return handlersByCapability.get(capability);
+    }
+
+    /**
+     * Get all registered handlers (for MCP server registration).
+     *
+     * @return Unmodifiable collection of all handlers
+     */
+    public Collection<McpToolHandler> getAllHandlers() {
+        return Collections.unmodifiableCollection(handlers.values());
+    }
+
+    /**
+     * Get all registered wrappers (MeshToolWrapper only, for backwards compat).
+     *
+     * @return Unmodifiable collection of MeshToolWrapper instances
+     * @deprecated Use {@link #getAllHandlers()} instead
+     */
+    @Deprecated
     public Collection<MeshToolWrapper> getAllWrappers() {
         return Collections.unmodifiableCollection(wrappers.values());
     }
 
     /**
-     * Get all wrappers mapped by capability.
+     * Get all handlers mapped by capability.
      *
-     * @return Unmodifiable map of capability → wrapper
+     * @return Unmodifiable map of capability → handler
      */
-    public Map<String, MeshToolWrapper> getWrappersByCapability() {
-        return Collections.unmodifiableMap(wrappersByCapability);
+    public Map<String, McpToolHandler> getHandlersByCapability() {
+        return Collections.unmodifiableMap(handlersByCapability);
     }
 
     /**
@@ -254,9 +310,9 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
-     * Check if a wrapper exists for the given capability.
+     * Check if a handler exists for the given capability.
      */
     public boolean hasCapability(String capability) {
-        return wrappersByCapability.containsKey(capability);
+        return handlersByCapability.containsKey(capability);
     }
 }
