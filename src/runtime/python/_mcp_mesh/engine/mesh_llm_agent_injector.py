@@ -123,11 +123,14 @@ class MeshLlmAgentInjector(BaseInjector):
 
                     # Set factory for per-call context agent creation (template support)
                     if config.get("is_template", False):
+
                         def create_context_agent(
                             context_value: Any, _func_id: str = function_id
                         ) -> MeshLlmAgent:
                             """Factory to create MeshLlmAgent with context for template rendering."""
-                            return self._create_llm_agent(_func_id, context_value=context_value)
+                            return self._create_llm_agent(
+                                _func_id, context_value=context_value
+                            )
 
                         wrapper._mesh_create_context_agent = create_context_agent
                         logger.info(
@@ -262,17 +265,25 @@ class MeshLlmAgentInjector(BaseInjector):
             filter_config = llm_metadata.config.get("filter")
             has_filter = filter_config is not None and len(filter_config) > 0
 
+        # CRITICAL FIX: Always set config if not already set (prevents KeyError during race condition)
+        # When provider arrives before tools, config must be available for inject_llm_agent
+        # to create the LLM agent with context. Without this, _create_llm_agent fails with KeyError.
+        if "config" not in self._llm_agents[function_id] and llm_metadata:
+            self._llm_agents[function_id]["config"] = llm_metadata.config
+            self._llm_agents[function_id]["output_type"] = llm_metadata.output_type
+            self._llm_agents[function_id]["param_name"] = llm_metadata.param_name
+            self._llm_agents[function_id]["function"] = llm_metadata.function
+            logger.debug(
+                f"📋 Set config from DecoratorRegistry for '{function_id}' (awaiting tools)"
+            )
+
         # If no filter specified, initialize empty tools data so we can create LLM agent without tools
         # This supports simple LLM calls (text generation) that don't need tool calling
         if not has_filter and "tools_metadata" not in self._llm_agents[function_id]:
             self._llm_agents[function_id].update(
                 {
-                    "config": llm_metadata.config if llm_metadata else {},
-                    "output_type": llm_metadata.output_type if llm_metadata else None,
-                    "param_name": llm_metadata.param_name if llm_metadata else "llm",
                     "tools_metadata": [],  # No tools for simple LLM calls
                     "tools_proxies": {},  # No tool proxies needed
-                    "function": llm_metadata.function if llm_metadata else None,
                 }
             )
             logger.info(
@@ -568,7 +579,9 @@ class MeshLlmAgentInjector(BaseInjector):
                         )
 
                 # Check if templates are enabled
-                is_template = config_dict.get("is_template", False) if config_dict else False
+                is_template = (
+                    config_dict.get("is_template", False) if config_dict else False
+                )
 
                 if is_template and config_dict:
                     # Templates enabled - create per-call agent with context
@@ -739,13 +752,17 @@ class MeshLlmAgentInjector(BaseInjector):
                 )
 
         # Create MeshLlmAgent with both metadata and proxies
+        # Use .get() with defaults for tools_metadata/proxies to handle race condition
+        # where provider arrives before tools (filter-based agents)
         llm_agent = MeshLlmAgent(
             config=llm_config,
-            filtered_tools=llm_agent_data[
-                "tools_metadata"
-            ],  # Metadata for schema building
+            filtered_tools=llm_agent_data.get(
+                "tools_metadata", []
+            ),  # Metadata for schema building (empty if tools not yet received)
             output_type=llm_agent_data["output_type"],
-            tool_proxies=llm_agent_data["tools_proxies"],  # Proxies for execution
+            tool_proxies=llm_agent_data.get(
+                "tools_proxies", {}
+            ),  # Proxies for execution (empty if tools not yet received)
             template_path=template_path if is_template else None,
             context_value=context_value if is_template else None,
             provider_proxy=llm_agent_data.get(
