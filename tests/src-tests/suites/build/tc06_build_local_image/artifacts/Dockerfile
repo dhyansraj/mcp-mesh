@@ -18,6 +18,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Eclipse Temurin JDK 17 (architecture-aware)
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) JAVA_ARCH="x64" ;; \
+      arm64) JAVA_ARCH="aarch64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.13%2B11/OpenJDK17U-jdk_${JAVA_ARCH}_linux_hotspot_17.0.13_11.tar.gz" | tar -xzf - -C /opt && \
+    ln -s /opt/jdk-17.0.13+11 /opt/java && \
+    ln -s /opt/java/bin/java /usr/local/bin/java && \
+    ln -s /opt/java/bin/javac /usr/local/bin/javac && \
+    ln -s /opt/java/bin/jar /usr/local/bin/jar
+ENV JAVA_HOME=/opt/java
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Install Maven
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | tar -xzf - -C /opt && \
+    ln -s /opt/apache-maven-3.9.6 /opt/maven && \
+    ln -s /opt/maven/bin/mvn /usr/local/bin/mvn
+ENV MAVEN_HOME=/opt/maven
+ENV PATH="${MAVEN_HOME}/bin:${PATH}"
+
 # Install Tempo for distributed tracing (architecture-aware)
 RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://github.com/grafana/tempo/releases/download/v2.7.1/tempo_2.7.1_linux_${ARCH}.deb" -o /tmp/tempo.deb && \
@@ -27,17 +49,24 @@ RUN ARCH=$(dpkg --print-architecture) && \
 COPY tempo.yaml /etc/tempo/tempo.yaml
 RUN mkdir -p /var/tempo && chown -R root:root /var/tempo
 
-# Verify Node.js installation
-RUN node --version && npm --version
+# Verify Node.js and Java installation
+RUN node --version && npm --version && java -version && mvn --version | head -1
 
 # Create directories for local packages
-RUN mkdir -p /wheels /packages /workspace
+RUN mkdir -p /wheels /packages /java-jars /native-libs /workspace
 
 # Copy locally built artifacts
 COPY wheels/*.whl /wheels/
 COPY packages/*.tgz /packages/
 COPY bin/meshctl /usr/local/bin/meshctl
 COPY bin/mcp-mesh-registry /usr/local/bin/mcp-mesh-registry
+
+# Copy Java JARs and native FFI library (optional - may not exist)
+COPY java-jars/ /java-jars/
+COPY native-libs/ /native-libs/
+
+# Copy Maven repository structure for Java SDK (preserves POMs and metadata)
+COPY m2-repo/ /root/.m2/repository/io/
 
 # Make binaries executable
 RUN chmod +x /usr/local/bin/meshctl /usr/local/bin/mcp-mesh-registry
@@ -63,6 +92,17 @@ RUN npm install -g /packages/mcpmesh-core-*.tgz
 
 # Install TypeScript SDK globally from local tarball
 RUN npm install -g /packages/mcpmesh-sdk-*.tgz
+
+# Verify Java SDK installation (installed via m2-repo copy above)
+RUN if [ -d "/root/.m2/repository/io/mcpmesh" ]; then \
+        echo "Java SDK installed in Maven repository:"; \
+        ls -la /root/.m2/repository/io/mcpmesh/; \
+    else \
+        echo "No Java SDK found in Maven repository (optional)"; \
+    fi
+
+# Set native library path for Java agents
+ENV MESH_NATIVE_LIB_PATH=/native-libs
 
 # Install tsuite dependencies for running tests inside container
 RUN pip install --no-cache-dir click rich pyyaml jsonpath-ng requests flask docker

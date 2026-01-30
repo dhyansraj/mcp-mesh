@@ -5,6 +5,7 @@ import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
@@ -139,13 +140,17 @@ public class MeshToolWrapperRegistry {
             return;
         }
 
-        // Get or create proxy
-        McpMeshTool proxy = proxyFactory.getOrCreateProxy(endpoint, functionName);
+        // Get the expected return type for this dependency (from McpMeshTool<T>)
+        Type returnType = wrapper.getDependencyReturnType(depIndex);
+
+        // Get or create typed proxy
+        McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(endpoint, functionName, returnType);
 
         // Update wrapper's dependency array
         wrapper.updateDependency(depIndex, proxy);
 
-        log.debug("Updated dependency {} for {} → {}:{}", depIndex, funcId, endpoint, functionName);
+        log.debug("Updated dependency {} for {} → {}:{} (returnType={})",
+            depIndex, funcId, endpoint, functionName, returnType);
     }
 
     /**

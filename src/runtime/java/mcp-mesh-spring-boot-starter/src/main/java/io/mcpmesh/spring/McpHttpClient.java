@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -45,8 +46,23 @@ public class McpHttpClient {
      * @return The tool result
      * @throws MeshToolCallException if the call fails
      */
-    @SuppressWarnings("unchecked")
     public <T> T callTool(String endpoint, String functionName, Map<String, Object> params) {
+        return callTool(endpoint, functionName, params, null);
+    }
+
+    /**
+     * Call a tool on a remote MCP server with typed response deserialization.
+     *
+     * @param endpoint     The MCP server endpoint (e.g., http://localhost:9000)
+     * @param functionName The tool/function name to call
+     * @param params       Parameters to pass to the tool
+     * @param returnType   The expected return type for deserialization (null for dynamic typing)
+     * @param <T>          Expected return type
+     * @return The tool result, deserialized to the specified type
+     * @throws MeshToolCallException if the call fails
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T callTool(String endpoint, String functionName, Map<String, Object> params, Type returnType) {
         try {
             // Build MCP tools/call request
             // Use /mcp endpoint (stateless transport) - not /mcp/v1
@@ -107,26 +123,20 @@ public class McpHttpClient {
                 if (responseNode.has("result")) {
                     JsonNode result = responseNode.get("result");
 
-                    // Handle MCP content array response
+                    // Handle MCP content array response - extract the text content
+                    String textContent = null;
                     if (result.has("content") && result.get("content").isArray()) {
                         JsonNode content = result.get("content");
                         if (content.size() > 0) {
                             JsonNode firstContent = content.get(0);
                             if (firstContent.has("text")) {
-                                String text = firstContent.get("text").asText();
-                                // Try to parse as JSON, otherwise return as string
-                                try {
-                                    return (T) objectMapper.readValue(text,
-                                        new TypeReference<Map<String, Object>>() {});
-                                } catch (Exception e) {
-                                    return (T) text;
-                                }
+                                textContent = firstContent.get("text").asText();
                             }
                         }
                     }
 
-                    // Return result directly
-                    return objectMapper.treeToValue(result, (Class<T>) Object.class);
+                    // Deserialize based on return type
+                    return deserializeResult(textContent, result, returnType);
                 }
 
                 return null;
@@ -190,6 +200,78 @@ public class McpHttpClient {
             log.warn("Failed to list tools at {}: {}", endpoint, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Deserialize the result to the specified type.
+     *
+     * @param textContent The extracted text content from MCP response (may be null)
+     * @param resultNode  The result JsonNode from MCP response
+     * @param returnType  The target type for deserialization (null for dynamic typing)
+     * @return The deserialized result
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T deserializeResult(String textContent, JsonNode resultNode, Type returnType) {
+        try {
+            // If we have text content, try to deserialize it
+            if (textContent != null) {
+                if (returnType != null) {
+                    Class<?> rawType = getRawType(returnType);
+
+                    // Handle primitive wrappers and String specially
+                    if (rawType == String.class) {
+                        return (T) textContent;
+                    } else if (rawType == Integer.class || rawType == int.class) {
+                        return (T) Integer.valueOf(textContent);
+                    } else if (rawType == Long.class || rawType == long.class) {
+                        return (T) Long.valueOf(textContent);
+                    } else if (rawType == Double.class || rawType == double.class) {
+                        return (T) Double.valueOf(textContent);
+                    } else if (rawType == Boolean.class || rawType == boolean.class) {
+                        return (T) Boolean.valueOf(textContent);
+                    } else {
+                        // Try to parse as JSON for complex types
+                        return objectMapper.readValue(textContent,
+                            objectMapper.getTypeFactory().constructType(returnType));
+                    }
+                } else {
+                    // No type specified - try JSON parsing, fallback to string
+                    try {
+                        return (T) objectMapper.readValue(textContent,
+                            new TypeReference<Map<String, Object>>() {});
+                    } catch (Exception e) {
+                        return (T) textContent;
+                    }
+                }
+            }
+
+            // No text content - deserialize the result node directly
+            if (returnType != null) {
+                return objectMapper.treeToValue(resultNode,
+                    objectMapper.getTypeFactory().constructType(returnType));
+            } else {
+                return objectMapper.treeToValue(resultNode, (Class<T>) Object.class);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to deserialize result to {}: {}", returnType, e.getMessage());
+            // Fallback to string if text content available
+            if (textContent != null) {
+                return (T) textContent;
+            }
+            throw new RuntimeException("Failed to deserialize result", e);
+        }
+    }
+
+    /**
+     * Get the raw type from a potentially parameterized type.
+     */
+    private Class<?> getRawType(Type type) {
+        if (type instanceof Class<?>) {
+            return (Class<?>) type;
+        } else if (type instanceof java.lang.reflect.ParameterizedType pt) {
+            return (Class<?>) pt.getRawType();
+        }
+        return Object.class;
     }
 
     /**

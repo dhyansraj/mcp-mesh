@@ -20,6 +20,9 @@ output:
   bin: "./out/bin"
   wheels: "./out/wheels"
   packages: "./out/packages"
+  java_jars: "./out/java-jars"
+  native_libs: "./out/native-libs"
+  m2_repo: "./out/m2-repo"
 
 # Build image with all necessary tools
 build:
