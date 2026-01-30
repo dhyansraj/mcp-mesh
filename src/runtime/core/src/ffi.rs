@@ -456,6 +456,135 @@ pub unsafe extern "C" fn mesh_free_string(s: *mut c_char) {
     }
 }
 
+// =============================================================================
+// Config Resolution Functions
+// =============================================================================
+
+/// Resolve configuration value with priority: ENV > param > default.
+///
+/// For http_host, auto-detects external IP if no value provided.
+///
+/// # Arguments
+/// * `key_name` - Config key (e.g., "http_host", "registry_url", "namespace")
+/// * `param_value` - Optional value from code/config (NULL for none)
+///
+/// # Returns
+/// Resolved value (caller must free with `mesh_free_string`), or NULL if unknown key
+///
+/// # Safety
+/// * `key_name` must be a valid null-terminated C string
+/// * `param_value` may be NULL or a valid null-terminated C string
+/// * The returned string must be freed with `mesh_free_string`
+#[no_mangle]
+pub unsafe extern "C" fn mesh_resolve_config(
+    key_name: *const c_char,
+    param_value: *const c_char,
+) -> *mut c_char {
+    if key_name.is_null() {
+        set_last_error("key_name is null");
+        return ptr::null_mut();
+    }
+
+    let key = match CStr::from_ptr(key_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in key_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let param = if param_value.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(param_value).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            Ok(_) => None, // Empty string treated as no value
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in param_value: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::config::resolve_config_by_name(key, param);
+
+    if result.is_empty() {
+        // Unknown key or no value available
+        return ptr::null_mut();
+    }
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Resolve integer configuration value with priority: ENV > param > default.
+///
+/// # Arguments
+/// * `key_name` - Config key (e.g., "http_port", "health_interval")
+/// * `param_value` - Value from code/config (-1 for none)
+///
+/// # Returns
+/// Resolved value, or -1 if unknown key or no value available
+///
+/// # Safety
+/// * `key_name` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_resolve_config_int(
+    key_name: *const c_char,
+    param_value: i64,
+) -> i64 {
+    if key_name.is_null() {
+        set_last_error("key_name is null");
+        return -1;
+    }
+
+    let key = match CStr::from_ptr(key_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in key_name: {}", e));
+            return -1;
+        }
+    };
+
+    let param = if param_value < 0 { None } else { Some(param_value) };
+
+    match crate::config::ConfigKey::from_name(key) {
+        Some(k) => crate::config::resolve_config_int(k, param).unwrap_or(-1),
+        None => {
+            set_last_error(format!("Unknown config key: {}", key));
+            -1
+        }
+    }
+}
+
+/// Auto-detect external IP address.
+///
+/// Uses UDP socket trick to find IP that routes to external networks.
+/// Falls back to "localhost" if detection fails.
+///
+/// # Returns
+/// IP address string (caller must free with `mesh_free_string`)
+///
+/// # Safety
+/// * The returned string must be freed with `mesh_free_string`
+#[no_mangle]
+pub extern "C" fn mesh_auto_detect_ip() -> *mut c_char {
+    let ip = crate::config::auto_detect_external_ip();
+
+    match CString::new(ip) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Get library version string.
 ///
 /// # Returns
@@ -551,6 +680,105 @@ mod tests {
         // Should not panic
         unsafe {
             mesh_free_string(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_namespace() {
+        unsafe {
+            let key = CString::new("namespace").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            // Default namespace is "default"
+            assert_eq!(value, "default");
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_with_param() {
+        unsafe {
+            let key = CString::new("namespace").unwrap();
+            let param = CString::new("production").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), param.as_ptr());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            assert_eq!(value, "production");
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_unknown_key() {
+        unsafe {
+            let key = CString::new("unknown_key").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(result.is_null());
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_null_key() {
+        unsafe {
+            let result = mesh_resolve_config(ptr::null(), ptr::null());
+            assert!(result.is_null());
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            mesh_free_string(err);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int() {
+        unsafe {
+            let key = CString::new("health_interval").unwrap();
+            // Default is 5
+            let result = mesh_resolve_config_int(key.as_ptr(), -1);
+            assert_eq!(result, 5);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int_with_param() {
+        unsafe {
+            let key = CString::new("health_interval").unwrap();
+            let result = mesh_resolve_config_int(key.as_ptr(), 10);
+            assert_eq!(result, 10);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int_unknown_key() {
+        unsafe {
+            let key = CString::new("unknown_key").unwrap();
+            let result = mesh_resolve_config_int(key.as_ptr(), -1);
+            assert_eq!(result, -1);
+        }
+    }
+
+    #[test]
+    fn test_auto_detect_ip() {
+        let result = mesh_auto_detect_ip();
+        assert!(!result.is_null());
+        unsafe {
+            let ip = CStr::from_ptr(result).to_str().unwrap();
+            // Should return something (either real IP or localhost)
+            assert!(!ip.is_empty());
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_http_host_auto_detect() {
+        unsafe {
+            let key = CString::new("http_host").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            // Should return auto-detected IP (not empty)
+            assert!(!value.is_empty());
+            mesh_free_string(result);
         }
     }
 }
