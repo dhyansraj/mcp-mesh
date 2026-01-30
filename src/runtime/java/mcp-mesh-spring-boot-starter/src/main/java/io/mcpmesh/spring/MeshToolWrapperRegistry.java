@@ -38,6 +38,9 @@ public class MeshToolWrapperRegistry {
     // capability → wrapper (for MCP SDK tool lookup by name)
     private final Map<String, MeshToolWrapper> wrappersByCapability = new ConcurrentHashMap<>();
 
+    // methodName → wrapper (for dependency resolution by function name from Rust core)
+    private final Map<String, MeshToolWrapper> wrappersByMethodName = new ConcurrentHashMap<>();
+
     private final McpMeshToolProxyFactory proxyFactory;
 
     public MeshToolWrapperRegistry(McpMeshToolProxyFactory proxyFactory) {
@@ -52,9 +55,11 @@ public class MeshToolWrapperRegistry {
     public void registerWrapper(MeshToolWrapper wrapper) {
         String funcId = wrapper.getFuncId();
         String capability = wrapper.getCapability();
+        String methodName = wrapper.getMethodName();
 
         wrappers.put(funcId, wrapper);
         wrappersByCapability.put(capability, wrapper);
+        wrappersByMethodName.put(methodName, wrapper);
 
         log.info("Registered wrapper: {} (capability: {}, deps: {}, llm: {})",
             funcId, capability, wrapper.getDependencyCount(), wrapper.getLlmAgentCount());
@@ -126,7 +131,11 @@ public class MeshToolWrapperRegistry {
 
         MeshToolWrapper wrapper = wrappers.get(funcId);
         if (wrapper == null) {
-            log.warn("No wrapper found for funcId: {}", funcId);
+            // Fallback: funcId might be just the method name from Rust core
+            wrapper = wrappersByMethodName.get(funcId);
+        }
+        if (wrapper == null) {
+            log.warn("No wrapper found for funcId: {} (also checked method name)", funcId);
             return;
         }
 
@@ -159,6 +168,10 @@ public class MeshToolWrapperRegistry {
         }
 
         MeshToolWrapper wrapper = wrappers.get(funcId);
+        if (wrapper == null) {
+            // Fallback: funcId might be just the method name from Rust core
+            wrapper = wrappersByMethodName.get(funcId);
+        }
         if (wrapper != null) {
             wrapper.updateDependency(depIndex, null);
             log.debug("Marked dependency {} unavailable for {}", depIndex, funcId);

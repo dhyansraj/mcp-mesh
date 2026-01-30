@@ -49,7 +49,8 @@ public class McpHttpClient {
     public <T> T callTool(String endpoint, String functionName, Map<String, Object> params) {
         try {
             // Build MCP tools/call request
-            String url = endpoint.endsWith("/") ? endpoint + "mcp/v1" : endpoint + "/mcp/v1";
+            // Use /mcp endpoint (stateless transport) - not /mcp/v1
+            String url = endpoint.endsWith("/") ? endpoint + "mcp" : endpoint + "/mcp";
 
             Map<String, Object> request = Map.of(
                 "jsonrpc", "2.0",
@@ -68,6 +69,7 @@ public class McpHttpClient {
                 .url(url)
                 .post(RequestBody.create(requestBody, JSON))
                 .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
                 .build();
 
             try (Response response = httpClient.newCall(httpRequest).execute()) {
@@ -84,8 +86,16 @@ public class McpHttpClient {
                 String responseBody = body.string();
                 log.debug("Tool response: {}", responseBody);
 
+                // Handle SSE (Server-Sent Events) format from MCP servers
+                // SSE format: "event: message\nid: ...\ndata: {JSON}\n\n"
+                String jsonContent = responseBody;
+                if (responseBody.startsWith("event:") || responseBody.contains("\ndata: ")) {
+                    jsonContent = extractJsonFromSse(responseBody);
+                    log.debug("Extracted JSON from SSE: {}", jsonContent);
+                }
+
                 // Parse JSON-RPC response
-                JsonNode responseNode = objectMapper.readTree(responseBody);
+                JsonNode responseNode = objectMapper.readTree(jsonContent);
 
                 if (responseNode.has("error")) {
                     JsonNode error = responseNode.get("error");
@@ -143,7 +153,8 @@ public class McpHttpClient {
      */
     public JsonNode listTools(String endpoint) {
         try {
-            String url = endpoint.endsWith("/") ? endpoint + "mcp/v1" : endpoint + "/mcp/v1";
+            // Use /mcp endpoint (stateless transport)
+            String url = endpoint.endsWith("/") ? endpoint + "mcp" : endpoint + "/mcp";
 
             Map<String, Object> request = Map.of(
                 "jsonrpc", "2.0",
@@ -158,6 +169,7 @@ public class McpHttpClient {
                 .url(url)
                 .post(RequestBody.create(requestBody, JSON))
                 .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
                 .build();
 
             try (Response response = httpClient.newCall(httpRequest).execute()) {
@@ -178,6 +190,33 @@ public class McpHttpClient {
             log.warn("Failed to list tools at {}: {}", endpoint, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Extract JSON content from SSE (Server-Sent Events) format.
+     *
+     * <p>SSE format looks like:
+     * <pre>
+     * event: message
+     * id: some-id
+     * data: {"jsonrpc":"2.0","id":1,"result":{...}}
+     * </pre>
+     *
+     * @param sseContent The SSE-formatted response
+     * @return The extracted JSON content from the data: line
+     */
+    private String extractJsonFromSse(String sseContent) {
+        // Find all data: lines and concatenate them (for multi-line data)
+        StringBuilder jsonBuilder = new StringBuilder();
+        for (String line : sseContent.split("\n")) {
+            if (line.startsWith("data: ")) {
+                jsonBuilder.append(line.substring(6)); // Remove "data: " prefix
+            } else if (line.startsWith("data:")) {
+                jsonBuilder.append(line.substring(5)); // Handle "data:" without space
+            }
+        }
+        String json = jsonBuilder.toString().trim();
+        return json.isEmpty() ? sseContent : json;
     }
 
     /**
