@@ -598,18 +598,18 @@ The stateless transports were added in later versions of the MCP Java SDK:
 
 Current implementation uses `0.10.0` which only has SSE transport.
 
-### Migration Checklist (PENDING)
+### Migration Checklist ✅ COMPLETE
 
 To switch from SSE to stateless:
 
-- [ ] **PENDING**: Update MCP SDK version: `0.10.0` → `0.17.2`
-- [ ] **PENDING**: Change transport: `HttpServletSseServerTransportProvider` → `HttpServletStatelessServerTransport`
-- [ ] **PENDING**: Change server type: `McpSyncServer` → `McpStatelessSyncServer`
-- [ ] **PENDING**: Update servlet registration (endpoint pattern may differ)
-- [ ] **PENDING**: Test with `curl` direct POST (should work without session)
-- [ ] **PENDING**: Test with `meshctl call` (should work end-to-end)
+- [x] Update MCP SDK version: `0.10.0` → `0.17.2`
+- [x] Change transport: `HttpServletSseServerTransportProvider` → `HttpServletStatelessServerTransport`
+- [x] Change server type: `McpSyncServer` → `McpStatelessSyncServer`
+- [x] Update servlet registration (uses `/mcp` endpoint)
+- [x] Test with `curl` direct POST (works without session)
+- [x] Test with `meshctl call` (works end-to-end)
 
-**Note**: Current SSE transport works for basic functionality. Stateless migration is optional but recommended for full compatibility with Python/meshctl.
+**Note**: Stateless transport fully working as of 2026-01-30. Tested with `meshctl call greeter:greet '{"name": "World"}'` and `meshctl call greeter:getInfo '{}'`.
 
 ---
 
@@ -1288,11 +1288,12 @@ make generate && make build
 
 3. [x] Implement `McpMeshToolProxyFactory` with caching
 
-### Phase 2: MCP SDK Integration (Partial - SSE working, stateless pending)
+### Phase 2: MCP SDK Integration ✅ COMPLETE
 
-4. [ ] **PENDING**: Upgrade to stateless transport (`HttpServletStatelessServerTransport`)
-   - Current: Using SSE transport (v0.10.0) - works but session-based
-   - Target: Stateless transport (v0.17.2+) - matches Python/meshctl expectations
+4. [x] Upgrade to stateless transport (`HttpServletStatelessServerTransport`)
+   - Updated MCP SDK: `0.10.0` → `0.17.2`
+   - Using `McpStatelessSyncServer` with `HttpServletStatelessServerTransport`
+   - Verified with `meshctl call` - works end-to-end
 5. [x] Implement `MeshMcpServerConfiguration` for MCP SDK setup
 6. [x] Register wrappers with MCP SDK (`McpServer.addTool`)
 
@@ -1339,7 +1340,7 @@ make generate && make build
 
 _Document created: 2026-01-30_
 _Last updated: 2026-01-30_
-_Status: Phase 0-1 COMPLETE, Phase 2-5 partially complete_
+_Status: Phase 0-2 COMPLETE, Phase 3-5 partially complete_
 _Based on: Python SDK analysis (decorators.py, dependency_injector.py, signature_analyzer.py)_
 _Reviewed by: Claude Web (feedback incorporated)_
 
@@ -1353,6 +1354,6 @@ _Updates:_
 - _2026-01-30: **IMPLEMENTED** - Phase 1 complete: MeshToolWrapper, MeshToolWrapperRegistry, McpMeshToolProxyFactory_
 - _2026-01-30: **IMPLEMENTED** - Agent registers with auto-detected IP (10.0.0.44), UUID suffix, 5s heartbeat_
 - _2026-01-30: **IMPLEMENTED** - meshctl shows Java in magenta with capitalized "Java"_
-- _2026-01-30: **PENDING** - Stateless transport migration (currently using SSE v0.10.0)_
+- _2026-01-30: **IMPLEMENTED** - Phase 2 complete: Stateless MCP transport (v0.17.2), meshctl call verified_
 - _2026-01-30: **PENDING** - MeshLlmAgent injection support_
 - _2026-01-30: **PENDING** - Automated tests_
