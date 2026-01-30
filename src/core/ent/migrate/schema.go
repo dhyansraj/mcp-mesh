@@ -12,7 +12,7 @@ var (
 	AgentsColumns = []*schema.Column{
 		{Name: "agent_id", Type: field.TypeString},
 		{Name: "agent_type", Type: field.TypeEnum, Enums: []string{"mcp_agent", "mesh_tool", "decorator_agent", "api"}, Default: "mcp_agent"},
-		{Name: "runtime", Type: field.TypeEnum, Nullable: true, Enums: []string{"python", "typescript"}, Default: "python"},
+		{Name: "runtime", Type: field.TypeEnum, Nullable: true, Enums: []string{"python", "typescript", "java"}, Default: "python"},
 		{Name: "name", Type: field.TypeString},
 		{Name: "version", Type: field.TypeString, Nullable: true},
 		{Name: "http_host", Type: field.TypeString, Nullable: true},
