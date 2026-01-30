@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,7 +38,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *       api-key: ${OPENAI_API_KEY}
  * </pre>
  */
-@Component
 public class SpringAiLlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiLlmProvider.class);
@@ -89,8 +87,14 @@ public class SpringAiLlmProvider {
     public String generate(String provider, String systemPrompt, String userPrompt) {
         ChatClient client = getClient(provider);
 
-        ChatClient.CallResponseSpec response = client.prompt()
-            .system(systemPrompt)
+        ChatClient.ChatClientRequestSpec requestSpec = client.prompt();
+
+        // Only set system prompt if it's non-empty (Spring AI rejects empty strings)
+        if (systemPrompt != null && !systemPrompt.isEmpty()) {
+            requestSpec.system(systemPrompt);
+        }
+
+        ChatClient.CallResponseSpec response = requestSpec
             .user(userPrompt)
             .call();
 
@@ -111,8 +115,14 @@ public class SpringAiLlmProvider {
                           Class<T> responseType) {
         ChatClient client = getClient(provider);
 
-        return client.prompt()
-            .system(systemPrompt)
+        ChatClient.ChatClientRequestSpec requestSpec = client.prompt();
+
+        // Only set system prompt if it's non-empty (Spring AI rejects empty strings)
+        if (systemPrompt != null && !systemPrompt.isEmpty()) {
+            requestSpec.system(systemPrompt);
+        }
+
+        return requestSpec
             .user(userPrompt)
             .call()
             .entity(responseType);

@@ -35,8 +35,9 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
  * and calls use the latest cached values (fast path, no registry lookup).
  *
  * @see MeshToolWrapperRegistry
+ * @see McpToolHandler
  */
-public class MeshToolWrapper {
+public class MeshToolWrapper implements McpToolHandler {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolWrapper.class);
     private static final long ASYNC_TIMEOUT_SECONDS = 30;
