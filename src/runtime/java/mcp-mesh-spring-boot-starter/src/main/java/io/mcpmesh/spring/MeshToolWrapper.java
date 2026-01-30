@@ -381,6 +381,13 @@ public class MeshToolWrapper {
         return capability;
     }
 
+    /**
+     * Get the method name (used as MCP tool name to match registry).
+     */
+    public String getMethodName() {
+        return method.getName();
+    }
+
     public String getDescription() {
         return description;
     }

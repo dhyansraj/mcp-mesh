@@ -51,7 +51,7 @@
         <!-- Dependency versions -->
         <spring-boot.version>3.2.0</spring-boot.version>
         <spring-ai.version>1.0.0-M4</spring-ai.version>
-        <mcp-sdk.version>0.10.0</mcp-sdk.version>
+        <mcp-sdk.version>0.17.2</mcp-sdk.version>
         <jnr-ffi.version>2.2.16</jnr-ffi.version>
         <jackson.version>2.16.0</jackson.version>
         <slf4j.version>2.0.9</slf4j.version>

@@ -1,15 +1,18 @@
 package io.mcpmesh.spring;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.common.McpTransportContext;
+import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
-import io.modelcontextprotocol.server.McpServerFeatures;
-import io.modelcontextprotocol.server.McpSyncServer;
-import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.server.McpStatelessServerFeatures;
+import io.modelcontextprotocol.server.McpStatelessSyncServer;
+import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
-import io.modelcontextprotocol.server.transport.HttpServletSseServerTransportProvider;
+import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
+import io.modelcontextprotocol.server.transport.HttpServletStatelessServerTransport;
 import jakarta.servlet.http.HttpServlet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,10 +29,18 @@ import java.util.Map;
  * MCP Server configuration for MCP Mesh agents.
  *
  * <p>This configuration creates an MCP server that exposes registered
- * {@link MeshToolWrapper} instances as MCP tools. The server uses SSE
- * (Server-Sent Events) transport for HTTP communication.
+ * {@link MeshToolWrapper} instances as MCP tools. The server uses stateless
+ * HTTP transport for direct JSON-RPC communication (no session required).
  *
  * <p>The MCP endpoint is exposed at {@code /mcp} by default.
+ *
+ * <p>Stateless transport enables:
+ * <ul>
+ *   <li>Direct POST requests without session establishment</li>
+ *   <li>Compatibility with meshctl call command</li>
+ *   <li>Consistent behavior with Python/TypeScript SDKs</li>
+ *   <li>Simpler load balancing (no sticky sessions)</li>
+ * </ul>
  *
  * @see MeshToolWrapperRegistry
  * @see MeshToolWrapper
@@ -49,28 +60,35 @@ public class MeshMcpServerConfiguration {
     }
 
     /**
-     * Create the SSE transport provider for MCP.
+     * Create the stateless HTTP transport for MCP.
+     *
+     * <p>Stateless transport allows direct JSON-RPC POST requests without
+     * session establishment, matching the behavior of Python FastMCP.
      */
     @Bean
     @ConditionalOnMissingBean
-    public HttpServletSseServerTransportProvider mcpTransportProvider() {
-        return new HttpServletSseServerTransportProvider(objectMapper, MCP_ENDPOINT);
+    public HttpServletStatelessServerTransport mcpStatelessTransport() {
+        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(objectMapper);
+        return HttpServletStatelessServerTransport.builder()
+            .jsonMapper(jsonMapper)
+            .messageEndpoint(MCP_ENDPOINT)
+            .build();
     }
 
     /**
-     * Create the MCP sync server with all registered tools.
+     * Create the stateless MCP server with all registered tools.
      */
     @Bean
     @ConditionalOnMissingBean
-    public McpSyncServer mcpSyncServer(
-            HttpServletSseServerTransportProvider transportProvider,
+    public McpStatelessSyncServer mcpStatelessServer(
+            HttpServletStatelessServerTransport transport,
             MeshToolWrapperRegistry wrapperRegistry,
             MeshProperties properties) {
 
         String agentName = properties.getAgent().getName();
         String agentVersion = properties.getAgent().getVersion();
 
-        McpSyncServer server = McpServer.sync(transportProvider)
+        McpStatelessSyncServer server = McpServer.sync(transport)
             .serverInfo(agentName != null ? agentName : "mcp-mesh-agent",
                        agentVersion != null ? agentVersion : "1.0.0")
             .capabilities(ServerCapabilities.builder()
@@ -83,61 +101,81 @@ public class MeshMcpServerConfiguration {
             registerTool(server, wrapper);
         }
 
-        log.info("MCP server initialized with {} tools", wrapperRegistry.size());
+        log.info("Stateless MCP server initialized with {} tools for agent '{}'",
+            wrapperRegistry.size(), agentName);
         return server;
     }
 
     /**
-     * Register a servlet for the MCP transport provider.
+     * Register a servlet for the MCP stateless transport.
      */
     @Bean
     @ConditionalOnMissingBean(name = "mcpServletRegistration")
     public ServletRegistrationBean<HttpServlet> mcpServletRegistration(
-            HttpServletSseServerTransportProvider transportProvider) {
+            HttpServletStatelessServerTransport transport) {
 
         ServletRegistrationBean<HttpServlet> registration =
-            new ServletRegistrationBean<>(transportProvider, MCP_ENDPOINT + "/*");
+            new ServletRegistrationBean<>(transport, MCP_ENDPOINT);
         registration.setName("mcpServlet");
         registration.setLoadOnStartup(1);
 
-        log.info("Registered MCP servlet at {}", MCP_ENDPOINT);
+        log.info("Registered stateless MCP servlet at {}", MCP_ENDPOINT);
         return registration;
     }
 
     /**
      * Register a MeshToolWrapper as an MCP tool specification.
      */
-    private void registerTool(McpSyncServer server, MeshToolWrapper wrapper) {
-        String capability = wrapper.getCapability();
+    private void registerTool(McpStatelessSyncServer server, MeshToolWrapper wrapper) {
+        // Use method name as tool name to match what registry advertises
+        String toolName = wrapper.getMethodName();
         String description = wrapper.getDescription();
         Map<String, Object> inputSchema = wrapper.getInputSchema();
 
-        // Convert input schema to JSON string for MCP
-        String schemaJson;
-        try {
-            schemaJson = objectMapper.writeValueAsString(inputSchema);
-        } catch (Exception e) {
-            schemaJson = "{}";
-        }
+        // Create JsonSchema from input schema map
+        JsonSchema jsonSchema = createJsonSchema(inputSchema);
 
-        // Create MCP Tool definition
-        Tool tool = new Tool(capability, description, schemaJson);
+        // Create MCP Tool definition using builder
+        Tool tool = Tool.builder()
+            .name(toolName)
+            .description(description)
+            .inputSchema(jsonSchema)
+            .build();
 
         // Create tool specification with handler
-        McpServerFeatures.SyncToolSpecification toolSpec =
-            new McpServerFeatures.SyncToolSpecification(
+        McpStatelessServerFeatures.SyncToolSpecification toolSpec =
+            new McpStatelessServerFeatures.SyncToolSpecification(
                 tool,
-                (exchange, args) -> handleToolCall(wrapper, args)
+                (context, request) -> handleToolCall(wrapper, request.arguments())
             );
 
         server.addTool(toolSpec);
-        log.debug("Registered MCP tool: {} (funcId: {})", capability, wrapper.getFuncId());
+        log.debug("Registered MCP tool: {} (capability: {}, funcId: {})",
+            toolName, wrapper.getCapability(), wrapper.getFuncId());
+    }
+
+    /**
+     * Create a JsonSchema from a schema map.
+     */
+    @SuppressWarnings("unchecked")
+    private JsonSchema createJsonSchema(Map<String, Object> schemaMap) {
+        String type = (String) schemaMap.getOrDefault("type", "object");
+        Map<String, Object> properties = (Map<String, Object>) schemaMap.get("properties");
+        List<String> required = (List<String>) schemaMap.get("required");
+
+        return new JsonSchema(
+            type,
+            properties,
+            required,
+            null,  // additionalProperties
+            null,  // defs
+            null   // definitions
+        );
     }
 
     /**
      * Handle an MCP tool call by invoking the wrapper.
      */
-    @SuppressWarnings("unchecked")
     private CallToolResult handleToolCall(MeshToolWrapper wrapper, Map<String, Object> args) {
         try {
             log.debug("MCP tool call: {} with args: {}", wrapper.getCapability(), args);
