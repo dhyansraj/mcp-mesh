@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.mcpmesh</groupId>
+        <artifactId>mcp-mesh-parent</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mcp-mesh-native</artifactId>
+    <packaging>jar</packaging>
+
+    <name>MCP Mesh Native</name>
+    <description>Native library artifacts for MCP Mesh (platform-specific)</description>
+
+    <!--
+    This module bundles the native libraries for all supported platforms.
+    The libraries are located in src/main/resources/META-INF/native/{classifier}/:
+    - osx-aarch_64/libmcp_mesh_core.dylib
+    - osx-x86_64/libmcp_mesh_core.dylib
+    - linux-x86_64/libmcp_mesh_core.so
+    - linux-aarch_64/libmcp_mesh_core.so
+    - windows-x86_64/mcp_mesh_core.dll
+    -->
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>META-INF/native/**</include>
+                </includes>
+            </resource>
+        </resources>
+    </build>
+
+    <profiles>
+        <!-- Profile for building platform-specific JARs with classifier -->
+        <profile>
+            <id>native-osx-aarch_64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.classifier>osx-aarch_64</native.classifier>
+            </properties>
+        </profile>
+        <profile>
+            <id>native-osx-x86_64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>x86_64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.classifier>osx-x86_64</native.classifier>
+            </properties>
+        </profile>
+        <profile>
+            <id>native-linux-x86_64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.classifier>linux-x86_64</native.classifier>
+            </properties>
+        </profile>
+        <profile>
+            <id>native-linux-aarch_64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.classifier>linux-aarch_64</native.classifier>
+            </properties>
+        </profile>
+    </profiles>
+</project>
