@@ -2,7 +2,6 @@
 # Tests basic tool invocation via meshctl call with Java Spring Boot agent.
 #
 # Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
-# Note: meshctl doesn't support starting Java agents yet, so we use mvn spring-boot:run
 
 name: "Java Basic Tool Call"
 description: "Verify meshctl call invokes a Java tool and returns result"
@@ -33,27 +32,12 @@ test:
     path: /workspace/java-greeter-agent
     timeout: 600
 
-  # Start the math-agent with meshctl
-  - name: "Start math-agent with meshctl"
-    handler: shell
-    command: "meshctl start --registry-only -d"
-    workdir: /workspace
-    capture: registry_start_output
-
-  # Wait for agent to start
-  - name: "Wait for agent to start"
-    handler: wait
-    seconds: 15
-
-  # Start the Java agent with mvn spring-boot:run in background
+  # Start the Java agent with meshctl (registry starts automatically)
   - name: "Start Java agent"
     handler: shell
     command: |
-      cd /workspace/java-greeter-agent
-      # Run in background, redirect output to log file
-      nohup mvn spring-boot:run -q > /workspace/java-agent.log 2>&1 &
-      echo "Java agent starting in background (PID: $!)"
-      echo "AGENT_PID=$!"
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java agent starting via meshctl"
     capture: start_agent
 
   # Wait for agent to start and register
@@ -69,8 +53,8 @@ test:
         sleep 2
       done
       echo "ERROR: Agent did not register within 60s"
-      echo "=== Agent log ==="
-      cat /workspace/java-agent.log 2>/dev/null | tail -50
+      echo "=== Agent logs ==="
+      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
       exit 1
     capture: wait_registration
     timeout: 90
@@ -125,7 +109,7 @@ post_run:
   # Stop all agents
   - handler: shell
     command: |
-      meshctl stop --all 2>/dev/null || true
+      meshctl stop 2>/dev/null || true
       # Also kill any remaining Java processes
       pkill -f "spring-boot:run" 2>/dev/null || true
       pkill -f "java.*greeter" 2>/dev/null || true

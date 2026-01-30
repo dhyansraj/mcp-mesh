@@ -26,13 +26,14 @@ import (
 const (
 	langPython     = "python"
 	langTypeScript = "typescript"
+	langJava       = "java"
 )
 
-// isAgentFile returns true if the file is a valid agent file (.py, .ts, .js, .yaml, .yml)
+// isAgentFile returns true if the file is a valid agent file (.py, .ts, .js, .yaml, .yml, .jar, .java)
 func isAgentFile(path string) bool {
 	ext := filepath.Ext(path)
 	switch ext {
-	case ".py", ".ts", ".js", ".yaml", ".yml":
+	case ".py", ".ts", ".js", ".yaml", ".yml", ".jar", ".java":
 		return true
 	default:
 		return false
@@ -69,7 +70,7 @@ func NewStartCommand() *cobra.Command {
 		Short: "Start MCP agent with mesh runtime",
 		Long: `Start one or more MCP agents with mesh runtime support.
 
-Supports both Python (.py) and TypeScript (.ts, .js) agents.
+Supports Python (.py), TypeScript (.ts, .js), and Java (Maven/Spring Boot) agents.
 If no registry is running, a local registry will be started automatically.
 The registry service can also be started independently using --registry-only.
 
@@ -77,6 +78,8 @@ Examples:
   meshctl start                              # Start registry only
   meshctl start examples/hello_world.py     # Start Python agent
   meshctl start src/index.ts                # Start TypeScript agent
+  meshctl start examples/java/my-agent      # Start Java agent (Maven project)
+  meshctl start my-agent.jar                # Start Java agent (JAR file)
   meshctl start --registry-only              # Start only the registry service
   meshctl start agent1.py agent2.ts         # Start multiple agents (mixed languages)`,
 		Args: cobra.ArbitraryArgs,
@@ -585,6 +588,7 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 	// Group agents by language using handlers package
 	pythonAgents := []string{}
 	tsAgents := []string{}
+	javaAgents := []string{}
 	for _, agentPath := range agentPaths {
 		handler := handlers.DetectLanguage(agentPath)
 		lang := handler.Language()
@@ -593,11 +597,13 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 			pythonAgents = append(pythonAgents, agentPath)
 		case langTypeScript:
 			tsAgents = append(tsAgents, agentPath)
+		case langJava:
+			javaAgents = append(javaAgents, agentPath)
 		default:
 			return &PrerequisiteError{
 				Check:   "Agent file",
 				Message: fmt.Sprintf("Unknown file type: %s", agentPath),
-				Remediation: `MCP Mesh supports .py, .ts, and .js files.
+				Remediation: `MCP Mesh supports .py, .ts, .js, .java, and .jar files.
 Use 'meshctl scaffold' to generate a new agent.`,
 			}
 		}
@@ -650,28 +656,36 @@ Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.Pyth
 		}
 	}
 
-	// Validate agent file paths exist
+	// Validate Java prerequisites if we have Java agents
+	if len(javaAgents) > 0 {
+		if err := validateJavaPrerequisites(javaAgents, quiet); err != nil {
+			return err
+		}
+	}
+
+	// Validate agent file/directory paths exist
 	for _, agentPath := range agentPaths {
 		absPath, err := AbsolutePath(agentPath)
 		if err != nil {
 			return &PrerequisiteError{
-				Check:   "Agent file",
+				Check:   "Agent path",
 				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
 				Remediation: `To fix this issue:
-  1. Verify the agent file exists at the specified path
+  1. Verify the agent file/directory exists at the specified path
   2. Use an absolute path or ensure the relative path is correct from your current directory
   3. Check file permissions`,
 			}
 		}
 
-		if !fileExists(absPath) {
+		// Check if path exists (file or directory - Java agents use directories)
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
 			return &PrerequisiteError{
-				Check:   "Agent file",
-				Message: fmt.Sprintf("Agent file not found: %s", absPath),
+				Check:   "Agent path",
+				Message: fmt.Sprintf("Agent path not found: %s", absPath),
 				Remediation: fmt.Sprintf(`To fix this issue:
-  1. Verify the agent file exists: ls -la %s
+  1. Verify the path exists: ls -la %s
   2. Check if you're in the correct directory
-  3. Create the agent file or use 'meshctl scaffold' to generate one`, absPath),
+  3. Create the agent or use 'meshctl scaffold' to generate one`, absPath),
 			}
 		}
 	}
@@ -686,6 +700,9 @@ Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.Pyth
 		}
 		if len(tsAgents) > 0 {
 			fmt.Printf("   TypeScript: node_modules with @mcpmesh/sdk\n")
+		}
+		if len(javaAgents) > 0 {
+			fmt.Printf("   Java: Maven project with mcp-mesh-spring-boot-starter\n")
 		}
 	}
 
@@ -794,6 +811,144 @@ To fix this issue:
 	}
 
 	return nil
+}
+
+// validateJavaPrerequisites checks Java-specific requirements
+// Checks for Java 17+ and Maven installation
+func validateJavaPrerequisites(agentPaths []string, quiet bool) error {
+	// 1. Check Java is available
+	javaPath, err := exec.LookPath("java")
+	if err != nil {
+		return &PrerequisiteError{
+			Check:   "java command",
+			Message: "java command not found.",
+			Remediation: `Java 17+ is required to run Java agents.
+
+To fix this issue:
+  1. Install JDK 17+ from https://adoptium.net/
+  2. Verify installation: java -version`,
+		}
+	}
+
+	// 2. Check Java version is 17+
+	javaVersion, err := getJavaMajorVersion()
+	if err != nil {
+		return &PrerequisiteError{
+			Check:   "java version",
+			Message: fmt.Sprintf("Could not determine Java version: %v", err),
+			Remediation: `Java 17+ is required to run Java agents.
+
+To fix this issue:
+  1. Install JDK 17+ from https://adoptium.net/
+  2. Verify installation: java -version`,
+		}
+	}
+
+	if javaVersion < 17 {
+		return &PrerequisiteError{
+			Check:   "java version",
+			Message: fmt.Sprintf("Java %d found, but Java 17+ is required.", javaVersion),
+			Remediation: fmt.Sprintf(`Java 17+ is required to run Java agents.
+
+Current Java: %s (version %d)
+
+To fix this issue:
+  1. Install JDK 17+ from https://adoptium.net/
+  2. Update your PATH to use the new Java
+  3. Verify: java -version`, javaPath, javaVersion),
+		}
+	}
+
+	// 3. Check Maven is available
+	if _, err := exec.LookPath("mvn"); err != nil {
+		return &PrerequisiteError{
+			Check:   "mvn command",
+			Message: "mvn command not found.",
+			Remediation: `Maven is required to build and run Java agents.
+
+To fix this issue:
+  1. Install Maven from https://maven.apache.org/
+  2. Verify installation: mvn --version`,
+		}
+	}
+
+	// 4. Check each agent's directory for pom.xml
+	for _, agentPath := range agentPaths {
+		// Handle JAR files - they don't need pom.xml
+		if strings.HasSuffix(strings.ToLower(agentPath), ".jar") {
+			if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+				return &PrerequisiteError{
+					Check:   "JAR file",
+					Message: fmt.Sprintf("JAR file not found: %s", agentPath),
+					Remediation: fmt.Sprintf(`The specified JAR file does not exist.
+
+JAR: %s
+
+To fix this issue:
+  1. Verify the path is correct
+  2. Build the JAR: mvn package
+  3. Run meshctl start again`, agentPath),
+				}
+			}
+			continue
+		}
+
+		// For directories or pom.xml paths, check for pom.xml
+		projectDir := agentPath
+		if info, err := os.Stat(agentPath); err == nil && !info.IsDir() {
+			projectDir = filepath.Dir(agentPath)
+		}
+
+		pomPath := filepath.Join(projectDir, "pom.xml")
+		if _, err := os.Stat(pomPath); os.IsNotExist(err) {
+			return &PrerequisiteError{
+				Check:   "Maven project",
+				Message: fmt.Sprintf("pom.xml not found in: %s", projectDir),
+				Remediation: fmt.Sprintf(`MCP Mesh Java agents require a Maven project with pom.xml.
+
+Project: %s
+
+To fix this issue:
+  1. Ensure the path points to a Maven project
+  2. Verify pom.xml exists in the project root
+  3. Run meshctl start again`, projectDir),
+			}
+		}
+	}
+
+	return nil
+}
+
+// getJavaMajorVersion returns the major Java version (e.g., 17, 21)
+func getJavaMajorVersion() (int, error) {
+	cmd := exec.Command("java", "-version")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, err
+	}
+
+	// Parse version from output like:
+	// openjdk version "17.0.13" 2024-10-15
+	// or: java version "1.8.0_291"
+	outputStr := string(output)
+	versionRe := regexp.MustCompile(`version "(\d+)(?:\.(\d+))?`)
+	matches := versionRe.FindStringSubmatch(outputStr)
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("could not parse Java version from: %s", outputStr)
+	}
+
+	majorVersion, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid Java version number: %s", matches[1])
+	}
+
+	// Handle old versioning (1.8 = Java 8)
+	if majorVersion == 1 && len(matches) > 2 {
+		minorVersion, _ := strconv.Atoi(matches[2])
+		return minorVersion, nil
+	}
+
+	return majorVersion, nil
 }
 
 // findNodeProjectRoot walks up directories to find package.json or node_modules
@@ -1396,8 +1551,10 @@ func createAgentCommand(agentPath string, env []string, workingDir, user, group 
 		return createTypeScriptAgentCommand(agentPath, env, workingDir, user, group, watch)
 	case langPython:
 		return createPythonAgentCommand(agentPath, env, workingDir, user, group, watch)
+	case langJava:
+		return createJavaAgentCommand(agentPath, env, workingDir, user, group, watch)
 	default:
-		return nil, fmt.Errorf("unsupported file type: %s (use .py, .ts, or .js)", agentPath)
+		return nil, fmt.Errorf("unsupported file type: %s (use .py, .ts, .js, .java, or .jar)", agentPath)
 	}
 }
 
@@ -1552,6 +1709,150 @@ func createPythonAgentCommand(agentPath string, env []string, workingDir, user, 
 		// The mcp_mesh_runtime will be auto-imported via site-packages
 		cmd = exec.Command(pythonExec, scriptPath)
 	}
+	cmd.Env = env
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	cmd.Dir = finalWorkingDir
+
+	// Set up process group for proper signal handling (Unix only)
+	// This ensures that when we stop the agent, we kill the entire process tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Set user and group (Unix only)
+	if user != "" || group != "" {
+		if err := setProcessCredentials(cmd, user, group); err != nil {
+			return nil, fmt.Errorf("failed to set process credentials: %w", err)
+		}
+	}
+
+	return cmd, nil
+}
+
+// createJavaAgentCommand creates a command for Java agents (Maven/Spring Boot or JAR)
+func createJavaAgentCommand(agentPath string, env []string, workingDir, user, group string, watch bool) (*exec.Cmd, error) {
+	var cmd *exec.Cmd
+	var finalWorkingDir string
+
+	// Check if it's a JAR file
+	if strings.HasSuffix(strings.ToLower(agentPath), ".jar") {
+		// Convert JAR path to absolute path
+		absJarPath, err := filepath.Abs(agentPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get absolute path for %s: %w", agentPath, err)
+		}
+
+		finalWorkingDir = filepath.Dir(absJarPath)
+
+		// Override working directory if specified in command line
+		if workingDir != "" {
+			absWorkingDir, err := AbsolutePath(workingDir)
+			if err != nil {
+				return nil, fmt.Errorf("invalid working directory: %w", err)
+			}
+			finalWorkingDir = absWorkingDir
+		}
+
+		// Run JAR directly with java -jar
+		cmd = exec.Command("java", "-jar", absJarPath)
+	} else {
+		// Maven project - find the project root (directory with pom.xml)
+		projectDir := agentPath
+
+		// If agentPath is a file, get its directory
+		if info, err := os.Stat(agentPath); err == nil && !info.IsDir() {
+			projectDir = filepath.Dir(agentPath)
+		}
+
+		// Convert to absolute path
+		absProjectDir, err := filepath.Abs(projectDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get absolute path for %s: %w", projectDir, err)
+		}
+
+		// Walk up to find pom.xml if not in current directory
+		javaHandler := &handlers.JavaHandler{}
+		projectRoot, err := javaHandler.FindProjectRoot(absProjectDir)
+		if err != nil {
+			return nil, fmt.Errorf("cannot find Maven project: %w", err)
+		}
+
+		finalWorkingDir = projectRoot
+
+		// Override working directory if specified in command line
+		if workingDir != "" {
+			absWorkingDir, err := AbsolutePath(workingDir)
+			if err != nil {
+				return nil, fmt.Errorf("invalid working directory: %w", err)
+			}
+			finalWorkingDir = absWorkingDir
+		}
+
+		// Use mvn spring-boot:run
+		if watch {
+			// For watch mode, use a shell script that polls for file changes
+			// and restarts the Maven process when Java files change
+			watchScript := fmt.Sprintf(`
+get_checksum() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        find "%s/src" -name "*.java" -type f -exec stat -f "%%m %%N" {} \; 2>/dev/null | sort | md5
+    else
+        find "%s/src" -name "*.java" -type f -exec stat -c "%%Y %%n" {} \; 2>/dev/null | sort | md5sum
+    fi
+}
+cleanup() {
+    if [ -n "$PID" ]; then
+        kill $PID 2>/dev/null
+        wait $PID 2>/dev/null
+    fi
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+echo "🔄 Starting Java agent with file watching enabled"
+echo "📁 Watching: %s/src"
+echo "📝 File types: .java"
+echo "🔃 Agent will restart automatically when files change"
+LAST=$(get_checksum)
+cd "%s"
+mvn spring-boot:run -q &
+PID=$!
+echo "✅ Agent started (PID: $PID)"
+while true; do
+    sleep 2
+    CURRENT=$(get_checksum)
+    if [ "$CURRENT" != "$LAST" ]; then
+        echo "🔄 Detected file changes, restarting agent..."
+        kill $PID 2>/dev/null
+        wait $PID 2>/dev/null
+        sleep 1
+        mvn spring-boot:run -q &
+        PID=$!
+        echo "✅ Agent restarted (PID: $PID)"
+        LAST=$CURRENT
+    fi
+    # Check if process crashed
+    if ! kill -0 $PID 2>/dev/null; then
+        echo "⚠️ Agent process exited, restarting..."
+        sleep 1
+        mvn spring-boot:run -q &
+        PID=$!
+        echo "✅ Agent restarted (PID: $PID)"
+        LAST=$(get_checksum)
+    fi
+done
+`, projectRoot, projectRoot, projectRoot, projectRoot)
+			cmd = exec.Command("bash", "-c", watchScript)
+		} else {
+			cmd = exec.Command("mvn", "spring-boot:run", "-q")
+		}
+	}
+
+	// Add Java-specific environment variables
+	javaEnv := []string{
+		"SPRING_MAIN_BANNER_MODE=off", // Disable Spring Boot banner for cleaner output
+	}
+	env = append(env, javaEnv...)
+
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1907,6 +2208,7 @@ var agentNameCache sync.Map
 // extractAgentName extracts the agent name from agent configuration.
 // For Python: extracts from @mesh.agent(name="...") decorator
 // For TypeScript: extracts from mesh(server, { name: "..." }) call
+// For Java: extracts from @MeshAgent(name="...") annotation or pom.xml artifactId
 // Falls back to the script filename if extraction fails.
 // Results are cached to avoid repeated file parsing.
 func extractAgentName(scriptPath string) string {
@@ -1924,6 +2226,8 @@ func extractAgentName(scriptPath string) string {
 		agentName = extractTypeScriptAgentName(scriptPath)
 	case langPython:
 		agentName = extractPythonAgentName(scriptPath)
+	case langJava:
+		agentName = extractJavaAgentName(scriptPath)
 	}
 
 	if agentName != "" {
@@ -1944,6 +2248,8 @@ func getAgentNameFallback(scriptPath string) string {
 	fallback = strings.TrimSuffix(fallback, ".py")
 	fallback = strings.TrimSuffix(fallback, ".ts")
 	fallback = strings.TrimSuffix(fallback, ".js")
+	fallback = strings.TrimSuffix(fallback, ".java")
+	fallback = strings.TrimSuffix(fallback, ".jar")
 
 	// If filename is "main" or "index", use parent directory name instead (#382)
 	if fallback == "main" || fallback == "index" {
@@ -2051,4 +2357,42 @@ func findPythonForAST() string {
 	}
 
 	return ""
+}
+
+// extractJavaAgentName extracts the agent name from @MeshAgent annotation or pom.xml
+func extractJavaAgentName(projectPath string) string {
+	// If it's a JAR file, use the JAR filename
+	if strings.HasSuffix(strings.ToLower(projectPath), ".jar") {
+		name := filepath.Base(projectPath)
+		name = strings.TrimSuffix(name, ".jar")
+		// Remove version suffix if present (e.g., "agent-1.0.0" -> "agent")
+		if idx := strings.LastIndex(name, "-"); idx != -1 {
+			// Check if what follows is a version number
+			suffix := name[idx+1:]
+			if len(suffix) > 0 && (suffix[0] >= '0' && suffix[0] <= '9') {
+				name = name[:idx]
+			}
+		}
+		return name
+	}
+
+	// Find the project root (directory with pom.xml)
+	projectDir := projectPath
+	if info, err := os.Stat(projectPath); err == nil && !info.IsDir() {
+		projectDir = filepath.Dir(projectPath)
+	}
+
+	// Try to extract from pom.xml artifactId
+	pomPath := filepath.Join(projectDir, "pom.xml")
+	if content, err := os.ReadFile(pomPath); err == nil {
+		// Extract artifactId as name (simple regex, not full XML parsing)
+		// Look for <artifactId> that's not inside a <parent> block
+		artifactIdRe := regexp.MustCompile(`(?s)<project[^>]*>.*?<artifactId>([^<]+)</artifactId>`)
+		if matches := artifactIdRe.FindSubmatch(content); len(matches) > 1 {
+			return string(matches[1])
+		}
+	}
+
+	// Fallback to directory name
+	return filepath.Base(projectDir)
 }
