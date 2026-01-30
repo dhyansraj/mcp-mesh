@@ -85,10 +85,41 @@ test:
       cp "${suite_path}/${config.output.wheels}"/*.whl $BUILD_DIR/wheels/
       cp "${suite_path}/${config.output.packages}"/*.tgz $BUILD_DIR/packages/
 
+      # Create java-jars and native-libs directories (required by Dockerfile COPY)
+      # These may be empty if Java SDK wasn't built
+      mkdir -p $BUILD_DIR/java-jars $BUILD_DIR/native-libs
+
+      # Copy Java JARs if they exist
+      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1>/dev/null 2>&1; then
+        cp "${suite_path}/${config.output.java_jars}"/*.jar $BUILD_DIR/java-jars/
+        echo "Java JARs copied"
+      else
+        echo "No Java JARs found (optional)"
+      fi
+
+      # Copy native libs if they exist
+      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1>/dev/null 2>&1; then
+        cp "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* $BUILD_DIR/native-libs/
+        echo "Native libs copied"
+      else
+        echo "No native libs found (optional)"
+      fi
+
+      # Copy Maven repository structure if it exists
+      mkdir -p $BUILD_DIR/m2-repo
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
+        cp -r "${suite_path}/${config.output.m2_repo}/mcpmesh" $BUILD_DIR/m2-repo/
+        echo "Maven repo structure copied"
+      else
+        echo "No Maven repo found (optional)"
+      fi
+
       echo "Build context prepared at $BUILD_DIR"
       ls -la $BUILD_DIR/
       ls -la $BUILD_DIR/wheels/
       ls -la $BUILD_DIR/packages/
+      ls -la $BUILD_DIR/java-jars/ 2>/dev/null || echo "java-jars: empty"
+      ls -la $BUILD_DIR/native-libs/ 2>/dev/null || echo "native-libs: empty"
     capture: build_context
 
   # Build the image
@@ -149,6 +180,19 @@ test:
       docker run --rm ${config.docker.output_image} bash -c "ls /wheels/*.whl && ls /packages/*.tgz"
     capture: packages_check
 
+  # Test the image - verify /java-jars and /native-libs exist
+  - name: "Verify /java-jars and /native-libs in image"
+    handler: shell
+    command: |
+      docker run --rm ${config.docker.output_image} bash -c "
+        echo 'java-jars:' && ls /java-jars/ 2>/dev/null | head -5 || echo '  (empty)'
+        echo 'native-libs:' && ls /native-libs/ 2>/dev/null | head -5 || echo '  (empty)'
+        # Check if Java and Maven are available
+        java -version 2>&1 | head -1
+        mvn --version 2>&1 | head -1
+      "
+    capture: java_check
+
   # Test the image - verify node
   - name: "Test Node.js in image"
     handler: shell
@@ -168,6 +212,8 @@ test:
       echo "Image: ${config.docker.output_image}"
       echo "meshctl: ${captured.meshctl_version}"
       echo "node: ${captured.node_version}"
+      echo "java: OK"
+      echo "maven: OK"
       echo "mesh: OK"
       echo ""
       echo "To use with integration tests:"
@@ -219,3 +265,11 @@ assertions:
   # Node should be installed
   - expr: ${captured.node_version} contains 'v22'
     message: "Node.js 22 should be installed"
+
+  # Java should be installed
+  - expr: ${captured.java_check} contains 'openjdk'
+    message: "Java should be installed"
+
+  # Maven should be installed
+  - expr: ${captured.java_check} contains 'Apache Maven'
+    message: "Maven should be installed"

@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -48,10 +50,12 @@ public class MeshToolWrapper {
     // Parameter metadata
     private final List<ParamInfo> mcpParams;           // MCP-exposed parameters (with @Param)
     private final List<Integer> meshToolPositions;     // Positions of McpMeshTool params
+    private final List<Type> meshToolReturnTypes;      // Generic return types for McpMeshTool params
     private final List<Integer> llmAgentPositions;     // Positions of MeshLlmAgent params
     private final Map<String, Object> inputSchema;     // JSON Schema for MCP
 
     // Mutable dependency arrays (updated by heartbeat)
+    @SuppressWarnings("rawtypes")
     private final AtomicReferenceArray<McpMeshTool> injectedDeps;
     private final AtomicReferenceArray<MeshLlmAgent> injectedLlmAgents;
 
@@ -94,6 +98,7 @@ public class MeshToolWrapper {
         // Analyze parameters
         this.mcpParams = new ArrayList<>();
         this.meshToolPositions = new ArrayList<>();
+        this.meshToolReturnTypes = new ArrayList<>();
         this.llmAgentPositions = new ArrayList<>();
 
         analyzeParameters();
@@ -112,11 +117,12 @@ public class MeshToolWrapper {
     /**
      * Analyze method parameters to identify:
      * - MCP parameters (with @Param annotation)
-     * - McpMeshTool injection positions
+     * - McpMeshTool injection positions and their generic return types
      * - MeshLlmAgent injection positions
      */
     private void analyzeParameters() {
         Parameter[] params = method.getParameters();
+        Type[] genericTypes = method.getGenericParameterTypes();
 
         for (int i = 0; i < params.length; i++) {
             Parameter param = params[i];
@@ -125,6 +131,9 @@ public class MeshToolWrapper {
             if (McpMeshTool.class.isAssignableFrom(type)) {
                 // Mesh tool dependency - will be injected
                 meshToolPositions.add(i);
+                // Extract generic type argument (e.g., Integer from McpMeshTool<Integer>)
+                Type returnType = extractGenericTypeArgument(genericTypes[i]);
+                meshToolReturnTypes.add(returnType);
             } else if (MeshLlmAgent.class.isAssignableFrom(type)) {
                 // LLM agent - will be injected
                 llmAgentPositions.add(i);
@@ -212,6 +221,7 @@ public class MeshToolWrapper {
      * @param depIndex The dependency index (0-based, in declaration order)
      * @param proxy    The resolved proxy (or null if unavailable)
      */
+    @SuppressWarnings("rawtypes")
     public void updateDependency(int depIndex, McpMeshTool proxy) {
         if (depIndex >= 0 && depIndex < injectedDeps.length()) {
             injectedDeps.set(depIndex, proxy);
@@ -369,6 +379,25 @@ public class MeshToolWrapper {
         return null;
     }
 
+    /**
+     * Extract the type argument from a parameterized type.
+     *
+     * <p>For {@code McpMeshTool<Integer>}, returns {@code Integer.class}.
+     * For raw {@code McpMeshTool}, returns {@code null}.
+     *
+     * @param type The generic parameter type
+     * @return The first type argument, or null if not parameterized
+     */
+    private Type extractGenericTypeArgument(Type type) {
+        if (type instanceof ParameterizedType pt) {
+            Type[] typeArgs = pt.getActualTypeArguments();
+            if (typeArgs.length > 0) {
+                return typeArgs[0];
+            }
+        }
+        return null;
+    }
+
     // =========================================================================
     // Getters
     // =========================================================================
@@ -417,8 +446,25 @@ public class MeshToolWrapper {
     }
 
     /**
+     * Get the expected return type for a dependency at the given index.
+     *
+     * <p>This is extracted from the generic type parameter of McpMeshTool&lt;T&gt;.
+     * For example, for {@code McpMeshTool<Integer>}, this returns {@code Integer.class}.
+     *
+     * @param depIndex The dependency index
+     * @return The return type, or null if not specified or index out of bounds
+     */
+    public Type getDependencyReturnType(int depIndex) {
+        if (depIndex >= 0 && depIndex < meshToolReturnTypes.size()) {
+            return meshToolReturnTypes.get(depIndex);
+        }
+        return null;
+    }
+
+    /**
      * Check if all dependencies are available.
      */
+    @SuppressWarnings("rawtypes")
     public boolean areDependenciesAvailable() {
         for (int i = 0; i < injectedDeps.length(); i++) {
             McpMeshTool dep = injectedDeps.get(i);

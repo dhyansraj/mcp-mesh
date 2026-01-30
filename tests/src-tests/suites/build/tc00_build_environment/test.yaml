@@ -23,6 +23,9 @@ test:
       rm -rf "${suite_path}/out/bin"/* 2>/dev/null || true
       rm -rf "${suite_path}/out/wheels"/* 2>/dev/null || true
       rm -rf "${suite_path}/out/packages"/* 2>/dev/null || true
+      rm -rf "${suite_path}/out/java-jars"/* 2>/dev/null || true
+      rm -rf "${suite_path}/out/native-libs"/* 2>/dev/null || true
+      rm -rf "${suite_path}/out/m2-repo"/* 2>/dev/null || true
       echo "Output directory cleaned"
     capture: clean_output
 
@@ -109,6 +112,18 @@ test:
       docker run --rm ${config.build.image} maturin --version
     capture: maturin_version
 
+  - name: "Verify Java"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} java -version 2>&1 | head -1
+    capture: java_version
+
+  - name: "Verify Maven"
+    handler: shell
+    command: |
+      docker run --rm ${config.build.image} mvn --version 2>&1 | head -1
+    capture: maven_version
+
   # Print summary
   - name: "Print summary"
     handler: shell
@@ -124,6 +139,8 @@ test:
       echo "Python: ${captured.python_version}"
       echo "Node.js: ${captured.node_version}"
       echo "maturin: ${captured.maturin_version}"
+      echo "Java: ${captured.java_version}"
+      echo "Maven: ${captured.maven_version}"
       echo ""
       echo "Ready to build MCP Mesh packages."
       echo "=========================================="
@@ -157,3 +174,9 @@ assertions:
 
   - expr: ${captured.maturin_version} contains 'maturin'
     message: "maturin should be installed"
+
+  - expr: ${captured.java_version} contains 'openjdk'
+    message: "Java should be installed"
+
+  - expr: ${captured.maven_version} contains 'Apache Maven'
+    message: "Maven should be installed"
