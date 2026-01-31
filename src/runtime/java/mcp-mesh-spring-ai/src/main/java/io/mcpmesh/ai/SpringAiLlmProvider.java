@@ -1,11 +1,14 @@
 package io.mcpmesh.ai;
 
+import io.mcpmesh.ai.handlers.LlmProviderHandler;
+import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -126,6 +129,84 @@ public class SpringAiLlmProvider {
             .user(userPrompt)
             .call()
             .entity(responseType);
+    }
+
+    /**
+     * Generate a response with full message history.
+     *
+     * <p>This method supports multi-turn conversations by accepting a list of
+     * messages with roles (system, user, assistant). Uses vendor-specific
+     * handlers for optimal message formatting.
+     *
+     * @param provider The LLM provider name (e.g., "anthropic", "openai")
+     * @param messages List of messages with role and content
+     * @return The generated response
+     */
+    public String generateWithMessages(String provider, List<Map<String, Object>> messages) {
+        return generateWithMessages(provider, messages, Map.of());
+    }
+
+    /**
+     * Generate a response with full message history and options.
+     *
+     * <p>Delegates to a vendor-specific handler for optimal message formatting.
+     *
+     * @param provider The LLM provider name
+     * @param messages List of messages with role and content
+     * @param options  Generation options (max_tokens, temperature, etc.)
+     * @return The generated response
+     */
+    public String generateWithMessages(String provider, List<Map<String, Object>> messages,
+                                        Map<String, Object> options) {
+        // Get vendor-specific handler
+        LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler(provider);
+
+        log.debug("Using {} for provider '{}' with {} messages",
+            handler.getClass().getSimpleName(), provider, messages.size());
+
+        // Get the ChatModel for this provider
+        ChatModel model = getModelForProvider(provider);
+
+        // Delegate to handler for vendor-specific processing
+        return handler.generateWithMessages(model, messages, options);
+    }
+
+    /**
+     * Get the ChatModel for a provider.
+     *
+     * @param provider The provider name
+     * @return The configured ChatModel
+     * @throws IllegalStateException if the model is not configured
+     */
+    public ChatModel getModelForProvider(String provider) {
+        return switch (provider.toLowerCase()) {
+            case "claude", "anthropic" -> {
+                if (anthropicChatModel == null) {
+                    throw new IllegalStateException("Anthropic ChatModel not configured. " +
+                        "Add spring-ai-anthropic dependency and set ANTHROPIC_API_KEY");
+                }
+                yield anthropicChatModel;
+            }
+            case "openai", "gpt" -> {
+                if (openAiChatModel == null) {
+                    throw new IllegalStateException("OpenAI ChatModel not configured. " +
+                        "Add spring-ai-openai dependency and set OPENAI_API_KEY");
+                }
+                yield openAiChatModel;
+            }
+            default -> {
+                // Try anthropic as default fallback
+                if (anthropicChatModel != null) {
+                    log.warn("Unknown provider '{}', falling back to Anthropic", provider);
+                    yield anthropicChatModel;
+                }
+                if (openAiChatModel != null) {
+                    log.warn("Unknown provider '{}', falling back to OpenAI", provider);
+                    yield openAiChatModel;
+                }
+                throw new IllegalArgumentException("No ChatModel available for provider: " + provider);
+            }
+        };
     }
 
     private ChatClient createClient(String provider) {

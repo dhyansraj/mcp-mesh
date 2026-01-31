@@ -306,17 +306,19 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         List<Map<String, Object>> messages = (List<Map<String, Object>>) requestData.get("messages");
         List<Map<String, Object>> tools = (List<Map<String, Object>>) requestData.get("tools");
 
-        // Build prompts from messages
-        String systemPrompt = extractSystemPrompt(messages);
-        String userPrompt = extractUserPrompt(messages);
-
         log.debug("Generating response with provider={}, messageCount={}", config.provider(),
             messages != null ? messages.size() : 0);
 
-        // Generate response
+        // Generate response with full message history
         String content;
         try {
-            content = llmProvider.generate(config.provider(), systemPrompt, userPrompt);
+            if (messages != null && !messages.isEmpty()) {
+                // Use full message history for multi-turn conversations
+                content = llmProvider.generateWithMessages(config.provider(), messages);
+            } else {
+                // Fallback to simple generation if no messages
+                content = llmProvider.generate(config.provider(), "", "Hello");
+            }
         } catch (Exception e) {
             log.error("LLM generation failed: {}", e.getMessage());
             throw new RuntimeException("LLM generation failed", e);

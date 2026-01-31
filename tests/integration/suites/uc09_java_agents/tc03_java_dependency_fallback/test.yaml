@@ -1,0 +1,192 @@
+# Test Case: Java Dependency Injection with Graceful Fallback
+# Tests that Java agent gracefully handles missing dependencies.
+#
+# Scenario:
+#   - java-assistant-agent has smartGreet tool (depends on date_service)
+#   - First call WITHOUT date_service provider - should use local fallback
+#   - Start py-system-agent (provides date_service)
+#   - Second call WITH date_service - should use mesh proxy
+
+name: "Java Dependency Injection Fallback"
+description: "Verify Java agent gracefully degrades when dependency unavailable"
+tags:
+  - tools
+  - meshctl
+  - java
+  - dependency
+  - fallback
+timeout: 360
+
+pre_run:
+  # Setup for Java agent
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  # Setup for Python agent
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy Java assistant artifact to workspace
+  - name: "Copy Java assistant to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-assistant-agent /workspace/
+      ls -la /workspace/java-assistant-agent/
+    capture: copy_java
+
+  # Copy Python system agent artifact
+  - name: "Copy Python system agent to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/py-system-agent
+      cp /uc-artifacts/py-system-agent.py /workspace/py-system-agent/main.py
+      ls -la /workspace/py-system-agent/
+    capture: copy_py
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-assistant-agent
+    timeout: 600
+
+  # Start Java assistant WITHOUT date_service provider
+  - name: "Start Java assistant (no date_service yet)"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-assistant-agent -d
+      echo "Java assistant starting via meshctl"
+    capture: start_java
+
+  # Wait for Java agent to register
+  - name: "Wait for Java assistant registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java assistant..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "assistant"; then
+          echo "Assistant registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s) - current agents:"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Assistant did not register within 90s"
+      echo "=== Current agents ==="
+      meshctl list 2>/dev/null || true
+      echo "=== Agent logs ==="
+      meshctl logs java-assistant-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_java
+    timeout: 120
+
+  # Verify assistant is registered
+  - name: "Verify assistant registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_before
+
+  # Call smartGreet WITHOUT date_service - should use fallback
+  - name: "Call smartGreet (fallback expected)"
+    handler: shell
+    command: 'meshctl call smartGreet ''{"name": "TestUser"}'''
+    capture: call_fallback
+
+  # Check getStatus shows date_service unavailable
+  - name: "Call getStatus (no date_service)"
+    handler: shell
+    command: "meshctl call getStatus '{}'"
+    capture: status_before
+
+  # Start Python system agent (provides date_service)
+  - name: "Start Python system agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/py-system-agent/main.py -d
+      echo "Python system agent starting"
+    capture: start_py
+
+  # Wait for Python agent to register
+  - name: "Wait for Python system agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for system-agent..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "system-agent"; then
+          echo "System agent registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: System agent did not register within 30s"
+      exit 1
+    capture: wait_py
+    timeout: 45
+
+  # Wait for dependency resolution
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  # Verify both agents running
+  - name: "Verify both agents running"
+    handler: shell
+    command: "meshctl list"
+    capture: list_after
+
+  # Call smartGreet WITH date_service - should use mesh proxy
+  - name: "Call smartGreet (mesh expected)"
+    handler: shell
+    command: 'meshctl call smartGreet ''{"name": "TestUser"}'''
+    capture: call_mesh
+
+  # Check getStatus shows date_service available
+  - name: "Call getStatus (with date_service)"
+    handler: shell
+    command: "meshctl call getStatus '{}'"
+    capture: status_after
+
+assertions:
+  # Assistant registered
+  - expr: "${captured.list_before} contains 'assistant'"
+    message: "Java assistant should be registered"
+
+  # Fallback call worked - use jq to parse nested JSON
+  - expr: "${jq:captured.call_fallback:.content[0].text | fromjson | .message} contains 'Hello, TestUser'"
+    message: "Fallback greeting should include user name"
+
+  - expr: "${jq:captured.call_fallback:.content[0].text | fromjson | .source} contains 'fallback'"
+    message: "Fallback call should indicate fallback source"
+
+  # Status before shows date_service unavailable
+  - expr: ${jq:captured.status_before:.content[0].text | fromjson | .dateServiceAvailable} == false
+    message: "Status should show dateServiceAvailable=false"
+
+  # Both agents running after
+  - expr: "${captured.list_after} contains 'system-agent'"
+    message: "Python system agent should be registered"
+
+  # Mesh call worked (should use date_service now)
+  - expr: "${jq:captured.call_mesh:.content[0].text | fromjson | .message} contains 'Hello, TestUser'"
+    message: "Mesh greeting should include user name"
+
+  # Status after shows date_service available
+  - expr: ${jq:captured.status_after:.content[0].text | fromjson | .dateServiceAvailable} == true
+    message: "Status should show dateServiceAvailable=true after provider starts"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*assistant" 2>/dev/null || true
+      pkill -f "python.*system_agent" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

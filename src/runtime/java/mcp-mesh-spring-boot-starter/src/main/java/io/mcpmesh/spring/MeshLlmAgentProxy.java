@@ -1,7 +1,6 @@
 package io.mcpmesh.spring;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.types.MeshLlmAgent;
@@ -19,15 +18,30 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Routes LLM requests to remote LLM provider agents discovered via the mesh.
  * Supports agentic loops with tool calling.
  *
- * <h2>Agentic Loop</h2>
- * <pre>
- * 1. Send prompt to remote LLM provider
- * 2. If response contains tool_calls:
- *    a. Execute each tool via mesh
- *    b. Send tool results back to LLM
- *    c. Repeat until no more tool calls or max iterations
- * 3. Return final text response
- * </pre>
+ * <h2>Fluent Builder API</h2>
+ * <pre>{@code
+ * // Simple prompt
+ * llm.request().user("Hello").generate();
+ *
+ * // With message history from database
+ * List<Message> history = Message.fromMaps(redis.getHistory(sessionId));
+ * llm.request()
+ *    .system("You are helpful")
+ *    .messages(history)
+ *    .user(newMessage)
+ *    .maxTokens(1000)
+ *    .generate();
+ * }</pre>
+ *
+ * <h2>Prompt Templates</h2>
+ * <p>Supports FreeMarker templates for system prompts:
+ * <ul>
+ *   <li>{@code file://path/to/template.ftl} - File system template</li>
+ *   <li>{@code classpath:prompts/template.ftl} - Classpath template</li>
+ *   <li>Inline text with ${variable} syntax</li>
+ * </ul>
+ *
+ * @see PromptTemplateRenderer
  */
 public class MeshLlmAgentProxy implements MeshLlmAgent {
 
@@ -38,10 +52,19 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private final List<ToolInfo> availableTools = new CopyOnWriteArrayList<>();
     private final AtomicReference<ProviderEndpoint> providerRef = new AtomicReference<>();
 
-    private volatile String systemPrompt = "";
-    private volatile int maxIterations = 1;
+    // Configuration from @MeshLlm annotation
+    private volatile String systemPromptTemplate = "";
+    private volatile String contextParamName = "ctx";
+    private volatile int defaultMaxIterations = 1;
+    private volatile int defaultMaxTokens = 4096;
+    private volatile double defaultTemperature = 0.7;
+
     private McpHttpClient mcpClient;
     private MeshDependencyInjector dependencyInjector;
+    private PromptTemplateRenderer templateRenderer;
+
+    // Thread-local context for per-invocation template rendering (from MeshToolWrapper)
+    private final ThreadLocal<Map<String, Object>> invocationContext = new ThreadLocal<>();
 
     /**
      * Endpoint info for the LLM provider.
@@ -54,30 +77,50 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
     public MeshLlmAgentProxy(String functionId) {
         this.functionId = functionId;
+        this.templateRenderer = new PromptTemplateRenderer();
     }
+
+    // =========================================================================
+    // Configuration (called by MeshEventProcessor)
+    // =========================================================================
 
     /**
      * Configure the proxy with dependencies.
      */
     public void configure(McpHttpClient mcpClient, MeshDependencyInjector dependencyInjector,
                           String systemPrompt, int maxIterations) {
-        this.mcpClient = mcpClient;
-        this.dependencyInjector = dependencyInjector;
-        this.systemPrompt = systemPrompt != null ? systemPrompt : "";
-        this.maxIterations = maxIterations > 0 ? maxIterations : 1;
+        configure(mcpClient, dependencyInjector, systemPrompt, "ctx", maxIterations);
     }
 
     /**
-     * Update the LLM provider endpoint.
+     * Configure the proxy with dependencies and context parameter name.
      */
+    public void configure(McpHttpClient mcpClient, MeshDependencyInjector dependencyInjector,
+                          String systemPrompt, String contextParamName, int maxIterations) {
+        this.mcpClient = mcpClient;
+        this.dependencyInjector = dependencyInjector;
+        this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
+        this.contextParamName = contextParamName != null ? contextParamName : "ctx";
+        this.defaultMaxIterations = maxIterations > 0 ? maxIterations : 1;
+    }
+
+    public String getContextParamName() {
+        return contextParamName;
+    }
+
+    public void setInvocationContext(Map<String, Object> context) {
+        invocationContext.set(context);
+    }
+
+    private void clearInvocationContext() {
+        invocationContext.remove();
+    }
+
     public void updateProvider(String endpoint, String functionName, String provider) {
         log.info("LLM provider updated for {}: {} at {}", functionId, provider, endpoint);
         providerRef.set(new ProviderEndpoint(endpoint, functionName, provider));
     }
 
-    /**
-     * Update available tools from mesh events.
-     */
     void updateTools(List<MeshEvent.LlmToolInfo> tools) {
         availableTools.clear();
         for (MeshEvent.LlmToolInfo tool : tools) {
@@ -96,52 +139,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         providerRef.set(null);
     }
 
-    @Override
-    public String generate(String prompt) {
-        ProviderEndpoint provider = providerRef.get();
-        if (provider == null || !provider.isAvailable()) {
-            throw new IllegalStateException("LLM provider not available for: " + functionId);
-        }
-
-        if (mcpClient == null) {
-            throw new IllegalStateException("MCP client not configured for LLM agent: " + functionId);
-        }
-
-        log.debug("Generating response via mesh delegation to {}", provider.endpoint());
-
-        return executeAgenticLoop(prompt, provider);
-    }
+    // =========================================================================
+    // MeshLlmAgent Interface Implementation
+    // =========================================================================
 
     @Override
-    public <T> T generate(String prompt, Class<T> responseType) {
-        String response = generate(prompt);
-
-        try {
-            // Try to parse as JSON and deserialize to target type
-            return objectMapper.readValue(response, responseType);
-        } catch (JsonProcessingException e) {
-            // If not valid JSON, try to extract JSON from the response
-            String jsonContent = extractJsonFromResponse(response);
-            if (jsonContent != null) {
-                try {
-                    return objectMapper.readValue(jsonContent, responseType);
-                } catch (JsonProcessingException e2) {
-                    log.warn("Failed to parse extracted JSON: {}", e2.getMessage());
-                }
-            }
-
-            throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName(), e);
-        }
-    }
-
-    @Override
-    public CompletableFuture<String> generateAsync(String prompt) {
-        return CompletableFuture.supplyAsync(() -> generate(prompt));
-    }
-
-    @Override
-    public <T> CompletableFuture<T> generateAsync(String prompt, Class<T> responseType) {
-        return CompletableFuture.supplyAsync(() -> generate(prompt, responseType));
+    public GenerateBuilder request() {
+        return new GenerateBuilderImpl();
     }
 
     @Override
@@ -161,122 +165,345 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return provider != null ? provider.provider() : null;
     }
 
-    /**
-     * Execute the agentic loop with tool calling.
-     *
-     * <p>Sends prompt to LLM, handles tool calls, and returns final response.
-     */
-    private String executeAgenticLoop(String userPrompt, ProviderEndpoint provider) {
-        List<Map<String, Object>> messages = new ArrayList<>();
+    // =========================================================================
+    // GenerateBuilder Implementation
+    // =========================================================================
 
-        // Add system message if present
-        if (!systemPrompt.isBlank()) {
-            messages.add(Map.of(
-                "role", "system",
-                "content", systemPrompt
-            ));
+    private class GenerateBuilderImpl implements GenerateBuilder {
+
+        private final List<Message> messages = new ArrayList<>();
+        private final Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        private ContextMode contextMode = ContextMode.APPEND;
+
+        // Override options (null = use defaults)
+        private Integer maxTokens = null;
+        private Double temperature = null;
+        private Double topP = null;
+        private List<String> stopSequences = null;
+        private int maxIterations = defaultMaxIterations;
+
+        // Metadata from last call
+        private GenerationMeta lastMeta = null;
+
+        // --- Messages ---
+
+        @Override
+        public GenerateBuilder system(String content) {
+            messages.add(Message.system(content));
+            return this;
         }
 
-        // Add user message
-        messages.add(Map.of(
-            "role", "user",
-            "content", userPrompt
-        ));
+        @Override
+        public GenerateBuilder user(String content) {
+            messages.add(Message.user(content));
+            return this;
+        }
 
-        // Add tools if available
-        List<Map<String, Object>> toolDefs = buildToolDefinitions();
+        @Override
+        public GenerateBuilder assistant(String content) {
+            messages.add(Message.assistant(content));
+            return this;
+        }
 
-        int iteration = 0;
-        while (iteration < maxIterations) {
-            iteration++;
-            log.debug("Agentic loop iteration {}/{}", iteration, maxIterations);
+        @Override
+        public GenerateBuilder message(String role, String content) {
+            messages.add(new Message(role, content));
+            return this;
+        }
 
-            // Call LLM provider
-            Map<String, Object> params = new LinkedHashMap<>();
-            params.put("messages", messages);
-            if (!toolDefs.isEmpty()) {
-                params.put("tools", toolDefs);
+        @Override
+        public GenerateBuilder message(Message message) {
+            messages.add(message);
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder messages(List<Message> messageList) {
+            if (messageList != null) {
+                messages.addAll(messageList);
+            }
+            return this;
+        }
+
+        // --- Options ---
+
+        @Override
+        public GenerateBuilder maxTokens(int tokens) {
+            this.maxTokens = tokens;
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder temperature(double temp) {
+            this.temperature = temp;
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder topP(double topP) {
+            this.topP = topP;
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder stop(String... sequences) {
+            this.stopSequences = Arrays.asList(sequences);
+            return this;
+        }
+
+        // --- Context ---
+
+        @Override
+        public GenerateBuilder context(Map<String, Object> context) {
+            if (context != null) {
+                this.runtimeContext.putAll(context);
+            }
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder context(String key, Object value) {
+            this.runtimeContext.put(key, value);
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder contextMode(ContextMode mode) {
+            this.contextMode = mode != null ? mode : ContextMode.APPEND;
+            return this;
+        }
+
+        // --- Execute ---
+
+        @Override
+        public String generate() {
+            ProviderEndpoint provider = providerRef.get();
+            if (provider == null || !provider.isAvailable()) {
+                throw new IllegalStateException("LLM provider not available for: " + functionId);
+            }
+            if (mcpClient == null) {
+                throw new IllegalStateException("MCP client not configured for LLM agent: " + functionId);
             }
 
-            Map<String, Object> response;
+            long startTime = System.currentTimeMillis();
             try {
-                response = mcpClient.callTool(provider.endpoint(), provider.functionName(), params);
-            } catch (Exception e) {
-                log.error("LLM call failed: {}", e.getMessage());
-                throw new RuntimeException("LLM call failed", e);
-            }
-
-            // Check for tool calls
-            List<Map<String, Object>> toolCalls = extractToolCalls(response);
-
-            if (toolCalls.isEmpty()) {
-                // No tool calls, return the content
-                return extractContent(response);
-            }
-
-            // Add assistant message with tool calls
-            messages.add(Map.of(
-                "role", "assistant",
-                "content", extractContent(response),
-                "tool_calls", toolCalls
-            ));
-
-            // Execute tool calls and add results
-            for (Map<String, Object> toolCall : toolCalls) {
-                String toolId = (String) toolCall.get("id");
-                String toolName = (String) toolCall.get("name");
-                @SuppressWarnings("unchecked")
-                Map<String, Object> toolArgs = (Map<String, Object>) toolCall.get("arguments");
-
-                log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
-
-                String toolResult = executeToolCall(toolName, toolArgs);
-
-                messages.add(Map.of(
-                    "role", "tool",
-                    "tool_call_id", toolId,
-                    "content", toolResult
-                ));
+                String result = executeAgenticLoop(provider);
+                long latency = System.currentTimeMillis() - startTime;
+                // Update metadata (tokens would come from response if provider returns them)
+                this.lastMeta = new GenerationMeta(0, 0, 0, latency, maxIterations, provider.provider());
+                return result;
+            } finally {
+                clearInvocationContext();
             }
         }
 
-        log.warn("Max iterations ({}) reached for LLM agent {}", maxIterations, functionId);
-        // Return last response content
-        return extractLastAssistantContent(messages);
+        @Override
+        public <T> T generate(Class<T> responseType) {
+            String response = generate();
+
+            try {
+                return objectMapper.readValue(response, responseType);
+            } catch (JsonProcessingException e) {
+                String jsonContent = extractJsonFromResponse(response);
+                if (jsonContent != null) {
+                    try {
+                        return objectMapper.readValue(jsonContent, responseType);
+                    } catch (JsonProcessingException e2) {
+                        log.warn("Failed to parse extracted JSON: {}", e2.getMessage());
+                    }
+                }
+                throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName(), e);
+            }
+        }
+
+        @Override
+        public CompletableFuture<String> generateAsync() {
+            return CompletableFuture.supplyAsync(this::generate);
+        }
+
+        @Override
+        public <T> CompletableFuture<T> generateAsync(Class<T> responseType) {
+            return CompletableFuture.supplyAsync(() -> generate(responseType));
+        }
+
+        @Override
+        public GenerationMeta lastMeta() {
+            return lastMeta;
+        }
+
+        // --- Internal ---
+
+        private String executeAgenticLoop(ProviderEndpoint provider) {
+            // Build the messages list for the LLM
+            List<Map<String, Object>> llmMessages = new ArrayList<>();
+
+            // 1. Add rendered system prompt (from template) if no explicit system message
+            boolean hasExplicitSystem = messages.stream().anyMatch(m -> "system".equals(m.role()));
+            if (!hasExplicitSystem) {
+                String renderedSystemPrompt = renderSystemPrompt();
+                if (!renderedSystemPrompt.isBlank()) {
+                    llmMessages.add(Map.of("role", "system", "content", renderedSystemPrompt));
+                }
+            }
+
+            // 2. Convert builder messages to LLM format
+            for (Message msg : messages) {
+                llmMessages.add(Map.of("role", msg.role(), "content", msg.content()));
+            }
+
+            // 3. Build tool definitions
+            List<Map<String, Object>> toolDefs = buildToolDefinitions();
+
+            // 4. Execute agentic loop
+            int iteration = 0;
+            while (iteration < maxIterations) {
+                iteration++;
+                log.debug("Agentic loop iteration {}/{}", iteration, maxIterations);
+
+                // Build request params
+                Map<String, Object> params = new LinkedHashMap<>();
+                params.put("messages", llmMessages);
+                if (!toolDefs.isEmpty()) {
+                    params.put("tools", toolDefs);
+                }
+                if (maxTokens != null) {
+                    params.put("max_tokens", maxTokens);
+                } else {
+                    params.put("max_tokens", defaultMaxTokens);
+                }
+                if (temperature != null) {
+                    params.put("temperature", temperature);
+                } else {
+                    params.put("temperature", defaultTemperature);
+                }
+                if (topP != null) {
+                    params.put("top_p", topP);
+                }
+                if (stopSequences != null && !stopSequences.isEmpty()) {
+                    params.put("stop", stopSequences);
+                }
+
+                // Call LLM provider
+                Map<String, Object> response;
+                try {
+                    response = mcpClient.callTool(provider.endpoint(), provider.functionName(), params);
+                } catch (Exception e) {
+                    log.error("LLM call failed: {}", e.getMessage());
+                    throw new RuntimeException("LLM call failed", e);
+                }
+
+                // Check for tool calls
+                List<Map<String, Object>> toolCalls = extractToolCalls(response);
+
+                if (toolCalls.isEmpty()) {
+                    return extractContent(response);
+                }
+
+                // Add assistant message with tool calls
+                llmMessages.add(Map.of(
+                    "role", "assistant",
+                    "content", extractContent(response),
+                    "tool_calls", toolCalls
+                ));
+
+                // Execute tool calls and add results
+                for (Map<String, Object> toolCall : toolCalls) {
+                    String toolId = (String) toolCall.get("id");
+                    String toolName = (String) toolCall.get("name");
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> toolArgs = (Map<String, Object>) toolCall.get("arguments");
+
+                    log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
+                    String toolResult = executeToolCall(toolName, toolArgs);
+
+                    llmMessages.add(Map.of(
+                        "role", "tool",
+                        "tool_call_id", toolId,
+                        "content", toolResult
+                    ));
+                }
+            }
+
+            log.warn("Max iterations ({}) reached for LLM agent {}", maxIterations, functionId);
+            return extractLastAssistantContent(llmMessages);
+        }
+
+        private String renderSystemPrompt() {
+            if (systemPromptTemplate == null || systemPromptTemplate.isBlank()) {
+                return "";
+            }
+
+            // Merge contexts based on mode
+            Map<String, Object> effectiveContext = mergeContexts();
+
+            // Render template if needed
+            if (templateRenderer.isTemplate(systemPromptTemplate) ||
+                systemPromptTemplate.contains("${") ||
+                systemPromptTemplate.contains("<#")) {
+                try {
+                    String rendered = templateRenderer.render(systemPromptTemplate, effectiveContext);
+                    log.debug("Rendered system prompt with {} context variables",
+                        effectiveContext != null ? effectiveContext.size() : 0);
+                    return rendered;
+                } catch (Exception e) {
+                    log.warn("Failed to render system prompt template: {}", e.getMessage());
+                    return systemPromptTemplate;
+                }
+            }
+
+            return systemPromptTemplate;
+        }
+
+        private Map<String, Object> mergeContexts() {
+            Map<String, Object> autoContext = invocationContext.get();
+            if (autoContext == null) {
+                autoContext = Map.of();
+            }
+
+            if (runtimeContext.isEmpty()) {
+                return autoContext;
+            }
+
+            return switch (contextMode) {
+                case REPLACE -> runtimeContext;
+                case PREPEND -> {
+                    Map<String, Object> merged = new LinkedHashMap<>(runtimeContext);
+                    merged.putAll(autoContext); // auto wins on conflicts
+                    yield merged;
+                }
+                case APPEND -> {
+                    Map<String, Object> merged = new LinkedHashMap<>(autoContext);
+                    merged.putAll(runtimeContext); // runtime wins on conflicts
+                    yield merged;
+                }
+            };
+        }
     }
 
-    /**
-     * Build tool definitions for the LLM from available tools.
-     */
+    // =========================================================================
+    // Helper Methods
+    // =========================================================================
+
     private List<Map<String, Object>> buildToolDefinitions() {
         List<Map<String, Object>> tools = new ArrayList<>();
 
         for (ToolInfo tool : availableTools) {
-            Map<String, Object> functionDef = new LinkedHashMap<String, Object>();
+            Map<String, Object> functionDef = new LinkedHashMap<>();
             functionDef.put("name", tool.name());
             functionDef.put("description", tool.description() != null ? tool.description() : "");
-            // inputSchema is already a Map, use it directly or provide default
+
             Map<String, Object> schema = tool.inputSchema();
             if (schema == null || schema.isEmpty()) {
-                Map<String, Object> defaultSchema = new LinkedHashMap<String, Object>();
-                defaultSchema.put("type", "object");
-                defaultSchema.put("properties", new LinkedHashMap<String, Object>());
-                schema = defaultSchema;
+                schema = Map.of("type", "object", "properties", Map.of());
             }
             functionDef.put("parameters", schema);
 
-            Map<String, Object> toolDef = new LinkedHashMap<String, Object>();
-            toolDef.put("type", "function");
-            toolDef.put("function", functionDef);
-            tools.add(toolDef);
+            tools.add(Map.of("type", "function", "function", functionDef));
         }
 
         return tools;
     }
 
-    /**
-     * Extract tool calls from LLM response.
-     */
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractToolCalls(Map<String, Object> response) {
         Object toolCalls = response.get("tool_calls");
@@ -286,16 +513,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return List.of();
     }
 
-    /**
-     * Extract text content from LLM response.
-     */
     private String extractContent(Map<String, Object> response) {
         Object content = response.get("content");
         if (content instanceof String s) {
             return s;
         }
         if (content instanceof List<?> list && !list.isEmpty()) {
-            // Handle content blocks format
             Object first = list.get(0);
             if (first instanceof Map<?, ?> block) {
                 Object text = block.get("text");
@@ -307,26 +530,24 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return "";
     }
 
-    /**
-     * Execute a tool call via the mesh.
-     */
     private String executeToolCall(String toolName, Map<String, Object> args) {
-        // Find tool info to get agent endpoint
-        ToolInfo toolInfo = findToolByName(toolName);
+        ToolInfo toolInfo = availableTools.stream()
+            .filter(t -> t.name().equals(toolName))
+            .findFirst()
+            .orElse(null);
+
         if (toolInfo == null) {
             log.warn("Tool not found: {}", toolName);
             return "{\"error\": \"Tool not found: " + toolName + "\"}";
         }
 
         try {
-            // Get proxy for the tool's capability
             var proxy = dependencyInjector.getToolProxy(toolInfo.capability());
             if (proxy == null || !proxy.isAvailable()) {
                 log.warn("Tool proxy not available: {}", toolInfo.capability());
                 return "{\"error\": \"Tool unavailable: " + toolInfo.capability() + "\"}";
             }
 
-            // Call the tool
             Object result = proxy.call(args);
             return objectMapper.writeValueAsString(result);
         } catch (Exception e) {
@@ -335,19 +556,6 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         }
     }
 
-    /**
-     * Find a tool by name.
-     */
-    private ToolInfo findToolByName(String name) {
-        return availableTools.stream()
-            .filter(t -> t.name().equals(name))
-            .findFirst()
-            .orElse(null);
-    }
-
-    /**
-     * Extract last assistant content from messages.
-     */
     private String extractLastAssistantContent(List<Map<String, Object>> messages) {
         for (int i = messages.size() - 1; i >= 0; i--) {
             Map<String, Object> msg = messages.get(i);
@@ -361,22 +569,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return "";
     }
 
-    /**
-     * Try to extract JSON from a text response.
-     */
     private String extractJsonFromResponse(String response) {
-        if (response == null) {
-            return null;
-        }
+        if (response == null) return null;
 
-        // Look for JSON object
         int start = response.indexOf('{');
         int end = response.lastIndexOf('}');
         if (start >= 0 && end > start) {
             return response.substring(start, end + 1);
         }
 
-        // Look for JSON array
         start = response.indexOf('[');
         end = response.lastIndexOf(']');
         if (start >= 0 && end > start) {
