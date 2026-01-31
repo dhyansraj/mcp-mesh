@@ -13,7 +13,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Map;
 
 /**
  * MCP Mesh agent demonstrating @MeshTool dependencies.
@@ -92,7 +91,7 @@ public class AssistantAgentApplication {
     )
     public GreetingResponse smartGreet(
         @Param(value = "name", description = "The name to greet") String name,
-        McpMeshTool dateService
+        McpMeshTool<String> dateService
     ) {
         log.info("Smart greeting for: {}", name);
 
@@ -103,11 +102,8 @@ public class AssistantAgentApplication {
             // Call the remote date_service via mesh
             log.info("Using mesh date_service at: {}", dateService.getEndpoint());
             try {
-                // Call with parameters for format
-                Map<String, Object> result = dateService.call(Map.of(
-                    "format", "long"
-                ));
-                dateString = (String) result.get("date");
+                // Call with no parameters - date_service returns a formatted string
+                dateString = dateService.call();
                 source = "mesh:" + dateService.getCapability();
             } catch (Exception e) {
                 log.warn("Failed to call date_service, using fallback: {}", e.getMessage());
@@ -139,7 +135,7 @@ public class AssistantAgentApplication {
         tags = {"status", "info", "java"},
         dependencies = @Selector(capability = "date_service")
     )
-    public AgentStatus getStatus(McpMeshTool dateService) {
+    public AgentStatus getStatus(McpMeshTool<String> dateService) {
         boolean dateServiceAvailable = dateService != null && dateService.isAvailable();
         String dateServiceEndpoint = dateServiceAvailable ? dateService.getEndpoint() : null;
 

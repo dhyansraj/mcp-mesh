@@ -70,4 +70,12 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- Local repository for mcp-mesh artifacts (development) -->
+    <repositories>
+        <repository>
+            <id>local-maven-repo</id>
+            <url>file://${project.basedir}/../../../src/runtime/java/local-repo</url>
+        </repository>
+    </repositories>
 </project>

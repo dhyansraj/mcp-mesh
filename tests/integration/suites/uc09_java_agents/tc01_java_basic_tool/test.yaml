@@ -95,14 +95,14 @@ assertions:
   - expr: "${captured.list_tools} contains 'getInfo'"
     message: "getInfo tool should be listed"
 
-  # Tool calls succeeded
-  - expr: "${captured.call_greet} contains 'Hello, World'"
+  # Tool calls succeeded - use jq to parse nested JSON
+  - expr: "${jq:captured.call_greet:.content[0].text | fromjson | .message} contains 'Hello, World'"
     message: "greet should return greeting message"
 
-  - expr: "${captured.call_info} contains 'greeter'"
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .name} == 'greeter'"
     message: "getInfo should return agent name"
 
-  - expr: "${captured.call_info} contains 'Java'"
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .runtime} contains 'Java'"
     message: "getInfo should return Java runtime"
 
 post_run:

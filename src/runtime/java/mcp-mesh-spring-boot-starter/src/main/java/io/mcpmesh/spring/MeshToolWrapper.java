@@ -274,23 +274,23 @@ public class MeshToolWrapper implements McpToolHandler {
             fullArgs[param.position()] = convertValue(value, param.type());
         }
 
-        // Fill McpMeshTool dependencies
+        // Fill McpMeshTool dependencies (null if unavailable for graceful degradation)
         for (int i = 0; i < meshToolPositions.size(); i++) {
             int paramPos = meshToolPositions.get(i);
             McpMeshTool proxy = injectedDeps.get(i);
 
+            // Allow null for graceful degradation - tool method can check:
+            //   if (dep != null && dep.isAvailable()) { ... } else { fallback }
             if (proxy == null) {
                 String depName = i < dependencyNames.size() ? dependencyNames.get(i) : "unknown";
-                throw new IllegalStateException(
-                    "Dependency not available: " + depName + " (index " + i + ") for " + funcId +
-                    ". The dependency may not be resolved yet or the providing agent is offline."
-                );
+                log.debug("Dependency {} not available for {}, passing null for graceful degradation",
+                    depName, funcId);
             }
 
             fullArgs[paramPos] = proxy;
         }
 
-        // Fill MeshLlmAgent dependencies
+        // Fill MeshLlmAgent dependencies and set context for template rendering
         for (int i = 0; i < llmAgentPositions.size(); i++) {
             int paramPos = llmAgentPositions.get(i);
             MeshLlmAgent agent = injectedLlmAgents.get(i);
@@ -300,6 +300,16 @@ public class MeshToolWrapper implements McpToolHandler {
                     "LLM agent not available for " + funcId +
                     ". Check @MeshLlm configuration and provider availability."
                 );
+            }
+
+            // If agent is a proxy, set context for template rendering
+            if (agent instanceof MeshLlmAgentProxy proxy) {
+                Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), mcpArgs);
+                if (context != null) {
+                    proxy.setInvocationContext(context);
+                    log.debug("Set invocation context with {} variables for LLM agent",
+                        context.size());
+                }
             }
 
             fullArgs[paramPos] = agent;
@@ -341,6 +351,44 @@ public class MeshToolWrapper implements McpToolHandler {
         }
 
         return result;
+    }
+
+    /**
+     * Extract context from MCP args for template rendering.
+     *
+     * <p>Looks for a parameter matching the contextParamName and wraps it
+     * in a Map with the contextParamName as the key. This allows templates
+     * to reference the context as {@code ${ctx.field}} when contextParam="ctx".
+     *
+     * @param contextParamName The parameter name to look for
+     * @param mcpArgs          The MCP arguments
+     * @return A Map suitable for template rendering with contextParamName as key
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractContextForTemplate(String contextParamName, Map<String, Object> mcpArgs) {
+        if (contextParamName == null || mcpArgs == null) {
+            return null;
+        }
+
+        Object contextValue = mcpArgs.get(contextParamName);
+        if (contextValue == null) {
+            // If no specific context param, use all MCP args as context
+            return new HashMap<>(mcpArgs);
+        }
+
+        // Wrap the context value with the param name as key
+        // This allows templates to use ${ctx.field} when contextParam="ctx"
+        Map<String, Object> templateContext = new HashMap<>();
+        templateContext.put(contextParamName, contextValue);
+
+        // Also add all other MCP args to context (except injected params)
+        for (Map.Entry<String, Object> entry : mcpArgs.entrySet()) {
+            if (!entry.getKey().equals(contextParamName)) {
+                templateContext.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        return templateContext;
     }
 
     /**

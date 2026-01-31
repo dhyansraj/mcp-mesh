@@ -1,0 +1,15 @@
+server:
+  port: 9003
+
+spring:
+  application:
+    name: employee-service
+
+mcp:
+  mesh:
+    registry-url: http://localhost:8000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

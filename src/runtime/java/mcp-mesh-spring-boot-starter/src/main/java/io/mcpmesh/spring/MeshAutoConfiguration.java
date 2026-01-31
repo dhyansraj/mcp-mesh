@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshAgent;
+import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +79,24 @@ public class MeshAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public static MeshLlmRegistry meshLlmRegistry() {
+        return new MeshLlmRegistry();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public static PromptTemplateRenderer promptTemplateRenderer() {
+        return new PromptTemplateRenderer();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshLlmBeanPostProcessor meshLlmBeanPostProcessor(MeshLlmRegistry llmRegistry) {
+        return new MeshLlmBeanPostProcessor(llmRegistry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public MeshDependencyInjector meshDependencyInjector() {
         return new MeshDependencyInjector();
     }
@@ -94,9 +113,11 @@ public class MeshAutoConfiguration {
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
             MeshToolWrapperRegistry wrapperRegistry,
-            MeshConfigResolver configResolver) {
+            MeshLlmRegistry llmRegistry,
+            MeshConfigResolver configResolver,
+            ObjectMapper objectMapper) {
 
-        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, configResolver);
+        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry, configResolver, objectMapper);
         log.info("Creating MeshRuntime for agent '{}' with {} tools",
             spec.getName(), spec.getTools().size());
 
@@ -105,19 +126,32 @@ public class MeshAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public McpHttpClient mcpHttpClient() {
+        return new McpHttpClient();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public MeshEventProcessor meshEventProcessor(
             MeshRuntime runtime,
             MeshDependencyInjector injector,
-            MeshToolWrapperRegistry wrapperRegistry) {
+            MeshToolWrapperRegistry wrapperRegistry,
+            MeshLlmRegistry llmRegistry,
+            McpHttpClient mcpHttpClient,
+            ObjectMapper objectMapper,
+            ApplicationContext applicationContext) {
 
-        return new MeshEventProcessor(runtime, injector, wrapperRegistry);
+        return new MeshEventProcessor(runtime, injector, wrapperRegistry,
+            llmRegistry, mcpHttpClient, objectMapper, applicationContext);
     }
 
     private AgentSpec buildAgentSpec(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
             MeshToolWrapperRegistry wrapperRegistry,
-            MeshConfigResolver configResolver) {
+            MeshLlmRegistry llmRegistry,
+            MeshConfigResolver configResolver,
+            ObjectMapper objectMapper) {
 
         // Find @MeshAgent annotation
         MeshAgent agentAnnotation = findMeshAgentAnnotation();
@@ -177,12 +211,97 @@ public class MeshAutoConfiguration {
         // Add tools from registry (dependencies are embedded in tool specs)
         List<AgentSpec.ToolSpec> allTools = new ArrayList<>(toolRegistry.getToolSpecs());
 
+        // Enrich tools with @MeshLlm provider info for mesh delegation
+        enrichToolsWithLlmProvider(allTools, toolRegistry, llmRegistry, objectMapper);
+
         // Add LLM provider tools if mcp-mesh-spring-ai is on classpath
         addLlmProviderTools(allTools, wrapperRegistry);
 
         spec.setTools(allTools);
 
         return spec;
+    }
+
+    /**
+     * Enrich tool specs with @MeshLlm provider selector info for mesh delegation.
+     *
+     * <p>For each tool with a corresponding @MeshLlm annotation that uses mesh delegation
+     * (providerSelector), this sets the llmProvider field on the ToolSpec so the registry
+     * knows to discover and route LLM calls for this tool.
+     *
+     * @param tools        List of tool specs to enrich
+     * @param toolRegistry Tool registry to get method info
+     * @param llmRegistry  LLM registry with @MeshLlm configs
+     * @param objectMapper Jackson ObjectMapper for JSON serialization
+     */
+    private void enrichToolsWithLlmProvider(
+            List<AgentSpec.ToolSpec> tools,
+            MeshToolRegistry toolRegistry,
+            MeshLlmRegistry llmRegistry,
+            ObjectMapper objectMapper) {
+
+        for (AgentSpec.ToolSpec toolSpec : tools) {
+            // Look up the tool metadata to get the full funcId
+            MeshToolRegistry.ToolMetadata meta = toolRegistry.getTool(toolSpec.getCapability());
+            if (meta == null) {
+                continue;
+            }
+
+            // Build funcId in the format used by MeshLlmRegistry
+            String funcId = meta.bean().getClass().getName() + "." + meta.method().getName();
+
+            // Look up @MeshLlm config
+            MeshLlmRegistry.LlmConfig llmConfig = llmRegistry.getByFunctionId(funcId);
+            if (llmConfig == null) {
+                continue;
+            }
+
+            // Only set llmProvider for mesh delegation mode (not direct provider mode)
+            if (llmConfig.isMeshDelegation()) {
+                Selector selector = llmConfig.providerSelector();
+                if (selector != null && !selector.capability().isEmpty()) {
+                    try {
+                        // Build llmProvider JSON: {"capability": "llm", "tags": ["+claude", "+anthropic"]}
+                        java.util.Map<String, Object> providerMap = new java.util.LinkedHashMap<>();
+                        providerMap.put("capability", selector.capability());
+                        providerMap.put("tags", java.util.Arrays.asList(selector.tags()));
+                        if (!selector.version().isEmpty()) {
+                            providerMap.put("version", selector.version());
+                        }
+
+                        String llmProviderJson = objectMapper.writeValueAsString(providerMap);
+                        toolSpec.setLlmProvider(llmProviderJson);
+
+                        log.debug("Set llmProvider on tool '{}': {}", toolSpec.getCapability(), llmProviderJson);
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize llmProvider for tool '{}': {}",
+                            toolSpec.getCapability(), e.getMessage());
+                    }
+                }
+
+                // Set llmFilter if configured (single filter as map, not array)
+                Selector[] filters = llmConfig.filters();
+                if (filters != null && filters.length > 0) {
+                    try {
+                        // Use first filter (registry expects single filter as map, not array)
+                        Selector filter = filters[0];
+                        java.util.Map<String, Object> filterMap = new java.util.LinkedHashMap<>();
+                        if (!filter.capability().isEmpty()) {
+                            filterMap.put("capability", filter.capability());
+                        }
+                        filterMap.put("tags", java.util.Arrays.asList(filter.tags()));
+
+                        String llmFilterJson = objectMapper.writeValueAsString(filterMap);
+                        toolSpec.setLlmFilter(llmFilterJson);
+
+                        log.debug("Set llmFilter on tool '{}': {}", toolSpec.getCapability(), llmFilterJson);
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize llmFilter for tool '{}': {}",
+                            toolSpec.getCapability(), e.getMessage());
+                    }
+                }
+            }
+        }
     }
 
     /**

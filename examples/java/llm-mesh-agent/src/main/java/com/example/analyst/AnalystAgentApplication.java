@@ -7,6 +7,7 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
 import io.mcpmesh.types.MeshLlmAgent;
+import io.mcpmesh.types.MeshLlmAgent.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -14,6 +15,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -134,19 +136,26 @@ public class AnalystAgentApplication {
         }
 
         try {
-            // Generate structured response using LLM with agentic loop
-            String userPrompt = String.format(
-                "Analyze the following query: %s\n\nData source: %s",
-                ctx.query(),
-                ctx.dataSource() != null ? ctx.dataSource() : "not specified"
-            );
+            // Use fluent builder API for clean, readable code
+            // Builder supports: messages, context, options, and structured output
+            AnalysisResult result = llm.request()
+                .user(String.format(
+                    "Analyze the following query: %s\n\nData source: %s",
+                    ctx.query(),
+                    ctx.dataSource() != null ? ctx.dataSource() : "not specified"
+                ))
+                .maxTokens(4096)
+                .temperature(0.7)
+                .generate(AnalysisResult.class);
 
-            // LLM agent handles:
-            // 1. System prompt rendering with context
-            // 2. Tool discovery from mesh
-            // 3. Agentic loop (call tools, get results, continue)
-            // 4. Parse response to record type
-            return llm.generate(userPrompt, AnalysisResult.class);
+            // Log metadata from the generation
+            var meta = llm.request().lastMeta();
+            if (meta != null) {
+                log.info("Generation completed: {} iterations, {}ms latency",
+                    meta.iterations(), meta.latencyMs());
+            }
+
+            return result;
 
         } catch (Exception e) {
             log.error("Analysis failed: {}", e.getMessage(), e);
@@ -155,9 +164,9 @@ public class AnalystAgentApplication {
     }
 
     /**
-     * Simple chat endpoint using mesh LLM.
+     * Simple chat endpoint using mesh LLM with fluent builder.
      *
-     * <p>Simpler version without structured output - just returns text.
+     * <p>Demonstrates the fluent builder for simple text generation.
      *
      * @param message User message
      * @param llm     Injected LLM agent proxy
@@ -185,7 +194,11 @@ public class AnalystAgentApplication {
         String source;
 
         if (llm != null && llm.isAvailable()) {
-            response = llm.generate(message);  // Returns String (text)
+            // Use fluent builder for clean code
+            response = llm.request()
+                .user(message)
+                .temperature(0.7)
+                .generate();
             source = "mesh:llm";
         } else {
             response = "I'm sorry, the LLM service is currently unavailable.";
@@ -194,6 +207,99 @@ public class AnalystAgentApplication {
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         return new ChatResponse(response, timestamp, source);
+    }
+
+    /**
+     * Multi-turn conversation with message history support.
+     *
+     * <p>Demonstrates loading chat history from a database (simulated) and
+     * continuing the conversation. This is a common pattern when building
+     * chat applications where history is stored in Redis, PostgreSQL, etc.
+     *
+     * <h2>Example Usage</h2>
+     * <pre>
+     * meshctl call chatWithHistory '{
+     *   "sessionId": "user-123",
+     *   "message": "What was my previous question?"
+     * }'
+     * </pre>
+     *
+     * @param sessionId Session ID for retrieving chat history
+     * @param message   Current user message
+     * @param llm       Injected LLM agent proxy
+     * @return Chat response with context
+     */
+    @MeshLlm(
+        providerSelector = @Selector(capability = "llm"),
+        maxIterations = 3,
+        systemPrompt = "You are a helpful assistant with memory of the conversation.",
+        maxTokens = 2048,
+        temperature = 0.7
+    )
+    @MeshTool(
+        capability = "chatWithHistory",
+        description = "Multi-turn chat with conversation history",
+        tags = {"chat", "llm", "java", "history"}
+    )
+    public ChatResponse chatWithHistory(
+        @Param(value = "sessionId", description = "Session ID for history lookup") String sessionId,
+        @Param(value = "message", description = "Current user message") String message,
+        MeshLlmAgent llm
+    ) {
+        log.info("Chat with history - session: {}, message: {}", sessionId, message);
+
+        String response;
+        String source;
+
+        if (llm != null && llm.isAvailable()) {
+            // Simulate loading chat history from Redis/database
+            // In production: List<Message> history = Message.fromMaps(redis.getHistory(sessionId));
+            List<Message> history = loadChatHistory(sessionId);
+
+            log.info("Loaded {} history messages for session {}", history.size(), sessionId);
+
+            // Use fluent builder with message history
+            // This pattern supports 100s of messages efficiently
+            response = llm.request()
+                .system("You are a helpful assistant. Remember the conversation context.")
+                .messages(history)      // Bulk add history from DB/Redis
+                .user(message)          // Current message
+                .maxTokens(2048)
+                .temperature(0.7)
+                .generate();
+
+            source = "mesh:llm";
+        } else {
+            response = "I'm sorry, the LLM service is currently unavailable.";
+            source = "fallback";
+        }
+
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        return new ChatResponse(response, timestamp, source);
+    }
+
+    /**
+     * Simulate loading chat history from a database.
+     *
+     * <p>In production, this would query Redis, PostgreSQL, or another store:
+     * <pre>{@code
+     * List<Map<String, String>> rawHistory = redis.lrange("chat:" + sessionId, 0, -1);
+     * return Message.fromMaps(rawHistory);
+     * }</pre>
+     */
+    private List<Message> loadChatHistory(String sessionId) {
+        // Simulate a few turns of conversation history
+        List<Message> history = new ArrayList<>();
+
+        // Simulated history (in production, this comes from Redis/DB)
+        if (sessionId != null && sessionId.startsWith("demo")) {
+            history.add(Message.user("Hello, I'm interested in data analysis."));
+            history.add(Message.assistant("Hello! I'd be happy to help with data analysis. What kind of data are you working with?"));
+            history.add(Message.user("I have sales data from Q4 2024."));
+            history.add(Message.assistant("Great! Q4 sales data can reveal interesting trends. What specific insights are you looking for? For example: trends, comparisons, anomalies, or forecasts?"));
+        }
+
+        return history;
     }
 
     private AnalysisResult fallbackAnalysis(AnalysisContext ctx) {
