@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.spring.web.MeshRouteRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -115,9 +117,10 @@ public class MeshAutoConfiguration {
             MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
 
-        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry, configResolver, objectMapper);
+        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry, configResolver, objectMapper, routeRegistryProvider);
         log.info("Creating MeshRuntime for agent '{}' with {} tools",
             spec.getName(), spec.getTools().size());
 
@@ -151,7 +154,8 @@ public class MeshAutoConfiguration {
             MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
 
         // Find @MeshAgent annotation
         MeshAgent agentAnnotation = findMeshAgentAnnotation();
@@ -217,9 +221,48 @@ public class MeshAutoConfiguration {
         // Add LLM provider tools if mcp-mesh-spring-ai is on classpath
         addLlmProviderTools(allTools, wrapperRegistry);
 
+        // Add @MeshRoute dependencies as a synthetic tool
+        addRouteDependencies(allTools, routeRegistryProvider);
+
         spec.setTools(allTools);
 
         return spec;
+    }
+
+    /**
+     * Add @MeshRoute dependencies as a synthetic tool for registry resolution.
+     *
+     * <p>Route dependencies are not part of any @MeshTool, so we create a
+     * synthetic tool called "__mesh_route_deps" that declares all unique
+     * route dependencies. This allows the Rust core to resolve them via
+     * the registry's dependency resolution mechanism.
+     *
+     * @param tools                 List to add the synthetic tool to
+     * @param routeRegistryProvider Provider for MeshRouteRegistry
+     */
+    private void addRouteDependencies(List<AgentSpec.ToolSpec> tools,
+                                      ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
+        MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+        if (routeRegistry == null || !routeRegistry.hasRoutes()) {
+            return;
+        }
+
+        List<AgentSpec.DependencySpec> routeDeps = routeRegistry.getUniqueDependencySpecs();
+        if (routeDeps.isEmpty()) {
+            log.debug("No @MeshRoute dependencies to register");
+            return;
+        }
+
+        // Create synthetic tool for route dependencies
+        AgentSpec.ToolSpec routeDepsTool = new AgentSpec.ToolSpec();
+        routeDepsTool.setFunctionName("__mesh_route_deps");
+        routeDepsTool.setCapability("__mesh_route_deps");
+        routeDepsTool.setDescription("Synthetic tool for @MeshRoute dependency resolution");
+        routeDepsTool.setDependencies(routeDeps);
+
+        tools.add(routeDepsTool);
+
+        log.info("Added {} @MeshRoute dependencies to agent registration", routeDeps.size());
     }
 
     /**

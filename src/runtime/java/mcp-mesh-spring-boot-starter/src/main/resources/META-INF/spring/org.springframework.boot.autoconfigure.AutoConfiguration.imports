@@ -1,2 +1,3 @@
 io.mcpmesh.spring.MeshAutoConfiguration
 io.mcpmesh.spring.MeshMcpServerConfiguration
+io.mcpmesh.spring.web.MeshRouteAutoConfiguration
