@@ -107,10 +107,8 @@ public class AnalystAgentApplication {
      */
     @MeshLlm(
         // Delegate to LLM provider via mesh (not direct API call)
-        providerSelector = @Selector(
-            capability = "llm",
-            tags = {"+claude", "+anthropic"}  // Prefer Claude/Anthropic providers
-        ),
+        // Uses capability-only selection so analyst works with any LLM provider
+        providerSelector = @Selector(capability = "llm"),
         // Agentic loop settings
         maxIterations = 5,
         // System prompt from Freemarker template

@@ -63,6 +63,9 @@ public class SpringAiLlmProvider {
     @Autowired(required = false)
     private ChatModel vertexAiGeminiChatModel;
 
+    @Autowired(required = false)
+    private ChatModel googleAiGeminiChatModel;
+
     /**
      * Get a ChatClient for the specified provider.
      *
@@ -85,7 +88,7 @@ public class SpringAiLlmProvider {
         return switch (normalizedProvider) {
             case "claude", "anthropic" -> anthropicChatModel != null;
             case "openai", "gpt" -> openAiChatModel != null;
-            case "gemini", "google" -> vertexAiGeminiChatModel != null;
+            case "gemini", "google" -> vertexAiGeminiChatModel != null || googleAiGeminiChatModel != null;
             default -> false;
         };
     }
@@ -183,6 +186,40 @@ public class SpringAiLlmProvider {
     }
 
     /**
+     * Generate a response with full message history, tools, and options.
+     *
+     * <p>Uses Spring AI 2.0 ChatClient with native tool calling support.
+     * Delegates to a vendor-specific handler for optimal message formatting.
+     *
+     * @param provider     The LLM provider name
+     * @param messages     List of messages with role and content
+     * @param tools        List of tool definitions for the LLM
+     * @param toolExecutor Executor for invoking tools during agentic loop
+     * @param options      Generation options (max_tokens, temperature, etc.)
+     * @return Response containing content and any tool calls
+     */
+    public LlmProviderHandler.LlmResponse generateWithTools(
+            String provider,
+            List<Map<String, Object>> messages,
+            List<LlmProviderHandler.ToolDefinition> tools,
+            LlmProviderHandler.ToolExecutorCallback toolExecutor,
+            Map<String, Object> options) {
+
+        // Get vendor-specific handler
+        LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler(provider);
+
+        log.debug("Using {} for provider '{}' with {} messages and {} tools",
+            handler.getClass().getSimpleName(), provider, messages.size(),
+            tools != null ? tools.size() : 0);
+
+        // Get the ChatModel for this provider
+        ChatModel model = getModelForProvider(provider);
+
+        // Delegate to handler for vendor-specific processing with tools
+        return handler.generateWithTools(model, messages, tools, toolExecutor, options);
+    }
+
+    /**
      * Get the ChatModel for a provider.
      *
      * @param provider The provider name
@@ -206,11 +243,16 @@ public class SpringAiLlmProvider {
                 yield openAiChatModel;
             }
             case "gemini", "google" -> {
-                if (vertexAiGeminiChatModel == null) {
-                    throw new IllegalStateException("Gemini ChatModel not configured. " +
-                        "Add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
+                // Prefer Google AI Gemini (API key based, like Python), fallback to Vertex AI
+                if (googleAiGeminiChatModel != null) {
+                    yield googleAiGeminiChatModel;
                 }
-                yield vertexAiGeminiChatModel;
+                if (vertexAiGeminiChatModel != null) {
+                    yield vertexAiGeminiChatModel;
+                }
+                throw new IllegalStateException("Gemini ChatModel not configured. " +
+                    "Add spring-ai-google-genai dependency and set GEMINI_API_KEY, " +
+                    "or add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
             }
             default -> {
                 // Try anthropic as default fallback
@@ -222,8 +264,12 @@ public class SpringAiLlmProvider {
                     log.warn("Unknown provider '{}', falling back to OpenAI", provider);
                     yield openAiChatModel;
                 }
+                if (googleAiGeminiChatModel != null) {
+                    log.warn("Unknown provider '{}', falling back to Gemini (Google AI)", provider);
+                    yield googleAiGeminiChatModel;
+                }
                 if (vertexAiGeminiChatModel != null) {
-                    log.warn("Unknown provider '{}', falling back to Gemini", provider);
+                    log.warn("Unknown provider '{}', falling back to Gemini (Vertex AI)", provider);
                     yield vertexAiGeminiChatModel;
                 }
                 throw new IllegalArgumentException("No ChatModel available for provider: " + provider);
@@ -248,11 +294,15 @@ public class SpringAiLlmProvider {
                 yield openAiChatModel;
             }
             case "gemini", "google" -> {
-                if (vertexAiGeminiChatModel == null) {
-                    throw new IllegalStateException(
-                        "Gemini ChatModel not configured. Add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
+                // Prefer Google AI Gemini (API key based), fallback to Vertex AI
+                if (googleAiGeminiChatModel != null) {
+                    yield googleAiGeminiChatModel;
                 }
-                yield vertexAiGeminiChatModel;
+                if (vertexAiGeminiChatModel != null) {
+                    yield vertexAiGeminiChatModel;
+                }
+                throw new IllegalStateException(
+                    "Gemini ChatModel not configured. Add spring-ai-google-genai and set GEMINI_API_KEY");
             }
             default -> throw new IllegalArgumentException("Unknown LLM provider: " + provider +
                 ". Supported: claude, anthropic, openai, gpt, gemini, google");
