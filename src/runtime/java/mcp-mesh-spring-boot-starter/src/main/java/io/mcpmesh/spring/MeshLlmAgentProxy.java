@@ -121,15 +121,27 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         providerRef.set(new ProviderEndpoint(endpoint, functionName, provider));
     }
 
+    @SuppressWarnings("unchecked")
     void updateTools(List<MeshEvent.LlmToolInfo> tools) {
         availableTools.clear();
         for (MeshEvent.LlmToolInfo tool : tools) {
+            // Parse inputSchema from JSON string to Map
+            Map<String, Object> inputSchema = null;
+            String schemaStr = tool.getInputSchema();
+            if (schemaStr != null && !schemaStr.isEmpty()) {
+                try {
+                    inputSchema = objectMapper.readValue(schemaStr, Map.class);
+                } catch (JsonProcessingException e) {
+                    log.warn("Failed to parse input schema for tool {}: {}", tool.getFunctionName(), e.getMessage());
+                }
+            }
+
             availableTools.add(new ToolInfo(
                 tool.getFunctionName(),
                 tool.getDescription(),
                 tool.getCapability(),
                 tool.getAgentId(),
-                tool.getInputSchema()
+                inputSchema
             ));
         }
         log.debug("Updated {} tools for LLM agent {}", availableTools.size(), functionId);
@@ -516,18 +528,55 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private String extractContent(Map<String, Object> response) {
         Object content = response.get("content");
         if (content instanceof String s) {
-            return s;
+            return parseNestedContent(s);
         }
         if (content instanceof List<?> list && !list.isEmpty()) {
             Object first = list.get(0);
             if (first instanceof Map<?, ?> block) {
                 Object text = block.get("text");
                 if (text != null) {
-                    return text.toString();
+                    return parseNestedContent(text.toString());
                 }
             }
         }
         return "";
+    }
+
+    /**
+     * Parse nested content from LLM provider responses.
+     *
+     * <p>Some LLM providers wrap their responses in a JSON object like:
+     * {@code {"content": "actual text...", "model": "...", "tool_calls": []}}
+     *
+     * <p>This method extracts the inner "content" field if present,
+     * otherwise returns the original string.
+     */
+    @SuppressWarnings("unchecked")
+    private String parseNestedContent(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+
+        // Check if text looks like a JSON object with a "content" field
+        String trimmed = text.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            try {
+                Map<String, Object> parsed = objectMapper.readValue(trimmed, Map.class);
+                // If it has a "content" field, extract it (this is the LLM's actual response)
+                if (parsed.containsKey("content")) {
+                    Object innerContent = parsed.get("content");
+                    if (innerContent instanceof String s) {
+                        log.debug("Extracted inner content from LLM provider wrapper");
+                        return s;
+                    }
+                }
+            } catch (JsonProcessingException e) {
+                // Not valid JSON, return as-is
+                log.trace("Text is not JSON, returning as-is: {}", e.getMessage());
+            }
+        }
+
+        return text;
     }
 
     private String executeToolCall(String toolName, Map<String, Object> args) {
@@ -572,16 +621,73 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private String extractJsonFromResponse(String response) {
         if (response == null) return null;
 
-        int start = response.indexOf('{');
-        int end = response.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return response.substring(start, end + 1);
+        // First, look for JSON inside markdown code blocks (```json ... ```)
+        // This is the preferred location for structured output from LLMs
+        int jsonBlockStart = response.indexOf("```json");
+        if (jsonBlockStart >= 0) {
+            int contentStart = response.indexOf('\n', jsonBlockStart);
+            if (contentStart >= 0) {
+                int blockEnd = response.indexOf("```", contentStart);
+                if (blockEnd > contentStart) {
+                    String jsonContent = response.substring(contentStart + 1, blockEnd).trim();
+                    if (log.isDebugEnabled()) {
+                        log.debug("Extracted JSON from markdown code block: {} chars", jsonContent.length());
+                    }
+                    return jsonContent;
+                }
+            }
         }
 
-        start = response.indexOf('[');
-        end = response.lastIndexOf(']');
-        if (start >= 0 && end > start) {
-            return response.substring(start, end + 1);
+        // Also check for generic code blocks that might contain JSON
+        int genericBlockStart = response.lastIndexOf("```\n{");
+        if (genericBlockStart >= 0) {
+            int contentStart = genericBlockStart + 4; // Skip "```\n"
+            int blockEnd = response.indexOf("\n```", contentStart);
+            if (blockEnd > contentStart) {
+                String jsonContent = response.substring(contentStart, blockEnd).trim();
+                if (log.isDebugEnabled()) {
+                    log.debug("Extracted JSON from generic code block: {} chars", jsonContent.length());
+                }
+                return jsonContent;
+            }
+        }
+
+        // Fallback: find the LAST complete JSON object (not first) since LLM responses
+        // often have intermediate JSON (like function results) before final output
+        int lastBrace = response.lastIndexOf('}');
+        if (lastBrace >= 0) {
+            // Find matching opening brace by counting nesting
+            int depth = 0;
+            for (int i = lastBrace; i >= 0; i--) {
+                char c = response.charAt(i);
+                if (c == '}') depth++;
+                else if (c == '{') {
+                    depth--;
+                    if (depth == 0) {
+                        String jsonContent = response.substring(i, lastBrace + 1);
+                        if (log.isDebugEnabled()) {
+                            log.debug("Extracted last JSON object from response: {} chars", jsonContent.length());
+                        }
+                        return jsonContent;
+                    }
+                }
+            }
+        }
+
+        // Fallback for arrays
+        int lastBracket = response.lastIndexOf(']');
+        if (lastBracket >= 0) {
+            int depth = 0;
+            for (int i = lastBracket; i >= 0; i--) {
+                char c = response.charAt(i);
+                if (c == ']') depth++;
+                else if (c == '[') {
+                    depth--;
+                    if (depth == 0) {
+                        return response.substring(i, lastBracket + 1);
+                    }
+                }
+            }
         }
 
         return null;
