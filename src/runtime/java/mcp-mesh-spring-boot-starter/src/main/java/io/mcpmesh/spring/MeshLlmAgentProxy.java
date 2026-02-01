@@ -78,6 +78,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     public MeshLlmAgentProxy(String functionId) {
         this.functionId = functionId;
         this.templateRenderer = new PromptTemplateRenderer();
+        log.info("Created MeshLlmAgentProxy for {} (proxy@{})", functionId, System.identityHashCode(this));
     }
 
     // =========================================================================
@@ -117,7 +118,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     }
 
     public void updateProvider(String endpoint, String functionName, String provider) {
-        log.info("LLM provider updated for {}: {} at {}", functionId, provider, endpoint);
+        log.info("LLM provider updated for {} (proxy@{}): {} at {}",
+            functionId, System.identityHashCode(this), provider, endpoint);
         providerRef.set(new ProviderEndpoint(endpoint, functionName, provider));
     }
 
@@ -125,6 +127,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     void updateTools(List<MeshEvent.LlmToolInfo> tools) {
         availableTools.clear();
         for (MeshEvent.LlmToolInfo tool : tools) {
+            log.debug("Received tool: name={}, desc='{}', cap={}, agentId={}, endpoint={}",
+                tool.getFunctionName(),
+                tool.getDescription(),
+                tool.getCapability(),
+                tool.getAgentId(),
+                tool.getEndpoint());
+
             // Parse inputSchema from JSON string to Map
             Map<String, Object> inputSchema = null;
             String schemaStr = tool.getInputSchema();
@@ -141,6 +150,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 tool.getDescription(),
                 tool.getCapability(),
                 tool.getAgentId(),
+                tool.getEndpoint(),
                 inputSchema
             ));
         }
@@ -168,7 +178,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     @Override
     public boolean isAvailable() {
         ProviderEndpoint provider = providerRef.get();
-        return provider != null && provider.isAvailable();
+        boolean available = provider != null && provider.isAvailable();
+        log.debug("isAvailable() for {}: provider={}, endpoint={}, result={}",
+            functionId,
+            provider != null ? provider.provider() : "null",
+            provider != null ? provider.endpoint() : "null",
+            available);
+        return available;
     }
 
     @Override
@@ -423,9 +439,23 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 // Execute tool calls and add results
                 for (Map<String, Object> toolCall : toolCalls) {
                     String toolId = (String) toolCall.get("id");
-                    String toolName = (String) toolCall.get("name");
+                    String toolName;
+                    Map<String, Object> toolArgs;
+
+                    // Handle OpenAI-style format where name/arguments are nested in "function"
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> toolArgs = (Map<String, Object>) toolCall.get("arguments");
+                    Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
+                    if (function != null) {
+                        toolName = (String) function.get("name");
+                        // Arguments come as a JSON string in OpenAI format
+                        Object argsObj = function.get("arguments");
+                        toolArgs = parseToolArguments(argsObj);
+                    } else {
+                        // Fallback to flat format (Anthropic native format)
+                        toolName = (String) toolCall.get("name");
+                        Object argsObj = toolCall.get("arguments");
+                        toolArgs = parseToolArguments(argsObj);
+                    }
 
                     log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
                     String toolResult = executeToolCall(toolName, toolArgs);
@@ -504,7 +534,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         for (ToolInfo tool : availableTools) {
             Map<String, Object> functionDef = new LinkedHashMap<>();
             functionDef.put("name", tool.name());
-            functionDef.put("description", tool.description() != null ? tool.description() : "");
+
+            // Generate description from tool name and schema if not provided
+            String description = tool.description();
+            if (description == null || description.isEmpty()) {
+                description = generateToolDescription(tool);
+            }
+            functionDef.put("description", description);
 
             Map<String, Object> schema = tool.inputSchema();
             if (schema == null || schema.isEmpty()) {
@@ -520,10 +556,34 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractToolCalls(Map<String, Object> response) {
+        // First check top-level tool_calls
         Object toolCalls = response.get("tool_calls");
-        if (toolCalls instanceof List<?> list) {
+        if (toolCalls instanceof List<?> list && !list.isEmpty()) {
             return (List<Map<String, Object>>) list;
         }
+
+        // Check for nested JSON in content[0].text (MCP response format)
+        // Response format: {"content":[{"type":"text","text":"{\"content\":\"...\",\"tool_calls\":[...]}"}]}
+        Object content = response.get("content");
+        if (content instanceof List<?> contentList && !contentList.isEmpty()) {
+            Object first = contentList.get(0);
+            if (first instanceof Map<?, ?> block) {
+                Object text = block.get("text");
+                if (text instanceof String textStr && textStr.trim().startsWith("{")) {
+                    try {
+                        Map<String, Object> parsed = objectMapper.readValue(textStr, Map.class);
+                        Object nestedToolCalls = parsed.get("tool_calls");
+                        if (nestedToolCalls instanceof List<?> nestedList && !nestedList.isEmpty()) {
+                            log.debug("Extracted {} tool calls from nested JSON", nestedList.size());
+                            return (List<Map<String, Object>>) nestedList;
+                        }
+                    } catch (JacksonException e) {
+                        log.trace("Failed to parse nested JSON for tool_calls: {}", e.getMessage());
+                    }
+                }
+            }
+        }
+
         return List.of();
     }
 
@@ -542,6 +602,39 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             }
         }
         return "";
+    }
+
+    /**
+     * Parse tool arguments from various formats.
+     *
+     * <p>Handles:
+     * <ul>
+     *   <li>JSON string (OpenAI format): {@code "{\"city\":\"Boston\"}"}</li>
+     *   <li>Already-parsed Map (Anthropic native format)</li>
+     *   <li>Null or empty values</li>
+     * </ul>
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseToolArguments(Object argsObj) {
+        if (argsObj == null) {
+            return Map.of();
+        }
+        if (argsObj instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        if (argsObj instanceof String argsStr) {
+            if (argsStr.isBlank() || argsStr.equals("{}")) {
+                return Map.of();
+            }
+            try {
+                return objectMapper.readValue(argsStr, Map.class);
+            } catch (JacksonException e) {
+                log.warn("Failed to parse tool arguments JSON: {}", e.getMessage());
+                return Map.of();
+            }
+        }
+        log.warn("Unexpected tool arguments type: {}", argsObj.getClass().getName());
+        return Map.of();
     }
 
     /**
@@ -592,15 +685,27 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             return "{\"error\": \"Tool not found: " + toolName + "\"}";
         }
 
-        try {
-            var proxy = dependencyInjector.getToolProxy(toolInfo.capability());
-            if (proxy == null || !proxy.isAvailable()) {
-                log.warn("Tool proxy not available: {}", toolInfo.capability());
-                return "{\"error\": \"Tool unavailable: " + toolInfo.capability() + "\"}";
-            }
+        String endpoint = toolInfo.endpoint();
+        if (endpoint == null || endpoint.isBlank()) {
+            log.warn("Tool endpoint not available: {}", toolName);
+            return "{\"error\": \"Tool endpoint unavailable: " + toolName + "\"}";
+        }
 
-            Object result = proxy.call(args);
-            return objectMapper.writeValueAsString(result);
+        try {
+            // Call the tool directly via MCP HTTP client using endpoint from mesh
+            log.debug("Calling tool {} at endpoint {}", toolName, endpoint);
+            Object result = mcpClient.callTool(endpoint, toolName, args);
+
+            // Handle various result types - return as JSON string for LLM
+            if (result == null) {
+                return "{}";
+            } else if (result instanceof String s) {
+                // Already a string - might be JSON or plain text
+                return s;
+            } else {
+                // Serialize complex objects to JSON
+                return objectMapper.writeValueAsString(result);
+            }
         } catch (Exception e) {
             log.error("Tool call failed: {} - {}", toolName, e.getMessage());
             return "{\"error\": \"" + e.getMessage().replace("\"", "'") + "\"}";
@@ -693,5 +798,29 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         }
 
         return null;
+    }
+
+    /**
+     * Generate a fallback description for a tool when none is provided.
+     *
+     * <p>Creates a human-readable description from the tool name and its input schema.
+     * The description format is: "{capability} tool: {name} (params: p1, p2, ...)"
+     */
+    private String generateToolDescription(ToolInfo tool) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(tool.capability()).append(" tool: ").append(tool.name());
+
+        Map<String, Object> schema = tool.inputSchema();
+        if (schema != null && schema.containsKey("properties")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> props = (Map<String, Object>) schema.get("properties");
+            if (props != null && !props.isEmpty()) {
+                sb.append(" (params: ");
+                sb.append(String.join(", ", props.keySet()));
+                sb.append(")");
+            }
+        }
+
+        return sb.toString();
     }
 }

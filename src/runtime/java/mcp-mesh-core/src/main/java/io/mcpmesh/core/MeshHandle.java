@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <h2>Usage Example</h2>
  * <pre>{@code
- * AgentSpec spec = new AgentSpec("my-agent", "http://localhost:8100");
+ * AgentSpec spec = new AgentSpec("my-agent", "http://localhost:8000");
  * try (MeshHandle handle = MeshHandle.start(spec)) {
  *     while (handle.isRunning()) {
  *         Optional<MeshEvent> event = handle.nextEvent(5000);

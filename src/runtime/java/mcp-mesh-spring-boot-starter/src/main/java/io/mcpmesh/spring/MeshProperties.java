@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <pre>
  * mesh:
  *   registry:
- *     url: http://localhost:8100
+ *     url: http://localhost:8000
  *   agent:
  *     name: my-agent
  *     port: 9000
@@ -37,7 +37,7 @@ public class MeshProperties {
     }
 
     public static class Registry {
-        private String url = "http://localhost:8100";
+        private String url = "http://localhost:8000";
 
         public String getUrl() {
             return url;

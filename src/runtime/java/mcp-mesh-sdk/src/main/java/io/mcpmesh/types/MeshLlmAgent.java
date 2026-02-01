@@ -419,6 +419,7 @@ public interface MeshLlmAgent {
         String description,
         String capability,
         String agentId,
+        String endpoint,
         Map<String, Object> inputSchema
     ) {}
 }
