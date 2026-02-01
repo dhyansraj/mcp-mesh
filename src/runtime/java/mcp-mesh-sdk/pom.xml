@@ -22,9 +22,9 @@
             <artifactId>mcp-mesh-core</artifactId>
         </dependency>
 
-        <!-- Jackson for JSON -->
+        <!-- Jackson 3 for JSON -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
+            <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
 

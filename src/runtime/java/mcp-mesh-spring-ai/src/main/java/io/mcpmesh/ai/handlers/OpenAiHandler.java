@@ -64,7 +64,7 @@ public class OpenAiHandler implements LlmProviderHandler {
         // Call the model
         ChatResponse response = model.call(prompt);
 
-        String content = response.getResult().getOutput().getContent();
+        String content = response.getResult().getOutput().getText();
         log.debug("OpenAiHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 

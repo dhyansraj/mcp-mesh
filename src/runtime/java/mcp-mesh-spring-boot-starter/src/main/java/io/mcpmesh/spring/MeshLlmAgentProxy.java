@@ -1,7 +1,7 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
@@ -131,7 +131,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             if (schemaStr != null && !schemaStr.isEmpty()) {
                 try {
                     inputSchema = objectMapper.readValue(schemaStr, Map.class);
-                } catch (JsonProcessingException e) {
+                } catch (JacksonException e) {
                     log.warn("Failed to parse input schema for tool {}: {}", tool.getFunctionName(), e.getMessage());
                 }
             }
@@ -315,12 +315,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
             try {
                 return objectMapper.readValue(response, responseType);
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 String jsonContent = extractJsonFromResponse(response);
                 if (jsonContent != null) {
                     try {
                         return objectMapper.readValue(jsonContent, responseType);
-                    } catch (JsonProcessingException e2) {
+                    } catch (JacksonException e2) {
                         log.warn("Failed to parse extracted JSON: {}", e2.getMessage());
                     }
                 }
@@ -365,6 +365,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
             // 3. Build tool definitions
             List<Map<String, Object>> toolDefs = buildToolDefinitions();
+            log.info("Built {} tool definitions for LLM (availableTools={})",
+                toolDefs.size(), availableTools.size());
 
             // 4. Execute agentic loop
             int iteration = 0;
@@ -570,7 +572,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                         return s;
                     }
                 }
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 // Not valid JSON, return as-is
                 log.trace("Text is not JSON, returning as-is: {}", e.getMessage());
             }

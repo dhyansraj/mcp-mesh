@@ -1,7 +1,7 @@
 package io.mcpmesh.ai;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlmProvider;
 import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
@@ -167,7 +167,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             providerData.put("version", config.version());
             providerData.put("namespace", "default");
             return objectMapper.writeValueAsString(providerData);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("Failed to serialize llm_provider JSON", e);
             return "{}";
         }
@@ -213,7 +213,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             schema.put("required", List.of("messages"));
 
             return objectMapper.writeValueAsString(schema);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("Failed to serialize input schema", e);
             return "{}";
         }

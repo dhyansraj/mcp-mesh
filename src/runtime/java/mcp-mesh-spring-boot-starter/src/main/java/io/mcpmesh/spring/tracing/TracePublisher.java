@@ -1,7 +1,7 @@
 package io.mcpmesh.spring.tracing;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.TracingBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,7 +78,7 @@ public class TracePublisher {
                     log.debug("Failed to publish span via Rust FFI");
                 }
 
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 // Never block agent execution due to serialization errors
                 log.debug("Failed to serialize span: {}", e.getMessage());
             } catch (Exception e) {
@@ -116,7 +116,7 @@ public class TracePublisher {
             } else if (value instanceof Collection || value instanceof Map) {
                 try {
                     stringValue = objectMapper.writeValueAsString(value);
-                } catch (JsonProcessingException e) {
+                } catch (JacksonException e) {
                     stringValue = value.toString();
                 }
             } else if (value instanceof Number || value instanceof Boolean) {

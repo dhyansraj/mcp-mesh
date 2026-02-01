@@ -1,8 +1,8 @@
 package io.mcpmesh.ai;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.Selector;
 import io.mcpmesh.types.MeshLlmAgent;
@@ -528,7 +528,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         if (textContent != null) {
             try {
                 return objectMapper.readValue(textContent, Map.class);
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 // Not JSON, return as plain text
                 Map<String, Object> plainResult = new LinkedHashMap<>();
                 plainResult.put("content", textContent);
@@ -608,7 +608,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     private <T> T parseStructuredOutput(String response, Class<T> responseType) {
         try {
             return objectMapper.readValue(response, responseType);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.warn("Failed to parse structured output directly, trying to extract JSON");
 
             // Try to extract JSON from the response
@@ -616,7 +616,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
             if (json != null) {
                 try {
                     return objectMapper.readValue(json, responseType);
-                } catch (JsonProcessingException e2) {
+                } catch (JacksonException e2) {
                     throw new RuntimeException("Failed to parse LLM response as " + responseType.getSimpleName(), e2);
                 }
             }

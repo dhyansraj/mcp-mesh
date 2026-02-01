@@ -23,11 +23,12 @@
             <artifactId>jnr-ffi</artifactId>
         </dependency>
 
-        <!-- Jackson for JSON serialization -->
+        <!-- Jackson 3 for JSON serialization -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
+            <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <!-- Jackson annotations stay on com.fasterxml (shared between Jackson 2 and 3) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>

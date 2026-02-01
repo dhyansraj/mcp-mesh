@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.Param;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
@@ -381,19 +381,16 @@ public class MeshToolWrapper implements McpToolHandler {
         }
 
         // Fill MeshLlmAgent dependencies and set context for template rendering
+        // Allow null for graceful degradation - method can check:
+        //   if (llm != null && llm.isAvailable()) { ... } else { fallback }
         for (int i = 0; i < llmAgentPositions.size(); i++) {
             int paramPos = llmAgentPositions.get(i);
             MeshLlmAgent agent = injectedLlmAgents.get(i);
 
             if (agent == null) {
-                throw new IllegalStateException(
-                    "LLM agent not available for " + funcId +
-                    ". Check @MeshLlm configuration and provider availability."
-                );
-            }
-
-            // If agent is a proxy, set context for template rendering
-            if (agent instanceof MeshLlmAgentProxy proxy) {
+                log.debug("LLM agent not available for {}, passing null for graceful degradation", funcId);
+            } else if (agent instanceof MeshLlmAgentProxy proxy) {
+                // Set context for template rendering
                 Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), cleanArgs);
                 if (context != null) {
                     proxy.setInvocationContext(context);

@@ -1,6 +1,6 @@
 package io.mcpmesh.spring.tracing;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.spring.McpToolHandler;
 import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.spring.MeshToolWrapper;

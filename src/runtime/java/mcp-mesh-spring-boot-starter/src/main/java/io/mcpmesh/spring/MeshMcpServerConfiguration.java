@@ -1,6 +1,5 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
@@ -53,10 +52,12 @@ public class MeshMcpServerConfiguration {
 
     private static final String MCP_ENDPOINT = "/mcp";
 
-    private final ObjectMapper objectMapper;
+    // MCP SDK uses Jackson 2 (com.fasterxml.jackson), not Jackson 3 (tools.jackson)
+    private final com.fasterxml.jackson.databind.ObjectMapper mcpObjectMapper;
 
-    public MeshMcpServerConfiguration(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
+    public MeshMcpServerConfiguration() {
+        // Create Jackson 2 ObjectMapper for MCP SDK compatibility
+        this.mcpObjectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     }
 
     /**
@@ -68,7 +69,7 @@ public class MeshMcpServerConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public HttpServletStatelessServerTransport mcpStatelessTransport() {
-        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(objectMapper);
+        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(mcpObjectMapper);
         return HttpServletStatelessServerTransport.builder()
             .jsonMapper(jsonMapper)
             .messageEndpoint(MCP_ENDPOINT)
@@ -190,7 +191,7 @@ public class MeshMcpServerConfiguration {
             } else if (result instanceof String) {
                 resultJson = (String) result;
             } else {
-                resultJson = objectMapper.writeValueAsString(result);
+                resultJson = mcpObjectMapper.writeValueAsString(result);
             }
 
             // Return as text content

@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
@@ -52,7 +52,9 @@ public class MeshEventProcessor implements SmartLifecycle {
     // Key: funcId, Value: proxy (we only support one LLM agent per function currently)
     private final Map<String, MeshLlmAgentProxy> llmAgentProxies = new ConcurrentHashMap<>();
 
-    // Cache for tools that arrive before proxy is created (event order can vary)
+    // Cache for tools when wrapper is not found (fallback only)
+    // With the new flow, proxy is created immediately when tools arrive, so this
+    // is only used when wrapper lookup fails (legacy injection mode).
     // Key: short function name (e.g., "analyze"), Value: tools list
     private final Map<String, List<MeshEvent.LlmToolInfo>> pendingTools = new ConcurrentHashMap<>();
 
@@ -343,6 +345,8 @@ public class MeshEventProcessor implements SmartLifecycle {
             // Registry uses short function name (e.g., "analyze"), but proxy is stored
             // with full Java ID (e.g., "com.example.Class.analyze"). Try both.
             MeshLlmAgentProxy proxy = llmAgentProxies.get(funcId);
+            String wrapperFuncId = null;
+
             if (proxy == null) {
                 // Search by method name suffix (funcId might be just the method name)
                 for (Map.Entry<String, MeshLlmAgentProxy> entry : llmAgentProxies.entrySet()) {
@@ -350,6 +354,7 @@ public class MeshEventProcessor implements SmartLifecycle {
                     // Match if key ends with ".funcId" (full class path) or equals funcId
                     if (key.endsWith("." + funcId) || key.equals(funcId)) {
                         proxy = entry.getValue();
+                        wrapperFuncId = key;
                         log.info("Found LLM proxy by method name: {} -> {}", funcId, key);
                         break;
                     }
@@ -360,12 +365,84 @@ public class MeshEventProcessor implements SmartLifecycle {
                 proxy.updateTools(event.getTools());
                 log.info("Updated {} tools on LLM agent proxy for {}", event.getTools().size(), funcId);
             } else {
-                // Proxy doesn't exist yet - cache tools for when it's created
-                // This handles the case where llm_tools_updated arrives before llm_provider_available
-                pendingTools.put(funcId, event.getTools());
-                log.info("Cached {} pending tools for {} (proxy not created yet)", event.getTools().size(), funcId);
+                // Proxy doesn't exist yet - create it now (don't wait for provider)
+                // This matches Python behavior where agent is created when tools arrive
+                proxy = createLlmProxyForTools(funcId, event.getTools());
+                if (proxy != null) {
+                    log.info("Created LLM agent proxy with {} tools for {} (provider pending)",
+                        event.getTools().size(), funcId);
+                } else {
+                    // Fallback: cache tools for later (e.g., wrapper not found)
+                    pendingTools.put(funcId, event.getTools());
+                    log.info("Cached {} pending tools for {} (wrapper not found)", event.getTools().size(), funcId);
+                }
             }
         }
+    }
+
+    /**
+     * Create MeshLlmAgentProxy when tools arrive (before provider is available).
+     *
+     * <p>This matches Python SDK behavior where the LLM agent is created when tools
+     * are discovered, and the provider is added later when available. The agent
+     * can still be used (returns isAvailable=false until provider connects).
+     *
+     * @param funcId The function ID from the event (method name)
+     * @param tools  The discovered tools
+     * @return The created proxy, or null if wrapper not found
+     */
+    private MeshLlmAgentProxy createLlmProxyForTools(String funcId, List<MeshEvent.LlmToolInfo> tools) {
+        // Find wrapper by method name or capability
+        MeshToolWrapper wrapper = null;
+        for (MeshToolWrapper w : wrapperRegistry.getAllWrappers()) {
+            if (w.getMethodName().equals(funcId) || w.getCapability().equals(funcId)) {
+                wrapper = w;
+                break;
+            }
+        }
+
+        if (wrapper == null) {
+            log.debug("No wrapper found for funcId: {} (may be using legacy injection)", funcId);
+            return null;
+        }
+
+        if (wrapper.getLlmAgentCount() == 0) {
+            log.debug("Wrapper {} has no MeshLlmAgent parameters", wrapper.getFuncId());
+            return null;
+        }
+
+        String wrapperFuncId = wrapper.getFuncId();
+
+        // Get @MeshLlm configuration from registry
+        MeshLlmRegistry.LlmConfig config = llmRegistry.getByFunctionId(wrapperFuncId);
+
+        // Create proxy for each LLM agent parameter position
+        MeshLlmAgentProxy proxy = null;
+        for (int llmIndex = 0; llmIndex < wrapper.getLlmAgentCount(); llmIndex++) {
+            proxy = new MeshLlmAgentProxy(wrapperFuncId);
+
+            // Configure with @MeshLlm settings (or defaults)
+            String systemPrompt = config != null ? config.systemPrompt() : "";
+            String contextParam = config != null ? config.contextParam() : "ctx";
+            int maxIterations = config != null ? config.maxIterations() : 1;
+
+            proxy.configure(mcpClient, injector, systemPrompt, contextParam, maxIterations);
+
+            // Apply tools immediately
+            proxy.updateTools(tools);
+
+            // Store proxy for later provider updates
+            llmAgentProxies.put(wrapperFuncId, proxy);
+
+            // Update the wrapper's LLM agent array
+            String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);
+            wrapperRegistry.updateLlmAgent(compositeKey, proxy);
+
+            log.info("Created LLM agent for {} (index={}, tools={}, provider=pending)",
+                wrapperFuncId, llmIndex, tools.size());
+        }
+
+        return proxy;
     }
 
     private void handleDependencyChanged(MeshEvent event) {
@@ -407,7 +484,10 @@ public class MeshEventProcessor implements SmartLifecycle {
     }
 
     /**
-     * Create and configure a MeshLlmAgentProxy for the wrapper registry.
+     * Update or create MeshLlmAgentProxy with provider information.
+     *
+     * <p>If proxy already exists (created by handleLlmToolsUpdated), just updates
+     * the provider endpoint. Otherwise creates a new proxy with provider.
      *
      * <p>Uses @MeshLlm configuration from MeshLlmRegistry to set up the proxy
      * with the correct system prompt, max iterations, etc.
@@ -442,6 +522,17 @@ public class MeshEventProcessor implements SmartLifecycle {
 
         if (wrapper.getLlmAgentCount() == 0) {
             log.debug("Wrapper {} has no MeshLlmAgent parameters", wrapperFuncId);
+            return;
+        }
+
+        // Check if proxy already exists (created by handleLlmToolsUpdated)
+        MeshLlmAgentProxy existingProxy = llmAgentProxies.get(wrapperFuncId);
+
+        if (existingProxy != null) {
+            // Proxy already exists - just update the provider
+            existingProxy.updateProvider(endpoint, functionName, model);
+            log.info("Updated provider on existing LLM agent proxy for {} (endpoint={}, model={})",
+                wrapperFuncId, endpoint, model);
             return;
         }
 

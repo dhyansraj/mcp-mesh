@@ -49,14 +49,16 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Dependency versions -->
-        <spring-boot.version>3.2.0</spring-boot.version>
-        <spring-ai.version>1.0.0-M4</spring-ai.version>
+        <spring-boot.version>4.0.2</spring-boot.version>
+        <spring-ai.version>2.0.0-M2</spring-ai.version>
         <mcp-sdk.version>0.17.2</mcp-sdk.version>
         <jnr-ffi.version>2.2.16</jnr-ffi.version>
-        <jackson.version>2.16.0</jackson.version>
-        <slf4j.version>2.0.9</slf4j.version>
-        <junit.version>5.10.1</junit.version>
-        <freemarker.version>2.3.32</freemarker.version>
+        <!-- Jackson 3 (databind uses tools.jackson, annotations stays on com.fasterxml) -->
+        <jackson3.version>3.0.1</jackson3.version>
+        <jackson-annotations.version>2.20</jackson-annotations.version>
+        <!-- JUnit 6 for Spring Boot 4.0 -->
+        <junit-jupiter.version>6.0.2</junit-jupiter.version>
+        <freemarker.version>2.3.33</freemarker.version>
     </properties>
 
     <dependencyManagement>
@@ -104,16 +106,17 @@
                 <version>${jnr-ffi.version}</version>
             </dependency>
 
-            <!-- Jackson for JSON -->
+            <!-- Jackson 3 for JSON -->
             <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
+                <groupId>tools.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
-                <version>${jackson.version}</version>
+                <version>${jackson3.version}</version>
             </dependency>
+            <!-- Jackson annotations stay on com.fasterxml (shared between Jackson 2 and 3) -->
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-annotations</artifactId>
-                <version>${jackson.version}</version>
+                <version>${jackson-annotations.version}</version>
             </dependency>
 
             <!-- Freemarker for templates -->
@@ -137,11 +140,11 @@
                 <version>4.12.0</version>
             </dependency>
 
-            <!-- Testing -->
+            <!-- Testing (JUnit 6 for Spring Boot 4.0) -->
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
-                <version>${junit.version}</version>
+                <version>${junit-jupiter.version}</version>
                 <scope>test</scope>
             </dependency>
         </dependencies>
@@ -198,6 +201,25 @@
             <url>https://repo.spring.io/milestone</url>
             <snapshots>
                 <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>spring-snapshots</id>
+            <name>Spring Snapshots</name>
+            <url>https://repo.spring.io/snapshot</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+        </repository>
+        <repository>
+            <id>central-portal-snapshots</id>
+            <name>Central Portal Snapshots</name>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
             </snapshots>
         </repository>
     </repositories>

@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;

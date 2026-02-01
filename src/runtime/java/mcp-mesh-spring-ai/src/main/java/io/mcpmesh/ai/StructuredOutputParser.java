@@ -1,10 +1,10 @@
 package io.mcpmesh.ai;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.json.JsonMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,7 +85,7 @@ public class StructuredOutputParser {
 
         try {
             return objectMapper.readValue(json, responseType);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new StructuredOutputException("Failed to parse JSON: " + e.getMessage(), e);
         }
     }
@@ -135,7 +135,7 @@ public class StructuredOutputParser {
         Map<String, Object> schema = buildSchema(type);
         try {
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(schema);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             return "{}";
         }
     }
@@ -197,7 +197,7 @@ public class StructuredOutputParser {
         try {
             objectMapper.readTree(json);
             return true;
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             return false;
         }
     }
@@ -270,12 +270,12 @@ public class StructuredOutputParser {
     }
 
     private ObjectMapper createObjectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        // Support both snake_case and camelCase
-        mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-        return mapper;
+        // Jackson 3 uses builder pattern for configuration
+        // JSR-310 date/time support is built-in (no module needed)
+        return JsonMapper.builder()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+            .build();
     }
 
     /**

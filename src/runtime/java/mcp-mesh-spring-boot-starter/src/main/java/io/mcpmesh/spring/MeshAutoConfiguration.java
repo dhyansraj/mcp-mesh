@@ -1,6 +1,6 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
