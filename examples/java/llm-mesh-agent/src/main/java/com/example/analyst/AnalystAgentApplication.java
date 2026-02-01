@@ -70,8 +70,8 @@ import java.util.Map;
  * cd examples/java/llm-mesh-agent
  * mvn spring-boot:run
  *
- * # Test with meshctl
- * meshctl call analyze '{"query": "What is the current weather?"}'
+ * # Test with meshctl (no dataSource needed - LLM autonomously selects tools)
+ * meshctl call analyze '{"ctx": {"query": "What is the weather in San Francisco?"}}'
  * </pre>
  */
 @MeshAgent(
@@ -96,7 +96,12 @@ public class AnalystAgentApplication {
      * <p>The {@code llm} parameter is automatically injected by the mesh
      * and routes to an LLM provider agent matching the selector.
      *
-     * @param ctx Analysis context with query and parameters
+     * <p>Tools are discovered automatically from the mesh based on the filter selector.
+     * The LLM autonomously decides which tools to call based on the query - no explicit
+     * dataSource hint is needed (following the MCP spec pattern where LLM selects tools
+     * based on tool descriptions and input schemas).
+     *
+     * @param ctx Analysis context with query (dataSource is optional and ignored)
      * @param llm Injected LLM agent proxy (delegates to mesh provider)
      * @return Structured analysis result
      */
@@ -138,12 +143,9 @@ public class AnalystAgentApplication {
         try {
             // Use fluent builder API for clean, readable code
             // Builder supports: messages, context, options, and structured output
+            // Note: LLM autonomously selects tools based on the query - no dataSource hint needed
             AnalysisResult result = llm.request()
-                .user(String.format(
-                    "Analyze the following query: %s\n\nData source: %s",
-                    ctx.query(),
-                    ctx.dataSource() != null ? ctx.dataSource() : "not specified"
-                ))
+                .user(ctx.query())
                 .maxTokens(4096)
                 .temperature(0.7)
                 .generate(AnalysisResult.class);

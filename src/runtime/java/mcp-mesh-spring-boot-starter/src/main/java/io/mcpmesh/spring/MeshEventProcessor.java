@@ -10,6 +10,7 @@ import org.springframework.context.SmartLifecycle;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -50,6 +51,10 @@ public class MeshEventProcessor implements SmartLifecycle {
     // Track created LLM agent proxies so we can update their tools later
     // Key: funcId, Value: proxy (we only support one LLM agent per function currently)
     private final Map<String, MeshLlmAgentProxy> llmAgentProxies = new ConcurrentHashMap<>();
+
+    // Cache for tools that arrive before proxy is created (event order can vary)
+    // Key: short function name (e.g., "analyze"), Value: tools list
+    private final Map<String, List<MeshEvent.LlmToolInfo>> pendingTools = new ConcurrentHashMap<>();
 
     // Track if direct LLM agents have been initialized
     private final AtomicBoolean directLlmInitialized = new AtomicBoolean(false);
@@ -323,14 +328,42 @@ public class MeshEventProcessor implements SmartLifecycle {
             funcId, event.getTools() != null ? event.getTools().size() : 0);
 
         if (event.getTools() != null) {
+            // Log all tool names for debugging
+            for (MeshEvent.LlmToolInfo tool : event.getTools()) {
+                log.debug("  Tool: {} (capability: {})", tool.getFunctionName(), tool.getCapability());
+            }
+
             // Update legacy injector
             injector.updateLlmTools(funcId, event.getTools());
 
+            // Log current proxy state
+            log.debug("Current llmAgentProxies keys: {}", llmAgentProxies.keySet());
+
             // Update wrapper's LLM agent proxy if exists
+            // Registry uses short function name (e.g., "analyze"), but proxy is stored
+            // with full Java ID (e.g., "com.example.Class.analyze"). Try both.
             MeshLlmAgentProxy proxy = llmAgentProxies.get(funcId);
+            if (proxy == null) {
+                // Search by method name suffix (funcId might be just the method name)
+                for (Map.Entry<String, MeshLlmAgentProxy> entry : llmAgentProxies.entrySet()) {
+                    String key = entry.getKey();
+                    // Match if key ends with ".funcId" (full class path) or equals funcId
+                    if (key.endsWith("." + funcId) || key.equals(funcId)) {
+                        proxy = entry.getValue();
+                        log.info("Found LLM proxy by method name: {} -> {}", funcId, key);
+                        break;
+                    }
+                }
+            }
+
             if (proxy != null) {
                 proxy.updateTools(event.getTools());
-                log.debug("Updated tools on LLM agent proxy for {}", funcId);
+                log.info("Updated {} tools on LLM agent proxy for {}", event.getTools().size(), funcId);
+            } else {
+                // Proxy doesn't exist yet - cache tools for when it's created
+                // This handles the case where llm_tools_updated arrives before llm_provider_available
+                pendingTools.put(funcId, event.getTools());
+                log.info("Cached {} pending tools for {} (proxy not created yet)", event.getTools().size(), funcId);
             }
         }
     }
@@ -435,6 +468,26 @@ public class MeshEventProcessor implements SmartLifecycle {
             // Update the wrapper's LLM agent array (using wrapper's funcId for composite key)
             String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);
             wrapperRegistry.updateLlmAgent(compositeKey, proxy);
+
+            // Apply any pending tools that arrived before the proxy was created
+            // Check both short funcId and method name extracted from wrapperFuncId
+            String methodName = wrapperFuncId.contains(".")
+                ? wrapperFuncId.substring(wrapperFuncId.lastIndexOf('.') + 1)
+                : wrapperFuncId;
+
+            log.info("Looking for pending tools with keys: methodName='{}', funcId='{}' (pendingTools keys: {})",
+                methodName, funcId, pendingTools.keySet());
+
+            List<MeshEvent.LlmToolInfo> tools = pendingTools.remove(methodName);
+            if (tools == null) {
+                tools = pendingTools.remove(funcId);
+            }
+            if (tools != null) {
+                proxy.updateTools(tools);
+                log.info("Applied {} pending tools to LLM agent proxy for {}", tools.size(), wrapperFuncId);
+            } else {
+                log.debug("No pending tools found for {} (methodName={}, funcId={})", wrapperFuncId, methodName, funcId);
+            }
 
             log.info("Updated LLM agent for {} (index={}, systemPrompt={}, maxIterations={})",
                 wrapperFuncId, llmIndex, systemPrompt.isEmpty() ? "<none>" : "<configured>", maxIterations);

@@ -37,7 +37,7 @@ public class MathAgentApplication {
     @MeshTool(
         capability = "add",
         description = "Add two numbers together",
-        tags = {"math", "add"}
+        tags = {"tools", "data", "math", "add"}
     )
     public Map<String, Object> add(
         @Param(value = "a", description = "First number") double a,
@@ -58,7 +58,7 @@ public class MathAgentApplication {
     @MeshTool(
         capability = "multiply",
         description = "Multiply two numbers together",
-        tags = {"math", "multiply"}
+        tags = {"tools", "data", "math", "multiply"}
     )
     public Map<String, Object> multiply(
         @Param(value = "a", description = "First number") double a,

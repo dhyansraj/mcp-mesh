@@ -102,7 +102,9 @@ class TraceContextHelper:
         trace_id = request.headers.get("X-Trace-ID")
         parent_span = request.headers.get("X-Parent-Span")
 
-        # Try extracting from JSON-RPC body as fallback
+        # Try extracting from JSON-RPC body as fallback (for TypeScript agents that
+        # inject trace context into arguments since FastMCP doesn't expose HTTP headers)
+        # Keys use underscore prefix to match injection convention: _trace_id, _parent_span
         if not trace_id:
             try:
                 body = await request.body()
@@ -110,8 +112,8 @@ class TraceContextHelper:
                     payload = json.loads(body.decode("utf-8"))
                     if payload.get("method") == "tools/call":
                         arguments = payload.get("params", {}).get("arguments", {})
-                        trace_id = arguments.get("trace_id")
-                        parent_span = arguments.get("parent_span")
+                        trace_id = arguments.get("_trace_id")
+                        parent_span = arguments.get("_parent_span")
             except Exception:
                 pass
 

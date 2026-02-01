@@ -1,12 +1,17 @@
 package io.mcpmesh.ai;
 
 import io.mcpmesh.spring.McpToolHandler;
+import io.mcpmesh.spring.tracing.ExecutionTracer;
+import io.mcpmesh.spring.tracing.SpanScope;
+import io.mcpmesh.spring.tracing.TraceContext;
+import io.mcpmesh.spring.tracing.TraceInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Wrapper for LLM provider tool that handles MCP calls.
@@ -29,6 +34,9 @@ public class LlmProviderToolWrapper implements McpToolHandler {
     private final String version;
     private final List<String> tags;
     private final MeshLlmProviderProcessor processor;
+
+    // Tracing support (set lazily via setter)
+    private final AtomicReference<ExecutionTracer> tracerRef = new AtomicReference<>();
 
     /**
      * Create a wrapper for an LLM provider.
@@ -55,6 +63,15 @@ public class LlmProviderToolWrapper implements McpToolHandler {
     }
 
     /**
+     * Set the ExecutionTracer for this wrapper.
+     *
+     * @param tracer The tracer to use
+     */
+    public void setTracer(ExecutionTracer tracer) {
+        tracerRef.set(tracer);
+    }
+
+    /**
      * Invoke the LLM provider with MCP arguments.
      *
      * @param mcpArgs Arguments from MCP call
@@ -64,12 +81,65 @@ public class LlmProviderToolWrapper implements McpToolHandler {
     public Object invoke(Map<String, Object> mcpArgs) throws Exception {
         log.debug("LLM provider invoked with args: {}", mcpArgs);
 
-        try {
-            return processor.handleGenerateRequest(capability, mcpArgs);
+        // Extract trace context from arguments and set up TraceContext
+        Map<String, Object> cleanArgs = extractAndSetupTraceContext(mcpArgs);
+
+        // Get tracer and start span if tracing is enabled
+        ExecutionTracer tracer = tracerRef.get();
+        Map<String, Object> spanMetadata = new LinkedHashMap<>();
+        spanMetadata.put("capability", capability);
+        spanMetadata.put("provider", "llm");
+
+        // Use method name for trace (llm_generate)
+        String traceName = getMethodName();
+        try (SpanScope span = tracer != null ? tracer.startSpan(traceName, spanMetadata) : SpanScope.NOOP) {
+            Object result = processor.handleGenerateRequest(capability, cleanArgs);
+            span.withResult(result);
+            return result;
         } catch (Exception e) {
             log.error("LLM provider call failed: {}", e.getMessage(), e);
             throw e;
         }
+    }
+
+    /**
+     * Extract trace context from arguments and set up TraceContext.
+     *
+     * @param mcpArgs The MCP arguments (may contain _trace_id and _parent_span)
+     * @return Clean arguments with trace fields removed
+     */
+    private Map<String, Object> extractAndSetupTraceContext(Map<String, Object> mcpArgs) {
+        if (mcpArgs == null) {
+            return new LinkedHashMap<>();
+        }
+
+        // Make a mutable copy
+        Map<String, Object> cleanArgs = new LinkedHashMap<>(mcpArgs);
+
+        // Extract trace context from arguments
+        String traceId = null;
+        String parentSpan = null;
+
+        Object traceIdObj = cleanArgs.remove("_trace_id");
+        Object parentSpanObj = cleanArgs.remove("_parent_span");
+
+        if (traceIdObj instanceof String) {
+            traceId = (String) traceIdObj;
+        }
+        if (parentSpanObj instanceof String) {
+            parentSpan = (String) parentSpanObj;
+        }
+
+        // Set trace context from arguments
+        if (traceId != null && !traceId.isEmpty()) {
+            TraceInfo traceInfo = TraceInfo.fromHeaders(traceId, parentSpan);
+            TraceContext.set(traceInfo);
+            log.trace("Set trace context from arguments: trace={}, parent={}",
+                traceId.substring(0, Math.min(8, traceId.length())),
+                parentSpan != null ? parentSpan.substring(0, Math.min(8, parentSpan.length())) : "null");
+        }
+
+        return cleanArgs;
     }
 
     // =========================================================================

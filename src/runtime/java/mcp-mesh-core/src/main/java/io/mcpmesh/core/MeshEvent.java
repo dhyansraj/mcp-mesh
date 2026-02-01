@@ -164,8 +164,9 @@ public class MeshEvent {
         @JsonProperty("agent_id")
         private String agentId;
 
+        // Note: Rust core sends input_schema as a JSON string, not a parsed object
         @JsonProperty("input_schema")
-        private Map<String, Object> inputSchema;
+        private String inputSchema;
 
         public String getFunctionName() {
             return functionName;
@@ -187,7 +188,7 @@ public class MeshEvent {
             return agentId;
         }
 
-        public Map<String, Object> getInputSchema() {
+        public String getInputSchema() {
             return inputSchema;
         }
     }

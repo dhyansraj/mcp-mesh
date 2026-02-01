@@ -1,0 +1,234 @@
+# Test Case: Java LLM Tracing with Mesh Delegation
+# Verifies that LLM calls through mesh delegation produce traceable spans
+#
+# Agent Setup:
+#   - claude-provider (port 9110): LLM provider exposing capability="llm"
+#   - analyst (port 9002): LLM consumer using mesh delegation
+#
+# Flow: chat -> llm (process_chat on provider) -> result
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
+
+name: "Java LLM Tracing with Mesh Delegation"
+description: "Verify distributed tracing works across Java LLM mesh delegation"
+tags:
+  - observability
+  - tracing
+  - tempo
+  - redis
+  - java
+  - llm
+  - mesh-delegation
+timeout: 360
+
+pre_run:
+  # Start observability infrastructure (Redis + Tempo)
+  - routine: global.start_observability
+
+  # Setup for Java agents
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/llm-provider-agent /workspace/
+      cp -r /uc-artifacts/llm-mesh-agent /workspace/
+      cp /uc-artifacts/.env /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for llm-provider-agent
+  - name: "Install Maven dependencies for llm-provider-agent"
+    handler: maven-install
+    path: /workspace/llm-provider-agent
+    timeout: 600
+
+  # Install Maven dependencies for llm-mesh-agent
+  - name: "Install Maven dependencies for llm-mesh-agent"
+    handler: maven-install
+    path: /workspace/llm-mesh-agent
+    timeout: 600
+
+  # Start claude-provider with tracing enabled
+  - name: "Start claude-provider"
+    handler: shell
+    command: "meshctl start /workspace/llm-provider-agent --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider
+
+  # Wait for provider to register
+  - name: "Wait for provider registration"
+    handler: shell
+    command: |
+      echo "Waiting for claude-provider to start and register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "claude-provider"; then
+          echo "claude-provider registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: claude-provider did not register within 60s"
+      meshctl list 2>/dev/null || true
+      meshctl logs claude-provider 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_provider
+    timeout: 90
+
+  # Start analyst agent with tracing enabled (depends on provider)
+  - name: "Start analyst agent"
+    handler: shell
+    command: "meshctl start /workspace/llm-mesh-agent --env-file .env -d"
+    workdir: /workspace
+    capture: start_analyst
+
+  # Wait for analyst to register and resolve LLM provider dependency
+  - name: "Wait for analyst registration"
+    handler: shell
+    command: |
+      echo "Waiting for analyst agent to start and resolve LLM dependency..."
+      for i in $(seq 1 45); do
+        # Check if analyst is registered and has LLM provider resolved (1/1 deps)
+        if meshctl list 2>/dev/null | grep -q "analyst.*1/1"; then
+          echo "analyst registered and LLM provider resolved after ${i}s"
+          exit 0
+        fi
+        # Also check if it shows as healthy without deps indicator
+        if meshctl list 2>/dev/null | grep -q "analyst.*healthy"; then
+          echo "analyst registered as healthy after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: analyst agent did not register properly within 90s"
+      echo "=== Agent list ==="
+      meshctl list 2>/dev/null || true
+      echo "=== analyst logs ==="
+      meshctl logs analyst 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+
+  # Verify all agents are running
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify capabilities
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call chat with --trace to generate distributed trace
+  # Using chat tool (simpler than analyze, no tool filtering needed)
+  - name: "Call chat with tracing"
+    handler: shell
+    command: |
+      meshctl call chat '{"message": "Hello, what is 2+2?"}' --trace 2>&1
+    workdir: /workspace
+    capture: chat_output
+    timeout: 120
+
+  # Extract just the JSON result (strip trace lines for jq parsing)
+  - name: "Extract JSON result"
+    handler: shell
+    command: |
+      # Extract JSON by taking lines until we hit "Trace ID:"
+      echo '${captured.chat_output}' | sed '/^Trace ID:/,$d'
+    workdir: /workspace
+    capture: chat_json
+
+  # Extract trace ID from output
+  - name: "Extract trace ID"
+    handler: shell
+    command: |
+      # Extract trace ID from "Trace ID: <id>" line
+      TRACE_ID=$(echo "${captured.chat_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract trace ID"
+        echo "Output was: ${captured.chat_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: trace_id_output
+
+  # Wait for traces to be flushed to Tempo
+  - name: "Wait for trace flush"
+    handler: wait
+    seconds: 5
+
+  # Query trace from Tempo
+  - name: "Query trace from Tempo"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.trace_id_output}" | grep "TRACE_ID=" | cut -d= -f2)
+      meshctl trace $TRACE_ID --json 2>&1
+    workdir: /workspace
+    capture: trace_output
+    timeout: 30
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # All agents should be registered
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'analyst'"
+    message: "analyst should be registered"
+
+  # Tools should be available
+  - expr: "${captured.tools_output} contains 'chat'"
+    message: "chat tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'llm'"
+    message: "llm tool should be listed from provider"
+
+  # Chat should return a response (not fallback)
+  - expr: "${captured.chat_json} contains 'response'"
+    message: "Chat should return a response field"
+
+  - expr: "${captured.chat_json} contains 'mesh:llm'"
+    message: "Chat source should be mesh:llm (not fallback)"
+
+  # Trace ID should be extracted
+  - expr: "${captured.trace_id_output} contains 'TRACE_ID='"
+    message: "Trace ID should be extracted from output"
+
+  # Trace should have correct span count (2 spans: 1 chat + 1 llm)
+  - expr: ${jq:captured.trace_output:.SpanCount} == 2
+    message: "Trace should have exactly 2 spans (1 chat + 1 llm)"
+
+  # Trace should involve 2 agents
+  - expr: ${jq:captured.trace_output:.AgentCount} == 2
+    message: "Trace should involve 2 agents (analyst, claude-provider)"
+
+  # Trace should be successful
+  - expr: ${jq:captured.trace_output:.Success} == true
+    message: "Trace should show successful execution"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Also kill any remaining Java processes
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

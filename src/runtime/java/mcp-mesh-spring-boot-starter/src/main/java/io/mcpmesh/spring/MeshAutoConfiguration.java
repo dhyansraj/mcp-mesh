@@ -322,19 +322,41 @@ public class MeshAutoConfiguration {
                     }
                 }
 
-                // Set llmFilter if configured (single filter as map, not array)
+                // Set llmFilter if configured
+                // Registry expects: {"filter": [...], "filter_mode": "all"|"best_match"|"wildcard"}
                 Selector[] filters = llmConfig.filters();
                 if (filters != null && filters.length > 0) {
                     try {
-                        // Use first filter (registry expects single filter as map, not array)
-                        Selector filter = filters[0];
-                        java.util.Map<String, Object> filterMap = new java.util.LinkedHashMap<>();
-                        if (!filter.capability().isEmpty()) {
-                            filterMap.put("capability", filter.capability());
+                        // Build filter array (supports multiple selectors)
+                        java.util.List<java.util.Map<String, Object>> filterArray = new java.util.ArrayList<>();
+                        for (Selector filter : filters) {
+                            java.util.Map<String, Object> selectorMap = new java.util.LinkedHashMap<>();
+                            if (!filter.capability().isEmpty()) {
+                                selectorMap.put("capability", filter.capability());
+                            }
+                            if (filter.tags().length > 0) {
+                                selectorMap.put("tags", java.util.Arrays.asList(filter.tags()));
+                            }
+                            if (!filter.version().isEmpty()) {
+                                selectorMap.put("version", filter.version());
+                            }
+                            filterArray.add(selectorMap);
                         }
-                        filterMap.put("tags", java.util.Arrays.asList(filter.tags()));
 
-                        String llmFilterJson = objectMapper.writeValueAsString(filterMap);
+                        // Build llmFilter with filter array and filter_mode
+                        java.util.Map<String, Object> llmFilterMap = new java.util.LinkedHashMap<>();
+                        llmFilterMap.put("filter", filterArray);
+
+                        // Convert filterMode ordinal to string
+                        String filterModeStr = switch (llmConfig.filterMode()) {
+                            case 0 -> "all";
+                            case 1 -> "best_match";
+                            case 2 -> "wildcard";
+                            default -> "all";
+                        };
+                        llmFilterMap.put("filter_mode", filterModeStr);
+
+                        String llmFilterJson = objectMapper.writeValueAsString(llmFilterMap);
                         toolSpec.setLlmFilter(llmFilterJson);
 
                         log.debug("Set llmFilter on tool '{}': {}", toolSpec.getCapability(), llmFilterJson);

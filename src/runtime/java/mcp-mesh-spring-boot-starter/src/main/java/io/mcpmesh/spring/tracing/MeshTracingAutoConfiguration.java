@@ -1,6 +1,7 @@
 package io.mcpmesh.spring.tracing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.mcpmesh.spring.McpToolHandler;
 import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.spring.MeshToolWrapper;
 import io.mcpmesh.spring.MeshToolWrapperRegistry;
@@ -114,12 +115,35 @@ public class MeshTracingAutoConfiguration {
     }
 
     /**
-     * Wire the ExecutionTracer to all registered MeshToolWrappers.
+     * Wire the ExecutionTracer to all registered handlers.
+     *
+     * <p>This wires tracers to both MeshToolWrapper and LlmProviderToolWrapper instances.
+     * Uses reflection for LlmProviderToolWrapper to avoid compile-time dependency on spring-ai.
      */
     private void wireTracerToWrappers(ExecutionTracer tracer, MeshToolWrapperRegistry registry) {
+        // Wire to MeshToolWrapper instances
         for (MeshToolWrapper wrapper : registry.getAllWrappers()) {
             wrapper.setTracer(tracer);
             log.debug("Wired tracer to wrapper: {}", wrapper.getFuncId());
+        }
+
+        // Wire to other handlers (e.g., LlmProviderToolWrapper) via reflection
+        for (McpToolHandler handler : registry.getAllHandlers()) {
+            if (handler instanceof MeshToolWrapper) {
+                continue; // Already handled above
+            }
+
+            // Try to call setTracer via reflection (for LlmProviderToolWrapper)
+            try {
+                var method = handler.getClass().getMethod("setTracer", ExecutionTracer.class);
+                method.invoke(handler, tracer);
+                log.debug("Wired tracer to handler: {}", handler.getFuncId());
+            } catch (NoSuchMethodException e) {
+                // Handler doesn't support tracing, skip
+                log.trace("Handler {} doesn't support tracing", handler.getFuncId());
+            } catch (Exception e) {
+                log.warn("Failed to wire tracer to handler {}: {}", handler.getFuncId(), e.getMessage());
+            }
         }
     }
 
