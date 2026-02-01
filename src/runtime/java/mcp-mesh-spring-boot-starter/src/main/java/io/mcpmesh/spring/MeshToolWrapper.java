@@ -2,6 +2,10 @@ package io.mcpmesh.spring;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcpmesh.Param;
+import io.mcpmesh.spring.tracing.ExecutionTracer;
+import io.mcpmesh.spring.tracing.SpanScope;
+import io.mcpmesh.spring.tracing.TraceContext;
+import io.mcpmesh.spring.tracing.TraceInfo;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
@@ -17,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
@@ -64,6 +69,9 @@ public class MeshToolWrapper implements McpToolHandler {
     private final List<String> dependencyNames;
 
     private final ObjectMapper objectMapper;
+
+    // Tracing support (set lazily via setter)
+    private final AtomicReference<ExecutionTracer> tracerRef = new AtomicReference<>();
 
     /**
      * Create a wrapper for a @MeshTool annotated method.
@@ -244,6 +252,15 @@ public class MeshToolWrapper implements McpToolHandler {
         }
     }
 
+    /**
+     * Set the ExecutionTracer for this wrapper.
+     *
+     * @param tracer The tracer to use
+     */
+    public void setTracer(ExecutionTracer tracer) {
+        tracerRef.set(tracer);
+    }
+
     // =========================================================================
     // Tool Invocation (called by MCP SDK)
     // =========================================================================
@@ -259,12 +276,85 @@ public class MeshToolWrapper implements McpToolHandler {
     public Object invoke(Map<String, Object> mcpArgs) throws Exception {
         log.debug("Invoking {} with args: {}", funcId, mcpArgs);
 
+        // Extract trace context from arguments (fallback for TypeScript agents)
+        // If TracingFilter didn't set context (e.g., came from TypeScript agent via FastMCP),
+        // try extracting from arguments where trace IDs are injected
+        Map<String, Object> cleanArgs = extractAndSetupTraceContext(mcpArgs);
+
+        // Get tracer and start span if tracing is enabled
+        ExecutionTracer tracer = tracerRef.get();
+        Map<String, Object> spanMetadata = new LinkedHashMap<>();
+        spanMetadata.put("capability", capability);
+        spanMetadata.put("args_count", cleanArgs.size());
+        spanMetadata.put("injected_dependencies", meshToolPositions.size());
+
+        // Use method name for trace (not full funcId) - matches Python/TypeScript behavior
+        String traceName = method.getName();
+        try (SpanScope span = tracer != null ? tracer.startSpan(traceName, spanMetadata) : SpanScope.NOOP) {
+            Object result = invokeInternal(cleanArgs);
+            span.withResult(result);
+            return result;
+        }
+    }
+
+    /**
+     * Extract trace context from arguments and set up TraceContext if not already set.
+     *
+     * <p>TypeScript agents inject trace context into arguments since FastMCP doesn't
+     * expose HTTP headers to tool handlers. This method extracts those fields and
+     * removes them from the arguments before passing to the tool.
+     *
+     * @param mcpArgs The MCP arguments (may contain _trace_id and _parent_span)
+     * @return Clean arguments with trace fields removed
+     */
+    private Map<String, Object> extractAndSetupTraceContext(Map<String, Object> mcpArgs) {
+        if (mcpArgs == null) {
+            return new LinkedHashMap<>();
+        }
+
+        // Make a mutable copy
+        Map<String, Object> cleanArgs = new LinkedHashMap<>(mcpArgs);
+
+        // Extract trace context from arguments
+        String traceId = null;
+        String parentSpan = null;
+
+        Object traceIdObj = cleanArgs.remove("_trace_id");
+        Object parentSpanObj = cleanArgs.remove("_parent_span");
+
+        if (traceIdObj instanceof String) {
+            traceId = (String) traceIdObj;
+        }
+        if (parentSpanObj instanceof String) {
+            parentSpan = (String) parentSpanObj;
+        }
+
+        // Set trace context from arguments (authoritative source for trace propagation)
+        // Arguments take precedence over any existing context because:
+        // 1. TypeScript agents inject trace IDs into arguments (FastMCP doesn't expose headers)
+        // 2. InheritableThreadLocal can leak stale context from thread pool reuse
+        // 3. The calling agent explicitly passed these trace IDs for this specific call
+        if (traceId != null && !traceId.isEmpty()) {
+            TraceInfo traceInfo = TraceInfo.fromHeaders(traceId, parentSpan);
+            TraceContext.set(traceInfo);
+            log.trace("Set trace context from arguments: trace={}, parent={}",
+                traceId.substring(0, Math.min(8, traceId.length())),
+                parentSpan != null ? parentSpan.substring(0, Math.min(8, parentSpan.length())) : "null");
+        }
+
+        return cleanArgs;
+    }
+
+    /**
+     * Internal invoke method that handles the actual method invocation.
+     */
+    private Object invokeInternal(Map<String, Object> cleanArgs) throws Exception {
         // Build full argument array
         Object[] fullArgs = new Object[method.getParameterCount()];
 
         // Fill MCP parameters
         for (ParamInfo param : mcpParams) {
-            Object value = mcpArgs.get(param.name());
+            Object value = cleanArgs.get(param.name());
 
             if (value == null && param.required()) {
                 throw new IllegalArgumentException("Missing required parameter: " + param.name());
@@ -304,7 +394,7 @@ public class MeshToolWrapper implements McpToolHandler {
 
             // If agent is a proxy, set context for template rendering
             if (agent instanceof MeshLlmAgentProxy proxy) {
-                Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), mcpArgs);
+                Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), cleanArgs);
                 if (context != null) {
                     proxy.setInvocationContext(context);
                     log.debug("Set invocation context with {} variables for LLM agent",

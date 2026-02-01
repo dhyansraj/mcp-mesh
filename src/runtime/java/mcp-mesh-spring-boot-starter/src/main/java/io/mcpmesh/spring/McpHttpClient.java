@@ -3,6 +3,8 @@ package io.mcpmesh.spring;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.mcpmesh.spring.tracing.TraceContext;
+import io.mcpmesh.spring.tracing.TraceInfo;
 import io.mcpmesh.types.MeshToolCallException;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -10,6 +12,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -68,25 +71,50 @@ public class McpHttpClient {
             // Use /mcp endpoint (stateless transport) - not /mcp/v1
             String url = endpoint.endsWith("/") ? endpoint + "mcp" : endpoint + "/mcp";
 
+            // Get current trace context for propagation
+            TraceInfo traceInfo = TraceContext.get();
+
+            // Inject trace context into arguments for TypeScript agents
+            // (FastMCP doesn't expose HTTP headers to tool handlers)
+            Map<String, Object> argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+            if (traceInfo != null) {
+                argsWithTrace.put("_trace_id", traceInfo.getTraceId());
+                argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                log.trace("Injecting trace context into args: trace={}, parent={}",
+                    traceInfo.getTraceId().substring(0, 8),
+                    traceInfo.getSpanId().substring(0, 8));
+            }
+
             Map<String, Object> request = Map.of(
                 "jsonrpc", "2.0",
                 "id", System.currentTimeMillis(),
                 "method", "tools/call",
                 "params", Map.of(
                     "name", functionName,
-                    "arguments", params
+                    "arguments", argsWithTrace
                 )
             );
 
             String requestBody = objectMapper.writeValueAsString(request);
             log.debug("Calling tool {} at {}: {}", functionName, url, requestBody);
 
-            Request httpRequest = new Request.Builder()
+            // Build request with trace headers for Python/Java agents
+            Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
                 .post(RequestBody.create(requestBody, JSON))
                 .header("Content-Type", "application/json")
-                .header("Accept", "application/json, text/event-stream")
-                .build();
+                .header("Accept", "application/json, text/event-stream");
+
+            // Inject trace context into HTTP headers
+            if (traceInfo != null) {
+                requestBuilder.header("X-Trace-ID", traceInfo.getTraceId());
+                requestBuilder.header("X-Parent-Span", traceInfo.getSpanId());
+                log.trace("Injecting trace headers: X-Trace-ID={}, X-Parent-Span={}",
+                    traceInfo.getTraceId().substring(0, 8),
+                    traceInfo.getSpanId().substring(0, 8));
+            }
+
+            Request httpRequest = requestBuilder.build();
 
             try (Response response = httpClient.newCall(httpRequest).execute()) {
                 if (!response.isSuccessful()) {
