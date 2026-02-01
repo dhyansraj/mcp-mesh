@@ -130,6 +130,45 @@ public interface MeshCore {
     Pointer mesh_auto_detect_ip();
 
     // ==========================================================================
+    // Tracing Functions
+    // ==========================================================================
+
+    /**
+     * Check if tracing is enabled.
+     *
+     * <p>Checks MCP_MESH_TRACING environment variable.
+     *
+     * @return 1 if tracing is enabled, 0 otherwise
+     */
+    int mesh_is_tracing_enabled();
+
+    /**
+     * Initialize the trace publisher.
+     *
+     * <p>Must be called before mesh_publish_span. Connects to Redis.
+     *
+     * @return 1 on success, 0 on failure
+     */
+    int mesh_init_trace_publisher();
+
+    /**
+     * Check if trace publisher is available.
+     *
+     * @return 1 if publisher is initialized and ready, 0 otherwise
+     */
+    int mesh_is_trace_publisher_available();
+
+    /**
+     * Publish a trace span to Redis.
+     *
+     * <p>Non-blocking - returns immediately. The span is queued for async publishing.
+     *
+     * @param spanJson JSON string containing span data
+     * @return 1 on success (queued), 0 on failure
+     */
+    int mesh_publish_span(String spanJson);
+
+    // ==========================================================================
     // Utility Functions
     // ==========================================================================
 

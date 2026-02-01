@@ -199,6 +199,43 @@ char *mesh_auto_detect_ip(void);
 // Version string (do not free)
 const char *mesh_version(void);
 
+// Check if distributed tracing is enabled.
+//
+// Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+//
+// # Returns
+// 1 if tracing is enabled, 0 otherwise
+int32_t mesh_is_tracing_enabled(void);
+
+// Initialize the trace publisher.
+//
+// Must be called before `mesh_publish_span`. Connects to Redis.
+//
+// # Returns
+// 1 on success (Redis connected), 0 on failure
+int32_t mesh_init_trace_publisher(void);
+
+// Check if trace publisher is available.
+//
+// # Returns
+// 1 if publisher is initialized and ready, 0 otherwise
+int32_t mesh_is_trace_publisher_available(void);
+
+// Publish a trace span to Redis.
+//
+// Non-blocking (from the caller's perspective) - returns after queuing the span.
+// Silently handles failures to never break agent operations.
+//
+// # Arguments
+// * `span_json` - JSON string containing span data (all values should be strings)
+//
+// # Returns
+// 1 on success (queued), 0 on failure
+//
+// # Safety
+// * `span_json` must be a valid null-terminated C string
+int32_t mesh_publish_span(const char *span_json);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

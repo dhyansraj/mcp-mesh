@@ -19,10 +19,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::config::is_tracing_enabled;
 use crate::events::MeshEvent;
 use crate::handle::HandleState;
 use crate::runtime::{AgentRuntime, RuntimeConfig};
 use crate::spec::AgentSpec;
+use crate::tracing_publish;
 
 // Thread-local last error storage
 thread_local! {
@@ -599,6 +601,124 @@ pub extern "C" fn mesh_version() -> *const c_char {
 }
 
 // =============================================================================
+// Tracing Functions
+// =============================================================================
+
+/// Global tokio runtime for tracing operations.
+/// Lazily initialized on first tracing call.
+static TRACING_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_tracing_runtime() -> &'static tokio::runtime::Runtime {
+    TRACING_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("mesh-trace")
+            .enable_all()
+            .build()
+            .expect("Failed to create tracing runtime")
+    })
+}
+
+/// Check if distributed tracing is enabled.
+///
+/// Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+///
+/// # Returns
+/// 1 if tracing is enabled, 0 otherwise
+#[no_mangle]
+pub extern "C" fn mesh_is_tracing_enabled() -> i32 {
+    if is_tracing_enabled() { 1 } else { 0 }
+}
+
+/// Initialize the trace publisher.
+///
+/// Must be called before `mesh_publish_span`. Connects to Redis.
+///
+/// # Returns
+/// 1 on success (Redis connected), 0 on failure
+#[no_mangle]
+pub extern "C" fn mesh_init_trace_publisher() -> i32 {
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::init_trace_publisher().await
+    });
+
+    if result {
+        info!("FFI: Trace publisher initialized successfully");
+        1
+    } else {
+        debug!("FFI: Trace publisher initialization failed (tracing disabled or Redis unavailable)");
+        0
+    }
+}
+
+/// Check if trace publisher is available.
+///
+/// # Returns
+/// 1 if publisher is initialized and ready, 0 otherwise
+#[no_mangle]
+pub extern "C" fn mesh_is_trace_publisher_available() -> i32 {
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::is_trace_publisher_available().await
+    });
+
+    if result { 1 } else { 0 }
+}
+
+/// Publish a trace span to Redis.
+///
+/// Non-blocking (from the caller's perspective) - returns after queuing the span.
+/// Silently handles failures to never break agent operations.
+///
+/// # Arguments
+/// * `span_json` - JSON string containing span data (all values should be strings)
+///
+/// # Returns
+/// 1 on success (queued), 0 on failure
+///
+/// # Safety
+/// * `span_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_publish_span(span_json: *const c_char) -> i32 {
+    if span_json.is_null() {
+        debug!("FFI: mesh_publish_span called with null span_json");
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(span_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            debug!("FFI: Invalid UTF-8 in span_json: {}", e);
+            return 0;
+        }
+    };
+
+    // Parse JSON into HashMap
+    let span_data: std::collections::HashMap<String, String> = match serde_json::from_str(json_str) {
+        Ok(data) => data,
+        Err(e) => {
+            debug!("FFI: Failed to parse span JSON: {}", e);
+            return 0;
+        }
+    };
+
+    // Publish to Redis
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::publish_span(span_data).await
+    });
+
+    if result {
+        debug!("FFI: Trace span published successfully");
+        1
+    } else {
+        debug!("FFI: Failed to publish trace span");
+        0
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -779,6 +899,37 @@ mod tests {
             // Should return auto-detected IP (not empty)
             assert!(!value.is_empty());
             mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_mesh_is_tracing_enabled_default() {
+        // Without env var set, should return 0
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        assert_eq!(mesh_is_tracing_enabled(), 0);
+    }
+
+    #[test]
+    fn test_mesh_is_tracing_enabled_with_env() {
+        std::env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
+        assert_eq!(mesh_is_tracing_enabled(), 1);
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    #[test]
+    fn test_mesh_publish_span_null_json() {
+        unsafe {
+            // Should return 0 for null input
+            assert_eq!(mesh_publish_span(ptr::null()), 0);
+        }
+    }
+
+    #[test]
+    fn test_mesh_publish_span_invalid_json() {
+        unsafe {
+            let invalid = CString::new("not valid json").unwrap();
+            // Should return 0 for invalid JSON
+            assert_eq!(mesh_publish_span(invalid.as_ptr()), 0);
         }
     }
 }
