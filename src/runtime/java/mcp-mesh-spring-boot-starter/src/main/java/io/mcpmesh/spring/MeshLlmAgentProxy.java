@@ -3,7 +3,10 @@ package io.mcpmesh.spring;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
+import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
+import io.mcpmesh.types.MeshToolCallException;
+import io.mcpmesh.types.MeshToolUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +63,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private volatile double defaultTemperature = 0.7;
 
     private McpHttpClient mcpClient;
+    private McpMeshToolProxyFactory proxyFactory;
+    private ToolInvoker toolInvoker;
     private MeshDependencyInjector dependencyInjector;
     private PromptTemplateRenderer templateRenderer;
 
@@ -88,17 +93,21 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     /**
      * Configure the proxy with dependencies.
      */
-    public void configure(McpHttpClient mcpClient, MeshDependencyInjector dependencyInjector,
+    public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                          ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
                           String systemPrompt, int maxIterations) {
-        configure(mcpClient, dependencyInjector, systemPrompt, "ctx", maxIterations);
+        configure(mcpClient, proxyFactory, toolInvoker, dependencyInjector, systemPrompt, "ctx", maxIterations);
     }
 
     /**
      * Configure the proxy with dependencies and context parameter name.
      */
-    public void configure(McpHttpClient mcpClient, MeshDependencyInjector dependencyInjector,
+    public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                          ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
                           String systemPrompt, String contextParamName, int maxIterations) {
         this.mcpClient = mcpClient;
+        this.proxyFactory = proxyFactory;
+        this.toolInvoker = toolInvoker;
         this.dependencyInjector = dependencyInjector;
         this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
         this.contextParamName = contextParamName != null ? contextParamName : "ctx";
@@ -145,13 +154,20 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 }
             }
 
+            // For LLM-discovered tools, we don't know the return type from mesh events
+            // Default to null (will use Object.class in getReturnTypeOrDefault())
+            // Future: Rust core could send return_type in LlmToolInfo
+            // Set available=true for tools discovered from mesh
+            boolean hasEndpoint = tool.getEndpoint() != null && !tool.getEndpoint().isBlank();
             availableTools.add(new ToolInfo(
                 tool.getFunctionName(),
                 tool.getDescription(),
                 tool.getCapability(),
                 tool.getAgentId(),
                 tool.getEndpoint(),
-                inputSchema
+                null,  // returnType - unknown for mesh-discovered tools
+                inputSchema,
+                hasEndpoint  // available - true if endpoint is valid
             ));
         }
         log.debug("Updated {} tools for LLM agent {}", availableTools.size(), functionId);
@@ -209,6 +225,9 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         private Double topP = null;
         private List<String> stopSequences = null;
         private int maxIterations = defaultMaxIterations;
+
+        // Response type for auto-generating JSON schema instructions
+        private Class<?> responseType = null;
 
         // Metadata from last call
         private GenerationMeta lastMeta = null;
@@ -327,6 +346,9 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         @Override
         public <T> T generate(Class<T> responseType) {
+            // Set response type so executeAgenticLoop can generate JSON schema instructions
+            this.responseType = responseType;
+
             String response = generate();
 
             try {
@@ -369,6 +391,17 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             boolean hasExplicitSystem = messages.stream().anyMatch(m -> "system".equals(m.role()));
             if (!hasExplicitSystem) {
                 String renderedSystemPrompt = renderSystemPrompt();
+
+                // Auto-inject JSON schema instructions if responseType is set
+                // (matches Python SDK behavior - mesh auto-generates output format instructions)
+                if (responseType != null && responseType != String.class) {
+                    String jsonInstructions = buildJsonSchemaInstructions(responseType);
+                    if (jsonInstructions != null) {
+                        renderedSystemPrompt = renderedSystemPrompt + jsonInstructions;
+                        log.debug("Auto-injected JSON schema instructions for {}", responseType.getSimpleName());
+                    }
+                }
+
                 if (!renderedSystemPrompt.isBlank()) {
                     llmMessages.add(Map.of("role", "system", "content", renderedSystemPrompt));
                 }
@@ -474,11 +507,31 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         private String renderSystemPrompt() {
             if (systemPromptTemplate == null || systemPromptTemplate.isBlank()) {
+                log.debug("renderSystemPrompt: template is null or blank");
                 return "";
             }
 
-            // Merge contexts based on mode
-            Map<String, Object> effectiveContext = mergeContexts();
+            log.info("renderSystemPrompt: template='{}' (isTemplate={})",
+                systemPromptTemplate.length() > 50 ? systemPromptTemplate.substring(0, 50) + "..." : systemPromptTemplate,
+                templateRenderer.isTemplate(systemPromptTemplate));
+
+            // Merge contexts based on mode, then add tools
+            Map<String, Object> effectiveContext = new LinkedHashMap<>(mergeContexts());
+
+            // Always add tools to context - templates can use <#if tools?has_content>
+            // to conditionally render tool lists or "no tools" messages
+            // Convert ToolInfo records to Maps for FreeMarker compatibility
+            // (FreeMarker doesn't understand record accessors like name())
+            List<Map<String, Object>> toolMaps = new ArrayList<>();
+            for (ToolInfo tool : availableTools) {
+                Map<String, Object> toolMap = new LinkedHashMap<>();
+                toolMap.put("name", tool.name());
+                toolMap.put("description", tool.description());
+                toolMap.put("capability", tool.capability());
+                toolMaps.add(toolMap);
+            }
+            effectiveContext.put("tools", toolMaps);
+            log.info("renderSystemPrompt: context has {} vars, tools={}", effectiveContext.size(), availableTools.size());
 
             // Render template if needed
             if (templateRenderer.isTemplate(systemPromptTemplate) ||
@@ -486,15 +539,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 systemPromptTemplate.contains("<#")) {
                 try {
                     String rendered = templateRenderer.render(systemPromptTemplate, effectiveContext);
-                    log.debug("Rendered system prompt with {} context variables",
-                        effectiveContext != null ? effectiveContext.size() : 0);
+                    log.info("renderSystemPrompt: SUCCESS - rendered {} chars", rendered.length());
                     return rendered;
                 } catch (Exception e) {
-                    log.warn("Failed to render system prompt template: {}", e.getMessage());
+                    log.error("renderSystemPrompt: FAILED to render template: {}", e.getMessage(), e);
                     return systemPromptTemplate;
                 }
             }
 
+            log.info("renderSystemPrompt: template doesn't need rendering, returning as-is");
             return systemPromptTemplate;
         }
 
@@ -521,6 +574,63 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     yield merged;
                 }
             };
+        }
+
+        /**
+         * Build JSON schema instructions from the response type class.
+         *
+         * <p>This auto-generates output format instructions based on the response type,
+         * matching Python SDK behavior. The LLM is instructed to return JSON matching
+         * the schema derived from the class fields.
+         *
+         * <p>Uses reflection to inspect record components or class fields to build
+         * a schema description.
+         *
+         * @param type the response type class
+         * @return JSON schema instructions to append to system prompt
+         */
+        private String buildJsonSchemaInstructions(Class<?> type) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n\nIMPORTANT: Return your final response as valid JSON with this structure:\n{\n");
+
+            // Handle records
+            if (type.isRecord()) {
+                var components = type.getRecordComponents();
+                for (int i = 0; i < components.length; i++) {
+                    var comp = components[i];
+                    sb.append("  \"").append(comp.getName()).append("\": ");
+                    sb.append(getTypeHint(comp.getType()));
+                    if (i < components.length - 1) sb.append(",");
+                    sb.append("\n");
+                }
+            } else {
+                // Handle regular classes - use declared fields
+                var fields = type.getDeclaredFields();
+                int count = 0;
+                for (var field : fields) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+                    if (count > 0) sb.append(",\n");
+                    sb.append("  \"").append(field.getName()).append("\": ");
+                    sb.append(getTypeHint(field.getType()));
+                    count++;
+                }
+                sb.append("\n");
+            }
+
+            sb.append("}\n\nReturn ONLY the JSON object, no additional text or markdown.");
+            return sb.toString();
+        }
+
+        private String getTypeHint(Class<?> type) {
+            if (type == String.class) return "\"...\"";
+            if (type == int.class || type == Integer.class) return "0";
+            if (type == long.class || type == Long.class) return "0";
+            if (type == double.class || type == Double.class) return "0.0";
+            if (type == float.class || type == Float.class) return "0.0";
+            if (type == boolean.class || type == Boolean.class) return "true/false";
+            if (type.isArray() || java.util.Collection.class.isAssignableFrom(type)) return "[...]";
+            if (java.util.Map.class.isAssignableFrom(type)) return "{...}";
+            return "{...}";
         }
     }
 
@@ -674,6 +784,23 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         return text;
     }
 
+    /**
+     * Execute a tool call and return the result as a JSON string.
+     *
+     * <p>Error Handling Strategy (for LLM agentic loops):
+     * <ul>
+     *   <li>Errors are returned as JSON strings, not thrown as exceptions</li>
+     *   <li>This allows the LLM to see errors and potentially self-correct</li>
+     *   <li>Error format: {@code {"error": {"type": "...", "tool": "...", "message": "..."}}}</li>
+     * </ul>
+     *
+     * <p>This differs from {@link McpMeshToolProxy} which throws exceptions,
+     * because in an agentic loop the LLM benefits from seeing error details.
+     *
+     * @param toolName The tool function name to call
+     * @param args     The arguments to pass to the tool
+     * @return JSON string result, or JSON error object if the call failed
+     */
     private String executeToolCall(String toolName, Map<String, Object> args) {
         ToolInfo toolInfo = availableTools.stream()
             .filter(t -> t.name().equals(toolName))
@@ -682,19 +809,38 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         if (toolInfo == null) {
             log.warn("Tool not found: {}", toolName);
-            return "{\"error\": \"Tool not found: " + toolName + "\"}";
+            return buildErrorResponse("tool_not_found", toolName, "Tool not found in available tools list");
         }
 
-        String endpoint = toolInfo.endpoint();
-        if (endpoint == null || endpoint.isBlank()) {
-            log.warn("Tool endpoint not available: {}", toolName);
-            return "{\"error\": \"Tool endpoint unavailable: " + toolName + "\"}";
+        // Check availability using ToolInfo's isAvailable() which checks both
+        // the available flag and endpoint validity
+        if (!toolInfo.isAvailable()) {
+            log.warn("Tool not available: {} (available={}, endpoint={})",
+                toolName, toolInfo.available(), toolInfo.endpoint());
+            return buildErrorResponse("tool_unavailable", toolName,
+                "Tool is not currently available. It may have gone offline or been unregistered.");
         }
 
         try {
-            // Call the tool directly via MCP HTTP client using endpoint from mesh
-            log.debug("Calling tool {} at endpoint {}", toolName, endpoint);
-            Object result = mcpClient.callTool(endpoint, toolName, args);
+            // Use ToolInvoker for unified invocation (supports both local and remote)
+            // Local invocation is used when the tool is on the same agent (self-dependency)
+            boolean isLocal = toolInvoker != null && toolInvoker.isSelfDependency(toolInfo);
+            log.debug("Calling tool {} {} (returnType={}, agentId={})",
+                toolName,
+                isLocal ? "locally" : "at endpoint " + toolInfo.endpoint(),
+                toolInfo.getReturnTypeOrDefault(),
+                toolInfo.agentId());
+
+            Object result;
+            if (toolInvoker != null) {
+                // Use ToolInvoker for smart local/remote invocation
+                result = toolInvoker.invoke(toolInfo, args);
+            } else {
+                // Fallback to direct proxy invocation (if toolInvoker not configured)
+                McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
+                    toolInfo.endpoint(), toolName, toolInfo.getReturnTypeOrDefault());
+                result = proxy.call(args);
+            }
 
             // Handle various result types - return as JSON string for LLM
             if (result == null) {
@@ -706,9 +852,68 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 // Serialize complex objects to JSON
                 return objectMapper.writeValueAsString(result);
             }
-        } catch (Exception e) {
+        } catch (MeshToolUnavailableException e) {
+            // Tool/agent became unavailable (went offline, unregistered, etc.)
+            // Mark the tool as unavailable so subsequent calls in this agentic loop
+            // can see it's unavailable without attempting another call
+            markToolUnavailable(toolName);
+            log.warn("Tool unavailable: {} - {}", toolName, e.getMessage());
+            return buildErrorResponse("tool_unavailable", toolName,
+                "The tool is currently unavailable. It may have gone offline or been unregistered.");
+        } catch (MeshToolCallException e) {
+            // Tool call failed (network error, remote error, serialization error)
             log.error("Tool call failed: {} - {}", toolName, e.getMessage());
-            return "{\"error\": \"" + e.getMessage().replace("\"", "'") + "\"}";
+            return buildErrorResponse("tool_call_failed", toolName, e.getMessage());
+        } catch (Exception e) {
+            // Unexpected error
+            log.error("Unexpected error calling tool: {} - {}", toolName, e.getMessage(), e);
+            return buildErrorResponse("unexpected_error", toolName, e.getMessage());
+        }
+    }
+
+    /**
+     * Build a structured JSON error response for the LLM.
+     *
+     * <p>The structured format helps the LLM understand:
+     * <ul>
+     *   <li>What type of error occurred (for potential retry logic)</li>
+     *   <li>Which tool was being called</li>
+     *   <li>A human-readable message describing the problem</li>
+     * </ul>
+     *
+     * @param errorType Short error type identifier (e.g., "tool_not_found", "tool_unavailable")
+     * @param toolName  The tool that was being called
+     * @param message   Human-readable error description
+     * @return JSON error string
+     */
+    private String buildErrorResponse(String errorType, String toolName, String message) {
+        // Escape quotes in message to ensure valid JSON
+        String safeMessage = message != null ? message.replace("\"", "'").replace("\\", "\\\\") : "Unknown error";
+        return String.format(
+            "{\"error\":{\"type\":\"%s\",\"tool\":\"%s\",\"message\":\"%s\"}}",
+            errorType, toolName, safeMessage
+        );
+    }
+
+    /**
+     * Mark a tool as unavailable in the available tools list.
+     *
+     * <p>This is called when a tool call fails with {@link MeshToolUnavailableException},
+     * indicating the tool/agent has gone offline or been unregistered. Marking it
+     * unavailable allows subsequent calls in the same agentic loop to see the tool
+     * is unavailable via {@link ToolInfo#isAvailable()} without attempting another call.
+     *
+     * @param toolName The name of the tool to mark as unavailable
+     */
+    private void markToolUnavailable(String toolName) {
+        for (int i = 0; i < availableTools.size(); i++) {
+            ToolInfo tool = availableTools.get(i);
+            if (tool.name().equals(toolName)) {
+                // Replace with an unavailable copy
+                availableTools.set(i, tool.markUnavailable());
+                log.debug("Marked tool as unavailable: {}", toolName);
+                return;
+            }
         }
     }
 

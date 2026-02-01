@@ -175,6 +175,7 @@ logs/
 .logs/
 capability_store/
 prompts/
+!examples/**/prompts/
 *.db
 *.pid
 
