@@ -149,6 +149,18 @@ export function wrapToolResultOutput(content: string | null | undefined): ToolRe
  * @returns Messages in Vercel AI SDK format
  */
 export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessage[] {
+  // Build a map of tool_call_id -> tool_name from assistant messages
+  // This is needed because tool result messages may not include the tool name,
+  // but Gemini API requires it (function_response.name cannot be empty)
+  const toolCallIdToName: Map<string, string> = new Map();
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        toolCallIdToName.set(tc.id, tc.function.name);
+      }
+    }
+  }
+
   return messages.map((msg) => {
     // System and user messages pass through
     if (msg.role === "system" || msg.role === "user") {
@@ -208,12 +220,21 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
 
     // Tool result messages - convert to content blocks with tool-result type
     if (msg.role === "tool") {
+      // Get tool name from message, or look it up from the tool call map
+      // Gemini API requires function_response.name to be non-empty
+      const toolCallId = msg.tool_call_id ?? "";
+      const toolName = msg.name || toolCallIdToName.get(toolCallId) || "";
+
+      if (!toolName) {
+        debug(`Warning: Tool result for call ${toolCallId} has no tool name. Gemini API may reject this.`);
+      }
+
       return {
         role: "tool",
         content: [{
           type: "tool-result",
-          toolCallId: msg.tool_call_id ?? "",
-          toolName: msg.name ?? "",
+          toolCallId,
+          toolName,
           output: wrapToolResultOutput(msg.content),
         }],
       } as unknown as LlmMessage;
