@@ -423,28 +423,27 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 iteration++;
                 log.debug("Agentic loop iteration {}/{}", iteration, maxIterations);
 
-                // Build request params
-                Map<String, Object> params = new LinkedHashMap<>();
-                params.put("messages", llmMessages);
-                if (!toolDefs.isEmpty()) {
-                    params.put("tools", toolDefs);
-                }
-                if (maxTokens != null) {
-                    params.put("max_tokens", maxTokens);
-                } else {
-                    params.put("max_tokens", defaultMaxTokens);
-                }
-                if (temperature != null) {
-                    params.put("temperature", temperature);
-                } else {
-                    params.put("temperature", defaultTemperature);
-                }
+                // Build model_params (LLM provider configuration)
+                Map<String, Object> modelParams = new LinkedHashMap<>();
+                modelParams.put("max_tokens", maxTokens != null ? maxTokens : defaultMaxTokens);
+                modelParams.put("temperature", temperature != null ? temperature : defaultTemperature);
                 if (topP != null) {
-                    params.put("top_p", topP);
+                    modelParams.put("top_p", topP);
                 }
                 if (stopSequences != null && !stopSequences.isEmpty()) {
-                    params.put("stop", stopSequences);
+                    modelParams.put("stop", stopSequences);
                 }
+
+                // Build request wrapper (matches Python/TypeScript SDK format)
+                Map<String, Object> request = new LinkedHashMap<>();
+                request.put("messages", llmMessages);
+                if (!toolDefs.isEmpty()) {
+                    request.put("tools", toolDefs);
+                }
+                request.put("model_params", modelParams);
+
+                // Final params with request wrapper
+                Map<String, Object> params = Map.of("request", request);
 
                 // Call LLM provider
                 Map<String, Object> response;
