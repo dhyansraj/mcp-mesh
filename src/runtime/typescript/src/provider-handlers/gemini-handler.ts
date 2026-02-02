@@ -198,6 +198,6 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
 }
 
 // Register with the registry
-// Use "google" as vendor name to match Vercel AI SDK model extraction
-// (e.g., "google/gemini-2.0-flash" → vendor "google")
-ProviderHandlerRegistry.register("google", GeminiHandler);
+// Use "gemini" as vendor name to match model prefix (e.g., "gemini/gemini-2.0-flash")
+// This is consistent with Python SDK's registration
+ProviderHandlerRegistry.register("gemini", GeminiHandler);
