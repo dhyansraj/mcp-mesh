@@ -412,6 +412,35 @@ export function llmProvider(config: LlmProviderConfig): {
     const handler = ProviderHandlerRegistry.getHandler(vendor);
     debug(`Using provider handler: ${handler.constructor.name} for vendor: ${vendor}`);
 
+    // Determine output mode early (needed for system prompt formatting)
+    // When tools are present, we can't use generateObject() (it doesn't support tools),
+    // so we must fall back to "hint" mode to add JSON instructions to the system prompt.
+    // This ensures the LLM knows to return structured JSON even when using generateText().
+    const hasTools = request.tools && request.tools.length > 0;
+    let outputMode = handler.determineOutputMode(outputSchemaObj);
+    if (outputMode === "strict" && hasTools && outputSchemaObj) {
+      debug(`Forcing hint mode: tools present (${request.tools?.length}), can't use generateObject`);
+      outputMode = "hint";
+    }
+    debug(`Output mode for system prompt: ${outputMode}`);
+
+    // Format system prompt with vendor-specific instructions (JSON format, tool rules, etc.)
+    // This is critical for structured output - handlers add JSON instructions in "hint" mode
+    // and brief notes in "strict" mode. Without this, LLMs may return plain text.
+    const formattedMessages = request.messages.map(msg => {
+      if (msg.role === "system" && msg.content) {
+        const formattedContent = handler.formatSystemPrompt(
+          msg.content,
+          request.tools ?? null,  // ToolSchema[] format (OpenAI function calling)
+          outputSchemaObj,
+          outputMode
+        );
+        debug(`Formatted system prompt (${outputMode} mode): ${formattedContent.substring(0, 200)}...`);
+        return { ...msg, content: formattedContent };
+      }
+      return msg;
+    });
+
     // Import generateText from ai package
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const aiModule = await import("ai") as any;
@@ -482,12 +511,13 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Apply vendor-specific request preparation (e.g., Claude prompt caching)
     // The handler may transform messages or add vendor-specific options
-    // Issue #459: Pass output schema so handler can format system prompt appropriately
+    // Use formattedMessages which have the system prompt already formatted by the handler
     const preparedRequest = handler.prepareRequest(
-      request.messages as LlmMessage[],
+      formattedMessages as LlmMessage[],
       null, // tools handled separately for Vercel AI SDK
-      outputSchemaObj, // Pass output schema for prompt formatting
+      outputSchemaObj, // Pass output schema for additional vendor-specific options
       {
+        outputMode,  // Pass output mode determined earlier
         temperature: temperature ?? modelParams.temperature as number | undefined,
         maxOutputTokens: maxTokens ?? modelParams.max_tokens as number | undefined,
         topP: topP ?? modelParams.top_p as number | undefined,
@@ -545,8 +575,10 @@ export function llmProvider(config: LlmProviderConfig): {
     // - "strict" mode: Use generateObject() for native structured output (OpenAI/Gemini)
     // - "hint" mode: Use generateText() with prompt-based JSON instructions (Claude)
     // - "text" mode: Use generateText() for plain text output
-    // Claude always uses "hint" mode because generateObject() has issues with Anthropic
-    const outputMode = handler.determineOutputMode(outputSchemaObj);
+    // NOTE: generateObject() doesn't support tools in Vercel AI SDK, so when tools are
+    // present we must use generateText(). The handler's formatSystemPrompt() adds JSON
+    // instructions to ensure the LLM returns structured output even via generateText().
+    // outputMode was determined earlier (before formatSystemPrompt call)
     const useStructuredOutput = outputMode === "strict" && outputSchema && !vercelTools;
     debug(`Output mode: ${outputMode}, useStructuredOutput: ${useStructuredOutput}`);
 

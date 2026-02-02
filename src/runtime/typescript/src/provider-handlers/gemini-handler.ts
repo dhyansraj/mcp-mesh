@@ -136,13 +136,16 @@ export class GeminiHandler implements ProviderHandler {
   }
 
   /**
-   * Format system prompt for Gemini (concise approach).
+   * Format system prompt for Gemini with output mode support.
    *
    * Gemini Strategy:
-   * 1. Use base prompt as-is
-   * 2. Add tool calling instructions if tools present
-   * 3. Minimal JSON instructions (response_format handles structure)
-   * 4. Keep prompt concise - Gemini works well with clear, direct prompts
+   * - strict mode: Brief JSON note (response_format handles schema)
+   * - hint mode: Detailed JSON schema instructions in prompt
+   * - text mode: No JSON instructions
+   *
+   * When tools are present, llm-provider forces "hint" mode because
+   * generateObject() doesn't support tools, so we need prompt-based
+   * JSON instructions to ensure structured output.
    */
   formatSystemPrompt(
     basePrompt: string,
@@ -158,15 +161,57 @@ export class GeminiHandler implements ProviderHandler {
       systemContent += BASE_TOOL_INSTRUCTIONS;
     }
 
-    // Skip JSON note for text mode
+    // Skip JSON instructions for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
       return systemContent;
     }
 
-    // Add brief JSON note (response_format handles enforcement)
-    systemContent += `
+    // Strict mode: Brief note (response_format handles enforcement)
+    if (determinedMode === "strict") {
+      systemContent += `
 
 Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
+      return systemContent;
+    }
+
+    // Hint mode: Add detailed JSON schema instructions
+    // This is used when tools are present (can't use generateObject)
+    const schema = outputSchema.schema;
+    const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const required = (schema.required ?? []) as string[];
+
+    // Build human-readable schema description
+    const fieldDescriptions: string[] = [];
+    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+      const fieldType = fieldSchema.type ?? "any";
+      const isRequired = required.includes(fieldName);
+      const reqMarker = isRequired ? " (required)" : " (optional)";
+      const desc = fieldSchema.description as string | undefined;
+      const descText = desc ? ` - ${desc}` : "";
+      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
+    }
+
+    const fieldsText = fieldDescriptions.join("\n");
+    const exampleObj: Record<string, string> = {};
+    for (const [k, v] of Object.entries(properties)) {
+      exampleObj[k] = `<${v.type ?? "value"}>`;
+    }
+
+    systemContent += `
+
+FINAL RESPONSE FORMAT:
+After gathering all needed information using tools, your FINAL response MUST be valid JSON matching this schema:
+{
+${fieldsText}
+}
+
+Example format:
+${JSON.stringify(exampleObj, null, 2)}
+
+IMPORTANT:
+- First, use the available tools to gather information
+- Only after you have all the data, provide your final JSON response
+- The final response must be ONLY valid JSON - no markdown code fences, no preamble text`;
 
     return systemContent;
   }
