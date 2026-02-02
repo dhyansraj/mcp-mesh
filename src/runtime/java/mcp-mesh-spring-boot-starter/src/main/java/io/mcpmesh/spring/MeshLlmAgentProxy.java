@@ -391,17 +391,8 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             boolean hasExplicitSystem = messages.stream().anyMatch(m -> "system".equals(m.role()));
             if (!hasExplicitSystem) {
                 String renderedSystemPrompt = renderSystemPrompt();
-
-                // Auto-inject JSON schema instructions if responseType is set
-                // (matches Python SDK behavior - mesh auto-generates output format instructions)
-                if (responseType != null && responseType != String.class) {
-                    String jsonInstructions = buildJsonSchemaInstructions(responseType);
-                    if (jsonInstructions != null) {
-                        renderedSystemPrompt = renderedSystemPrompt + jsonInstructions;
-                        log.debug("Auto-injected JSON schema instructions for {}", responseType.getSimpleName());
-                    }
-                }
-
+                // Note: JSON schema is passed via model_params.output_schema, not injected in prompt
+                // This allows LLM provider handlers to use vendor-specific structured output mechanisms
                 if (!renderedSystemPrompt.isBlank()) {
                     llmMessages.add(Map.of("role", "system", "content", renderedSystemPrompt));
                 }
@@ -432,6 +423,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 }
                 if (stopSequences != null && !stopSequences.isEmpty()) {
                     modelParams.put("stop", stopSequences);
+                }
+                // Pass output_schema for structured output (provider handles vendor-specific conversion)
+                if (responseType != null && responseType != String.class) {
+                    Map<String, Object> outputSchema = buildJsonSchema(responseType);
+                    if (outputSchema != null) {
+                        modelParams.put("output_schema", outputSchema);
+                        modelParams.put("output_type_name", responseType.getSimpleName());
+                        log.debug("Added output_schema for structured output: {}", responseType.getSimpleName());
+                    }
                 }
 
                 // Build request wrapper (matches Python/TypeScript SDK format)
@@ -576,60 +576,67 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         }
 
         /**
-         * Build JSON schema instructions from the response type class.
+         * Build JSON schema from the response type class.
          *
-         * <p>This auto-generates output format instructions based on the response type,
-         * matching Python SDK behavior. The LLM is instructed to return JSON matching
-         * the schema derived from the class fields.
+         * <p>This generates a JSON Schema object that can be passed to LLM providers
+         * via model_params.output_schema. The provider handler converts this to
+         * vendor-specific structured output format (e.g., response_format for OpenAI/Gemini).
          *
-         * <p>Uses reflection to inspect record components or class fields to build
-         * a schema description.
+         * <p>Uses reflection to inspect record components or class fields.
          *
          * @param type the response type class
-         * @return JSON schema instructions to append to system prompt
+         * @return JSON schema as a Map, or null if schema cannot be built
          */
-        private String buildJsonSchemaInstructions(Class<?> type) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("\n\nIMPORTANT: Return your final response as valid JSON with this structure:\n{\n");
+        private Map<String, Object> buildJsonSchema(Class<?> type) {
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+
+            Map<String, Object> properties = new LinkedHashMap<>();
+            List<String> required = new ArrayList<>();
 
             // Handle records
             if (type.isRecord()) {
                 var components = type.getRecordComponents();
-                for (int i = 0; i < components.length; i++) {
-                    var comp = components[i];
-                    sb.append("  \"").append(comp.getName()).append("\": ");
-                    sb.append(getTypeHint(comp.getType()));
-                    if (i < components.length - 1) sb.append(",");
-                    sb.append("\n");
+                for (var comp : components) {
+                    properties.put(comp.getName(), getJsonSchemaType(comp.getType()));
+                    required.add(comp.getName());
                 }
             } else {
                 // Handle regular classes - use declared fields
                 var fields = type.getDeclaredFields();
-                int count = 0;
                 for (var field : fields) {
                     if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
-                    if (count > 0) sb.append(",\n");
-                    sb.append("  \"").append(field.getName()).append("\": ");
-                    sb.append(getTypeHint(field.getType()));
-                    count++;
+                    properties.put(field.getName(), getJsonSchemaType(field.getType()));
+                    required.add(field.getName());
                 }
-                sb.append("\n");
             }
 
-            sb.append("}\n\nReturn ONLY the JSON object, no additional text or markdown.");
-            return sb.toString();
+            schema.put("properties", properties);
+            schema.put("required", required);
+            return schema;
         }
 
-        private String getTypeHint(Class<?> type) {
-            if (type == String.class) return "\"...\"";
-            if (type == int.class || type == Integer.class) return "0";
-            if (type == long.class || type == Long.class) return "0";
-            if (type == double.class || type == Double.class) return "0.0";
-            if (type == float.class || type == Float.class) return "0.0";
-            if (type == boolean.class || type == Boolean.class) return "true/false";
-            if (type.isArray() || java.util.Collection.class.isAssignableFrom(type)) return "[...]";
-            if (java.util.Map.class.isAssignableFrom(type)) return "{...}";
-            return "{...}";
+        private Map<String, Object> getJsonSchemaType(Class<?> type) {
+            Map<String, Object> schemaType = new LinkedHashMap<>();
+            if (type == String.class) {
+                schemaType.put("type", "string");
+            } else if (type == int.class || type == Integer.class ||
+                       type == long.class || type == Long.class) {
+                schemaType.put("type", "integer");
+            } else if (type == double.class || type == Double.class ||
+                       type == float.class || type == Float.class) {
+                schemaType.put("type", "number");
+            } else if (type == boolean.class || type == Boolean.class) {
+                schemaType.put("type", "boolean");
+            } else if (type.isArray() || java.util.Collection.class.isAssignableFrom(type)) {
+                schemaType.put("type", "array");
+                schemaType.put("items", Map.of("type", "object"));
+            } else if (java.util.Map.class.isAssignableFrom(type)) {
+                schemaType.put("type", "object");
+            } else {
+                schemaType.put("type", "object");
+            }
+            return schemaType;
         }
     }
 
