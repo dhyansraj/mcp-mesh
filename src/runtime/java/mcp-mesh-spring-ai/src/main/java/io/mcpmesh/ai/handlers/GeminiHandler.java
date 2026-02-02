@@ -505,6 +505,21 @@ public class GeminiHandler implements LlmProviderHandler {
             }
         }
 
+        // Collect consecutive tool responses to bundle into a single ToolResponseMessage
+        // Gemini requires all tool results from a turn to be in one message
+        List<ToolResponseMessage.ToolResponse> pendingToolResponses = new ArrayList<>();
+
+        // Helper to flush pending tool responses into result
+        Runnable flushPendingToolResponses = () -> {
+            if (!pendingToolResponses.isEmpty()) {
+                log.debug("Bundling {} tool responses into single ToolResponseMessage", pendingToolResponses.size());
+                result.add(ToolResponseMessage.builder()
+                    .responses(new ArrayList<>(pendingToolResponses))
+                    .build());
+                pendingToolResponses.clear();
+            }
+        };
+
         for (Map<String, Object> msg : messages) {
             String role = (String) msg.get("role");
             String content = (String) msg.get("content");
@@ -515,6 +530,8 @@ public class GeminiHandler implements LlmProviderHandler {
 
             switch (role.toLowerCase()) {
                 case "system" -> {
+                    // Flush any pending tool responses before adding non-tool message
+                    flushPendingToolResponses.run();
                     // Gemini uses system_instruction, collect all system messages
                     if (content != null && !content.trim().isEmpty()) {
                         if (systemContent.length() > 0) {
@@ -524,11 +541,15 @@ public class GeminiHandler implements LlmProviderHandler {
                     }
                 }
                 case "user" -> {
+                    // Flush any pending tool responses before adding non-tool message
+                    flushPendingToolResponses.run();
                     if (content != null && !content.trim().isEmpty()) {
                         result.add(new UserMessage(content));
                     }
                 }
                 case "assistant", "model" -> {
+                    // Flush any pending tool responses before adding non-tool message
+                    flushPendingToolResponses.run();
                     // Check for tool_calls in assistant message
                     List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) msg.get("tool_calls");
                     if (toolCalls != null && !toolCalls.isEmpty()) {
@@ -578,14 +599,14 @@ public class GeminiHandler implements LlmProviderHandler {
                     log.debug("Converted tool result: id={}, name={}, contentLength={}",
                         toolCallId, toolName, responseData.length());
 
-                    // Create ToolResponseMessage with proper ToolResponse
+                    // Add to pending list - will be bundled when we hit a non-tool message or end
                     ToolResponseMessage.ToolResponse toolResponse =
                         new ToolResponseMessage.ToolResponse(toolCallId, toolName, responseData);
-                    result.add(ToolResponseMessage.builder()
-                        .responses(List.of(toolResponse))
-                        .build());
+                    pendingToolResponses.add(toolResponse);
                 }
                 default -> {
+                    // Flush any pending tool responses before adding non-tool message
+                    flushPendingToolResponses.run();
                     log.warn("Unknown message role '{}', treating as user", role);
                     if (content != null && !content.trim().isEmpty()) {
                         result.add(new UserMessage(content));
@@ -593,6 +614,9 @@ public class GeminiHandler implements LlmProviderHandler {
                 }
             }
         }
+
+        // Flush any remaining pending tool responses at the end
+        flushPendingToolResponses.run();
 
         // Insert system instruction at the beginning if present
         if (systemContent.length() > 0) {
