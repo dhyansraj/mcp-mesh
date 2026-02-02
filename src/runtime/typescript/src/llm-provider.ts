@@ -203,11 +203,13 @@ function convertToVercelMessages(messages: LlmMessage[]): VercelCoreMessage[] {
 
 /**
  * AI SDK v6 tool call structure.
+ * Note: AI SDK v6 uses 'input' for tool call arguments (not 'args').
  */
 interface VercelToolCall {
+  type?: string;
   toolCallId: string;
   toolName: string;
-  args: Record<string, unknown>;
+  input: Record<string, unknown>;  // AI SDK v6 uses 'input', not 'args'
 }
 
 /**
@@ -219,7 +221,7 @@ function convertToolCalls(toolCalls: VercelToolCall[]): LlmToolCallRequest[] {
     type: "function" as const,
     function: {
       name: tc.toolName,
-      arguments: JSON.stringify(tc.args ?? {}),
+      arguments: JSON.stringify(tc.input ?? {}),  // Use 'input' for AI SDK v6
     },
   }));
 }
@@ -434,9 +436,10 @@ export function llmProvider(config: LlmProviderConfig): {
     }) => Promise<{
       text: string;
       toolCalls?: Array<{
+        type?: string;
         toolCallId: string;
         toolName: string;
-        args: Record<string, unknown>;
+        input: Record<string, unknown>;  // AI SDK v6 uses 'input', not 'args'
       }>;
       usage?: {
         inputTokens: number;
