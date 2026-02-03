@@ -1,0 +1,57 @@
+# Helm values for deploying openai-provider-py with mcp-mesh-agent chart
+# Usage: helm install openai-provider-py oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
+
+image:
+  repository: your-registry/openai-provider-py
+  tag: "v1.0.0" # Your image version. Override with: --set image.tag=v1.2.3
+  pullPolicy: IfNotPresent
+
+agent:
+  name: openai-provider-py
+  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
+  # http:
+  #   port: 8080
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+# Enable mesh connectivity
+mesh:
+  enabled: true
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+
+# LLM provider needs API keys for the backend LLM service
+env:
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: anthropic-api-key
+        optional: true
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: openai-api-key
+        optional: true
+  - name: GOOGLE_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-secrets
+        key: google-api-key
+        optional: true
+
+# Optional: Configure model settings
+# - name: DEFAULT_MODEL
+#   value: "claude-3-5-sonnet-20241022"
+# - name: MAX_TOKENS
+#   value: "4096"
+
+# Optional: Configure additional secrets
+secrets: []

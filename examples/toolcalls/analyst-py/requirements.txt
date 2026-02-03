@@ -1,0 +1,3 @@
+# analyst-py dependencies
+# Add your third-party dependencies here
+# Note: mcp-mesh is provided by the runtime environment (local venv or Docker base image)

@@ -13,6 +13,7 @@ import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
   makeSchemaStrict,
+  sanitizeSchemaForStructuredOutput,
   defaultDetermineOutputMode,
   BASE_TOOL_INSTRUCTIONS,
   type ProviderHandler,
@@ -116,7 +117,8 @@ export class OpenAIHandler implements ProviderHandler {
     if (determinedMode === "strict") {
       // Transform schema for OpenAI strict mode
       // OpenAI requires additionalProperties: false and all properties in required
-      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
+      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
 
       // OpenAI structured output format
       // See: https://platform.openai.com/docs/guides/structured-outputs
@@ -197,10 +199,21 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
       exampleObj[k] = `<${v.type ?? "value"}>`;
     }
 
-    systemContent += `
+    // Add DECISION GUIDE when tools are present to help OpenAI know when NOT to use tools
+    let decisionGuide = "";
+    if (toolSchemas && toolSchemas.length > 0) {
+      decisionGuide = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+    }
 
-FINAL RESPONSE FORMAT:
-After gathering all needed information using tools, your FINAL response MUST be valid JSON matching this schema:
+    systemContent += `
+${decisionGuide}
+RESPONSE FORMAT:
+You MUST respond with valid JSON matching this schema:
 {
 ${fieldsText}
 }
@@ -208,10 +221,10 @@ ${fieldsText}
 Example format:
 ${JSON.stringify(exampleObj, null, 2)}
 
-IMPORTANT:
-- First, use the available tools to gather information
-- Only after you have all the data, provide your final JSON response
-- The final response must be ONLY valid JSON - no markdown code fences, no preamble text`;
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
+- DO NOT include any text before or after the JSON
+- Start directly with { and end with }`;
 
     return systemContent;
   }
