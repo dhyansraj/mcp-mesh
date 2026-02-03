@@ -403,7 +403,7 @@ export interface LlmToolDefinition {
  * LLM completion request parameters (LiteLLM-compatible).
  */
 export interface LlmCompletionParams {
-  /** Model identifier (e.g., "anthropic/claude-sonnet-4-20250514") */
+  /** Model identifier (e.g., "anthropic/claude-sonnet-4-5") */
   model: string;
   /** Messages array */
   messages: LlmMessage[];
@@ -461,7 +461,7 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
   // LLM Configuration
   /** LLM provider - direct string (LiteLLM) or mesh delegation object */
   provider: LlmProviderSpec;
-  /** Model override (e.g., "anthropic/claude-sonnet-4-20250514") */
+  /** Model override (e.g., "anthropic/claude-sonnet-4-5") */
   model?: string;
   /** Maximum agentic loop iterations. Defaults to 10 */
   maxIterations?: number;

@@ -86,7 +86,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     port = 9110
 )
 @MeshLlmProvider(
-    model = "anthropic/claude-sonnet-4-20250514",
+    model = "anthropic/claude-sonnet-4-5",
     capability = "llm",
     tags = {"llm", "claude", "anthropic", "provider"},
     version = "1.0.0"

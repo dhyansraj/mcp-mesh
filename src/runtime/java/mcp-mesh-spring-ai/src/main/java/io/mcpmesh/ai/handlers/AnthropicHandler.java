@@ -24,17 +24,19 @@ import java.util.function.Function;
  * <ul>
  *   <li>Full multi-turn conversation support</li>
  *   <li>System message handling (Claude prefers single system message)</li>
- *   <li>Structured output with hint/strict mode</li>
- *   <li>Prompt caching support</li>
+ *   <li>Structured output with HINT mode (prompt-based)</li>
+ *   <li>DECISION GUIDE for tool vs. direct JSON response decisions</li>
  *   <li>Anti-XML tool calling instructions</li>
  * </ul>
  *
- * <h2>Structured Output Modes</h2>
+ * <h2>Structured Output Modes (TEXT + HINT only)</h2>
  * <ul>
  *   <li><b>text</b>: Plain text output for String return types (fastest)</li>
- *   <li><b>hint</b>: JSON schema in prompt for simple schemas (~95% reliable)</li>
- *   <li><b>strict</b>: response_format for complex schemas (100% reliable, slower)</li>
+ *   <li><b>hint</b>: JSON schema in prompt with DECISION GUIDE (~95% reliable)</li>
  * </ul>
+ *
+ * <p>Native response_format (strict mode) is not used due to cross-runtime
+ * incompatibilities when tools are present, and grammar compilation overhead.
  *
  * @see LlmProviderHandler
  */
@@ -73,8 +75,8 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (outputSchema == null) {
             return OUTPUT_MODE_TEXT;
         }
-        // Claude uses hint mode for simple schemas (faster), strict for complex
-        return outputSchema.simple() ? OUTPUT_MODE_HINT : OUTPUT_MODE_STRICT;
+        // All schemas use HINT mode for Claude -- no STRICT mode
+        return OUTPUT_MODE_HINT;
     }
 
     @Override
@@ -95,17 +97,10 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (OUTPUT_MODE_TEXT.equals(outputMode)) {
             // Text mode: No JSON instructions
             // Do nothing
-        } else if (OUTPUT_MODE_STRICT.equals(outputMode)) {
-            // Strict mode: Minimal instructions (response_format handles schema)
-            if (outputSchema != null) {
-                systemContent.append("\n\nYour final response will be structured as JSON matching the ")
-                    .append(outputSchema.name())
-                    .append(" format.");
-            }
         } else if (OUTPUT_MODE_HINT.equals(outputMode)) {
-            // Hint mode: Add detailed JSON schema instructions
+            // Hint mode: Add detailed JSON schema instructions with DECISION GUIDE
             if (outputSchema != null) {
-                systemContent.append(buildHintModeInstructions(outputSchema));
+                systemContent.append(buildHintModeInstructions(outputSchema, tools));
             }
         }
 
@@ -113,10 +108,13 @@ public class AnthropicHandler implements LlmProviderHandler {
     }
 
     /**
-     * Build detailed JSON schema instructions for hint mode.
+     * Build detailed JSON schema instructions for hint mode with optional DECISION GUIDE.
+     *
+     * @param outputSchema the output schema to build instructions for
+     * @param tools the list of available tools (DECISION GUIDE added when non-empty)
      */
     @SuppressWarnings("unchecked")
-    private String buildHintModeInstructions(OutputSchema outputSchema) {
+    private String buildHintModeInstructions(OutputSchema outputSchema, List<ToolDefinition> tools) {
         // Sanitize schema to remove unsupported validation keywords (minimum, maximum, etc.)
         Map<String, Object> schema = outputSchema.sanitize();
         Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
@@ -166,9 +164,21 @@ public class AnthropicHandler implements LlmProviderHandler {
         }
         exampleJson.append("}");
 
+        // Add DECISION GUIDE when tools are present
+        String decisionGuide = "";
+        if (tools != null && !tools.isEmpty()) {
+            decisionGuide = """
+
+            DECISION GUIDE:
+            - If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+            - If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+            - After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+            """;
+        }
+
         return String.format("""
 
-
+            %s
             RESPONSE FORMAT:
             You MUST respond with valid JSON matching this schema:
             {
@@ -177,8 +187,11 @@ public class AnthropicHandler implements LlmProviderHandler {
             Example format:
             %s
 
-            IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble text.""",
-            fieldDescriptions.toString(), exampleJson.toString());
+            CRITICAL: Your response must be ONLY the raw JSON object.
+            - DO NOT wrap in markdown code fences (```json or ```)
+            - DO NOT include any text before or after the JSON
+            - Start directly with { and end with }""",
+            decisionGuide, fieldDescriptions.toString(), exampleJson.toString());
     }
 
     // =========================================================================
@@ -485,11 +498,11 @@ public class AnthropicHandler implements LlmProviderHandler {
     public Map<String, Boolean> getCapabilities() {
         return Map.of(
             "native_tool_calling", true,
-            "structured_output", true,
+            "structured_output", false,  // Uses HINT mode (prompt-based), not native response_format
             "streaming", true,
             "vision", true,
-            "json_mode", true,
-            "prompt_caching", true  // Claude-specific
+            "json_mode", false,          // No native JSON mode used
+            "prompt_caching", false      // Not implemented yet in Java
         );
     }
 

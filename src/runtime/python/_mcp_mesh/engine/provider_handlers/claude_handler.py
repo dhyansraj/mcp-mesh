@@ -4,15 +4,17 @@ Claude/Anthropic provider handler.
 Optimized for Claude API (Claude 3.x, Sonnet, Opus, Haiku)
 using Anthropic's best practices for tool calling and JSON responses.
 
-Supports three output modes for performance/reliability tradeoffs:
-- strict: Use response_format for guaranteed schema compliance (slowest, 100% reliable)
-- hint: Use prompt-based JSON instructions (medium speed, ~95% reliable)
+Supports two output modes:
+- hint: Use prompt-based JSON instructions with DECISION GUIDE (~95% reliable)
 - text: Plain text output for str return types (fastest)
+
+Native response_format (strict mode) is NOT used due to cross-runtime
+incompatibilities when tools are present, and grammar compilation overhead.
 
 Features:
 - Automatic prompt caching for system messages (up to 90% cost reduction)
 - Anti-XML tool calling instructions
-- Output mode optimization based on return type
+- DECISION GUIDE for tool vs. direct JSON response decisions
 """
 
 import json
@@ -23,17 +25,16 @@ from pydantic import BaseModel
 
 from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
-    BaseProviderHandler,
     CLAUDE_ANTI_XML_INSTRUCTION,
-    is_simple_schema,
-    make_schema_strict,
-    sanitize_schema_for_structured_output,
+    BaseProviderHandler,
 )
 
 logger = logging.getLogger(__name__)
 
 # Output mode constants
-OUTPUT_MODE_STRICT = "strict"
+OUTPUT_MODE_STRICT = (
+    "strict"  # Unused for Claude (kept for override_mode compatibility)
+)
 OUTPUT_MODE_HINT = "hint"
 OUTPUT_MODE_TEXT = "text"
 
@@ -44,19 +45,20 @@ class ClaudeHandler(BaseProviderHandler):
 
     Claude Characteristics:
     - Excellent at following detailed instructions
-    - Native structured output via response_format (requires strict schema)
     - Native tool calling (via Anthropic messages API)
     - Performs best with anti-XML tool calling instructions
     - Automatic prompt caching for cost optimization
 
-    Output Modes:
-    - strict: response_format with JSON schema (slowest, guaranteed valid JSON)
-    - hint: JSON schema in prompt (medium speed, usually valid JSON)
+    Output Modes (TEXT + HINT only):
+    - hint: JSON schema in prompt with DECISION GUIDE (~95% reliable)
     - text: Plain text output for str return types (fastest)
 
+    Native response_format (strict mode) is not used. HINT mode with
+    detailed prompt instructions provides sufficient reliability (~95%)
+    without the cross-runtime incompatibilities and grammar compilation
+    overhead of native structured output.
+
     Best Practices (from Anthropic docs):
-    - Use response_format for guaranteed JSON schema compliance
-    - Schema must have additionalProperties: false on all objects
     - Add anti-XML instructions to prevent <invoke> style tool calls
     - Use one tool call at a time for better reliability
     - Use cache_control for system prompts to reduce costs
@@ -66,62 +68,18 @@ class ClaudeHandler(BaseProviderHandler):
         """Initialize Claude handler."""
         super().__init__(vendor="anthropic")
 
-    def _is_simple_schema(self, model_class: type[BaseModel]) -> bool:
-        """
-        Check if a Pydantic model has a simple schema.
-
-        Simple schema criteria:
-        - Less than 5 fields
-        - All fields are basic types (str, int, float, bool, list, Optional)
-        - No nested Pydantic models
-
-        Args:
-            model_class: Pydantic model class
-
-        Returns:
-            True if schema is simple, False otherwise
-        """
-        try:
-            schema = model_class.model_json_schema()
-            properties = schema.get("properties", {})
-
-            # Check field count
-            if len(properties) >= 5:
-                return False
-
-            # Check for nested objects or complex types
-            for field_name, field_schema in properties.items():
-                field_type = field_schema.get("type")
-
-                # Check for nested objects (indicates nested Pydantic model)
-                if field_type == "object" and "properties" in field_schema:
-                    return False
-
-                # Check for $ref (nested model reference)
-                if "$ref" in field_schema:
-                    return False
-
-                # Check array items for complex types
-                if field_type == "array":
-                    items = field_schema.get("items", {})
-                    if items.get("type") == "object" or "$ref" in items:
-                        return False
-
-            return True
-        except Exception:
-            return False
-
     def determine_output_mode(
         self, output_type: type, override_mode: Optional[str] = None
     ) -> str:
         """
         Determine the output mode based on return type.
 
+        Strategy: TEXT + HINT only. No STRICT mode for Claude.
+
         Logic:
         - If override_mode specified, use it
         - If return type is str, use "text" mode
-        - If return type is simple schema (<5 fields, basic types), use "hint" mode
-        - Otherwise, use "strict" mode
+        - All schema types use "hint" mode (prompt-based JSON instructions)
 
         Args:
             output_type: Return type (str or BaseModel subclass)
@@ -138,15 +96,11 @@ class ClaudeHandler(BaseProviderHandler):
         if output_type is str:
             return OUTPUT_MODE_TEXT
 
-        # Check if it's a Pydantic model
+        # All schema types use HINT mode -- no STRICT for Claude
         if isinstance(output_type, type) and issubclass(output_type, BaseModel):
-            if self._is_simple_schema(output_type):
-                return OUTPUT_MODE_HINT
-            else:
-                return OUTPUT_MODE_STRICT
+            return OUTPUT_MODE_HINT
 
-        # Default to strict for unknown types
-        return OUTPUT_MODE_STRICT
+        return OUTPUT_MODE_HINT
 
     def _apply_prompt_caching(
         self, messages: list[dict[str, Any]]
@@ -226,9 +180,8 @@ class ClaudeHandler(BaseProviderHandler):
         """
         Prepare request parameters for Claude API with output mode support.
 
-        Output Mode Strategy:
-        - strict: Use response_format for guaranteed JSON schema compliance (slowest)
-        - hint: No response_format, rely on prompt instructions (medium speed)
+        Output Mode Strategy (TEXT + HINT only):
+        - hint: No response_format, rely on prompt instructions (~95% reliable)
         - text: No response_format, plain text output (fastest)
 
         Args:
@@ -240,9 +193,8 @@ class ClaudeHandler(BaseProviderHandler):
         Returns:
             Dictionary of parameters for litellm.completion()
         """
-        # Extract output_mode from kwargs if provided
-        output_mode = kwargs.pop("output_mode", None)
-        determined_mode = self.determine_output_mode(output_type, output_mode)
+        # Extract output_mode from kwargs to prevent it leaking into request params
+        kwargs.pop("output_mode", None)
 
         # Remove response_format from kwargs - we control this based on output mode
         # The decorator's response_format="json" is just a hint for parsing, not API param
@@ -261,22 +213,6 @@ class ClaudeHandler(BaseProviderHandler):
         if tools:
             request_params["tools"] = tools
 
-        # Only add response_format in "strict" mode
-        if determined_mode == OUTPUT_MODE_STRICT:
-            # Claude requires additionalProperties: false on all object types
-            # Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
-            if isinstance(output_type, type) and issubclass(output_type, BaseModel):
-                schema = output_type.model_json_schema()
-                strict_schema = make_schema_strict(schema, add_all_required=False)
-                request_params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": output_type.__name__,
-                        "schema": strict_schema,
-                        "strict": False,  # Allow optional fields with defaults
-                    },
-                }
-
         return request_params
 
     def format_system_prompt(
@@ -289,9 +225,8 @@ class ClaudeHandler(BaseProviderHandler):
         """
         Format system prompt for Claude with output mode support.
 
-        Output Mode Strategy:
-        - strict: Minimal JSON instructions (response_format handles schema)
-        - hint: Add detailed JSON schema instructions in prompt
+        Output Mode Strategy (TEXT + HINT only):
+        - hint: Add detailed JSON schema instructions with DECISION GUIDE in prompt
         - text: No JSON instructions (plain text output)
 
         Args:
@@ -321,13 +256,8 @@ class ClaudeHandler(BaseProviderHandler):
             # Text mode: No JSON instructions
             pass
 
-        elif determined_mode == OUTPUT_MODE_STRICT:
-            # Strict mode: Minimal instructions (response_format handles schema)
-            if isinstance(output_type, type) and issubclass(output_type, BaseModel):
-                system_content += f"\n\nYour final response will be structured as JSON matching the {output_type.__name__} format."
-
         elif determined_mode == OUTPUT_MODE_HINT:
-            # Hint mode: Add detailed JSON schema instructions
+            # Hint mode: Add detailed JSON schema instructions with DECISION GUIDE
             if isinstance(output_type, type) and issubclass(output_type, BaseModel):
                 schema = output_type.model_json_schema()
                 properties = schema.get("properties", {})
@@ -346,8 +276,19 @@ class ClaudeHandler(BaseProviderHandler):
                     )
 
                 fields_text = "\n".join(field_descriptions)
-                system_content += f"""
 
+                # Add DECISION GUIDE when tools are present
+                decision_guide = ""
+                if tool_schemas:
+                    decision_guide = """
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+"""
+
+                system_content += f"""
+{decision_guide}
 RESPONSE FORMAT:
 You MUST respond with valid JSON matching this schema:
 {{
@@ -357,7 +298,10 @@ You MUST respond with valid JSON matching this schema:
 Example format:
 {json.dumps({k: f"<{v.get('type', 'value')}>" for k, v in properties.items()}, indent=2)}
 
-IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble text."""
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (```json or ```)
+- DO NOT include any text before or after the JSON
+- Start directly with {{ and end with }}"""
 
         return system_content
 
@@ -370,10 +314,10 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
         """
         return {
             "native_tool_calling": True,  # Claude has native function calling
-            "structured_output": True,  # Native response_format support via LiteLLM
+            "structured_output": False,  # Uses HINT mode (prompt-based), not native response_format
             "streaming": True,  # Supports streaming
             "vision": True,  # Claude 3+ supports vision
-            "json_mode": True,  # Native JSON mode via response_format
+            "json_mode": False,  # No native JSON mode used
             "prompt_caching": True,  # Automatic system prompt caching for cost savings
         }
 
@@ -384,12 +328,11 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
         model_params: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Apply Claude-specific structured output handling for mesh delegation.
+        Apply Claude-specific structured output for mesh delegation using HINT mode.
 
-        When called via mesh delegation (output_schema passed from consumer), we always
-        use strict mode with response_format to guarantee JSON output. Hint mode is only
-        suitable for local consumers who control their own system prompts and can inject
-        JSON instructions there.
+        Instead of using response_format (strict mode), injects detailed JSON schema
+        instructions into the system message. This is consistent with the TEXT + HINT
+        only strategy and avoids cross-runtime incompatibilities.
 
         Args:
             output_schema: JSON schema dict from consumer
@@ -397,23 +340,64 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
             model_params: Current model parameters dict (will be modified)
 
         Returns:
-            Modified model_params with structured output settings applied
+            Modified model_params with HINT-mode instructions in system prompt
         """
-        # For mesh delegation, always use strict mode with response_format
-        # This guarantees JSON output regardless of consumer's system prompt
-        # Sanitize schema first to remove unsupported validation keywords (minimum, maximum, etc.)
-        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
-        strict_schema = make_schema_strict(sanitized_schema, add_all_required=False)
-        model_params["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": output_type_name or "Response",
-                "schema": strict_schema,
-                "strict": False,  # Claude doesn't require all properties in 'required'
-            },
-        }
+        # Build HINT mode instructions from the schema
+        properties = output_schema.get("properties", {})
+        required = output_schema.get("required", [])
+
+        field_descriptions = []
+        for field_name, field_schema in properties.items():
+            field_type = field_schema.get("type", "any")
+            is_required = field_name in required
+            req_marker = " (required)" if is_required else " (optional)"
+            desc = field_schema.get("description", "")
+            desc_text = f" - {desc}" if desc else ""
+            field_descriptions.append(
+                f"  - {field_name}: {field_type}{req_marker}{desc_text}"
+            )
+
+        fields_text = "\n".join(field_descriptions)
+        type_name = output_type_name or "Response"
+
+        hint_instructions = f"""
+
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge, directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+
+RESPONSE FORMAT:
+You MUST respond with valid JSON matching this schema:
+{{
+{fields_text}
+}}
+
+Example format:
+{json.dumps({k: f"<{v.get('type', 'value')}>" for k, v in properties.items()}, indent=2)}
+
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (```json or ```)
+- DO NOT include any text before or after the JSON
+- Start directly with {{ and end with }}"""
+
+        # Inject into system message
+        messages = model_params.get("messages", [])
+        for msg in messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    msg["content"] = content + hint_instructions
+                elif isinstance(content, list):
+                    # Content block format -- append to last text block
+                    for block in reversed(content):
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            block["text"] = block["text"] + hint_instructions
+                            break
+                break
+
         logger.info(
-            f"🎯 Claude strict mode for '{output_type_name}' "
-            f"(mesh delegation, using response_format)"
+            f"Claude hint mode for '{type_name}' "
+            f"(mesh delegation, schema in prompt)"
         )
         return model_params

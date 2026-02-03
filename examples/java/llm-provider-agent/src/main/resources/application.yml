@@ -18,7 +18,7 @@ spring:
       api-key: ${ANTHROPIC_API_KEY:}
       chat:
         options:
-          model: claude-sonnet-4-20250514
+          model: claude-sonnet-4-5
           max-tokens: 4096
           temperature: 0.7
 
@@ -37,7 +37,7 @@ mesh:
   llm:
     provider:
       # Default model (can be overridden in request)
-      model: claude-sonnet-4-20250514
+      model: claude-sonnet-4-5
       # Maximum tokens per response
       max-tokens: 4096
       # Default temperature

@@ -145,7 +145,7 @@ class ClaudeProviderAgent:
 
 ```
 anthropic/claude-sonnet-4-5
-anthropic/claude-sonnet-4-20250514
+anthropic/claude-sonnet-4-5
 openai/gpt-4o
 openai/gpt-4-turbo
 openai/gpt-3.5-turbo

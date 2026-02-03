@@ -4,28 +4,25 @@
  * Optimized for Claude API (Claude 3.x, Sonnet, Opus, Haiku)
  * using Anthropic's best practices for tool calling and JSON responses.
  *
- * Supports three output modes for performance/reliability tradeoffs:
- * - strict: Use response_format for guaranteed schema compliance (slowest, 100% reliable)
- * - hint: Use prompt-based JSON instructions (medium speed, ~95% reliable)
+ * Supports two output modes (TEXT + HINT only):
+ * - hint: Use prompt-based JSON instructions with DECISION GUIDE (~95% reliable)
  * - text: Plain text output for str return types (fastest)
+ *
+ * Native response_format (strict mode) is NOT used due to cross-runtime
+ * incompatibilities when tools are present, and grammar compilation overhead.
  *
  * Features:
  * - Anti-XML tool calling instructions
- * - Output mode optimization based on return type
+ * - DECISION GUIDE for tool vs. direct JSON response decisions
  *
  * Note: Prompt caching is not yet implemented for AI SDK v6.
  * TODO: Re-enable via experimental_providerOptions when AI SDK v6 supports it.
- *
- * Based on Python's ClaudeHandler:
- * src/runtime/python/_mcp_mesh/engine/provider_handlers/claude_handler.py
  */
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
-  makeSchemaStrict,
-  sanitizeSchemaForStructuredOutput,
   BASE_TOOL_INSTRUCTIONS,
   CLAUDE_ANTI_XML_INSTRUCTION,
   type ProviderHandler,
@@ -48,18 +45,18 @@ const debug = createDebug("claude-handler");
  *
  * Claude Characteristics:
  * - Excellent at following detailed instructions
- * - Native structured output via response_format (requires strict schema)
  * - Native tool calling (via Anthropic messages API)
  * - Performs best with anti-XML tool calling instructions
  *
- * Output Modes:
- * - strict: response_format with JSON schema (slowest, guaranteed valid JSON)
- * - hint: JSON schema in prompt (medium speed, usually valid JSON)
+ * Output Modes (TEXT + HINT only):
+ * - hint: JSON schema in prompt with DECISION GUIDE (~95% reliable)
  * - text: Plain text output for str return types (fastest)
  *
+ * Native response_format (strict mode) is not used. HINT mode with
+ * detailed prompt instructions provides sufficient reliability (~95%)
+ * without cross-runtime incompatibilities and grammar compilation overhead.
+ *
  * Best Practices (from Anthropic docs):
- * - Use response_format for guaranteed JSON schema compliance
- * - Schema must have additionalProperties: false on all objects
  * - Add anti-XML instructions to prevent <invoke> style tool calls
  * - Use one tool call at a time for better reliability
  */
@@ -69,9 +66,8 @@ export class ClaudeHandler implements ProviderHandler {
   /**
    * Prepare request parameters for Claude API with output mode support.
    *
-   * Output Mode Strategy:
-   * - strict: Use response_format for guaranteed JSON schema compliance (slowest)
-   * - hint: No response_format, rely on prompt instructions (medium speed)
+   * Output Mode Strategy (TEXT + HINT only):
+   * - hint: No response_format, rely on prompt instructions (~95% reliable)
    * - text: No response_format, plain text output (fastest)
    *
    * Message Format (Anthropic-specific):
@@ -126,32 +122,14 @@ export class ClaudeHandler implements ProviderHandler {
       request.topP = topP;
     }
 
-    // Only add response_format in "strict" mode (not used for Claude anymore)
-    if (determinedMode === "strict" && outputSchema) {
-      // Claude requires additionalProperties: false on all object types
-      // Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
-      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
-      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: false });
-      request.responseFormat = {
-        type: "json_schema",
-        jsonSchema: {
-          name: outputSchema.name,
-          schema: strictSchema,
-          strict: false, // Allow optional fields with defaults
-        },
-      };
-      debug(`Using strict mode with response_format for schema: ${outputSchema.name}`);
-    }
-
     return request;
   }
 
   /**
    * Format system prompt for Claude with output mode support.
    *
-   * Output Mode Strategy:
-   * - strict: Minimal JSON instructions (response_format handles schema)
-   * - hint: Add detailed JSON schema instructions in prompt
+   * Output Mode Strategy (TEXT + HINT only):
+   * - hint: Add detailed JSON schema instructions with DECISION GUIDE in prompt
    * - text: No JSON instructions (plain text output)
    */
   formatSystemPrompt(
@@ -177,16 +155,6 @@ export class ClaudeHandler implements ProviderHandler {
     // Add output format instructions based on mode
     if (determinedMode === "text") {
       // Text mode: No JSON instructions
-      return systemContent;
-    }
-
-    if (determinedMode === "strict") {
-      // Strict mode: Minimal instructions (response_format handles schema)
-      if (outputSchema) {
-        systemContent += `
-
-Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
-      }
       return systemContent;
     }
 
@@ -248,10 +216,10 @@ CRITICAL: Your response must be ONLY the raw JSON object.
   getCapabilities(): VendorCapabilities {
     return {
       nativeToolCalling: true, // Claude has native function calling
-      structuredOutput: true, // Native response_format support via Vercel AI SDK
+      structuredOutput: false, // Uses HINT mode (prompt-based), not native response_format
       streaming: true, // Supports streaming
       vision: true, // Claude 3+ supports vision
-      jsonMode: true, // Native JSON mode via response_format
+      jsonMode: false, // No native JSON mode used
       promptCaching: false, // TODO: Re-enable via experimental_providerOptions
     };
   }
