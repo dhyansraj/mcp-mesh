@@ -1,5 +1,6 @@
 package io.mcpmesh.types;
 
+import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -413,6 +414,18 @@ public interface MeshLlmAgent {
 
     /**
      * Information about an available tool.
+     *
+     * <p>Tracks both tool metadata and availability status. Tools can become
+     * unavailable when the providing agent goes offline or unregisters.
+     *
+     * @param name        Tool function name
+     * @param description Tool description
+     * @param capability  Tool capability
+     * @param agentId     Agent providing the tool
+     * @param endpoint    Tool endpoint URL
+     * @param returnType  Expected return type for deserialization (null defaults to Object.class)
+     * @param inputSchema Tool input schema
+     * @param available   Whether the tool is currently available for calls
      */
     record ToolInfo(
         String name,
@@ -420,6 +433,40 @@ public interface MeshLlmAgent {
         String capability,
         String agentId,
         String endpoint,
-        Map<String, Object> inputSchema
-    ) {}
+        Type returnType,
+        Map<String, Object> inputSchema,
+        boolean available
+    ) {
+        /**
+         * Get the return type, defaulting to Object.class if not specified.
+         */
+        public Type getReturnTypeOrDefault() {
+            return returnType != null ? returnType : Object.class;
+        }
+
+        /**
+         * Check if this tool is available for calls.
+         *
+         * <p>A tool is available when:
+         * <ul>
+         *   <li>The available flag is true</li>
+         *   <li>The endpoint is not null or blank</li>
+         * </ul>
+         *
+         * @return true if the tool can be called
+         */
+        public boolean isAvailable() {
+            return available && endpoint != null && !endpoint.isBlank();
+        }
+
+        /**
+         * Create a copy of this tool marked as unavailable.
+         *
+         * @return A new ToolInfo with available=false
+         */
+        public ToolInfo markUnavailable() {
+            return new ToolInfo(name, description, capability, agentId, endpoint,
+                returnType, inputSchema, false);
+        }
+    }
 }

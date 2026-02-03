@@ -214,62 +214,52 @@ def llm_provider(
                             f"(requested by consumer)"
                         )
 
+            # Get vendor handler once - used for both structured output and system prompt formatting
+            from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+            handler = ProviderHandlerRegistry.get_handler(vendor)
+
             # Issue #459: Handle output_schema for vendor-specific structured output
-            # Convert to response_format for vendors that support it
+            # Use provider handler pattern for vendor-specific behavior
             output_schema = model_params_copy.pop("output_schema", None)
             output_type_name = model_params_copy.pop("output_type_name", None)
 
-            # Vendors that support structured output via response_format
-            supported_structured_output_vendors = (
-                "openai",
-                "azure",  # Azure OpenAI uses same format as OpenAI
-                "gemini",
-                "vertex_ai",  # Vertex AI Gemini uses same format as Gemini
-                "anthropic",
-            )
-
             if output_schema:
-                if vendor in supported_structured_output_vendors:
-                    # Apply vendor-specific response_format for structured output
-                    from _mcp_mesh.engine.provider_handlers import make_schema_strict
+                # Apply structured output via handler (e.g., Gemini stores schema for prompt hints)
+                handler.apply_structured_output(
+                    output_schema, output_type_name, model_params_copy
+                )
+                logger.debug(
+                    f"🎯 Applied {vendor} structured output via handler: "
+                    f"{output_type_name}"
+                )
 
-                    if vendor == "anthropic":
-                        # Claude: doesn't require all properties in 'required', uses strict=False
-                        schema = make_schema_strict(
-                            output_schema, add_all_required=False
+            # Use vendor handler to format system prompt when tools are present
+            messages = request.messages
+            if request.tools:
+
+                # Find and format system message
+                formatted_messages = []
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        # Format system prompt with vendor-specific instructions
+                        base_prompt = msg.get("content", "")
+                        formatted_content = handler.format_system_prompt(
+                            base_prompt=base_prompt,
+                            tool_schemas=request.tools,
+                            output_type=str,  # Provider returns raw string
                         )
-                        strict_mode = False
+                        formatted_messages.append(
+                            {"role": "system", "content": formatted_content}
+                        )
                     else:
-                        # OpenAI/Azure/Gemini/Vertex: require all properties in 'required', uses strict=True
-                        schema = make_schema_strict(
-                            output_schema, add_all_required=True
-                        )
-                        strict_mode = True
-
-                    model_params_copy["response_format"] = {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": output_type_name or "Response",
-                            "schema": schema,
-                            "strict": strict_mode,
-                        },
-                    }
-                    logger.debug(
-                        f"🎯 Applied {vendor} response_format for structured output: "
-                        f"{output_type_name} (strict={strict_mode})"
-                    )
-                else:
-                    # Vendor doesn't support structured output - warn user
-                    logger.warning(
-                        f"⚠️ Structured output schema '{output_type_name or 'Response'}' "
-                        f"was provided but vendor '{vendor}' does not support response_format. "
-                        f"The schema will be ignored and the LLM may return unstructured output."
-                    )
+                        formatted_messages.append(msg)
+                messages = formatted_messages
 
             # Build litellm.completion arguments
             completion_args: dict[str, Any] = {
                 "model": effective_model,
-                "messages": request.messages,
+                "messages": messages,
                 **litellm_kwargs,
             }
 

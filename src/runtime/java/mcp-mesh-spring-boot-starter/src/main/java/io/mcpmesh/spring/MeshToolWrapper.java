@@ -248,7 +248,12 @@ public class MeshToolWrapper implements McpToolHandler {
     public void updateLlmAgent(int llmIndex, MeshLlmAgent agent) {
         if (llmIndex >= 0 && llmIndex < injectedLlmAgents.length()) {
             injectedLlmAgents.set(llmIndex, agent);
-            log.debug("Updated LLM agent at index {} for {}", llmIndex, funcId);
+            log.info("Updated LLM agent at index {} for {} (proxy@{})",
+                llmIndex, funcId,
+                agent != null ? System.identityHashCode(agent) : "null");
+        } else {
+            log.warn("LLM index {} out of bounds for {} (max: {})",
+                llmIndex, funcId, injectedLlmAgents.length());
         }
     }
 
@@ -388,8 +393,11 @@ public class MeshToolWrapper implements McpToolHandler {
             MeshLlmAgent agent = injectedLlmAgents.get(i);
 
             if (agent == null) {
-                log.debug("LLM agent not available for {}, passing null for graceful degradation", funcId);
+                log.warn("LLM agent at index {} is null for {} - passing null for graceful degradation",
+                    i, funcId);
             } else if (agent instanceof MeshLlmAgentProxy proxy) {
+                log.info("Injecting LLM agent for {} (index={}, proxy@{}, available={}, provider={})",
+                    funcId, i, System.identityHashCode(proxy), proxy.isAvailable(), proxy.getProvider());
                 // Set context for template rendering
                 Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), cleanArgs);
                 if (context != null) {

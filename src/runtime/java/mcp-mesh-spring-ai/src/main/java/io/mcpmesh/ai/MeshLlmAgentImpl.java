@@ -5,11 +5,19 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.Selector;
+import io.mcpmesh.ai.handlers.LlmProviderHandler;
+import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
+import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
+import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import io.mcpmesh.types.MeshLlmAgent;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -238,7 +246,15 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
             int effectiveMaxTokens = runtimeMaxTokens != null ? runtimeMaxTokens : this.maxTokens;
             double effectiveTemperature = runtimeTemperature != null ? runtimeTemperature : this.temperature;
 
-            String response = runAgenticLoop(messagesList, effectiveMaxTokens, effectiveTemperature);
+            // Generate output schema for structured output (non-String types)
+            OutputSchema outputSchema = null;
+            if (responseType != String.class && responseType != Void.class) {
+                Map<String, Object> schema = generateJsonSchema(responseType);
+                outputSchema = OutputSchema.fromSchema(responseType.getSimpleName(), schema);
+                log.debug("Generated output schema for {}: simple={}", responseType.getSimpleName(), outputSchema.simple());
+            }
+
+            String response = runAgenticLoop(messagesList, effectiveMaxTokens, effectiveTemperature, outputSchema);
             iterations = 1; // TODO: Track actual iterations from agentic loop
 
             // Store metadata
@@ -318,7 +334,8 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
      */
     private String runAgenticLoop(List<Map<String, Object>> messages,
                                   int effectiveMaxTokens,
-                                  double effectiveTemperature) throws Exception {
+                                  double effectiveTemperature,
+                                  OutputSchema outputSchema) throws Exception {
         List<Map<String, Object>> conversationMessages = new ArrayList<>(messages);
         int iterations = 0;
 
@@ -326,8 +343,8 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
             iterations++;
             log.debug("Agentic loop iteration {}/{}", iterations, maxIterations);
 
-            // Call LLM with runtime parameters
-            Map<String, Object> response = callLlm(conversationMessages, effectiveMaxTokens, effectiveTemperature);
+            // Call LLM with runtime parameters and output schema
+            Map<String, Object> response = callLlm(conversationMessages, effectiveMaxTokens, effectiveTemperature, outputSchema);
 
             String content = (String) response.get("content");
             @SuppressWarnings("unchecked")
@@ -388,50 +405,106 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
      */
     private Map<String, Object> callLlm(List<Map<String, Object>> messages,
                                         int effectiveMaxTokens,
-                                        double effectiveTemperature) throws Exception {
+                                        double effectiveTemperature,
+                                        OutputSchema outputSchema) throws Exception {
         if (directProvider != null && springAiProvider != null) {
-            return callLlmDirect(messages);
+            return callLlmDirect(messages, outputSchema);
         } else {
-            return callLlmViaMesh(messages, effectiveMaxTokens, effectiveTemperature);
+            return callLlmViaMesh(messages, effectiveMaxTokens, effectiveTemperature, outputSchema);
         }
     }
 
     /**
-     * Call LLM directly using Spring AI.
+     * Call LLM directly using Spring AI with native tool support.
+     *
+     * <p>Uses Spring AI 2.0 ChatClient with FunctionToolCallback for
+     * native tool calling. Spring AI handles the agentic loop internally.
+     *
+     * @param messages     Conversation messages
+     * @param outputSchema Output schema for structured output (null for text)
      */
-    private Map<String, Object> callLlmDirect(List<Map<String, Object>> messages) {
-        // Extract system and user prompts
-        String systemPromptText = "";
-        StringBuilder userPromptBuilder = new StringBuilder();
-
-        for (Map<String, Object> msg : messages) {
-            String role = (String) msg.get("role");
-            String content = (String) msg.get("content");
-            if ("system".equals(role)) {
-                systemPromptText = content;
-            } else if ("user".equals(role)) {
-                if (userPromptBuilder.length() > 0) {
-                    userPromptBuilder.append("\n");
-                }
-                userPromptBuilder.append(content);
-            }
+    private Map<String, Object> callLlmDirect(List<Map<String, Object>> messages, OutputSchema outputSchema) {
+        // Convert our ToolInfo to handler's ToolDefinition
+        List<ToolDefinition> toolDefs = new ArrayList<>();
+        for (ToolInfo tool : availableTools) {
+            toolDefs.add(new ToolDefinition(
+                tool.name(),
+                tool.description(),
+                tool.inputSchema()
+            ));
         }
 
-        String response = springAiProvider.generate(directProvider, systemPromptText, userPromptBuilder.toString());
+        // Create tool executor callback that delegates to our tool executor
+        LlmProviderHandler.ToolExecutorCallback executorCallback = null;
+        if (toolExecutor != null && !availableTools.isEmpty()) {
+            executorCallback = (toolName, argsJson) -> {
+                ToolInfo tool = availableTools.stream()
+                    .filter(t -> t.name().equals(toolName))
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Tool not found: " + toolName));
+
+                @SuppressWarnings("unchecked")
+                Map<String, Object> args = argsJson != null && !argsJson.isEmpty() ?
+                    objectMapper.readValue(argsJson, Map.class) : Map.of();
+
+                Object result = toolExecutor.execute(toolName, tool.agentId(), args);
+                return result != null ? objectMapper.writeValueAsString(result) : "";
+            };
+        }
+
+        log.debug("Calling LLM directly with {} tools, outputSchema={}",
+            toolDefs.size(), outputSchema != null ? outputSchema.name() : "none");
+
+        // Get vendor-specific handler
+        LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler(directProvider);
+
+        // Get the ChatModel
+        var model = springAiProvider.getModelForProvider(directProvider);
+
+        // Use handler's generateWithTools with output schema
+        LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
+            model,
+            messages,
+            toolDefs,
+            executorCallback,
+            outputSchema,
+            Map.of()
+        );
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("content", response);
-        result.put("tool_calls", List.of());  // Direct mode doesn't support tool calls yet
+        result.put("content", llmResponse.content());
+
+        // Convert tool calls to our format
+        List<Map<String, Object>> toolCallMaps = new ArrayList<>();
+        if (llmResponse.hasToolCalls()) {
+            for (var tc : llmResponse.toolCalls()) {
+                Map<String, Object> tcMap = new LinkedHashMap<>();
+                tcMap.put("id", tc.id());
+                tcMap.put("function", Map.of(
+                    "name", tc.name(),
+                    "arguments", tc.arguments()
+                ));
+                toolCallMaps.add(tcMap);
+            }
+        }
+        result.put("tool_calls", toolCallMaps);
+
         return result;
     }
 
     /**
      * Call LLM via mesh delegation.
+     *
+     * @param messages            Conversation messages
+     * @param effectiveMaxTokens  Max tokens
+     * @param effectiveTemperature Temperature
+     * @param outputSchema        Output schema for structured output (null for text)
      */
     @SuppressWarnings("unchecked")
     private Map<String, Object> callLlmViaMesh(List<Map<String, Object>> messages,
                                                int effectiveMaxTokens,
-                                               double effectiveTemperature) throws Exception {
+                                               double effectiveTemperature,
+                                               OutputSchema outputSchema) throws Exception {
         if (providerEndpoint == null) {
             throw new IllegalStateException("No mesh LLM provider available");
         }
@@ -443,6 +516,16 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         // Add tools if available (for agentic loop)
         if (!availableTools.isEmpty()) {
             request.put("tools", formatToolsForLlm());
+        }
+
+        // Add output schema for structured output
+        if (outputSchema != null) {
+            Map<String, Object> outputSchemaData = new LinkedHashMap<>();
+            outputSchemaData.put("name", outputSchema.name());
+            outputSchemaData.put("schema", outputSchema.schema());
+            outputSchemaData.put("simple", outputSchema.simple());
+            request.put("output_schema", outputSchemaData);
+            log.debug("Including output_schema for {} in mesh request", outputSchema.name());
         }
 
         request.put("max_tokens", effectiveMaxTokens);
@@ -636,6 +719,183 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
             return text.substring(start, end + 1);
         }
         return null;
+    }
+
+    // =========================================================================
+    // JSON Schema Generation
+    // =========================================================================
+
+    /**
+     * Generate JSON schema from a Java class.
+     *
+     * <p>Supports records, POJOs, and common types like String, primitives,
+     * List, Map, etc. Used for structured output in LLM calls.
+     */
+    private Map<String, Object> generateJsonSchema(Class<?> clazz) {
+        return generateJsonSchemaInternal(clazz, new HashSet<>());
+    }
+
+    /**
+     * Internal schema generation with cycle detection.
+     */
+    private Map<String, Object> generateJsonSchemaInternal(Class<?> clazz, Set<Class<?>> visited) {
+        Map<String, Object> schema = new LinkedHashMap<>();
+
+        // Handle primitives and wrappers
+        if (clazz == String.class || clazz == CharSequence.class) {
+            schema.put("type", "string");
+            return schema;
+        }
+        if (clazz == Integer.class || clazz == int.class ||
+            clazz == Long.class || clazz == long.class ||
+            clazz == Short.class || clazz == short.class ||
+            clazz == Byte.class || clazz == byte.class) {
+            schema.put("type", "integer");
+            return schema;
+        }
+        if (clazz == Double.class || clazz == double.class ||
+            clazz == Float.class || clazz == float.class ||
+            clazz == Number.class) {
+            schema.put("type", "number");
+            return schema;
+        }
+        if (clazz == Boolean.class || clazz == boolean.class) {
+            schema.put("type", "boolean");
+            return schema;
+        }
+
+        // Handle arrays
+        if (clazz.isArray()) {
+            schema.put("type", "array");
+            schema.put("items", generateJsonSchemaInternal(clazz.getComponentType(), visited));
+            return schema;
+        }
+
+        // Handle enums
+        if (clazz.isEnum()) {
+            schema.put("type", "string");
+            Object[] constants = clazz.getEnumConstants();
+            List<String> values = new ArrayList<>();
+            for (Object c : constants) {
+                values.add(c.toString());
+            }
+            schema.put("enum", values);
+            return schema;
+        }
+
+        // Handle Map
+        if (Map.class.isAssignableFrom(clazz)) {
+            schema.put("type", "object");
+            schema.put("additionalProperties", true);
+            return schema;
+        }
+
+        // Handle List/Collection (generic handling would need type info)
+        if (List.class.isAssignableFrom(clazz) || Collection.class.isAssignableFrom(clazz)) {
+            schema.put("type", "array");
+            schema.put("items", Map.of("type", "object")); // Default to object items
+            return schema;
+        }
+
+        // Cycle detection for complex types
+        if (visited.contains(clazz)) {
+            schema.put("type", "object");
+            schema.put("description", "Recursive reference to " + clazz.getSimpleName());
+            return schema;
+        }
+        visited.add(clazz);
+
+        // Handle records and POJOs
+        schema.put("type", "object");
+        Map<String, Object> properties = new LinkedHashMap<>();
+        List<String> required = new ArrayList<>();
+
+        // For records, use record components
+        if (clazz.isRecord()) {
+            for (var component : clazz.getRecordComponents()) {
+                String name = component.getName();
+                Class<?> type = component.getType();
+                Type genericType = component.getGenericType();
+
+                Map<String, Object> fieldSchema = generateFieldSchema(type, genericType, visited);
+                properties.put(name, fieldSchema);
+                required.add(name); // All record components are required
+            }
+        } else {
+            // For POJOs, use declared fields
+            for (Field field : clazz.getDeclaredFields()) {
+                // Skip static fields
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                // Skip transient fields
+                if (Modifier.isTransient(field.getModifiers())) {
+                    continue;
+                }
+
+                String name = field.getName();
+                Class<?> type = field.getType();
+                Type genericType = field.getGenericType();
+
+                Map<String, Object> fieldSchema = generateFieldSchema(type, genericType, visited);
+                properties.put(name, fieldSchema);
+
+                // Consider primitive fields and non-null annotated fields as required
+                if (type.isPrimitive()) {
+                    required.add(name);
+                }
+            }
+        }
+
+        if (!properties.isEmpty()) {
+            schema.put("properties", properties);
+        }
+        if (!required.isEmpty()) {
+            schema.put("required", required);
+        }
+
+        visited.remove(clazz);
+        return schema;
+    }
+
+    /**
+     * Generate schema for a field, handling generic types.
+     */
+    private Map<String, Object> generateFieldSchema(Class<?> type, Type genericType, Set<Class<?>> visited) {
+        // Handle List<T>
+        if (List.class.isAssignableFrom(type) && genericType instanceof ParameterizedType) {
+            ParameterizedType paramType = (ParameterizedType) genericType;
+            Type[] typeArgs = paramType.getActualTypeArguments();
+            if (typeArgs.length > 0) {
+                Map<String, Object> schema = new LinkedHashMap<>();
+                schema.put("type", "array");
+                if (typeArgs[0] instanceof Class) {
+                    schema.put("items", generateJsonSchemaInternal((Class<?>) typeArgs[0], visited));
+                } else {
+                    schema.put("items", Map.of("type", "object"));
+                }
+                return schema;
+            }
+        }
+
+        // Handle Map<K, V>
+        if (Map.class.isAssignableFrom(type) && genericType instanceof ParameterizedType) {
+            Map<String, Object> schema = new LinkedHashMap<>();
+            schema.put("type", "object");
+            schema.put("additionalProperties", true);
+            return schema;
+        }
+
+        // Handle Optional<T>
+        if (Optional.class.isAssignableFrom(type) && genericType instanceof ParameterizedType) {
+            ParameterizedType paramType = (ParameterizedType) genericType;
+            Type[] typeArgs = paramType.getActualTypeArguments();
+            if (typeArgs.length > 0 && typeArgs[0] instanceof Class) {
+                return generateJsonSchemaInternal((Class<?>) typeArgs[0], visited);
+            }
+        }
+
+        return generateJsonSchemaInternal(type, visited);
     }
 
     // =========================================================================

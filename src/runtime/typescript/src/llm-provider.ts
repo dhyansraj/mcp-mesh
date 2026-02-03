@@ -477,14 +477,16 @@ export function llmProvider(config: LlmProviderConfig): {
       finishReason: string;
     }>;
 
-    // Convert tools to Vercel AI SDK format
-    // Note: Vercel AI SDK expects Zod schemas for parameters, but we receive JSON Schema
-    // from MCP tools. We use jsonSchema() from the AI SDK to wrap JSON Schema properly.
+    // Convert tools to Vercel AI SDK format using the tool() helper
+    // Import jsonSchema and tool from ai package for proper schema handling
+    const { jsonSchema, tool: aiTool } = aiModule as {
+      jsonSchema: (schema: Record<string, unknown>) => unknown;
+      tool: (config: { description?: string; inputSchema: unknown; execute?: (args: unknown) => Promise<unknown> }) => unknown;
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let vercelTools: Record<string, any> | undefined;
     if (request.tools && request.tools.length > 0) {
-      // Import jsonSchema helper from ai package
-      const { jsonSchema } = aiModule as { jsonSchema: (schema: Record<string, unknown>) => unknown };
       vercelTools = {};
       for (const tool of request.tools) {
         // Get the raw schema parameters
@@ -500,12 +502,16 @@ export function llmProvider(config: LlmProviderConfig): {
           ...schemaWithoutMeta,
         };
 
-        debug(`Tool '${tool.function.name}' schema: ${JSON.stringify(cleanSchema)}`);
+        debug(`Tool '${tool.function.name}' cleanSchema: ${JSON.stringify(cleanSchema, null, 2)}`);
 
-        vercelTools[tool.function.name] = {
+        // Use AI SDK's tool() helper with jsonSchema() for proper schema handling
+        vercelTools[tool.function.name] = aiTool({
           description: tool.function.description ?? "",
           inputSchema: jsonSchema(cleanSchema),
-        };
+          // No execute - we're in provider mode, consumer handles execution
+        });
+
+        debug(`Tool '${tool.function.name}' vercelTool created with aiTool() helper`);
       }
     }
 

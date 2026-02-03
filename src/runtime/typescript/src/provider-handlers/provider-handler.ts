@@ -272,6 +272,100 @@ export const CLAUDE_ANTI_XML_INSTRUCTION = `- NEVER use XML-style syntax like <i
 // ============================================================================
 
 /**
+ * Keywords that are validation-only and not supported by LLM structured output APIs.
+ */
+const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "pattern",
+  "multipleOf",
+]);
+
+/**
+ * Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
+ *
+ * LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
+ * the structural parts of JSON Schema, not validation constraints. This function
+ * removes unsupported keywords to ensure uniform behavior across all providers.
+ *
+ * @param schema - JSON schema to sanitize
+ * @returns New schema with unsupported validation keywords removed
+ */
+export function sanitizeSchemaForStructuredOutput(
+  schema: Record<string, unknown>
+): Record<string, unknown> {
+  // Deep clone to avoid mutating original
+  const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  stripUnsupportedKeywordsRecursive(result);
+  return result;
+}
+
+/**
+ * Recursively strip unsupported validation keywords from a schema object.
+ *
+ * @param obj - Schema object to process (mutated in place)
+ */
+function stripUnsupportedKeywordsRecursive(obj: unknown): void {
+  if (typeof obj !== "object" || obj === null) {
+    return;
+  }
+
+  const record = obj as Record<string, unknown>;
+
+  // Remove unsupported keywords at this level
+  for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
+    delete record[keyword];
+  }
+
+  // Process $defs (used for nested models)
+  if (record.$defs && typeof record.$defs === "object") {
+    for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
+      stripUnsupportedKeywordsRecursive(defSchema);
+    }
+  }
+
+  // Process properties
+  if (record.properties && typeof record.properties === "object") {
+    for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
+      stripUnsupportedKeywordsRecursive(propSchema);
+    }
+  }
+
+  // Process items (for arrays)
+  if (record.items) {
+    if (Array.isArray(record.items)) {
+      for (const item of record.items as unknown[]) {
+        stripUnsupportedKeywordsRecursive(item);
+      }
+    } else {
+      stripUnsupportedKeywordsRecursive(record.items);
+    }
+  }
+
+  // Process prefixItems (tuple validation)
+  if (Array.isArray(record.prefixItems)) {
+    for (const item of record.prefixItems as unknown[]) {
+      stripUnsupportedKeywordsRecursive(item);
+    }
+  }
+
+  // Process anyOf, oneOf, allOf
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    if (Array.isArray(record[key])) {
+      for (const item of record[key] as unknown[]) {
+        stripUnsupportedKeywordsRecursive(item);
+      }
+    }
+  }
+}
+
+/**
  * Options for making a schema strict.
  */
 export interface MakeSchemaStrictOptions {

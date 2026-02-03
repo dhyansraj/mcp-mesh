@@ -25,7 +25,9 @@ from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
     BaseProviderHandler,
     CLAUDE_ANTI_XML_INSTRUCTION,
+    is_simple_schema,
     make_schema_strict,
+    sanitize_schema_for_structured_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -374,3 +376,44 @@ IMPORTANT: Respond ONLY with valid JSON. No markdown code fences, no preamble te
             "json_mode": True,  # Native JSON mode via response_format
             "prompt_caching": True,  # Automatic system prompt caching for cost savings
         }
+
+    def apply_structured_output(
+        self,
+        output_schema: dict[str, Any],
+        output_type_name: Optional[str],
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Apply Claude-specific structured output handling for mesh delegation.
+
+        When called via mesh delegation (output_schema passed from consumer), we always
+        use strict mode with response_format to guarantee JSON output. Hint mode is only
+        suitable for local consumers who control their own system prompts and can inject
+        JSON instructions there.
+
+        Args:
+            output_schema: JSON schema dict from consumer
+            output_type_name: Name of the output type (e.g., "AnalysisResult")
+            model_params: Current model parameters dict (will be modified)
+
+        Returns:
+            Modified model_params with structured output settings applied
+        """
+        # For mesh delegation, always use strict mode with response_format
+        # This guarantees JSON output regardless of consumer's system prompt
+        # Sanitize schema first to remove unsupported validation keywords (minimum, maximum, etc.)
+        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+        strict_schema = make_schema_strict(sanitized_schema, add_all_required=False)
+        model_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": output_type_name or "Response",
+                "schema": strict_schema,
+                "strict": False,  # Claude doesn't require all properties in 'required'
+            },
+        }
+        logger.info(
+            f"🎯 Claude strict mode for '{output_type_name}' "
+            f"(mesh delegation, using response_format)"
+        )
+        return model_params

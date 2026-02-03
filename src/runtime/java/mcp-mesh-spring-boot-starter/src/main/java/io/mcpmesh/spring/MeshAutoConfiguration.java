@@ -66,6 +66,17 @@ public class MeshAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public ToolInvoker toolInvoker(
+            McpMeshToolProxyFactory proxyFactory,
+            MeshToolWrapperRegistry wrapperRegistry,
+            MeshRuntime runtime) {
+        // Full ToolInvoker with self-dependency optimization support
+        String agentId = runtime.getAgentSpec().getName();
+        return new ToolInvoker(proxyFactory, wrapperRegistry, agentId);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public static ObjectMapper meshObjectMapper() {
         return new ObjectMapper();
     }
@@ -99,8 +110,11 @@ public class MeshAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public MeshDependencyInjector meshDependencyInjector() {
-        return new MeshDependencyInjector();
+    public MeshDependencyInjector meshDependencyInjector(
+            McpHttpClient mcpHttpClient,
+            McpMeshToolProxyFactory proxyFactory,
+            ToolInvoker toolInvoker) {
+        return new MeshDependencyInjector(mcpHttpClient, proxyFactory, toolInvoker);
     }
 
     @Bean
@@ -141,11 +155,13 @@ public class MeshAutoConfiguration {
             MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             McpHttpClient mcpHttpClient,
+            McpMeshToolProxyFactory proxyFactory,
+            ToolInvoker toolInvoker,
             ObjectMapper objectMapper,
             ApplicationContext applicationContext) {
 
         return new MeshEventProcessor(runtime, injector, wrapperRegistry,
-            llmRegistry, mcpHttpClient, objectMapper, applicationContext);
+            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, objectMapper, applicationContext);
     }
 
     private AgentSpec buildAgentSpec(

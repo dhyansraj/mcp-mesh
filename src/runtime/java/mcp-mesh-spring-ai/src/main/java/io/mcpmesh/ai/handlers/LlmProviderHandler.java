@@ -276,13 +276,98 @@ public interface LlmProviderHandler {
         }
 
         /**
+         * Keywords that are validation-only and not supported by LLM structured output APIs.
+         */
+        private static final Set<String> UNSUPPORTED_SCHEMA_KEYWORDS = Set.of(
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "minLength",
+            "maxLength",
+            "minItems",
+            "maxItems",
+            "pattern",
+            "multipleOf"
+        );
+
+        /**
+         * Sanitize schema by removing validation keywords unsupported by LLM APIs.
+         *
+         * LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
+         * the structural parts of JSON Schema, not validation constraints.
+         *
+         * @return New schema with unsupported validation keywords removed
+         */
+        public Map<String, Object> sanitize() {
+            return sanitizeSchema(new LinkedHashMap<>(schema));
+        }
+
+        /**
+         * Recursively sanitize a schema by removing unsupported keywords.
+         */
+        @SuppressWarnings("unchecked")
+        private static Map<String, Object> sanitizeSchema(Map<String, Object> schema) {
+            Map<String, Object> result = new LinkedHashMap<>(schema);
+
+            // Remove unsupported keywords at this level
+            for (String keyword : UNSUPPORTED_SCHEMA_KEYWORDS) {
+                result.remove(keyword);
+            }
+
+            // Recursively process nested schemas
+            Map<String, Object> properties = (Map<String, Object>) result.get("properties");
+            if (properties != null) {
+                Map<String, Object> sanitizedProperties = new LinkedHashMap<>();
+                for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                    Map<String, Object> fieldSchema = (Map<String, Object>) entry.getValue();
+                    sanitizedProperties.put(entry.getKey(), sanitizeSchema(fieldSchema));
+                }
+                result.put("properties", sanitizedProperties);
+            }
+
+            // Process array items
+            Map<String, Object> items = (Map<String, Object>) result.get("items");
+            if (items != null) {
+                result.put("items", sanitizeSchema(items));
+            }
+
+            // Process $defs (JSON Schema definitions)
+            Map<String, Object> defs = (Map<String, Object>) result.get("$defs");
+            if (defs != null) {
+                Map<String, Object> sanitizedDefs = new LinkedHashMap<>();
+                for (Map.Entry<String, Object> entry : defs.entrySet()) {
+                    Map<String, Object> defSchema = (Map<String, Object>) entry.getValue();
+                    sanitizedDefs.put(entry.getKey(), sanitizeSchema(defSchema));
+                }
+                result.put("$defs", sanitizedDefs);
+            }
+
+            // Process anyOf, oneOf, allOf
+            for (String key : List.of("anyOf", "oneOf", "allOf")) {
+                List<Map<String, Object>> variants = (List<Map<String, Object>>) result.get(key);
+                if (variants != null) {
+                    List<Map<String, Object>> sanitizedVariants = new ArrayList<>();
+                    for (Map<String, Object> variant : variants) {
+                        sanitizedVariants.add(sanitizeSchema(variant));
+                    }
+                    result.put(key, sanitizedVariants);
+                }
+            }
+
+            return result;
+        }
+
+        /**
          * Make schema strict for OpenAI/Gemini (add additionalProperties: false, all required).
          *
          * @param addAllRequired Whether to add all properties to required array
          * @return New strict schema
          */
         public Map<String, Object> makeStrict(boolean addAllRequired) {
-            return makeSchemaStrict(new LinkedHashMap<>(schema), addAllRequired);
+            // Sanitize first to remove unsupported validation keywords (minimum, maximum, etc.)
+            Map<String, Object> sanitized = sanitizeSchema(new LinkedHashMap<>(schema));
+            return makeSchemaStrict(sanitized, addAllRequired);
         }
 
         /**

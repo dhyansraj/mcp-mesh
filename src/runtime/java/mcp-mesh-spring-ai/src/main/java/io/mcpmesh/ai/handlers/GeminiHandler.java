@@ -102,8 +102,9 @@ public class GeminiHandler implements LlmProviderHandler {
             systemContent.append("Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n")
                 .append("{\n");
 
+            // Sanitize schema to remove unsupported validation keywords (minimum, maximum, etc.)
             @SuppressWarnings("unchecked")
-            Map<String, Object> properties = (Map<String, Object>) outputSchema.schema().get("properties");
+            Map<String, Object> properties = (Map<String, Object>) outputSchema.sanitize().get("properties");
             if (properties != null) {
                 int i = 0;
                 for (Map.Entry<String, Object> entry : properties.entrySet()) {

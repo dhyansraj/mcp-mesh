@@ -618,13 +618,20 @@ IMPORTANT TOOL CALLING RULES:
         # Render base system prompt (from template or literal) with effective context
         base_system_prompt = self._render_system_prompt(effective_context)
 
-        # Phase 2: Use provider handler to format system prompt
-        # This allows vendor-specific optimizations (e.g., OpenAI skips JSON instructions)
-        system_content = self._provider_handler.format_system_prompt(
-            base_prompt=base_system_prompt,
-            tool_schemas=self._tool_schemas,
-            output_type=self.output_type,
-        )
+        # Phase 2: Format system prompt
+        if self._is_mesh_delegated:
+            # Delegate path: Just use base prompt + basic tool instructions
+            # Provider will add vendor-specific formatting
+            system_content = base_system_prompt
+            if self._tool_schemas:
+                system_content += "\n\nYou have access to tools. Use them when needed to gather information."
+        else:
+            # Direct path: Use vendor handler for vendor-specific optimizations
+            system_content = self._provider_handler.format_system_prompt(
+                base_prompt=base_system_prompt,
+                tool_schemas=self._tool_schemas,
+                output_type=self.output_type,
+            )
 
         # Debug: Log system prompt (truncated for privacy)
         logger.debug(

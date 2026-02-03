@@ -25,6 +25,7 @@ import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
   makeSchemaStrict,
+  sanitizeSchemaForStructuredOutput,
   BASE_TOOL_INSTRUCTIONS,
   CLAUDE_ANTI_XML_INSTRUCTION,
   type ProviderHandler,
@@ -96,14 +97,11 @@ export class ClaudeHandler implements ProviderHandler {
     // Convert messages to Vercel AI SDK format (shared utility)
     let convertedMessages = convertMessagesToVercelFormat(messages);
 
-    // For "hint" mode, append JSON instructions to the system prompt
-    // This is the fast, prompt-based approach instead of slow generateObject()
+    // Note: In hint mode, JSON instructions are added by formatSystemPrompt() which
+    // is called by llm-provider.ts before prepareRequest(). We don't duplicate here.
+    // The formatSystemPrompt() method handles the DECISION GUIDE when tools are present.
     if (determinedMode === "hint" && outputSchema) {
-      convertedMessages = this.appendJsonInstructionsToSystemPrompt(
-        convertedMessages,
-        outputSchema
-      );
-      debug(`Using hint mode with JSON instructions in prompt for schema: ${outputSchema.name}`);
+      debug(`Using hint mode (JSON instructions added by formatSystemPrompt)`);
     }
 
     const request: PreparedRequest = {
@@ -132,7 +130,8 @@ export class ClaudeHandler implements ProviderHandler {
     if (determinedMode === "strict" && outputSchema) {
       // Claude requires additionalProperties: false on all object types
       // Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
-      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: false });
+      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: false });
       request.responseFormat = {
         type: "json_schema",
         jsonSchema: {
@@ -212,8 +211,19 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
         Object.entries(properties).map(([k, v]) => [k, `<${(v as { type?: string }).type ?? "value"}>`])
       );
 
-      systemContent += `
+      // Add DECISION GUIDE when tools are present to help Claude know when NOT to use tools
+      let decisionGuide = "";
+      if (toolSchemas && toolSchemas.length > 0) {
+        decisionGuide = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+      }
 
+      systemContent += `
+${decisionGuide}
 RESPONSE FORMAT:
 You MUST respond with valid JSON matching this schema:
 {
@@ -279,84 +289,6 @@ CRITICAL: Your response must be ONLY the raw JSON object.
     return "hint";
   }
 
-  // ==========================================================================
-  // Private Helper Methods
-  // ==========================================================================
-
-  /**
-   * Append JSON schema instructions to the system prompt for "hint" mode.
-   *
-   * This enables fast, prompt-based structured output instead of slow generateObject().
-   * Claude is excellent at following detailed instructions, so this approach is
-   * ~95% reliable while being much faster than native structured output.
-   *
-   * @param messages - Messages with system prompt
-   * @param outputSchema - Schema to include in instructions
-   * @returns Messages with updated system prompt
-   */
-  private appendJsonInstructionsToSystemPrompt(
-    messages: LlmMessage[],
-    outputSchema: OutputSchema
-  ): LlmMessage[] {
-    const properties = (outputSchema.schema.properties ?? {}) as Record<
-      string,
-      { type?: string; description?: string }
-    >;
-    const required = (outputSchema.schema.required ?? []) as string[];
-
-    // Build human-readable schema description
-    const fieldDescriptions: string[] = [];
-    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-      const fieldType = fieldSchema.type ?? "any";
-      const isRequired = required.includes(fieldName);
-      const reqMarker = isRequired ? " (required)" : " (optional)";
-      const desc = fieldSchema.description ?? "";
-      const descText = desc ? ` - ${desc}` : "";
-      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
-    }
-
-    const fieldsText = fieldDescriptions.join("\n");
-    const exampleFormat = Object.fromEntries(
-      Object.entries(properties).map(([k, v]) => [k, `<${v.type ?? "value"}>`])
-    );
-
-    const jsonInstructions = `
-
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching the ${outputSchema.name} schema:
-{
-${fieldsText}
-}
-
-Example format:
-${JSON.stringify(exampleFormat, null, 2)}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
-- DO NOT include any text before or after the JSON
-- Start directly with { and end with }`;
-
-    // Find and update system message, or prepend one if none exists
-    const updatedMessages = [...messages];
-    const systemIndex = updatedMessages.findIndex((m) => m.role === "system");
-
-    if (systemIndex >= 0) {
-      // Append to existing system message
-      const systemMsg = updatedMessages[systemIndex];
-      updatedMessages[systemIndex] = {
-        ...systemMsg,
-        content: (systemMsg.content ?? "") + jsonInstructions,
-      };
-    } else {
-      // Prepend new system message with JSON instructions
-      updatedMessages.unshift({
-        role: "system",
-        content: jsonInstructions.trim(),
-      });
-    }
-
-    return updatedMessages;
-  }
 }
 
 // Register with the registry

@@ -43,6 +43,8 @@ public class MeshEventProcessor implements SmartLifecycle {
     private final MeshToolWrapperRegistry wrapperRegistry;
     private final MeshLlmRegistry llmRegistry;
     private final McpHttpClient mcpClient;
+    private final McpMeshToolProxyFactory proxyFactory;
+    private final ToolInvoker toolInvoker;
     private final ObjectMapper objectMapper;
     private final ApplicationContext applicationContext; // For optional Spring AI bean lookup
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -67,6 +69,8 @@ public class MeshEventProcessor implements SmartLifecycle {
             MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             McpHttpClient mcpClient,
+            McpMeshToolProxyFactory proxyFactory,
+            ToolInvoker toolInvoker,
             ObjectMapper objectMapper,
             ApplicationContext applicationContext) {
         this.runtime = runtime;
@@ -74,6 +78,8 @@ public class MeshEventProcessor implements SmartLifecycle {
         this.wrapperRegistry = wrapperRegistry;
         this.llmRegistry = llmRegistry;
         this.mcpClient = mcpClient;
+        this.proxyFactory = proxyFactory;
+        this.toolInvoker = toolInvoker;
         this.objectMapper = objectMapper;
         this.applicationContext = applicationContext;
         this.executor = Executors.newSingleThreadExecutor(r -> {
@@ -349,13 +355,15 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             if (proxy == null) {
                 // Search by method name suffix (funcId might be just the method name)
+                log.debug("Searching llmAgentProxies by suffix '.{}' (keys: {})", funcId, llmAgentProxies.keySet());
                 for (Map.Entry<String, MeshLlmAgentProxy> entry : llmAgentProxies.entrySet()) {
                     String key = entry.getKey();
                     // Match if key ends with ".funcId" (full class path) or equals funcId
                     if (key.endsWith("." + funcId) || key.equals(funcId)) {
                         proxy = entry.getValue();
                         wrapperFuncId = key;
-                        log.info("Found LLM proxy by method name: {} -> {}", funcId, key);
+                        log.info("Found LLM proxy by method name: {} -> {} (proxy@{})",
+                            funcId, key, System.identityHashCode(proxy));
                         break;
                     }
                 }
@@ -363,7 +371,8 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             if (proxy != null) {
                 proxy.updateTools(event.getTools());
-                log.info("Updated {} tools on LLM agent proxy for {}", event.getTools().size(), funcId);
+                log.info("Updated {} tools on LLM agent proxy@{} for {} (isAvailable={})",
+                    event.getTools().size(), System.identityHashCode(proxy), funcId, proxy.isAvailable());
             } else {
                 // Proxy doesn't exist yet - create it now (don't wait for provider)
                 // This matches Python behavior where agent is created when tools arrive
@@ -426,20 +435,22 @@ public class MeshEventProcessor implements SmartLifecycle {
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations() : 1;
 
-            proxy.configure(mcpClient, injector, systemPrompt, contextParam, maxIterations);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations);
 
             // Apply tools immediately
             proxy.updateTools(tools);
 
             // Store proxy for later provider updates
             llmAgentProxies.put(wrapperFuncId, proxy);
+            log.info("Stored proxy@{} in llmAgentProxies with key '{}'",
+                System.identityHashCode(proxy), wrapperFuncId);
 
             // Update the wrapper's LLM agent array
             String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);
             wrapperRegistry.updateLlmAgent(compositeKey, proxy);
 
-            log.info("Created LLM agent for {} (index={}, tools={}, provider=pending)",
-                wrapperFuncId, llmIndex, tools.size());
+            log.info("Created LLM agent proxy@{} for {} (index={}, tools={}, provider=pending, isAvailable={})",
+                System.identityHashCode(proxy), wrapperFuncId, llmIndex, tools.size(), proxy.isAvailable());
         }
 
         return proxy;
@@ -459,8 +470,12 @@ public class MeshEventProcessor implements SmartLifecycle {
         MeshEvent.LlmProviderInfo providerInfo = event.getProviderInfo();
         if (providerInfo != null) {
             String requestingFuncId = providerInfo.getFunctionId();
-            log.info("LLM provider available for {}: {} at {}",
-                requestingFuncId, providerInfo.getModel(), providerInfo.getEndpoint());
+            log.info("🔌 LLM_PROVIDER_AVAILABLE event received:");
+            log.info("  - functionId (consumer): {}", requestingFuncId);
+            log.info("  - functionName (provider tool): {}", providerInfo.getFunctionName());
+            log.info("  - endpoint: {}", providerInfo.getEndpoint());
+            log.info("  - model: {}", providerInfo.getModel());
+            log.info("  - agentId: {}", providerInfo.getAgentId());
 
             // Update the legacy LLM proxy with provider endpoint
             injector.updateLlmProvider(
@@ -479,7 +494,7 @@ public class MeshEventProcessor implements SmartLifecycle {
                 providerInfo.getModel()
             );
         } else {
-            log.debug("LLM provider event without provider info");
+            log.warn("⚠️ LLM provider event received but provider_info is NULL - event: {}", event);
         }
     }
 
@@ -498,22 +513,35 @@ public class MeshEventProcessor implements SmartLifecycle {
      * @param model        The model name
      */
     private void updateWrapperLlmAgent(String funcId, String endpoint, String functionName, String model) {
+        log.info("🔍 updateWrapperLlmAgent called with funcId='{}', endpoint='{}', functionName='{}', model='{}'",
+            funcId, endpoint, functionName, model);
+
+        // Log all registered wrappers for debugging
+        log.info("  Registered wrappers ({}):", wrapperRegistry.size());
+        for (MeshToolWrapper w : wrapperRegistry.getAllWrappers()) {
+            log.info("    - funcId='{}', methodName='{}', capability='{}'",
+                w.getFuncId(), w.getMethodName(), w.getCapability());
+        }
+
         MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
+        log.info("  Direct lookup by funcId '{}': {}", funcId, wrapper != null ? "FOUND" : "NOT FOUND");
 
         // If not found by funcId, try by method name (funcId might be just the function name from registry)
         if (wrapper == null) {
             // Search all wrappers for matching method name
             for (MeshToolWrapper w : wrapperRegistry.getAllWrappers()) {
+                log.debug("  Checking wrapper: funcId='{}', methodName='{}', capability='{}'",
+                    w.getFuncId(), w.getMethodName(), w.getCapability());
                 if (w.getMethodName().equals(funcId) || w.getCapability().equals(funcId)) {
                     wrapper = w;
-                    log.debug("Found wrapper by method name/capability: {} -> {}", funcId, w.getFuncId());
+                    log.info("  Found wrapper by method name/capability: {} -> {}", funcId, w.getFuncId());
                     break;
                 }
             }
         }
 
         if (wrapper == null) {
-            log.debug("No wrapper found for funcId: {} (may be using legacy injection)", funcId);
+            log.warn("❌ No wrapper found for funcId: {} (checked {} wrappers)", funcId, wrapperRegistry.size());
             return;
         }
 
@@ -526,29 +554,35 @@ public class MeshEventProcessor implements SmartLifecycle {
         }
 
         // Check if proxy already exists (created by handleLlmToolsUpdated)
+        log.info("  Current llmAgentProxies keys: {}", llmAgentProxies.keySet());
         MeshLlmAgentProxy existingProxy = llmAgentProxies.get(wrapperFuncId);
+        log.info("  Lookup proxy by wrapperFuncId '{}': {}", wrapperFuncId, existingProxy != null ? "FOUND" : "NOT FOUND");
 
         if (existingProxy != null) {
             // Proxy already exists - just update the provider
+            log.info("✅ Updating existing proxy (proxy@{}) with provider: endpoint={}, functionName={}, model={}",
+                System.identityHashCode(existingProxy), endpoint, functionName, model);
             existingProxy.updateProvider(endpoint, functionName, model);
-            log.info("Updated provider on existing LLM agent proxy for {} (endpoint={}, model={})",
-                wrapperFuncId, endpoint, model);
+            log.info("  Proxy isAvailable after update: {} (providerRef set)", existingProxy.isAvailable());
             return;
         }
 
         // Get @MeshLlm configuration from registry (using wrapper's full funcId)
         MeshLlmRegistry.LlmConfig config = llmRegistry.getByFunctionId(wrapperFuncId);
+        log.info("  Creating NEW proxy (no existing proxy found). LlmConfig: {}", config != null ? "found" : "NOT FOUND");
 
         // Create and configure proxy for each LLM agent parameter position
         for (int llmIndex = 0; llmIndex < wrapper.getLlmAgentCount(); llmIndex++) {
             MeshLlmAgentProxy proxy = new MeshLlmAgentProxy(wrapperFuncId);
+            log.info("  Created new proxy@{} for {} (llmIndex={})",
+                System.identityHashCode(proxy), wrapperFuncId, llmIndex);
 
             // Configure with @MeshLlm settings (or defaults)
             String systemPrompt = config != null ? config.systemPrompt() : "";
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations() : 1;
 
-            proxy.configure(mcpClient, injector, systemPrompt, contextParam, maxIterations);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations);
 
             // Set the provider endpoint
             proxy.updateProvider(endpoint, functionName, model);

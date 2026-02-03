@@ -265,10 +265,16 @@ public class MeshToolWrapperRegistry {
 
         MeshToolWrapper wrapper = wrappers.get(funcId);
         if (wrapper == null) {
-            log.warn("No wrapper found for funcId: {}", funcId);
+            // Fallback: funcId might be just the method name from Rust core
+            wrapper = wrappersByMethodName.get(funcId);
+        }
+        if (wrapper == null) {
+            log.warn("No wrapper found for funcId: {} (also checked method name)", funcId);
             return;
         }
 
+        log.info("updateLlmAgent: compositeKey='{}', funcId='{}', llmIndex={}, agent@{}",
+            compositeKey, funcId, llmIndex, agent != null ? System.identityHashCode(agent) : "null");
         wrapper.updateLlmAgent(llmIndex, agent);
         log.debug("Updated LLM agent {} for {}", llmIndex, funcId);
     }

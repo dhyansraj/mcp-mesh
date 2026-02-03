@@ -594,19 +594,19 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             Map<String, Object> properties = new LinkedHashMap<>();
             List<String> required = new ArrayList<>();
 
-            // Handle records
+            // Handle records - use getGenericType() to preserve parameterized types
             if (type.isRecord()) {
                 var components = type.getRecordComponents();
                 for (var comp : components) {
-                    properties.put(comp.getName(), getJsonSchemaType(comp.getType()));
+                    properties.put(comp.getName(), getJsonSchemaType(comp.getGenericType()));
                     required.add(comp.getName());
                 }
             } else {
-                // Handle regular classes - use declared fields
+                // Handle regular classes - use declared fields with generic types
                 var fields = type.getDeclaredFields();
                 for (var field : fields) {
                     if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
-                    properties.put(field.getName(), getJsonSchemaType(field.getType()));
+                    properties.put(field.getName(), getJsonSchemaType(field.getGenericType()));
                     required.add(field.getName());
                 }
             }
@@ -616,26 +616,70 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             return schema;
         }
 
-        private Map<String, Object> getJsonSchemaType(Class<?> type) {
+        /**
+         * Get JSON schema type for a given Java type.
+         *
+         * <p>Handles both raw classes and parameterized types (e.g., List&lt;String&gt;).
+         * For collections, extracts the element type from the generic parameter.
+         *
+         * @param type the Java type (Class or ParameterizedType)
+         * @return JSON schema type object
+         */
+        private Map<String, Object> getJsonSchemaType(java.lang.reflect.Type type) {
             Map<String, Object> schemaType = new LinkedHashMap<>();
-            if (type == String.class) {
-                schemaType.put("type", "string");
-            } else if (type == int.class || type == Integer.class ||
-                       type == long.class || type == Long.class) {
-                schemaType.put("type", "integer");
-            } else if (type == double.class || type == Double.class ||
-                       type == float.class || type == Float.class) {
-                schemaType.put("type", "number");
-            } else if (type == boolean.class || type == Boolean.class) {
-                schemaType.put("type", "boolean");
-            } else if (type.isArray() || java.util.Collection.class.isAssignableFrom(type)) {
-                schemaType.put("type", "array");
-                schemaType.put("items", Map.of("type", "object"));
-            } else if (java.util.Map.class.isAssignableFrom(type)) {
-                schemaType.put("type", "object");
+
+            // Handle parameterized types (e.g., List<String>, Map<String, Object>)
+            if (type instanceof java.lang.reflect.ParameterizedType pt) {
+                Class<?> rawType = (Class<?>) pt.getRawType();
+
+                if (java.util.Collection.class.isAssignableFrom(rawType)) {
+                    schemaType.put("type", "array");
+                    // Get the element type from the generic parameter
+                    java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
+                    if (typeArgs.length > 0) {
+                        schemaType.put("items", getJsonSchemaType(typeArgs[0]));
+                    } else {
+                        schemaType.put("items", Map.of("type", "object"));
+                    }
+                    return schemaType;
+                } else if (java.util.Map.class.isAssignableFrom(rawType)) {
+                    schemaType.put("type", "object");
+                    return schemaType;
+                }
+                // Fall through to handle rawType as a regular class
+                type = rawType;
+            }
+
+            // Handle raw class types
+            if (type instanceof Class<?> clazz) {
+                if (clazz == String.class) {
+                    schemaType.put("type", "string");
+                } else if (clazz == int.class || clazz == Integer.class ||
+                           clazz == long.class || clazz == Long.class) {
+                    schemaType.put("type", "integer");
+                } else if (clazz == double.class || clazz == Double.class ||
+                           clazz == float.class || clazz == Float.class) {
+                    schemaType.put("type", "number");
+                } else if (clazz == boolean.class || clazz == Boolean.class) {
+                    schemaType.put("type", "boolean");
+                } else if (clazz.isArray()) {
+                    schemaType.put("type", "array");
+                    Class<?> componentType = clazz.getComponentType();
+                    schemaType.put("items", getJsonSchemaType(componentType));
+                } else if (java.util.Collection.class.isAssignableFrom(clazz)) {
+                    // Raw collection without type parameter - default to object
+                    schemaType.put("type", "array");
+                    schemaType.put("items", Map.of("type", "object"));
+                } else if (java.util.Map.class.isAssignableFrom(clazz)) {
+                    schemaType.put("type", "object");
+                } else {
+                    schemaType.put("type", "object");
+                }
             } else {
+                // Unknown type - default to object
                 schemaType.put("type", "object");
             }
+
             return schemaType;
         }
     }

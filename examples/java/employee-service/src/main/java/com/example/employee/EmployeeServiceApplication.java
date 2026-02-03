@@ -69,7 +69,7 @@ public class EmployeeServiceApplication {
     @MeshTool(
         capability = "get_employee",
         description = "Get an employee by their ID",
-        tags = {"employee", "data", "java"}
+        tags = {"employee", "data", "tools", "java"}
     )
     public Employee getEmployee(
         @Param(value = "id", description = "The employee ID") int id
@@ -93,7 +93,7 @@ public class EmployeeServiceApplication {
     @MeshTool(
         capability = "list_employees",
         description = "List employees, optionally filtered by department",
-        tags = {"employee", "data", "java"}
+        tags = {"employee", "data", "tools", "java"}
     )
     public List<Employee> listEmployees(
         @Param(value = "department", description = "Department to filter by (optional)", required = false)

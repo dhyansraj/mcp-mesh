@@ -7,14 +7,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.web.client.RestTemplate;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Random;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
- * Java Weather Agent - provides weather information tools.
+ * Java Weather Agent - provides real weather information from wttr.in API.
  *
  * <p>This agent provides weather tools that can be discovered by LLM agents
  * using tool filtering (tags: "tools", "weather").
@@ -32,29 +39,40 @@ import java.util.Random;
  * meshctl start --registry-only
  *
  * # Run this agent
- * cd examples/java/java-weather-agent
- * MESH_NATIVE_LIB_PATH=/path/to/native/libs mvn spring-boot:run
+ * meshctl start examples/java/java-weather-agent -d
  *
  * # Test tools
  * meshctl list -t
- * meshctl call get_weather_by_city '{"city": "San Francisco"}'
- * meshctl call get_weather_by_zip '{"zip_code": "94102"}'
+ * meshctl call getWeatherByCity '{"city": "San Francisco"}'
+ * meshctl call getWeatherByZip '{"zip_code": "94102"}'
  * </pre>
  */
 @SpringBootApplication
 @MeshAgent(
     name = "java-weather-agent",
     version = "1.0.0",
-    description = "Weather information service providing current conditions and forecasts",
+    description = "Weather information service providing current conditions and forecasts from wttr.in",
     port = 9012
 )
 public class WeatherAgentApplication {
 
     private static final Logger log = LoggerFactory.getLogger(WeatherAgentApplication.class);
-    private static final Random random = new Random();
+    private static final String WTTR_BASE_URL = "https://wttr.in";
+
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
+
+    public WeatherAgentApplication() {
+        // Configure RestTemplate with timeouts
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10000);  // 10 seconds
+        factory.setReadTimeout(30000);     // 30 seconds
+        this.restTemplate = new RestTemplate(factory);
+        this.objectMapper = new ObjectMapper();
+    }
 
     public static void main(String[] args) {
-        log.info("Starting Weather Agent...");
+        log.info("Starting Weather Agent (using wttr.in API)...");
         SpringApplication.run(WeatherAgentApplication.class, args);
     }
 
@@ -74,19 +92,13 @@ public class WeatherAgentApplication {
     ) {
         log.info("[get_weather_by_city] Getting weather for city: {}", city);
 
-        // Generate realistic mock weather data based on city
-        WeatherData weather = generateWeatherForCity(city);
-
-        return Map.of(
-            "city", city,
-            "temperature_f", weather.temperatureF,
-            "temperature_c", weather.temperatureC,
-            "conditions", weather.conditions,
-            "humidity", weather.humidity,
-            "wind_mph", weather.windMph,
-            "timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-            "source", "java-weather-agent"
-        );
+        try {
+            JsonNode weatherData = fetchWeather(city);
+            return parseCurrentWeather(city, weatherData);
+        } catch (Exception e) {
+            log.error("Failed to fetch weather for {}: {}", city, e.getMessage());
+            return errorResponse(city, e.getMessage());
+        }
     }
 
     /**
@@ -105,21 +117,16 @@ public class WeatherAgentApplication {
     ) {
         log.info("[get_weather_by_zip] Getting weather for zip: {}", zipCode);
 
-        // Map zip code to city for mock data
-        String city = zipToCity(zipCode);
-        WeatherData weather = generateWeatherForCity(city);
-
-        return Map.of(
-            "zip_code", zipCode,
-            "city", city,
-            "temperature_f", weather.temperatureF,
-            "temperature_c", weather.temperatureC,
-            "conditions", weather.conditions,
-            "humidity", weather.humidity,
-            "wind_mph", weather.windMph,
-            "timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-            "source", "java-weather-agent"
-        );
+        try {
+            // wttr.in supports zip codes directly
+            JsonNode weatherData = fetchWeather(zipCode);
+            Map<String, Object> result = parseCurrentWeather(zipCode, weatherData);
+            result.put("zip_code", zipCode);
+            return result;
+        } catch (Exception e) {
+            log.error("Failed to fetch weather for zip {}: {}", zipCode, e.getMessage());
+            return errorResponse(zipCode, e.getMessage());
+        }
     }
 
     /**
@@ -138,85 +145,119 @@ public class WeatherAgentApplication {
     ) {
         log.info("[get_forecast] Getting 3-day forecast for: {}", city);
 
-        WeatherData today = generateWeatherForCity(city);
-        int baseTemp = today.temperatureF;
-
-        return Map.of(
-            "city", city,
-            "forecast", new Map[] {
-                Map.of(
-                    "day", "Today",
-                    "high_f", baseTemp + random.nextInt(5),
-                    "low_f", baseTemp - 10 - random.nextInt(5),
-                    "conditions", today.conditions
-                ),
-                Map.of(
-                    "day", "Tomorrow",
-                    "high_f", baseTemp + random.nextInt(8) - 2,
-                    "low_f", baseTemp - 12 - random.nextInt(5),
-                    "conditions", randomCondition()
-                ),
-                Map.of(
-                    "day", "Day After",
-                    "high_f", baseTemp + random.nextInt(10) - 3,
-                    "low_f", baseTemp - 14 - random.nextInt(5),
-                    "conditions", randomCondition()
-                )
-            },
-            "timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-            "source", "java-weather-agent"
-        );
+        try {
+            JsonNode weatherData = fetchWeather(city);
+            return parseForecast(city, weatherData);
+        } catch (Exception e) {
+            log.error("Failed to fetch forecast for {}: {}", city, e.getMessage());
+            return errorResponse(city, e.getMessage());
+        }
     }
 
     // =========================================================================
-    // Mock data generation
+    // wttr.in API integration
     // =========================================================================
 
-    private record WeatherData(
-        int temperatureF,
-        int temperatureC,
-        String conditions,
-        int humidity,
-        int windMph
-    ) {}
+    private JsonNode fetchWeather(String location) throws Exception {
+        String encodedLocation = URLEncoder.encode(location, StandardCharsets.UTF_8);
+        String url = WTTR_BASE_URL + "/" + encodedLocation + "?format=j1";
 
-    private WeatherData generateWeatherForCity(String city) {
-        // Generate somewhat realistic weather based on city name hash
-        int hash = Math.abs(city.toLowerCase().hashCode());
-        int baseTemp = 50 + (hash % 40); // 50-90F range
+        log.debug("Fetching weather from: {}", url);
 
-        // Add some randomness
-        int tempF = baseTemp + random.nextInt(10) - 5;
-        int tempC = (tempF - 32) * 5 / 9;
-
-        String[] conditions = {"Sunny", "Partly Cloudy", "Cloudy", "Light Rain", "Clear", "Overcast"};
-        String condition = conditions[hash % conditions.length];
-
-        int humidity = 30 + (hash % 50) + random.nextInt(10);
-        int windMph = 5 + (hash % 15) + random.nextInt(5);
-
-        return new WeatherData(tempF, tempC, condition, humidity, windMph);
+        String response = restTemplate.getForObject(url, String.class);
+        return objectMapper.readTree(response);
     }
 
-    private String zipToCity(String zipCode) {
-        // Map common zip codes to cities
-        return switch (zipCode) {
-            case "94102", "94103", "94104" -> "San Francisco";
-            case "10001", "10002", "10003" -> "New York";
-            case "90210", "90211" -> "Beverly Hills";
-            case "60601", "60602" -> "Chicago";
-            case "98101", "98102" -> "Seattle";
-            case "02101", "02102" -> "Boston";
-            case "33101", "33102" -> "Miami";
-            case "78201", "78202" -> "San Antonio";
-            case "85001", "85002" -> "Phoenix";
-            case "19101", "19102" -> "Philadelphia";
-            default -> "Unknown City (Zip: " + zipCode + ")";
-        };
+    private Map<String, Object> parseCurrentWeather(String location, JsonNode data) {
+        JsonNode current = data.path("current_condition").get(0);
+        JsonNode nearest = data.path("nearest_area").get(0);
+
+        // Get location info
+        String areaName = nearest.path("areaName").get(0).path("value").asText(location);
+        String country = nearest.path("country").get(0).path("value").asText("");
+        String region = nearest.path("region").get(0).path("value").asText("");
+
+        // Get weather data
+        int tempF = current.path("temp_F").asInt();
+        int tempC = current.path("temp_C").asInt();
+        int humidity = current.path("humidity").asInt();
+        int windMph = current.path("windspeedMiles").asInt();
+        String windDir = current.path("winddir16Point").asText();
+        int feelsLikeF = current.path("FeelsLikeF").asInt();
+        int feelsLikeC = current.path("FeelsLikeC").asInt();
+
+        // Get weather description
+        String conditions = current.path("weatherDesc").get(0).path("value").asText("Unknown");
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("location", areaName);
+        result.put("region", region);
+        result.put("country", country);
+        result.put("temperature_f", tempF);
+        result.put("temperature_c", tempC);
+        result.put("feels_like_f", feelsLikeF);
+        result.put("feels_like_c", feelsLikeC);
+        result.put("conditions", conditions);
+        result.put("humidity", humidity);
+        result.put("wind_mph", windMph);
+        result.put("wind_direction", windDir);
+        result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        result.put("source", "wttr.in");
+
+        return result;
     }
 
-    private String randomCondition() {
-        String[] conditions = {"Sunny", "Partly Cloudy", "Cloudy", "Light Rain", "Clear", "Overcast", "Scattered Showers"};
-        return conditions[random.nextInt(conditions.length)];
+    private Map<String, Object> parseForecast(String location, JsonNode data) {
+        JsonNode nearest = data.path("nearest_area").get(0);
+        String areaName = nearest.path("areaName").get(0).path("value").asText(location);
+
+        JsonNode weatherArray = data.path("weather");
+
+        Map<String, Object>[] forecast = new Map[Math.min(3, weatherArray.size())];
+        String[] dayNames = {"Today", "Tomorrow", "Day After"};
+
+        for (int i = 0; i < forecast.length; i++) {
+            JsonNode day = weatherArray.get(i);
+
+            int maxTempF = day.path("maxtempF").asInt();
+            int minTempF = day.path("mintempF").asInt();
+            int maxTempC = day.path("maxtempC").asInt();
+            int minTempC = day.path("mintempC").asInt();
+            String date = day.path("date").asText();
+
+            // Get average condition from hourly data
+            JsonNode hourly = day.path("hourly");
+            String conditions = hourly.get(hourly.size() / 2).path("weatherDesc").get(0).path("value").asText("Unknown");
+            int chanceOfRain = hourly.get(hourly.size() / 2).path("chanceofrain").asInt();
+
+            Map<String, Object> dayForecast = new LinkedHashMap<>();
+            dayForecast.put("day", dayNames[i]);
+            dayForecast.put("date", date);
+            dayForecast.put("high_f", maxTempF);
+            dayForecast.put("low_f", minTempF);
+            dayForecast.put("high_c", maxTempC);
+            dayForecast.put("low_c", minTempC);
+            dayForecast.put("conditions", conditions);
+            dayForecast.put("chance_of_rain", chanceOfRain + "%");
+
+            forecast[i] = dayForecast;
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("location", areaName);
+        result.put("forecast", forecast);
+        result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        result.put("source", "wttr.in");
+
+        return result;
+    }
+
+    private Map<String, Object> errorResponse(String location, String error) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("location", location);
+        result.put("error", error);
+        result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        result.put("source", "java-weather-agent");
+        return result;
     }
 }

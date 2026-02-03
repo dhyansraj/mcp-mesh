@@ -3,10 +3,14 @@ package io.mcpmesh.ai;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlmProvider;
+import io.mcpmesh.ai.handlers.LlmProviderHandler;
+import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
+import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
+import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.aop.support.AopUtils;
@@ -272,8 +276,16 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
     /**
      * Handle an LLM generation request.
      *
+     * <p>For mesh delegation mode:
+     * <ol>
+     *   <li>Receives request with messages, tools, and optional output_schema</li>
+     *   <li>Formats system prompt with structured output instructions (vendor-specific)</li>
+     *   <li>Calls LLM with tools (without auto-executing)</li>
+     *   <li>Returns tool_calls to caller for execution</li>
+     * </ol>
+     *
      * @param capability The capability name
-     * @param params     Request parameters (messages, tools, etc.)
+     * @param params     Request parameters (messages, tools, output_schema, etc.)
      * @return Response map with content and optional tool_calls
      */
     @SuppressWarnings("unchecked")
@@ -306,34 +318,211 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         List<Map<String, Object>> messages = (List<Map<String, Object>>) requestData.get("messages");
         List<Map<String, Object>> tools = (List<Map<String, Object>>) requestData.get("tools");
 
-        log.debug("Generating response with provider={}, messageCount={}", config.provider(),
-            messages != null ? messages.size() : 0);
+        // Extract model_params (contains output_schema for mesh delegation)
+        Map<String, Object> modelParams = (Map<String, Object>) requestData.get("model_params");
 
-        // Generate response with full message history
-        String content;
-        try {
-            if (messages != null && !messages.isEmpty()) {
-                // Use full message history for multi-turn conversations
-                content = llmProvider.generateWithMessages(config.provider(), messages);
-            } else {
-                // Fallback to simple generation if no messages
-                content = llmProvider.generate(config.provider(), "", "Hello");
-            }
-        } catch (Exception e) {
-            log.error("LLM generation failed: {}", e.getMessage());
-            throw new RuntimeException("LLM generation failed", e);
+        // Extract output_schema from model_params (mesh delegation) or directly (direct mode)
+        Map<String, Object> outputSchemaData = null;
+        String outputTypeName = null;
+        if (modelParams != null) {
+            outputSchemaData = (Map<String, Object>) modelParams.get("output_schema");
+            outputTypeName = (String) modelParams.get("output_type_name");
         }
+        // Also check direct location for backwards compatibility
+        if (outputSchemaData == null) {
+            outputSchemaData = (Map<String, Object>) requestData.get("output_schema");
+        }
+
+        log.debug("Generating response with provider={}, messageCount={}, toolCount={}, hasOutputSchema={}, outputTypeName={}",
+            config.provider(),
+            messages != null ? messages.size() : 0,
+            tools != null ? tools.size() : 0,
+            outputSchemaData != null,
+            outputTypeName);
+
+        // Get vendor-specific handler
+        LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler(config.provider());
+        log.debug("Using handler: {}", handler.getClass().getSimpleName());
+
+        // Get ChatModel for this provider
+        ChatModel model = llmProvider.getModelForProvider(config.provider());
 
         // Build response
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("content", content);
+
+        try {
+            if (messages == null || messages.isEmpty()) {
+                // Fallback to simple generation if no messages
+                String content = llmProvider.generate(config.provider(), "", "Hello");
+                response.put("content", content);
+                response.put("tool_calls", List.of());
+            } else if (tools == null || tools.isEmpty()) {
+                // No tools - use simple message generation with optional structured output
+                String content;
+                if (outputSchemaData != null) {
+                    // Format system prompt with output schema
+                    OutputSchema outputSchema = parseOutputSchema(outputSchemaData, outputTypeName);
+                    content = generateWithOutputSchema(handler, model, messages, outputSchema);
+                } else {
+                    content = llmProvider.generateWithMessages(config.provider(), messages);
+                }
+                response.put("content", content);
+                response.put("tool_calls", List.of());
+            } else {
+                // Tools present - use native tool calling without auto-execution
+                log.debug("Using tool-aware generation with {} tools (no auto-execution)", tools.size());
+
+                // Convert tool definitions to handler format
+                List<ToolDefinition> toolDefs = parseToolDefinitions(tools);
+
+                // Parse output schema if present
+                OutputSchema outputSchema = outputSchemaData != null ?
+                    parseOutputSchema(outputSchemaData, outputTypeName) : null;
+
+                // Generate with tools - provider does NOT execute tools
+                // Tool execution happens on the consumer (caller) side
+                LlmProviderHandler.LlmResponse llmResponse = generateWithToolsNoExecution(
+                    handler, model, messages, toolDefs, outputSchema
+                );
+
+                response.put("content", llmResponse.content());
+                response.put("tool_calls", convertToolCalls(llmResponse.toolCalls()));
+            }
+        } catch (Exception e) {
+            log.error("LLM generation failed: {}", e.getMessage(), e);
+            throw new RuntimeException("LLM generation failed", e);
+        }
+
         response.put("model", config.provider() + "/" + config.modelName());
-
-        // Note: Tool calling is not yet implemented in Spring AI direct mode
-        // For now, we return just the text response
-        response.put("tool_calls", List.of());
-
         return response;
+    }
+
+    /**
+     * Parse tool definitions from OpenAI function calling format.
+     */
+    @SuppressWarnings("unchecked")
+    private List<ToolDefinition> parseToolDefinitions(List<Map<String, Object>> tools) {
+        List<ToolDefinition> toolDefs = new ArrayList<>();
+        for (Map<String, Object> tool : tools) {
+            // Handle OpenAI format: {"type": "function", "function": {...}}
+            String type = (String) tool.get("type");
+            if ("function".equals(type)) {
+                Map<String, Object> function = (Map<String, Object>) tool.get("function");
+                if (function != null) {
+                    String name = (String) function.get("name");
+                    String description = (String) function.get("description");
+                    Map<String, Object> parameters = (Map<String, Object>) function.get("parameters");
+                    toolDefs.add(new ToolDefinition(name, description, parameters));
+                }
+            } else {
+                // Handle direct format: {"name": "...", "description": "...", "parameters": {...}}
+                String name = (String) tool.get("name");
+                String description = (String) tool.get("description");
+                Map<String, Object> parameters = (Map<String, Object>) tool.get("parameters");
+                if (name != null) {
+                    toolDefs.add(new ToolDefinition(name, description, parameters));
+                }
+            }
+        }
+        return toolDefs;
+    }
+
+    /**
+     * Parse output schema from request.
+     *
+     * @param outputSchemaData The schema data map
+     * @param outputTypeName Optional type name from model_params (takes precedence over name in schema)
+     */
+    @SuppressWarnings("unchecked")
+    private OutputSchema parseOutputSchema(Map<String, Object> outputSchemaData, String outputTypeName) {
+        // Use outputTypeName if provided, otherwise fall back to name in schema data
+        String name = outputTypeName != null ? outputTypeName :
+            (String) outputSchemaData.getOrDefault("name", "Response");
+        Map<String, Object> schema = (Map<String, Object>) outputSchemaData.get("schema");
+        if (schema == null) {
+            // Schema might be at top level
+            schema = new LinkedHashMap<>(outputSchemaData);
+            schema.remove("name");
+        }
+        return OutputSchema.fromSchema(name, schema);
+    }
+
+    /**
+     * Generate response with output schema (no tools).
+     *
+     * <p>Delegates to handler's generateWithTools() with empty tools list
+     * to leverage the handler's proper response_format support.
+     */
+    private String generateWithOutputSchema(
+            LlmProviderHandler handler,
+            ChatModel model,
+            List<Map<String, Object>> messages,
+            OutputSchema outputSchema) {
+
+        // Delegate to handler which has proper vendor-specific response_format
+        // Pass empty tools list and null executor (no tool execution needed)
+        LlmProviderHandler.LlmResponse response = handler.generateWithTools(
+            model, messages, List.of(), null, outputSchema, Map.of()
+        );
+
+        return response.content();
+    }
+
+    /**
+     * Generate with tools but WITHOUT executing them.
+     *
+     * <p>This is the key method for mesh delegation:
+     * <ul>
+     *   <li>Provider calls LLM with tool schemas</li>
+     *   <li>LLM returns tool_calls</li>
+     *   <li>Provider returns tool_calls to caller (no execution)</li>
+     *   <li>Caller (consumer) executes tools and sends results back</li>
+     * </ul>
+     *
+     * <p>Delegates to the handler's generateWithTools() which has the proper
+     * vendor-specific options (response_format for OpenAI/Gemini structured output).
+     */
+    private LlmProviderHandler.LlmResponse generateWithToolsNoExecution(
+            LlmProviderHandler handler,
+            ChatModel model,
+            List<Map<String, Object>> messages,
+            List<ToolDefinition> toolDefs,
+            OutputSchema outputSchema) {
+
+        // Delegate to handler which has proper vendor-specific options (response_format for OpenAI/Gemini)
+        // The handler's generateWithTools() already handles:
+        // - Formatting system prompt
+        // - Creating tool callbacks with proper schemas
+        // - Applying response_format for structured output (OpenAI/Gemini)
+        // - Tool execution callback (we pass null since we don't execute here)
+        //
+        // Passing null for toolExecutor tells the handler to NOT execute tools,
+        // just return the tool_calls in the response.
+
+        log.debug("Delegating to handler.generateWithTools() with {} tools (no execution)", toolDefs.size());
+
+        return handler.generateWithTools(model, messages, toolDefs, null, outputSchema, Map.of());
+    }
+    /**
+     * Convert tool calls to response format (OpenAI style).
+     */
+    private List<Map<String, Object>> convertToolCalls(List<LlmProviderHandler.ToolCall> toolCalls) {
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (LlmProviderHandler.ToolCall tc : toolCalls) {
+            Map<String, Object> toolCall = new LinkedHashMap<>();
+            toolCall.put("id", tc.id());
+            toolCall.put("type", "function");
+
+            Map<String, Object> function = new LinkedHashMap<>();
+            function.put("name", tc.name());
+            function.put("arguments", tc.arguments());
+            toolCall.put("function", function);
+
+            result.add(toolCall);
+        }
+
+        return result;
     }
 
     /**

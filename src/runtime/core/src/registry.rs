@@ -96,6 +96,9 @@ pub struct LlmToolInfo {
     #[serde(rename = "name")]
     pub function_name: String,
     pub capability: String,
+    /// Tool description for LLM prompting
+    #[serde(default)]
+    pub description: Option<String>,
     pub endpoint: String,
     #[serde(default)]
     pub agent_id: String,
@@ -155,6 +158,8 @@ pub struct ToolRegistration {
     pub llm_filter: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_provider: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kwargs: Option<serde_json::Value>,
 }
 
 /// Dependency registration for heartbeat request.
@@ -232,6 +237,7 @@ impl HeartbeatRequest {
                 input_schema: t.input_schema.as_ref().and_then(|s| serde_json::from_str(s).ok()),
                 llm_filter: t.llm_filter.as_ref().and_then(|f| serde_json::from_str(f).ok()),
                 llm_provider: t.llm_provider.as_ref().and_then(|p| serde_json::from_str(p).ok()),
+                kwargs: t.kwargs.as_ref().and_then(|k| serde_json::from_str(k).ok()),
             })
             .collect();
 

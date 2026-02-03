@@ -160,3 +160,34 @@ TOOL CALLING RULES:
             "vision": False,  # Conservative - not all models support vision
             "json_mode": False,  # Conservative - use prompt-based JSON instead
         }
+
+    def apply_structured_output(
+        self,
+        output_schema: dict[str, Any],
+        output_type_name: Optional[str],
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Apply structured output for generic vendors.
+
+        Generic strategy: Don't use response_format since not all vendors support it.
+        The consumer should rely on prompt-based instructions instead.
+
+        Args:
+            output_schema: JSON schema dict from consumer
+            output_type_name: Name of the output type
+            model_params: Current model parameters dict
+
+        Returns:
+            Unmodified model_params (no response_format added)
+        """
+        # Don't add response_format - generic vendors may not support it
+        # The consumer's system prompt should include JSON instructions
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.debug(
+            f"⚠️ Generic handler: skipping response_format for '{output_type_name}' "
+            f"(vendor '{self.vendor}' may not support structured output)"
+        )
+        return model_params

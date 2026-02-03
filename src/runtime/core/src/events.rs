@@ -138,6 +138,9 @@ pub struct LlmProviderInfo {
 
     /// Model name (optional)
     pub model: Option<String>,
+
+    /// Vendor name for handler selection (e.g., "gemini", "anthropic")
+    pub vendor: Option<String>,
 }
 
 /// Tool specification for LLM tools update event.
@@ -149,6 +152,9 @@ pub struct LlmToolInfo {
 
     /// Capability name
     pub capability: String,
+
+    /// Tool description
+    pub description: Option<String>,
 
     /// Endpoint URL to call
     pub endpoint: String,
@@ -308,6 +314,7 @@ impl MeshEvent {
                 kwargs.set_item("endpoint", &info.endpoint)?;
                 kwargs.set_item("function_name", &info.function_name)?;
                 kwargs.set_item("model", &info.model)?;
+                kwargs.set_item("vendor", &info.vendor)?;
                 let obj = provider_class.call((), Some(&kwargs))?;
                 Ok(Some(obj.into()))
             }

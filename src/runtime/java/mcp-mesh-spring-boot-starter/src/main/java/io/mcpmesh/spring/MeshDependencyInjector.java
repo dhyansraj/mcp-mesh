@@ -20,15 +20,22 @@ public class MeshDependencyInjector {
     private static final Logger log = LoggerFactory.getLogger(MeshDependencyInjector.class);
 
     private final McpHttpClient mcpClient;
+    private final McpMeshToolProxyFactory proxyFactory;
+    private final ToolInvoker toolInvoker;
     private final Map<String, McpMeshToolProxy> toolProxies = new ConcurrentHashMap<>();
     private final Map<String, MeshLlmAgentProxy> llmProxies = new ConcurrentHashMap<>();
 
     public MeshDependencyInjector() {
         this.mcpClient = new McpHttpClient();
+        this.proxyFactory = new McpMeshToolProxyFactory(this.mcpClient);
+        this.toolInvoker = new ToolInvoker(this.proxyFactory);
     }
 
-    public MeshDependencyInjector(McpHttpClient mcpClient) {
+    public MeshDependencyInjector(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                                   ToolInvoker toolInvoker) {
         this.mcpClient = mcpClient;
+        this.proxyFactory = proxyFactory;
+        this.toolInvoker = toolInvoker;
     }
 
     /**
@@ -98,7 +105,7 @@ public class MeshDependencyInjector {
     public MeshLlmAgent getLlmProxy(String functionId, String systemPrompt, int maxIterations) {
         MeshLlmAgentProxy proxy = llmProxies.computeIfAbsent(functionId,
             id -> new MeshLlmAgentProxy(id));
-        proxy.configure(mcpClient, this, systemPrompt, maxIterations);
+        proxy.configure(mcpClient, proxyFactory, toolInvoker, this, systemPrompt, maxIterations);
         return proxy;
     }
 
