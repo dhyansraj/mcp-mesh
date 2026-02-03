@@ -163,6 +163,12 @@ cython_debug/
 # VS Code
 .vscode/
 
+# Eclipse / Maven IDE files
+.classpath
+.project
+.settings/
+.factorypath
+
 # Other IDEs/Tools
 .emigo_repomap/
 .windsurf/
