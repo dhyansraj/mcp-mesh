@@ -657,9 +657,12 @@ export class MeshLlmAgent<T = string> {
         systemContent += toolSchemaSection;
       }
 
-      // Inject output schema hint if using "hint" or "strict" mode with a schema
+      // Inject output schema hint if using "hint" or "strict" mode with a schema.
+      // Skip for mesh delegation — the provider's handler applies vendor-specific
+      // formatting via output_schema in model_params. Consumer doesn't know
+      // the provider's vendor, so it must not add vendor-agnostic schema instructions.
       const outputMode = this.config.outputMode ?? "hint";
-      if (outputMode !== "text" && this.config.returnSchema) {
+      if (!context.meshProvider && outputMode !== "text" && this.config.returnSchema) {
         const outputSchemaSection = this.buildOutputSchemaSection();
         systemContent += outputSchemaSection;
       }
