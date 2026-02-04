@@ -16,7 +16,7 @@ MCP Mesh supports multiple deployment patterns for Java/Spring Boot agents. The 
 <dependency>
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-    <version>0.9.0-beta.1</version>
+    <version>0.9.0-beta.2</version>
 </dependency>
 ```
 
@@ -204,12 +204,12 @@ For production Kubernetes deployment:
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.0-beta.1 \
+  --version 0.9.0-beta.2 \
   -n mcp-mesh --create-namespace
 
 # Deploy Java agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.0-beta.1 \
+  --version 0.9.0-beta.2 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -246,7 +246,7 @@ docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --pu
 
 # 2. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.0-beta.1 \
+  --version 0.9.0-beta.2 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
