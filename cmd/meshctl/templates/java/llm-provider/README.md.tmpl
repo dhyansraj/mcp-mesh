@@ -1,0 +1,42 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM provider generated using `meshctl scaffold`.{{ end }}
+
+## Overview
+
+This is a zero-code LLM provider agent that exposes {{ .Model }} to the mesh network.
+
+## Getting Started
+
+### Prerequisites
+
+- Java 17+
+- Maven 3.9+
+- API key for {{ .Model }}
+
+### Configuration
+
+Set your API key:
+
+```bash
+{{ if contains .Model "anthropic" }}export ANTHROPIC_API_KEY=your-key-here{{ else if contains .Model "openai" }}export OPENAI_API_KEY=your-key-here{{ else }}# Set the appropriate API key for your model{{ end }}
+```
+
+### Running the Provider
+
+```bash
+mvn spring-boot:run
+```
+
+The provider will start on port {{ .Port }} and register with the mesh.
+
+## How It Works
+
+1. This agent registers with `capability="llm"` on the mesh
+2. Other agents with `@MeshLlm(providerSelector = @Selector(capability = "llm"))` discover this provider
+3. LLM requests are routed through the mesh to this provider
+4. This provider forwards requests to the LLM API via Spring AI
+
+## License
+
+MIT

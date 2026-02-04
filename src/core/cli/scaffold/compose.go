@@ -116,6 +116,20 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 
 			agents = append(agents, *agent)
 		}
+
+		// Look for Java agents (pom.xml with @MeshAgent in source)
+		if d.Name() == "pom.xml" {
+			agent, err := parseJavaAgent(filepath.Dir(path))
+			if err == nil && agent != nil {
+				relDir, err := filepath.Rel(absDir, filepath.Dir(path))
+				if err != nil {
+					relDir = filepath.Dir(path)
+				}
+				agent.Dir = relDir
+				agent.MainFile = path
+				agents = append(agents, *agent)
+			}
+		}
 		return nil
 	})
 
@@ -188,6 +202,59 @@ func parseTypeScriptAgent(content string) (*DetectedAgent, error) {
 		Port:     port,
 		Language: "typescript",
 	}, nil
+}
+
+// parseJavaAgent scans Java source files in a directory for @MeshAgent annotation
+func parseJavaAgent(dir string) (*DetectedAgent, error) {
+	srcDir := filepath.Join(dir, "src", "main", "java")
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return nil, nil // Not a Java agent directory
+	}
+
+	var agent *DetectedAgent
+	filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".java") {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		contentStr := string(content)
+
+		// Look for @MeshAgent annotation
+		agentPattern := regexp.MustCompile(`@MeshAgent\s*\([\s\S]*?\)`)
+		match := agentPattern.FindString(contentStr)
+		if match == "" {
+			return nil
+		}
+
+		// Extract name
+		namePattern := regexp.MustCompile(`name\s*=\s*"([^"]+)"`)
+		nameMatch := namePattern.FindStringSubmatch(match)
+		if len(nameMatch) < 2 {
+			return nil
+		}
+
+		// Extract port
+		portPattern := regexp.MustCompile(`port\s*=\s*(\d+)`)
+		portMatch := portPattern.FindStringSubmatch(match)
+		port := 9000
+		if len(portMatch) >= 2 {
+			port, _ = strconv.Atoi(portMatch[1])
+		}
+
+		agent = &DetectedAgent{
+			Name:     nameMatch[1],
+			Port:     port,
+			Language: "java",
+		}
+		return filepath.SkipAll // Found it, stop walking
+	})
+
+	return agent, nil
 }
 
 // validateAgentPorts checks for port conflicts among agents
@@ -791,6 +858,8 @@ func addVolumesForAgents(doc *yaml.Node, agents []DetectedAgent) {
 		var volumeName string
 		if agent.Language == "typescript" {
 			volumeName = agent.Name + "-node_modules"
+		} else if agent.Language == "java" {
+			volumeName = agent.Name + "-maven-repo"
 		} else {
 			volumeName = agent.Name + "-packages"
 		}
@@ -956,6 +1025,48 @@ const agentServicesTemplate = `{{- range .Agents }}
     timeout: 3s
     retries: 10
     start_period: 45s
+  networks:
+    - {{ $.NetworkName }}
+{{- else if eq .Language "java" }}
+# Agent: {{ .Name }} (Java/Spring Boot)
+# NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
+{{ .Name }}:
+  image: mcpmesh/java-runtime:0.8
+  container_name: {{ $.ProjectName }}-{{ .Name }}
+  hostname: {{ .Name }}
+  user: root
+  ports:
+    - "{{ .Port }}:{{ .Port }}"
+  volumes:
+    - ./{{ .Dir }}:/app
+    - {{ .Name }}-maven-repo:/root/.m2
+  working_dir: /app
+  entrypoint: ["sh", "-c"]
+  command: ["mvn spring-boot:run -DskipTests -q"]
+  environment:
+    MCP_MESH_REGISTRY_URL: http://registry:8000
+    AGENT_NAME: {{ .Name }}
+    AGENT_PORT: "{{ .Port }}"
+    HOST: "0.0.0.0"
+    MCP_MESH_HTTP_HOST: {{ .Name }}
+    MCP_MESH_HTTP_PORT: "{{ .Port }}"
+    POD_IP: {{ .Name }}
+    MCP_MESH_HTTP_ENABLED: "true"
+    MCP_MESH_AGENT_NAME: {{ .Name }}
+    MCP_MESH_ENABLED: "true"
+    MCP_MESH_AUTO_RUN: "true"
+    MCP_MESH_LOG_LEVEL: DEBUG
+    MCP_MESH_DEBUG_MODE: "true"
+{{- if $.Observability }}
+    REDIS_URL: redis://redis:6379
+    MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+{{- end }}
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:{{ .Port }}/health"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 60s
   networks:
     - {{ $.NetworkName }}
 {{- end }}
@@ -1700,6 +1811,49 @@ services:
       start_period: 45s
     networks:
       - {{ $.NetworkName }}
+{{- else if eq .Language "java" }}
+
+  # Java Agent: {{ .Name }}
+  # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
+  {{ .Name }}:
+    image: mcpmesh/java-runtime:0.8
+    container_name: {{ $.ProjectName }}-{{ .Name }}
+    hostname: {{ .Name }}
+    user: root
+    ports:
+      - "{{ .Port }}:{{ .Port }}"
+    volumes:
+      - ./{{ .Dir }}:/app
+      - {{ .Name }}-maven-repo:/root/.m2
+    working_dir: /app
+    entrypoint: ["sh", "-c"]
+    command: ["mvn spring-boot:run -DskipTests -q"]
+    environment:
+      MCP_MESH_REGISTRY_URL: http://registry:8000
+      AGENT_NAME: {{ .Name }}
+      AGENT_PORT: "{{ .Port }}"
+      HOST: "0.0.0.0"
+      MCP_MESH_HTTP_HOST: {{ .Name }}
+      MCP_MESH_HTTP_PORT: "{{ .Port }}"
+      POD_IP: {{ .Name }}
+      MCP_MESH_HTTP_ENABLED: "true"
+      MCP_MESH_AGENT_NAME: {{ .Name }}
+      MCP_MESH_ENABLED: "true"
+      MCP_MESH_AUTO_RUN: "true"
+      MCP_MESH_LOG_LEVEL: DEBUG
+      MCP_MESH_DEBUG_MODE: "true"
+{{- if $.Observability }}
+      REDIS_URL: redis://redis:6379
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
+{{- end }}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:{{ .Port }}/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 60s
+    networks:
+      - {{ $.NetworkName }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -1715,6 +1869,8 @@ volumes:
   {{ .Name }}-packages:
 {{- else if eq .Language "typescript" }}
   {{ .Name }}-node_modules:
+{{- else if eq .Language "java" }}
+  {{ .Name }}-maven-repo:
 {{- end }}
 {{- end }}
 {{- end }}

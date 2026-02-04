@@ -267,6 +267,9 @@ func getAgentEntryFile(outputDir, language string) string {
 	if language == "typescript" {
 		return filepath.Join(outputDir, "src", "index.ts")
 	}
+	if language == "java" {
+		return filepath.Join(outputDir, "pom.xml")
+	}
 	return filepath.Join(outputDir, "main.py")
 }
 
@@ -309,6 +312,12 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 	// Create template renderer
 	renderer := NewTemplateRenderer()
 
+	// Compute default Java package name if not specified
+	if ctx.Language == "java" && ctx.JavaPackage == "" {
+		sanitized := strings.ReplaceAll(strings.ReplaceAll(ctx.Name, "-", ""), "_", "")
+		ctx.JavaPackage = "com.example." + strings.ToLower(sanitized)
+	}
+
 	// Build template data
 	data := TemplateDataFromContext(ctx)
 
@@ -349,6 +358,9 @@ func (p *StaticProvider) Execute(ctx *ScaffoldContext) error {
 		if ctx.Language == "typescript" {
 			ctx.Cmd.Printf("  cd %s && npm install\n", ctx.Name)
 			ctx.Cmd.Printf("  meshctl start %s/src/index.ts\n", ctx.Name)
+		} else if ctx.Language == "java" {
+			ctx.Cmd.Printf("  cd %s && mvn spring-boot:run\n", ctx.Name)
+			ctx.Cmd.Printf("  # or: meshctl start %s\n", ctx.Name)
 		} else {
 			ctx.Cmd.Printf("  meshctl start %s/main.py\n", ctx.Name)
 		}
@@ -440,6 +452,11 @@ func (p *StaticProvider) handleExistingAgentInteractive(ctx *ScaffoldContext, ou
 
 // executeAddTool handles adding a new tool to an existing agent
 func (p *StaticProvider) executeAddTool(ctx *ScaffoldContext, outputDir string) error {
+	// Java add-tool not yet supported
+	if ctx.Language == "java" {
+		return fmt.Errorf("--add-tool is not yet supported for Java agents; use examples/java as templates")
+	}
+
 	mainPyPath := filepath.Join(outputDir, "main.py")
 
 	// Check if main.py exists
@@ -571,6 +588,12 @@ Analyze the provided context and respond appropriately.
 func (p *StaticProvider) executeDryRun(ctx *ScaffoldContext) error {
 	// Create template renderer
 	renderer := NewTemplateRenderer()
+
+	// Compute default Java package name if not specified
+	if ctx.Language == "java" && ctx.JavaPackage == "" {
+		sanitized := strings.ReplaceAll(strings.ReplaceAll(ctx.Name, "-", ""), "_", "")
+		ctx.JavaPackage = "com.example." + strings.ToLower(sanitized)
+	}
 
 	// Build template data
 	data := TemplateDataFromContext(ctx)

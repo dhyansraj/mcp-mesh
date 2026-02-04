@@ -1,0 +1,44 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh agent generated using `meshctl scaffold`.{{ end }}
+
+## Overview
+
+This is a Java/Spring Boot MCP Mesh agent.
+
+## Getting Started
+
+### Prerequisites
+
+- Java 17+
+- Maven 3.9+
+- MCP Mesh SDK
+
+### Running the Agent
+
+```bash
+mvn spring-boot:run
+```
+
+Or with meshctl:
+
+```bash
+meshctl start {{ .Name }}
+```
+
+The agent will start on port {{ .Port }} by default.
+
+## Project Structure
+
+```
+{{ .Name }}/
+├── pom.xml
+├── Dockerfile
+├── helm-values.yaml
+└── src/main/java/{{ .JavaPackagePath }}/
+    └── {{ .NamePascal }}Application.java
+```
+
+## License
+
+MIT

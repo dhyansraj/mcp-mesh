@@ -14,6 +14,7 @@ import (
 type InteractiveConfig struct {
 	// Common fields
 	AgentType   string
+	Language    string
 	Name        string
 	Description string
 	Port        int
@@ -97,6 +98,22 @@ func RunInteractiveScaffold(outputDir string) (*InteractiveResult, error) {
 		return nil, fmt.Errorf("failed to get agent type: %w", err)
 	}
 	config.AgentType = strings.Split(agentType, " - ")[0]
+
+	// Step 3b: Select language
+	langOption := ""
+	langPrompt := &survey.Select{
+		Message: "Which language/runtime?",
+		Options: []string{
+			"python - Python with FastMCP (default)",
+			"typescript - TypeScript with @mcpmesh/sdk",
+			"java - Java with Spring Boot",
+		},
+		Default: "python - Python with FastMCP (default)",
+	}
+	if err := survey.AskOne(langPrompt, &langOption); err != nil {
+		return nil, fmt.Errorf("failed to get language: %w", err)
+	}
+	config.Language = strings.Split(langOption, " - ")[0]
 
 	// Step 4: Get description
 	descPrompt := &survey.Input{
@@ -833,6 +850,9 @@ func ContextFromInteractive(ic *InteractiveConfig) *ScaffoldContext {
 	ctx.Description = ic.Description
 	ctx.Port = ic.Port
 	ctx.AgentType = ic.AgentType
+	if ic.Language != "" {
+		ctx.Language = ic.Language
+	}
 	ctx.Tags = ic.Tags
 	ctx.Capabilities = ic.Capabilities
 	ctx.Dependencies = ic.Dependencies

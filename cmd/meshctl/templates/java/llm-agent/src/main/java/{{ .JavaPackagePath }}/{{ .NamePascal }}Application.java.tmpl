@@ -1,0 +1,123 @@
+package {{ .JavaPackage }};
+
+import io.mcpmesh.FilterMode;
+import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshLlm;
+import io.mcpmesh.MeshTool;
+import io.mcpmesh.Param;
+import io.mcpmesh.Selector;
+import io.mcpmesh.types.MeshLlmAgent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+{{ if eq .ResponseFormat "json" }}import java.util.List;{{ end }}
+
+/**
+ * {{ .NamePascal }} - MCP Mesh LLM Agent
+ *
+ * {{ default "A MCP Mesh LLM agent generated using meshctl scaffold." .Description }}
+ */
+@MeshAgent(
+    name = "{{ .Name }}",
+    version = "1.0.0",
+    description = "{{ default "MCP Mesh LLM agent" .Description }}",
+    port = {{ .Port }}
+)
+@SpringBootApplication
+public class {{ .NamePascal }}Application {
+
+    private static final Logger log = LoggerFactory.getLogger({{ .NamePascal }}Application.class);
+
+    public static void main(String[] args) {
+        log.info("Starting {{ .NamePascal }} Agent...");
+        SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+
+    // ===== CONTEXT =====
+
+    /**
+     * Context record for {{ .Name }} processing.
+     */
+    public record {{ .NamePascal }}Context(
+        String inputText
+        // Add additional context fields as needed
+    ) {}
+{{ if eq .ResponseFormat "json" }}
+    // ===== RESPONSE =====
+
+    /**
+     * Structured response from {{ .Name }}.
+     */
+    public record {{ .NamePascal }}Response(
+        String result,
+        List<String> details,
+        double confidence,
+        String source
+    ) {}
+{{ end }}
+    // ===== LLM TOOL =====
+
+    /**
+     * LLM-powered tool that processes input using an AI model.
+     *
+     * @param {{ .ContextParam }} Processing context
+     * @param llm Injected LLM agent (provided by mesh)
+     * @return {{ if eq .ResponseFormat "json" }}Structured response{{ else }}Processing result as text{{ end }}
+     */
+    @MeshLlm(
+        providerSelector = @Selector({{ if .ProviderTags }}tags = {{ "{" }}{{ range $i, $t := .ProviderTags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ "}" }}{{ else }}capability = "llm"{{ end }}),
+        maxIterations = {{ .MaxIterations }},
+        systemPrompt = "classpath:prompts/{{ .Name }}.ftl",
+        contextParam = "{{ .ContextParam }}",
+{{ if .ToolFilter }}        filter = @Selector(tags = {{ "{" }}{{ range $i, $f := .ToolFilter }}{{ if $i }}, {{ end }}{{ range $k, $v := $f }}{{ if eq $k "tags" }}{{ range $j, $tag := $v }}{{ if $j }}, {{ end }}"{{ $tag }}"{{ end }}{{ end }}{{ if eq $k "capability" }}"{{ $v }}"{{ end }}{{ end }}{{ end }}{{ "}" }}),
+        filterMode = FilterMode.ALL,
+{{ end }}        maxTokens = 4096,
+        temperature = 0.7
+    )
+    @MeshTool(
+        capability = "{{ default .NameSnake .ToolName }}",
+        description = "{{ default "Process input using LLM" .ToolDescription }}",
+        tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else }}"llm"{{ end }}{{ "}" }}
+    )
+    public {{ if eq .ResponseFormat "json" }}{{ .NamePascal }}Response{{ else }}String{{ end }} {{ default .NameSnake .ToolName }}(
+        @Param(value = "{{ .ContextParam }}", description = "Processing context") {{ .NamePascal }}Context {{ .ContextParam }},
+        MeshLlmAgent llm
+    ) {
+        log.info("Processing: {}", {{ .ContextParam }}.inputText());
+
+        if (llm == null || !llm.isAvailable()) {
+            log.warn("LLM provider not available");
+{{ if eq .ResponseFormat "json" }}            return new {{ .NamePascal }}Response(
+                "LLM provider not available",
+                List.of("Please check mesh connectivity"),
+                0.0,
+                "fallback"
+            );
+{{ else }}            return "Error: LLM provider not available. Check mesh connectivity.";
+{{ end }}        }
+
+        try {
+{{ if eq .ResponseFormat "json" }}            return llm.request()
+                .user({{ .ContextParam }}.inputText())
+                .maxTokens(4096)
+                .temperature(0.7)
+                .generate({{ .NamePascal }}Response.class);
+{{ else }}            return llm.request()
+                .user({{ .ContextParam }}.inputText())
+                .maxTokens(4096)
+                .temperature(0.7)
+                .generate();
+{{ end }}        } catch (Exception e) {
+            log.error("Processing failed: {}", e.getMessage(), e);
+{{ if eq .ResponseFormat "json" }}            return new {{ .NamePascal }}Response(
+                "Processing failed: " + e.getMessage(),
+                List.of(),
+                0.0,
+                "error"
+            );
+{{ else }}            return "Error: " + e.getMessage();
+{{ end }}        }
+    }
+}

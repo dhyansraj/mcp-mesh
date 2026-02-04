@@ -11,7 +11,7 @@ import (
 )
 
 // supportedLanguages defines the languages supported for scaffold generation
-var supportedLanguages = []string{"python", "typescript"}
+var supportedLanguages = []string{"python", "typescript", "java"}
 
 // supportedAgentTypes defines the agent types that can be scaffolded
 var supportedAgentTypes = []string{"tool", "llm-agent", "llm-provider"}
@@ -79,6 +79,9 @@ type ScaffoldContext struct {
 
 	// LLM-provider specific (for @mesh.llm_provider decorator)
 	Model string // LiteLLM model string (e.g., "anthropic/claude-sonnet-4-5")
+
+	// Java-specific
+	JavaPackage string // Java package name (e.g., "com.example.greeter")
 
 	// Add-tool mode (for appending tools to existing agents)
 	AddTool          bool   // If true, append tool to existing agent instead of creating new
@@ -193,6 +196,8 @@ func NormalizeLanguage(lang string) string {
 		return "python"
 	case "ts", "typescript":
 		return "typescript"
+	case "java", "jv":
+		return "java"
 	default:
 		return lang
 	}

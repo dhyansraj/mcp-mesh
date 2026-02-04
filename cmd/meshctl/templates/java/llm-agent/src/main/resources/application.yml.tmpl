@@ -1,0 +1,14 @@
+server:
+  port: ${MCP_MESH_HTTP_PORT:{{ .Port }}}
+
+spring:
+  main:
+    banner-mode: off
+  freemarker:
+    template-loader-path: classpath:/prompts/
+    suffix: .ftl
+
+logging:
+  level:
+    root: INFO
+    io.mcpmesh: DEBUG

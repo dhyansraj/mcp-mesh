@@ -1,0 +1,26 @@
+# Dockerfile for {{ .Name }} MCP Mesh LLM agent (Java/Spring Boot)
+FROM mcpmesh/java-runtime:0.8
+
+WORKDIR /app
+
+# Switch to root to copy files
+USER root
+
+# Copy Maven config and source
+COPY pom.xml .
+COPY src/ src/
+
+# Build the application
+RUN mvn package -DskipTests -q
+
+# Set permissions
+RUN chown -R mcp-mesh:mcp-mesh /app
+
+# Switch back to non-root user
+USER mcp-mesh
+
+# Expose the agent port
+EXPOSE {{ .Port }}
+
+# Run the agent
+CMD ["java", "-jar", "target/{{ .NameKebab }}-1.0.0-SNAPSHOT.jar"]

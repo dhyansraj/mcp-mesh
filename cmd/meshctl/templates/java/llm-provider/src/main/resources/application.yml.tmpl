@@ -1,0 +1,11 @@
+server:
+  port: ${MCP_MESH_HTTP_PORT:{{ .Port }}}
+
+spring:
+  main:
+    banner-mode: off
+
+logging:
+  level:
+    root: INFO
+    io.mcpmesh: DEBUG

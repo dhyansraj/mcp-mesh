@@ -82,13 +82,14 @@ Infrastructure:
 	// Common flags
 	cmd.Flags().String("mode", "static", "Generation mode: static, llm")
 	cmd.Flags().StringP("name", "n", "", "Agent name (required unless interactive or config)")
-	cmd.Flags().StringP("lang", "l", "python", "Language: python, typescript (or py, ts)")
+	cmd.Flags().StringP("lang", "l", "python", "Language: python, typescript, java (or py, ts, jv)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
 	cmd.Flags().IntP("port", "p", 9000, "HTTP port for the agent")
 	cmd.Flags().String("description", "", "Agent description")
 	cmd.Flags().Bool("list-modes", false, "List available scaffold modes")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive mode (for scripting)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated code without creating files")
+	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 
 	// Agent type flag
 	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider")
@@ -342,6 +343,7 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	toolDescription, _ := cmd.Flags().GetString("tool-description")
 	toolType, _ := cmd.Flags().GetString("tool-type")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	javaPackage, _ := cmd.Flags().GetString("package")
 
 	// If --add-tool is provided, it specifies the tool name
 	// Otherwise use --tool-name for new agent creation
@@ -389,6 +391,7 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 		ToolType:            toolType,
 		Cmd:                 cmd,
 		DryRun:              dryRun,
+		JavaPackage:         javaPackage,
 	}
 
 	return ctx, nil

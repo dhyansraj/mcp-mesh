@@ -1,0 +1,49 @@
+package {{ .JavaPackage }};
+
+import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshTool;
+import io.mcpmesh.Param;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+/**
+ * {{ .NamePascal }} - MCP Mesh Agent
+ *
+ * {{ default "A MCP Mesh agent generated using meshctl scaffold." .Description }}
+ */
+@MeshAgent(
+    name = "{{ .Name }}",
+    version = "1.0.0",
+    description = "{{ default "MCP Mesh agent" .Description }}",
+    port = {{ .Port }}
+)
+@SpringBootApplication
+public class {{ .NamePascal }}Application {
+
+    private static final Logger log = LoggerFactory.getLogger({{ .NamePascal }}Application.class);
+
+    public static void main(String[] args) {
+        log.info("Starting {{ .NamePascal }} Agent...");
+        SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+
+    /**
+     * {{ default "A sample tool" .ToolDescription }}.
+     *
+     * @param input Input parameter
+     * @return Result string
+     */
+    @MeshTool(
+        capability = "{{ default "hello" .ToolName }}",
+        description = "{{ default "A sample tool" .ToolDescription }}",
+        tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else }}"tools"{{ end }}{{ "}" }}
+    )
+    public String {{ default "hello" .ToolName }}(
+        @Param(value = "input", description = "Input parameter") String input
+    ) {
+        log.info("{{ default "hello" .ToolName }} called with: {}", input);
+        return "Hello from {{ .Name }}: " + input;
+    }
+}
