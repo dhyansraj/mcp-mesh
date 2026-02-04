@@ -1,5 +1,11 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.1...v0.9.0-beta.1)
+
+## v0.9.0-beta.1
+
+_Release in progress -- details to be added._
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.0...v0.8.1)
 
 ## v0.8.1 (2026-01-29)

@@ -65,12 +65,12 @@ docker compose up -d
 ```bash
 # Install core with observability enabled (default)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.8.1 \
+  --version 0.9.0-beta.1 \
   -n mcp-mesh --create-namespace
 
 # Or disable observability
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.8.1 \
+  --version 0.9.0-beta.1 \
   -n mcp-mesh --create-namespace \
   --set tempo.enabled=false \
   --set grafana.enabled=false
