@@ -31,7 +31,7 @@
     <scm>
         <url>https://github.com/dhyansraj/mcp-mesh</url>
         <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
-        <developerConnection>scm:git:ssh://github.com:dhyansraj/mcp-mesh.git</developerConnection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
     </scm>
 
     <modules>
@@ -60,6 +60,9 @@
         <!-- JUnit 6 for Spring Boot 4.0 -->
         <junit-jupiter.version>6.0.2</junit-jupiter.version>
         <freemarker.version>2.3.33</freemarker.version>
+
+        <!-- GPG signing: disabled by default, enable with -Dgpg.skip=false for releases -->
+        <gpg.skip>true</gpg.skip>
     </properties>
 
     <dependencyManagement>
@@ -233,6 +236,7 @@
                             <goal>sign</goal>
                         </goals>
                         <configuration>
+                            <skip>${gpg.skip}</skip>
                             <gpgArguments>
                                 <arg>--pinentry-mode</arg>
                                 <arg>loopback</arg>

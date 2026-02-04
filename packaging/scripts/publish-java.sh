@@ -201,7 +201,7 @@ done)
 # Upload to Sonatype Central Portal
 log "Uploading bundle to Sonatype Central Portal..."
 
-TOKEN=$(echo -n "${SONATYPE_USERNAME}:${SONATYPE_TOKEN}" | base64)
+TOKEN=$(printf '%s' "${SONATYPE_USERNAME}:${SONATYPE_TOKEN}" | openssl base64 -A)
 
 HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
     "${SONATYPE_API}?publishingType=AUTOMATIC" \

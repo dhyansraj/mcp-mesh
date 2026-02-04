@@ -387,6 +387,7 @@ jobs:
         run: |
           cd src/runtime/java
           mvn clean package -DskipTests \
+            -Dgpg.skip=false \
             -Dgpg.passphrase="" \
             -Dgpg.keyname="F94266795DCA259D!"
 
@@ -1286,19 +1287,23 @@ jobs:
       - name: Wait for Maven Central to index Java SDK
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
+          BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}"
+          POM_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.pom"
+          JAR_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.jar"
           echo "Waiting for Maven Central to index io.mcp-mesh:mcp-mesh-spring-boot-starter:${VERSION}..."
           MAX_ATTEMPTS=30
           ATTEMPT=0
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking Maven Central..."
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              "https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}/mcp-mesh-spring-boot-starter-${VERSION}.pom")
-            if [ "$STATUS" = "200" ]; then
-              echo "Maven Central has indexed io.mcp-mesh:mcp-mesh-spring-boot-starter:${VERSION}"
+            POM_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$POM_URL")
+            JAR_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$JAR_URL")
+            echo "  POM: HTTP $POM_STATUS | JAR: HTTP $JAR_STATUS"
+            if [ "$POM_STATUS" = "200" ] && [ "$JAR_STATUS" = "200" ]; then
+              echo "Maven Central has indexed mcp-mesh-spring-boot-starter-${VERSION}.jar"
               exit 0
             fi
-            echo "Not yet indexed (HTTP $STATUS), waiting 20 seconds..."
+            echo "Not fully indexed yet, waiting 20 seconds..."
             sleep 20
           done
           echo "WARNING: Maven Central may not have fully indexed yet, proceeding with Docker build anyway"
