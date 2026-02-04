@@ -18,7 +18,7 @@
  * ```typescript
  * const agent = new MeshLlmAgent({
  *   provider: "claude",
- *   model: "anthropic/claude-sonnet-4-20250514",
+ *   model: "anthropic/claude-sonnet-4-5",
  *   systemPrompt: "file://prompts/assistant.hbs",
  *   maxIterations: 10,
  *   returnSchema: ResponseSchema,
@@ -203,11 +203,11 @@ export class LiteLLMProvider implements LlmProvider {
  * Default model mappings for provider shorthand names.
  */
 const DEFAULT_MODELS: Record<string, string> = {
-  claude: "anthropic/claude-sonnet-4-20250514",
+  claude: "anthropic/claude-sonnet-4-5",
   openai: "openai/gpt-4o",
-  anthropic: "anthropic/claude-sonnet-4-20250514",
-  gemini: "google/gemini-2.0-flash",
-  google: "google/gemini-2.0-flash",
+  anthropic: "anthropic/claude-sonnet-4-5",
+  gemini: "google/gemini-3-flash-preview",
+  google: "google/gemini-3-flash-preview",
   gpt4: "openai/gpt-4o",
   gpt35: "openai/gpt-3.5-turbo",
 };
@@ -228,7 +228,7 @@ export class VercelDirectProvider implements LlmProvider {
 
   /**
    * Resolve the full model string from provider spec.
-   * E.g., "claude" -> "anthropic/claude-sonnet-4-20250514"
+   * E.g., "claude" -> "anthropic/claude-sonnet-4-5"
    */
   private resolveModel(model?: string): string {
     // If explicit model provided, use it
@@ -897,9 +897,9 @@ export class MeshLlmAgent<T = string> {
     if (typeof provider === "string") {
       // Map common provider names to models
       const defaultModels: Record<string, string> = {
-        claude: "anthropic/claude-sonnet-4-20250514",
+        claude: "anthropic/claude-sonnet-4-5",
         openai: "gpt-4o",
-        anthropic: "anthropic/claude-sonnet-4-20250514",
+        anthropic: "anthropic/claude-sonnet-4-5",
         gpt4: "gpt-4o",
         gpt35: "gpt-3.5-turbo",
       };

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.mcpmesh</groupId>
+        <artifactId>mcp-mesh-parent</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mcp-mesh-sdk</artifactId>
+    <packaging>jar</packaging>
+
+    <name>MCP Mesh SDK</name>
+    <description>Core SDK with annotations and types for MCP Mesh</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcpmesh</groupId>
+            <artifactId>mcp-mesh-core</artifactId>
+        </dependency>
+
+        <!-- Jackson 3 for JSON -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

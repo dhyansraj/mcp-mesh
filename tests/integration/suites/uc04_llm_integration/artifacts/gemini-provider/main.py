@@ -80,7 +80,7 @@ async def health_check() -> dict:
 
 
 @mesh.llm_provider(
-    model="gemini/gemini-2.0-flash",
+    model="gemini/gemini-3-flash-preview",
     capability="llm",
     tags=["llm", "gemini", "google", "provider"],
     version="1.0.0",
@@ -106,7 +106,7 @@ def gemini_provider():
 @mesh.agent(
     name="gemini-provider",
     version="1.0.0",
-    description="LLM Provider for gemini/gemini-2.0-flash",
+    description="LLM Provider for gemini/gemini-3-flash-preview",
     http_port=9005,
     enable_http=True,
     auto_run=True,
@@ -115,7 +115,7 @@ def gemini_provider():
 )
 class GeminiProviderAgent:
     """
-    LLM Provider agent that exposes gemini/gemini-2.0-flash via mesh.
+    LLM Provider agent that exposes gemini/gemini-3-flash-preview via mesh.
 
     Other agents can use this provider by specifying matching tags
     in their @mesh.llm decorator.

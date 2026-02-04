@@ -13,6 +13,7 @@ import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
   makeSchemaStrict,
+  sanitizeSchemaForStructuredOutput,
   defaultDetermineOutputMode,
   BASE_TOOL_INSTRUCTIONS,
   type ProviderHandler,
@@ -116,7 +117,8 @@ export class OpenAIHandler implements ProviderHandler {
     if (determinedMode === "strict") {
       // Transform schema for OpenAI strict mode
       // OpenAI requires additionalProperties: false and all properties in required
-      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
+      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
 
       // OpenAI structured output format
       // See: https://platform.openai.com/docs/guides/structured-outputs
@@ -136,19 +138,16 @@ export class OpenAIHandler implements ProviderHandler {
   }
 
   /**
-   * Format system prompt for OpenAI (concise approach).
+   * Format system prompt for OpenAI with output mode support.
    *
    * OpenAI Strategy:
-   * 1. Use base prompt as-is
-   * 2. Add tool calling instructions if tools present
-   * 3. NO JSON schema instructions (response_format handles this)
-   * 4. Keep prompt concise - OpenAI works well with shorter prompts
-   * 5. Skip JSON note for text mode (string return type)
+   * - strict mode: Brief JSON note (response_format handles schema)
+   * - hint mode: Detailed JSON schema instructions in prompt
+   * - text mode: No JSON instructions
    *
-   * Key Difference from Claude:
-   * - No JSON schema in prompt (response_format ensures compliance)
-   * - Shorter, more focused instructions
-   * - Let response_format handle output structure
+   * When tools are present, llm-provider forces "hint" mode because
+   * generateObject() doesn't support tools, so we need prompt-based
+   * JSON instructions to ensure structured output.
    */
   formatSystemPrompt(
     basePrompt: string,
@@ -164,20 +163,68 @@ export class OpenAIHandler implements ProviderHandler {
       systemContent += BASE_TOOL_INSTRUCTIONS;
     }
 
-    // Skip JSON note for text mode
+    // Skip JSON instructions for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
       return systemContent;
     }
 
-    // NOTE: We do NOT add JSON schema instructions here!
-    // OpenAI's response_format parameter handles JSON structure automatically.
-    // Adding explicit JSON instructions can actually confuse the model.
-
-    // Optional: Add a brief note that response should be JSON
-    // (though response_format enforces this anyway)
-    systemContent += `
+    // Strict mode: Brief note (response_format handles enforcement)
+    if (determinedMode === "strict") {
+      systemContent += `
 
 Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
+      return systemContent;
+    }
+
+    // Hint mode: Add detailed JSON schema instructions
+    // This is used when tools are present (can't use generateObject)
+    const schema = outputSchema.schema;
+    const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const required = (schema.required ?? []) as string[];
+
+    // Build human-readable schema description
+    const fieldDescriptions: string[] = [];
+    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+      const fieldType = fieldSchema.type ?? "any";
+      const isRequired = required.includes(fieldName);
+      const reqMarker = isRequired ? " (required)" : " (optional)";
+      const desc = fieldSchema.description as string | undefined;
+      const descText = desc ? ` - ${desc}` : "";
+      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
+    }
+
+    const fieldsText = fieldDescriptions.join("\n");
+    const exampleObj: Record<string, string> = {};
+    for (const [k, v] of Object.entries(properties)) {
+      exampleObj[k] = `<${v.type ?? "value"}>`;
+    }
+
+    // Add DECISION GUIDE when tools are present to help OpenAI know when NOT to use tools
+    let decisionGuide = "";
+    if (toolSchemas && toolSchemas.length > 0) {
+      decisionGuide = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+    }
+
+    systemContent += `
+${decisionGuide}
+RESPONSE FORMAT:
+You MUST respond with valid JSON matching this schema:
+{
+${fieldsText}
+}
+
+Example format:
+${JSON.stringify(exampleObj, null, 2)}
+
+CRITICAL: Your response must be ONLY the raw JSON object.
+- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
+- DO NOT include any text before or after the JSON
+- Start directly with { and end with }`;
 
     return systemContent;
   }

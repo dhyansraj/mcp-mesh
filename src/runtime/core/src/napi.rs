@@ -76,6 +76,8 @@ pub struct JsLlmToolInfo {
     pub function_name: String,
     /// Capability name
     pub capability: String,
+    /// Tool description for LLM prompting
+    pub description: Option<String>,
     /// Endpoint URL to call
     pub endpoint: String,
     /// Agent ID providing this tool
@@ -89,6 +91,7 @@ impl From<LlmToolInfo> for JsLlmToolInfo {
         JsLlmToolInfo {
             function_name: info.function_name,
             capability: info.capability,
+            description: info.description,
             endpoint: info.endpoint,
             agent_id: info.agent_id,
             input_schema: info.input_schema,
@@ -110,6 +113,8 @@ pub struct JsLlmProviderInfo {
     pub function_name: String,
     /// Model name (optional)
     pub model: Option<String>,
+    /// Vendor name for handler selection (e.g., "gemini", "anthropic")
+    pub vendor: Option<String>,
 }
 
 impl From<LlmProviderInfo> for JsLlmProviderInfo {
@@ -120,6 +125,7 @@ impl From<LlmProviderInfo> for JsLlmProviderInfo {
             endpoint: info.endpoint,
             function_name: info.function_name,
             model: info.model,
+            vendor: info.vendor,
         }
     }
 }

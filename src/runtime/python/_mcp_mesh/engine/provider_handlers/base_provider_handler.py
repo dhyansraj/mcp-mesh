@@ -6,8 +6,11 @@ that customize how different LLM vendors (Claude, OpenAI, Gemini, etc.) are call
 """
 
 import copy
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 
@@ -59,6 +62,144 @@ def make_schema_strict(
     result = copy.deepcopy(schema)
     _add_strict_constraints_recursive(result, add_all_required)
     return result
+
+
+def is_simple_schema(schema: dict[str, Any]) -> bool:
+    """
+    Check if a JSON schema is simple enough for hint mode.
+
+    Simple schema criteria:
+    - Less than 5 fields
+    - All fields are basic types (str, int, float, bool, list)
+    - No nested Pydantic models ($ref or nested objects with properties)
+
+    This is used by provider handlers to decide between hint mode
+    (prompt-based JSON instructions) and strict mode (response_format).
+
+    Args:
+        schema: JSON schema dict
+
+    Returns:
+        True if schema is simple, False otherwise
+    """
+    try:
+        properties = schema.get("properties", {})
+
+        # Check field count
+        if len(properties) >= 5:
+            return False
+
+        # Check for nested objects or complex types
+        for field_name, field_schema in properties.items():
+            field_type = field_schema.get("type")
+
+            # Check for nested objects (indicates nested Pydantic model)
+            if field_type == "object" and "properties" in field_schema:
+                return False
+
+            # Check for $ref (nested model reference)
+            if "$ref" in field_schema:
+                return False
+
+            # Check array items for complex types
+            if field_type == "array":
+                items = field_schema.get("items", {})
+                if items.get("type") == "object" or "$ref" in items:
+                    return False
+
+        return True
+    except Exception:
+        return False
+
+
+def sanitize_schema_for_structured_output(schema: dict[str, Any]) -> dict[str, Any]:
+    """
+    Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
+
+    LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
+    the structural parts of JSON Schema, not validation constraints. This function
+    removes unsupported keywords to ensure uniform behavior across all providers.
+
+    Removed keywords:
+    - minimum, maximum (number range)
+    - exclusiveMinimum, exclusiveMaximum (exclusive bounds)
+    - minLength, maxLength (string length)
+    - minItems, maxItems (array size)
+    - pattern (regex validation)
+    - multipleOf (divisibility)
+
+    Args:
+        schema: JSON schema dict (will not be mutated)
+
+    Returns:
+        New schema with unsupported validation keywords removed
+    """
+    result = copy.deepcopy(schema)
+    _strip_unsupported_keywords_recursive(result)
+    logger.debug(
+        "Sanitized schema for structured output (removed validation-only keywords)"
+    )
+    return result
+
+
+# Keywords that are validation-only and not supported by LLM structured output APIs
+_UNSUPPORTED_SCHEMA_KEYWORDS = {
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "pattern",
+    "multipleOf",
+}
+
+
+def _strip_unsupported_keywords_recursive(obj: Any) -> None:
+    """
+    Recursively strip unsupported validation keywords from a schema object.
+
+    Args:
+        obj: Schema object to process (mutated in place)
+    """
+    if not isinstance(obj, dict):
+        return
+
+    # Remove unsupported keywords at this level
+    for keyword in _UNSUPPORTED_SCHEMA_KEYWORDS:
+        obj.pop(keyword, None)
+
+    # Process $defs (Pydantic uses this for nested models)
+    if "$defs" in obj:
+        for def_schema in obj["$defs"].values():
+            _strip_unsupported_keywords_recursive(def_schema)
+
+    # Process properties
+    if "properties" in obj:
+        for prop_schema in obj["properties"].values():
+            _strip_unsupported_keywords_recursive(prop_schema)
+
+    # Process items (for arrays)
+    if "items" in obj:
+        items = obj["items"]
+        if isinstance(items, dict):
+            _strip_unsupported_keywords_recursive(items)
+        elif isinstance(items, list):
+            for item in items:
+                _strip_unsupported_keywords_recursive(item)
+
+    # Process prefixItems (tuple validation)
+    if "prefixItems" in obj:
+        for item in obj["prefixItems"]:
+            _strip_unsupported_keywords_recursive(item)
+
+    # Process anyOf, oneOf, allOf
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in obj:
+            for item in obj[key]:
+                _strip_unsupported_keywords_recursive(item)
 
 
 def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
@@ -222,6 +363,42 @@ class BaseProviderHandler(ABC):
             "vision": False,
             "json_mode": False,
         }
+
+    def apply_structured_output(
+        self,
+        output_schema: dict[str, Any],
+        output_type_name: Optional[str],
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Apply vendor-specific structured output handling to model params.
+
+        This is used by LLM providers (via mesh) when they receive an output_schema
+        from a consumer. Each vendor can customize how structured output is enforced.
+
+        Default behavior: Apply response_format with strict schema.
+        Override in subclasses for vendor-specific behavior (e.g., Claude hint mode).
+
+        Args:
+            output_schema: JSON schema dict from consumer
+            output_type_name: Name of the output type (e.g., "AnalysisResult")
+            model_params: Current model parameters dict (will be modified)
+
+        Returns:
+            Modified model_params with structured output settings applied
+        """
+        # Sanitize schema first to remove unsupported validation keywords
+        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+        strict_schema = make_schema_strict(sanitized_schema, add_all_required=True)
+        model_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": output_type_name or "Response",
+                "schema": strict_schema,
+                "strict": True,
+            },
+        }
+        return model_params
 
     def __repr__(self) -> str:
         """String representation of handler."""

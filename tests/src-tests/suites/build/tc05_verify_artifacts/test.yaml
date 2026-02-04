@@ -41,6 +41,47 @@ test:
       echo "Package count: $(ls "${suite_path}/${config.output.packages}"/*.tgz 2>/dev/null | wc -l)"
     capture: packages_check
 
+  # Check Java JARs (optional)
+  - name: "Verify Java JARs"
+    handler: shell
+    command: |
+      echo "=== Java JARs ==="
+      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
+        ls -la "${suite_path}/${config.output.java_jars}"/*.jar
+        echo ""
+        echo "JAR count: $(ls "${suite_path}/${config.output.java_jars}"/*.jar 2>/dev/null | wc -l)"
+      else
+        echo "No Java JARs found (optional)"
+      fi
+    capture: java_check
+    ignore_errors: true
+
+  # Check native libraries (optional)
+  - name: "Verify native libraries"
+    handler: shell
+    command: |
+      echo "=== Native libraries ==="
+      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
+        ls -la "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.*
+      else
+        echo "No native libraries found (optional)"
+      fi
+    capture: native_check
+    ignore_errors: true
+
+  # Check Maven repository (optional)
+  - name: "Verify Maven repository"
+    handler: shell
+    command: |
+      echo "=== Maven repository ==="
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
+        ls -la "${suite_path}/${config.output.m2_repo}/mcpmesh/"
+      else
+        echo "No Maven repository found (optional)"
+      fi
+    capture: m2_check
+    ignore_errors: true
+
   # Summary
   - name: "Build summary"
     handler: shell
@@ -71,6 +112,39 @@ test:
           echo "  [OK] $(basename $tgz)"
         fi
       done
+      echo ""
+      echo "Java JARs (optional):"
+      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
+        for jar in "${suite_path}/${config.output.java_jars}"/*.jar; do
+          if [ -f "$jar" ]; then
+            echo "  [OK] $(basename $jar)"
+          fi
+        done
+      else
+        echo "  [SKIPPED] No Java JARs"
+      fi
+      echo ""
+      echo "Native libraries (optional):"
+      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
+        for lib in "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.*; do
+          if [ -f "$lib" ]; then
+            echo "  [OK] $(basename $lib)"
+          fi
+        done
+      else
+        echo "  [SKIPPED] No native libraries"
+      fi
+      echo ""
+      echo "Maven repository (optional):"
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
+        for mod in "${suite_path}/${config.output.m2_repo}"/mcpmesh/*/; do
+          if [ -d "$mod" ]; then
+            echo "  [OK] $(basename $mod)"
+          fi
+        done
+      else
+        echo "  [SKIPPED] No Maven repository"
+      fi
       echo ""
       echo "=========================================="
       echo "All artifacts ready for image build"

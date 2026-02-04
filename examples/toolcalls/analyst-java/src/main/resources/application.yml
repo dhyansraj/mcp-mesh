@@ -1,0 +1,43 @@
+# MCP Mesh LLM Agent Configuration
+#
+# These settings can be overridden by environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: analyst-agent
+  freemarker:
+    template-loader-path: classpath:/prompts/
+    suffix: .ftl
+
+# Server configuration
+server:
+  port: ${MCP_MESH_HTTP_PORT:9002}
+
+# MCP Mesh configuration
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:analyst}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+  # LLM settings
+  llm:
+    # Default provider selection (can be overridden in annotation)
+    default-provider:
+      capability: llm
+      tags:
+        - "+claude"
+        - "+anthropic"
+    # Agentic loop settings
+    max-iterations: 5
+    # Timeout for LLM calls (ms)
+    timeout: 30000
+
+# Logging
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

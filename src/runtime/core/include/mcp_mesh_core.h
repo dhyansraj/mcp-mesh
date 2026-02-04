@@ -13,6 +13,15 @@
  *   4. Use mesh_next_event() to receive topology events
  *   5. Call mesh_shutdown() and mesh_free_handle() on cleanup
  *
+ * Functions:
+ *   - mesh_start_agent(spec_json) - Start an agent, returns handle
+ *   - mesh_next_event(handle, timeout_ms) - Poll for next event (JSON string)
+ *   - mesh_is_running(handle) - Check if agent is running (returns 1/0)
+ *   - mesh_report_health(handle, status_json) - Report health status (returns 0 on success, -1 on error)
+ *   - mesh_shutdown(handle) - Signal agent to shut down
+ *   - mesh_last_error() - Get last error message for current thread
+ *   - mesh_version() - Get library version string
+ *
  * Memory Management:
  *   - Strings returned by mesh_* functions must be freed with mesh_free_string()
  *   - Handles returned by mesh_start_agent() must be freed with mesh_free_handle()
@@ -73,7 +82,9 @@ void mesh_shutdown(struct MeshAgentHandle *handle);
 
 // Free agent handle and associated resources.
 //
-// Call after shutdown completes or on error.
+// If the agent is still running, this will trigger graceful shutdown
+// and wait briefly (up to 2 seconds) for the agent to unregister from
+// the registry before dropping resources.
 //
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent` or NULL
@@ -140,11 +151,90 @@ char *mesh_last_error(void);
 // * After this call, `s` is invalid and must not be used
 void mesh_free_string(char *s);
 
+// Resolve configuration value with priority: ENV > param > default.
+//
+// For http_host, auto-detects external IP if no value provided.
+//
+// # Arguments
+// * `key_name` - Config key (e.g., "http_host", "registry_url", "namespace")
+// * `param_value` - Optional value from code/config (NULL for none)
+//
+// # Returns
+// Resolved value (caller must free with `mesh_free_string`), or NULL if unknown key
+//
+// # Safety
+// * `key_name` must be a valid null-terminated C string
+// * `param_value` may be NULL or a valid null-terminated C string
+// * The returned string must be freed with `mesh_free_string`
+char *mesh_resolve_config(const char *key_name, const char *param_value);
+
+// Resolve integer configuration value with priority: ENV > param > default.
+//
+// # Arguments
+// * `key_name` - Config key (e.g., "http_port", "health_interval")
+// * `param_value` - Value from code/config (-1 for none)
+//
+// # Returns
+// Resolved value, or -1 if unknown key or no value available
+//
+// # Safety
+// * `key_name` must be a valid null-terminated C string
+int64_t mesh_resolve_config_int(const char *key_name, int64_t param_value);
+
+// Auto-detect external IP address.
+//
+// Uses UDP socket trick to find IP that routes to external networks.
+// Falls back to "localhost" if detection fails.
+//
+// # Returns
+// IP address string (caller must free with `mesh_free_string`)
+//
+// # Safety
+// * The returned string must be freed with `mesh_free_string`
+char *mesh_auto_detect_ip(void);
+
 // Get library version string.
 //
 // # Returns
 // Version string (do not free)
 const char *mesh_version(void);
+
+// Check if distributed tracing is enabled.
+//
+// Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+//
+// # Returns
+// 1 if tracing is enabled, 0 otherwise
+int32_t mesh_is_tracing_enabled(void);
+
+// Initialize the trace publisher.
+//
+// Must be called before `mesh_publish_span`. Connects to Redis.
+//
+// # Returns
+// 1 on success (Redis connected), 0 on failure
+int32_t mesh_init_trace_publisher(void);
+
+// Check if trace publisher is available.
+//
+// # Returns
+// 1 if publisher is initialized and ready, 0 otherwise
+int32_t mesh_is_trace_publisher_available(void);
+
+// Publish a trace span to Redis.
+//
+// Non-blocking (from the caller's perspective) - returns after queuing the span.
+// Silently handles failures to never break agent operations.
+//
+// # Arguments
+// * `span_json` - JSON string containing span data (all values should be strings)
+//
+// # Returns
+// 1 on success (queued), 0 on failure
+//
+// # Safety
+// * `span_json` must be a valid null-terminated C string
+int32_t mesh_publish_span(const char *span_json);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -1,7 +1,7 @@
 /**
- * Gemini/Google provider handler.
+ * Gemini/Google provider handler for Gemini 3.x models.
  *
- * Optimized for Gemini models (Gemini 2.0 Flash, Gemini 1.5 Pro, etc.)
+ * Optimized for Gemini models (Gemini 3 Flash Preview, Gemini 2.0 Flash, etc.)
  * using Google's best practices for tool calling and structured output.
  *
  * Features:
@@ -22,6 +22,7 @@ import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
   makeSchemaStrict,
+  sanitizeSchemaForStructuredOutput,
   defaultDetermineOutputMode,
   BASE_TOOL_INSTRUCTIONS,
   type ProviderHandler,
@@ -51,12 +52,12 @@ const debug = createDebug("gemini-handler");
  * - Similar schema enforcement requirements
  *
  * Supported Models (via Vercel AI SDK):
+ * - gemini-3-flash-preview (reasoning support)
+ * - gemini-3-pro-preview (advanced reasoning)
  * - gemini-2.0-flash (fast, efficient)
  * - gemini-2.0-flash-lite (fastest, most efficient)
  * - gemini-1.5-pro (high capability)
  * - gemini-1.5-flash (balanced)
- * - gemini-3-flash-preview (reasoning support)
- * - gemini-3-pro-preview (advanced reasoning)
  */
 export class GeminiHandler implements ProviderHandler {
   readonly vendor = "google";
@@ -118,7 +119,8 @@ export class GeminiHandler implements ProviderHandler {
     // Hint mode relies on prompt instructions instead
     if (determinedMode === "strict") {
       // Vercel AI SDK translates this to Gemini's native format
-      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: true });
+      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
 
       request.responseFormat = {
         type: "json_schema",
@@ -136,13 +138,16 @@ export class GeminiHandler implements ProviderHandler {
   }
 
   /**
-   * Format system prompt for Gemini (concise approach).
+   * Format system prompt for Gemini with output mode support.
    *
    * Gemini Strategy:
-   * 1. Use base prompt as-is
-   * 2. Add tool calling instructions if tools present
-   * 3. Minimal JSON instructions (response_format handles structure)
-   * 4. Keep prompt concise - Gemini works well with clear, direct prompts
+   * - strict mode: Brief JSON note (response_format handles schema)
+   * - hint mode: Detailed JSON schema instructions in prompt
+   * - text mode: No JSON instructions
+   *
+   * When tools are present, llm-provider forces "hint" mode because
+   * generateObject() doesn't support tools, so we need prompt-based
+   * JSON instructions to ensure structured output.
    */
   formatSystemPrompt(
     basePrompt: string,
@@ -158,15 +163,67 @@ export class GeminiHandler implements ProviderHandler {
       systemContent += BASE_TOOL_INSTRUCTIONS;
     }
 
-    // Skip JSON note for text mode
+    // Skip JSON instructions for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
       return systemContent;
     }
 
-    // Add brief JSON note (response_format handles enforcement)
-    systemContent += `
+    // Strict mode: Brief note (response_format handles enforcement)
+    if (determinedMode === "strict") {
+      systemContent += `
 
 Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
+      return systemContent;
+    }
+
+    // Hint mode: Add detailed JSON schema instructions
+    // This is used when tools are present (can't use generateObject)
+    const schema = outputSchema.schema;
+    const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const required = (schema.required ?? []) as string[];
+
+    // Build human-readable schema description
+    const fieldDescriptions: string[] = [];
+    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+      const fieldType = fieldSchema.type ?? "any";
+      const isRequired = required.includes(fieldName);
+      const reqMarker = isRequired ? " (required)" : " (optional)";
+      const desc = fieldSchema.description as string | undefined;
+      const descText = desc ? ` - ${desc}` : "";
+      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
+    }
+
+    const fieldsText = fieldDescriptions.join("\n");
+    const exampleObj: Record<string, string> = {};
+    for (const [k, v] of Object.entries(properties)) {
+      exampleObj[k] = `<${v.type ?? "value"}>`;
+    }
+
+    // Add DECISION GUIDE when tools are present to help Gemini know when NOT to use tools
+    let decisionGuide = "";
+    if (toolSchemas && toolSchemas.length > 0) {
+      decisionGuide = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+`;
+    }
+
+    systemContent += `
+${decisionGuide}
+FINAL RESPONSE FORMAT:
+After gathering all needed information using tools, your FINAL response MUST be valid JSON matching this schema:
+{
+${fieldsText}
+}
+
+Example format:
+${JSON.stringify(exampleObj, null, 2)}
+
+IMPORTANT:
+- First, use the available tools to gather information if needed
+- Only after you have all the data, provide your final JSON response
+- The final response must be ONLY valid JSON - no markdown code fences, no preamble text`;
 
     return systemContent;
   }
@@ -198,6 +255,6 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
 }
 
 // Register with the registry
-// Use "google" as vendor name to match Vercel AI SDK model extraction
-// (e.g., "google/gemini-2.0-flash" → vendor "google")
-ProviderHandlerRegistry.register("google", GeminiHandler);
+// Use "gemini" as vendor name to match model prefix (e.g., "gemini/gemini-3-flash-preview")
+// This is consistent with Python SDK's registration
+ProviderHandlerRegistry.register("gemini", GeminiHandler);

@@ -18,7 +18,7 @@ Key terms used throughout MCP Mesh documentation:
 | **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
 | **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
 | **Heartbeat**                    | Periodic signal sent by agents to the registry to indicate they're alive. Default interval is 15 seconds.                                                                                                                                                                                  |
-| **Proxy**                        | An injected object (`McpMeshTool`) that transparently handles communication with remote tools. You call it like a function; MCP Mesh handles the rest.                                                                                                                                    |
+| **Proxy**                        | An injected object (`McpMeshTool`) that transparently handles communication with remote tools. You call it like a function; MCP Mesh handles the rest.                                                                                                                                     |
 | **Tag**                          | Metadata attached to tools for filtering during dependency resolution. Supports `+` (prefer) and `-` (avoid) operators.                                                                                                                                                                    |
 | **MCP (Model Context Protocol)** | The underlying protocol used for tool communication. MCP Mesh tools are standard MCP tools and can be invoked via HTTP using MCP's `tools/list` and `tools/call` endpoints.                                                                                                                |
 
@@ -248,7 +248,7 @@ MCP Mesh supports four types of tools, each with its own decorator:
 | -------------------- | ------------------------------------------- | ------------------------------------------ |
 | `@mesh.tool`         | Standard MCP tool with dependency injection | Data processing, storage, utilities        |
 | `@mesh.llm`          | LLM-powered tool with agentic capabilities  | AI analysis, content generation, reasoning |
-| `@mesh.llm_provider` | Zero-code LLM vendor integration            | Claude, GPT-4, Gemini providers            |
+| `@mesh.llm_provider` | Zero-code LLM vendor integration            | Claude, GPT-4 providers                    |
 | `@mesh.route`        | FastAPI route with tool injection           | REST APIs, webhooks, external interfaces   |
 
 ---

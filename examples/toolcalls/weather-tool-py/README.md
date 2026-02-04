@@ -1,0 +1,96 @@
+# weather-tool-py
+
+A MCP Mesh agent generated using `meshctl scaffold`.
+
+## Overview
+
+This is a basic MCP Mesh agent that provides simple tools for demonstration.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- MCP Mesh SDK
+- FastMCP
+
+### Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+### Running the Agent
+
+```bash
+meshctl start main.py
+```
+
+Or with debug logging:
+
+```bash
+meshctl start main.py --debug
+```
+
+The agent will start on port 9000 by default.
+
+To override the port, modify the `http_port` parameter in the `@mesh.agent` decorator.
+
+## Available Tools
+
+| Tool    | Capability | Description          |
+| ------- | ---------- | -------------------- |
+| `hello` | `hello`    | Say hello to someone |
+| `echo`  | `echo`     | Echo a message back  |
+
+## Project Structure
+
+```
+weather-tool-py/
+├── __init__.py       # Package init
+├── __main__.py       # Module entry point
+├── main.py           # Agent implementation
+├── README.md         # This file
+└── requirements.txt  # Python dependencies
+```
+
+## Adding New Tools
+
+To add a new tool, use the dual decorator pattern:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="my_capability",
+    description="Description of what this tool does",
+)
+async def my_tool(param: str) -> str:
+    """Tool docstring."""
+    return f"Result: {param}"
+```
+
+## Adding Dependencies
+
+To inject dependencies from other agents:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="my_capability",
+    dependencies=["other_capability"],
+    description="Tool with dependency injection",
+)
+async def my_tool_with_deps(
+    param: str,
+    other_capability: mesh.McpMeshTool = None,
+) -> str:
+    """Tool with injected dependency."""
+    if other_capability:
+        result = await other_capability()
+        return f"Got: {result}"
+    return "Dependency not available"
+```
+
+## License
+
+MIT

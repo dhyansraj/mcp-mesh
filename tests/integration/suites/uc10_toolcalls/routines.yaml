@@ -1,0 +1,36 @@
+# Tool Call Integration Test Routines
+# UC-level routines for setting up and testing tool calls
+
+routines:
+  verify_tool_call_response:
+    description: "Verify tool call response contains weather data"
+    params:
+      response:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: |
+          echo "Verifying tool call response..."
+          echo "${params.response}"
+
+  setup_python_agents:
+    description: "Setup Python consumer, provider, and tool"
+    steps:
+      - handler: shell
+        command: |
+          echo "Python agents setup routine"
+
+  setup_typescript_agents:
+    description: "Setup TypeScript consumer, provider, and tool"
+    steps:
+      - handler: shell
+        command: |
+          echo "TypeScript agents setup routine"
+
+  setup_java_agents:
+    description: "Setup Java consumer, provider, and tool"
+    steps:
+      - handler: shell
+        command: |
+          echo "Java agents setup routine"

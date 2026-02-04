@@ -181,6 +181,7 @@ const DefaultRuntime = RuntimePython
 const (
 	RuntimePython     Runtime = "python"
 	RuntimeTypescript Runtime = "typescript"
+	RuntimeJava       Runtime = "java"
 )
 
 func (r Runtime) String() string {
@@ -190,7 +191,7 @@ func (r Runtime) String() string {
 // RuntimeValidator is a validator for the "runtime" field enum values. It is called by the builders before save.
 func RuntimeValidator(r Runtime) error {
 	switch r {
-	case RuntimePython, RuntimeTypescript:
+	case RuntimePython, RuntimeTypescript, RuntimeJava:
 		return nil
 	default:
 		return fmt.Errorf("agent: invalid enum value for runtime field: %q", r)

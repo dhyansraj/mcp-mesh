@@ -203,11 +203,13 @@ function convertToVercelMessages(messages: LlmMessage[]): VercelCoreMessage[] {
 
 /**
  * AI SDK v6 tool call structure.
+ * Note: AI SDK v6 uses 'input' for tool call arguments (not 'args').
  */
 interface VercelToolCall {
+  type?: string;
   toolCallId: string;
   toolName: string;
-  args: Record<string, unknown>;
+  input: Record<string, unknown>;  // AI SDK v6 uses 'input', not 'args'
 }
 
 /**
@@ -219,7 +221,7 @@ function convertToolCalls(toolCalls: VercelToolCall[]): LlmToolCallRequest[] {
     type: "function" as const,
     function: {
       name: tc.toolName,
-      arguments: JSON.stringify(tc.args ?? {}),
+      arguments: JSON.stringify(tc.input ?? {}),  // Use 'input' for AI SDK v6
     },
   }));
 }
@@ -410,6 +412,35 @@ export function llmProvider(config: LlmProviderConfig): {
     const handler = ProviderHandlerRegistry.getHandler(vendor);
     debug(`Using provider handler: ${handler.constructor.name} for vendor: ${vendor}`);
 
+    // Determine output mode early (needed for system prompt formatting)
+    // When tools are present, we can't use generateObject() (it doesn't support tools),
+    // so we must fall back to "hint" mode to add JSON instructions to the system prompt.
+    // This ensures the LLM knows to return structured JSON even when using generateText().
+    const hasTools = request.tools && request.tools.length > 0;
+    let outputMode = handler.determineOutputMode(outputSchemaObj);
+    if (outputMode === "strict" && hasTools && outputSchemaObj) {
+      debug(`Forcing hint mode: tools present (${request.tools?.length}), can't use generateObject`);
+      outputMode = "hint";
+    }
+    debug(`Output mode for system prompt: ${outputMode}`);
+
+    // Format system prompt with vendor-specific instructions (JSON format, tool rules, etc.)
+    // This is critical for structured output - handlers add JSON instructions in "hint" mode
+    // and brief notes in "strict" mode. Without this, LLMs may return plain text.
+    const formattedMessages = request.messages.map(msg => {
+      if (msg.role === "system" && msg.content) {
+        const formattedContent = handler.formatSystemPrompt(
+          msg.content,
+          request.tools ?? null,  // ToolSchema[] format (OpenAI function calling)
+          outputSchemaObj,
+          outputMode
+        );
+        debug(`Formatted system prompt (${outputMode} mode): ${formattedContent.substring(0, 200)}...`);
+        return { ...msg, content: formattedContent };
+      }
+      return msg;
+    });
+
     // Import generateText from ai package
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const aiModule = await import("ai") as any;
@@ -434,9 +465,10 @@ export function llmProvider(config: LlmProviderConfig): {
     }) => Promise<{
       text: string;
       toolCalls?: Array<{
+        type?: string;
         toolCallId: string;
         toolName: string;
-        args: Record<string, unknown>;
+        input: Record<string, unknown>;  // AI SDK v6 uses 'input', not 'args'
       }>;
       usage?: {
         inputTokens: number;
@@ -445,14 +477,16 @@ export function llmProvider(config: LlmProviderConfig): {
       finishReason: string;
     }>;
 
-    // Convert tools to Vercel AI SDK format
-    // Note: Vercel AI SDK expects Zod schemas for parameters, but we receive JSON Schema
-    // from MCP tools. We use jsonSchema() from the AI SDK to wrap JSON Schema properly.
+    // Convert tools to Vercel AI SDK format using the tool() helper
+    // Import jsonSchema and tool from ai package for proper schema handling
+    const { jsonSchema, tool: aiTool } = aiModule as {
+      jsonSchema: (schema: Record<string, unknown>) => unknown;
+      tool: (config: { description?: string; inputSchema: unknown; execute?: (args: unknown) => Promise<unknown> }) => unknown;
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let vercelTools: Record<string, any> | undefined;
     if (request.tools && request.tools.length > 0) {
-      // Import jsonSchema helper from ai package
-      const { jsonSchema } = aiModule as { jsonSchema: (schema: Record<string, unknown>) => unknown };
       vercelTools = {};
       for (const tool of request.tools) {
         // Get the raw schema parameters
@@ -468,23 +502,28 @@ export function llmProvider(config: LlmProviderConfig): {
           ...schemaWithoutMeta,
         };
 
-        debug(`Tool '${tool.function.name}' schema: ${JSON.stringify(cleanSchema)}`);
+        debug(`Tool '${tool.function.name}' cleanSchema: ${JSON.stringify(cleanSchema, null, 2)}`);
 
-        vercelTools[tool.function.name] = {
+        // Use AI SDK's tool() helper with jsonSchema() for proper schema handling
+        vercelTools[tool.function.name] = aiTool({
           description: tool.function.description ?? "",
           inputSchema: jsonSchema(cleanSchema),
-        };
+          // No execute - we're in provider mode, consumer handles execution
+        });
+
+        debug(`Tool '${tool.function.name}' vercelTool created with aiTool() helper`);
       }
     }
 
     // Apply vendor-specific request preparation (e.g., Claude prompt caching)
     // The handler may transform messages or add vendor-specific options
-    // Issue #459: Pass output schema so handler can format system prompt appropriately
+    // Use formattedMessages which have the system prompt already formatted by the handler
     const preparedRequest = handler.prepareRequest(
-      request.messages as LlmMessage[],
+      formattedMessages as LlmMessage[],
       null, // tools handled separately for Vercel AI SDK
-      outputSchemaObj, // Pass output schema for prompt formatting
+      outputSchemaObj, // Pass output schema for additional vendor-specific options
       {
+        outputMode,  // Pass output mode determined earlier
         temperature: temperature ?? modelParams.temperature as number | undefined,
         maxOutputTokens: maxTokens ?? modelParams.max_tokens as number | undefined,
         topP: topP ?? modelParams.top_p as number | undefined,
@@ -542,8 +581,10 @@ export function llmProvider(config: LlmProviderConfig): {
     // - "strict" mode: Use generateObject() for native structured output (OpenAI/Gemini)
     // - "hint" mode: Use generateText() with prompt-based JSON instructions (Claude)
     // - "text" mode: Use generateText() for plain text output
-    // Claude always uses "hint" mode because generateObject() has issues with Anthropic
-    const outputMode = handler.determineOutputMode(outputSchemaObj);
+    // NOTE: generateObject() doesn't support tools in Vercel AI SDK, so when tools are
+    // present we must use generateText(). The handler's formatSystemPrompt() adds JSON
+    // instructions to ensure the LLM returns structured output even via generateText().
+    // outputMode was determined earlier (before formatSystemPrompt call)
     const useStructuredOutput = outputMode === "strict" && outputSchema && !vercelTools;
     debug(`Output mode: ${outputMode}, useStructuredOutput: ${useStructuredOutput}`);
 

@@ -4,27 +4,25 @@
  * Optimized for Claude API (Claude 3.x, Sonnet, Opus, Haiku)
  * using Anthropic's best practices for tool calling and JSON responses.
  *
- * Supports three output modes for performance/reliability tradeoffs:
- * - strict: Use response_format for guaranteed schema compliance (slowest, 100% reliable)
- * - hint: Use prompt-based JSON instructions (medium speed, ~95% reliable)
+ * Supports two output modes (TEXT + HINT only):
+ * - hint: Use prompt-based JSON instructions with DECISION GUIDE (~95% reliable)
  * - text: Plain text output for str return types (fastest)
+ *
+ * Native response_format (strict mode) is NOT used due to cross-runtime
+ * incompatibilities when tools are present, and grammar compilation overhead.
  *
  * Features:
  * - Anti-XML tool calling instructions
- * - Output mode optimization based on return type
+ * - DECISION GUIDE for tool vs. direct JSON response decisions
  *
  * Note: Prompt caching is not yet implemented for AI SDK v6.
  * TODO: Re-enable via experimental_providerOptions when AI SDK v6 supports it.
- *
- * Based on Python's ClaudeHandler:
- * src/runtime/python/_mcp_mesh/engine/provider_handlers/claude_handler.py
  */
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
-  makeSchemaStrict,
   BASE_TOOL_INSTRUCTIONS,
   CLAUDE_ANTI_XML_INSTRUCTION,
   type ProviderHandler,
@@ -47,18 +45,18 @@ const debug = createDebug("claude-handler");
  *
  * Claude Characteristics:
  * - Excellent at following detailed instructions
- * - Native structured output via response_format (requires strict schema)
  * - Native tool calling (via Anthropic messages API)
  * - Performs best with anti-XML tool calling instructions
  *
- * Output Modes:
- * - strict: response_format with JSON schema (slowest, guaranteed valid JSON)
- * - hint: JSON schema in prompt (medium speed, usually valid JSON)
+ * Output Modes (TEXT + HINT only):
+ * - hint: JSON schema in prompt with DECISION GUIDE (~95% reliable)
  * - text: Plain text output for str return types (fastest)
  *
+ * Native response_format (strict mode) is not used. HINT mode with
+ * detailed prompt instructions provides sufficient reliability (~95%)
+ * without cross-runtime incompatibilities and grammar compilation overhead.
+ *
  * Best Practices (from Anthropic docs):
- * - Use response_format for guaranteed JSON schema compliance
- * - Schema must have additionalProperties: false on all objects
  * - Add anti-XML instructions to prevent <invoke> style tool calls
  * - Use one tool call at a time for better reliability
  */
@@ -68,9 +66,8 @@ export class ClaudeHandler implements ProviderHandler {
   /**
    * Prepare request parameters for Claude API with output mode support.
    *
-   * Output Mode Strategy:
-   * - strict: Use response_format for guaranteed JSON schema compliance (slowest)
-   * - hint: No response_format, rely on prompt instructions (medium speed)
+   * Output Mode Strategy (TEXT + HINT only):
+   * - hint: No response_format, rely on prompt instructions (~95% reliable)
    * - text: No response_format, plain text output (fastest)
    *
    * Message Format (Anthropic-specific):
@@ -96,14 +93,11 @@ export class ClaudeHandler implements ProviderHandler {
     // Convert messages to Vercel AI SDK format (shared utility)
     let convertedMessages = convertMessagesToVercelFormat(messages);
 
-    // For "hint" mode, append JSON instructions to the system prompt
-    // This is the fast, prompt-based approach instead of slow generateObject()
+    // Note: In hint mode, JSON instructions are added by formatSystemPrompt() which
+    // is called by llm-provider.ts before prepareRequest(). We don't duplicate here.
+    // The formatSystemPrompt() method handles the DECISION GUIDE when tools are present.
     if (determinedMode === "hint" && outputSchema) {
-      convertedMessages = this.appendJsonInstructionsToSystemPrompt(
-        convertedMessages,
-        outputSchema
-      );
-      debug(`Using hint mode with JSON instructions in prompt for schema: ${outputSchema.name}`);
+      debug(`Using hint mode (JSON instructions added by formatSystemPrompt)`);
     }
 
     const request: PreparedRequest = {
@@ -128,31 +122,14 @@ export class ClaudeHandler implements ProviderHandler {
       request.topP = topP;
     }
 
-    // Only add response_format in "strict" mode (not used for Claude anymore)
-    if (determinedMode === "strict" && outputSchema) {
-      // Claude requires additionalProperties: false on all object types
-      // Unlike OpenAI/Gemini, Claude doesn't require all properties in 'required'
-      const strictSchema = makeSchemaStrict(outputSchema.schema, { addAllRequired: false });
-      request.responseFormat = {
-        type: "json_schema",
-        jsonSchema: {
-          name: outputSchema.name,
-          schema: strictSchema,
-          strict: false, // Allow optional fields with defaults
-        },
-      };
-      debug(`Using strict mode with response_format for schema: ${outputSchema.name}`);
-    }
-
     return request;
   }
 
   /**
    * Format system prompt for Claude with output mode support.
    *
-   * Output Mode Strategy:
-   * - strict: Minimal JSON instructions (response_format handles schema)
-   * - hint: Add detailed JSON schema instructions in prompt
+   * Output Mode Strategy (TEXT + HINT only):
+   * - hint: Add detailed JSON schema instructions with DECISION GUIDE in prompt
    * - text: No JSON instructions (plain text output)
    */
   formatSystemPrompt(
@@ -181,16 +158,6 @@ export class ClaudeHandler implements ProviderHandler {
       return systemContent;
     }
 
-    if (determinedMode === "strict") {
-      // Strict mode: Minimal instructions (response_format handles schema)
-      if (outputSchema) {
-        systemContent += `
-
-Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
-      }
-      return systemContent;
-    }
-
     // Hint mode: Add detailed JSON schema instructions
     if (determinedMode === "hint" && outputSchema) {
       const properties = (outputSchema.schema.properties ?? {}) as Record<string, { type?: string; description?: string }>;
@@ -212,8 +179,19 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
         Object.entries(properties).map(([k, v]) => [k, `<${(v as { type?: string }).type ?? "value"}>`])
       );
 
-      systemContent += `
+      // Add DECISION GUIDE when tools are present to help Claude know when NOT to use tools
+      let decisionGuide = "";
+      if (toolSchemas && toolSchemas.length > 0) {
+        decisionGuide = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+      }
 
+      systemContent += `
+${decisionGuide}
 RESPONSE FORMAT:
 You MUST respond with valid JSON matching this schema:
 {
@@ -238,10 +216,10 @@ CRITICAL: Your response must be ONLY the raw JSON object.
   getCapabilities(): VendorCapabilities {
     return {
       nativeToolCalling: true, // Claude has native function calling
-      structuredOutput: true, // Native response_format support via Vercel AI SDK
+      structuredOutput: false, // Uses HINT mode (prompt-based), not native response_format
       streaming: true, // Supports streaming
       vision: true, // Claude 3+ supports vision
-      jsonMode: true, // Native JSON mode via response_format
+      jsonMode: false, // No native JSON mode used
       promptCaching: false, // TODO: Re-enable via experimental_providerOptions
     };
   }
@@ -279,84 +257,6 @@ CRITICAL: Your response must be ONLY the raw JSON object.
     return "hint";
   }
 
-  // ==========================================================================
-  // Private Helper Methods
-  // ==========================================================================
-
-  /**
-   * Append JSON schema instructions to the system prompt for "hint" mode.
-   *
-   * This enables fast, prompt-based structured output instead of slow generateObject().
-   * Claude is excellent at following detailed instructions, so this approach is
-   * ~95% reliable while being much faster than native structured output.
-   *
-   * @param messages - Messages with system prompt
-   * @param outputSchema - Schema to include in instructions
-   * @returns Messages with updated system prompt
-   */
-  private appendJsonInstructionsToSystemPrompt(
-    messages: LlmMessage[],
-    outputSchema: OutputSchema
-  ): LlmMessage[] {
-    const properties = (outputSchema.schema.properties ?? {}) as Record<
-      string,
-      { type?: string; description?: string }
-    >;
-    const required = (outputSchema.schema.required ?? []) as string[];
-
-    // Build human-readable schema description
-    const fieldDescriptions: string[] = [];
-    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-      const fieldType = fieldSchema.type ?? "any";
-      const isRequired = required.includes(fieldName);
-      const reqMarker = isRequired ? " (required)" : " (optional)";
-      const desc = fieldSchema.description ?? "";
-      const descText = desc ? ` - ${desc}` : "";
-      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
-    }
-
-    const fieldsText = fieldDescriptions.join("\n");
-    const exampleFormat = Object.fromEntries(
-      Object.entries(properties).map(([k, v]) => [k, `<${v.type ?? "value"}>`])
-    );
-
-    const jsonInstructions = `
-
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching the ${outputSchema.name} schema:
-{
-${fieldsText}
-}
-
-Example format:
-${JSON.stringify(exampleFormat, null, 2)}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
-- DO NOT include any text before or after the JSON
-- Start directly with { and end with }`;
-
-    // Find and update system message, or prepend one if none exists
-    const updatedMessages = [...messages];
-    const systemIndex = updatedMessages.findIndex((m) => m.role === "system");
-
-    if (systemIndex >= 0) {
-      // Append to existing system message
-      const systemMsg = updatedMessages[systemIndex];
-      updatedMessages[systemIndex] = {
-        ...systemMsg,
-        content: (systemMsg.content ?? "") + jsonInstructions,
-      };
-    } else {
-      // Prepend new system message with JSON instructions
-      updatedMessages.unshift({
-        role: "system",
-        content: jsonInstructions.trim(),
-      });
-    }
-
-    return updatedMessages;
-  }
 }
 
 // Register with the registry

@@ -1,0 +1,171 @@
+# Test Case: Java Employee Service with Complex Types
+# Tests Java agent that returns complex record types (Employee, DepartmentStats).
+#
+# Scenario:
+#   - java-employee-service provides get_employee, list_employees, employee_count
+#   - Test getEmployee returns Employee record with all fields
+#   - Test listEmployees returns filtered list
+#   - Test employee_count returns DepartmentStats
+
+name: "Java Employee Service Complex Types"
+description: "Verify Java agent with complex return types (records) works correctly"
+tags:
+  - tools
+  - meshctl
+  - java
+  - complex-types
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java employee service artifact to workspace
+  - name: "Copy Java employee service to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      ls -la /workspace/java-employee-service/
+    capture: copy_java
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Start Java employee service
+  - name: "Start Java employee service"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting via meshctl"
+    capture: start_java
+
+  # Wait for agent to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    command: |
+      echo "Waiting for employee-service..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 60s"
+      meshctl logs employee-service 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java
+    timeout: 90
+
+  # Verify agent is registered
+  - name: "Verify employee service registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get single employee by ID
+  - name: "Get employee by ID"
+    handler: shell
+    command: 'meshctl call getEmployee ''{"id": 1}'''
+    capture: get_employee
+
+  # Get non-existent employee (should fail gracefully)
+  - name: "Get non-existent employee"
+    handler: shell
+    command: 'meshctl call getEmployee ''{"id": 999}'' 2>&1 || true'
+    capture: get_missing
+
+  # List all employees
+  - name: "List all employees"
+    handler: shell
+    command: "meshctl call listEmployees '{}'"
+    capture: list_all
+
+  # List employees by department
+  - name: "List Engineering employees"
+    handler: shell
+    command: 'meshctl call listEmployees ''{"department": "Engineering"}'''
+    capture: list_engineering
+
+  # Get department stats
+  - name: "Get Engineering department stats"
+    handler: shell
+    command: 'meshctl call getEmployeeCount ''{"department": "Engineering"}'''
+    capture: dept_stats
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_agents} contains 'employee-service'"
+    message: "Employee service should be registered"
+
+  # Tools are listed
+  - expr: "${captured.list_tools} contains 'getEmployee'"
+    message: "getEmployee tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'listEmployees'"
+    message: "listEmployees tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'getEmployeeCount'"
+    message: "getEmployeeCount tool should be listed"
+
+  # Get employee returns complete record - use jq to parse nested JSON
+  - expr: "${jq:captured.get_employee:.content[0].text | fromjson | .firstName} == 'Alice'"
+    message: "Employee should have firstName Alice"
+
+  - expr: "${jq:captured.get_employee:.content[0].text | fromjson | .lastName} == 'Smith'"
+    message: "Employee should have lastName Smith"
+
+  - expr: "${jq:captured.get_employee:.content[0].text | fromjson | .department} == 'Engineering'"
+    message: "Employee should have department Engineering"
+
+  - expr: ${jq:captured.get_employee:.content[0].text | fromjson | .salary} > 0
+    message: "Employee should have positive salary"
+
+  # Missing employee handled gracefully (throws IllegalArgumentException)
+  - expr: "${captured.get_missing} contains 'Employee not found'"
+    message: "Missing employee should return 'Employee not found' error"
+
+  # List all contains multiple employees - check array has items
+  - expr: "${jq:captured.list_all:.content[0].text | fromjson} contains 'Alice'"
+    message: "All employees should include Alice"
+
+  - expr: "${jq:captured.list_all:.content[0].text | fromjson} contains 'Carol'"
+    message: "All employees should include Carol"
+
+  # Engineering filter works
+  - expr: "${jq:captured.list_engineering:.content[0].text | fromjson} contains 'Alice'"
+    message: "Engineering list should include Alice"
+
+  - expr: "${jq:captured.list_engineering:.content[0].text | fromjson} contains 'Bob'"
+    message: "Engineering list should include Bob"
+
+  # Department stats returned - use jq to extract fields
+  - expr: "${jq:captured.dept_stats:.content[0].text | fromjson | .department} == 'Engineering'"
+    message: "Stats should show Engineering department"
+
+  - expr: ${jq:captured.dept_stats:.content[0].text | fromjson | .employeeCount} >= 1
+    message: "Stats should include employeeCount >= 1"
+
+  - expr: ${jq:captured.dept_stats:.content[0].text | fromjson | .averageSalary} > 0
+    message: "Stats should include positive averageSalary"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

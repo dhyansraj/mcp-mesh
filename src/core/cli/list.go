@@ -1202,6 +1202,8 @@ func getRuntimeColor(runtime string) string {
 		return colorGreen
 	case "typescript":
 		return colorCyan
+	case "java":
+		return colorMagenta
 	default:
 		return colorReset
 	}
@@ -1214,6 +1216,8 @@ func formatRuntimeDisplay(runtime string) string {
 		return "Python"
 	case "typescript":
 		return "TypeScript"
+	case "java":
+		return "Java"
 	default:
 		return runtime
 	}

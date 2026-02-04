@@ -149,6 +149,18 @@ export function wrapToolResultOutput(content: string | null | undefined): ToolRe
  * @returns Messages in Vercel AI SDK format
  */
 export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessage[] {
+  // Build a map of tool_call_id -> tool_name from assistant messages
+  // This is needed because tool result messages may not include the tool name,
+  // but Gemini API requires it (function_response.name cannot be empty)
+  const toolCallIdToName: Map<string, string> = new Map();
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        toolCallIdToName.set(tc.id, tc.function.name);
+      }
+    }
+  }
+
   return messages.map((msg) => {
     // System and user messages pass through
     if (msg.role === "system" || msg.role === "user") {
@@ -208,12 +220,21 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
 
     // Tool result messages - convert to content blocks with tool-result type
     if (msg.role === "tool") {
+      // Get tool name from message, or look it up from the tool call map
+      // Gemini API requires function_response.name to be non-empty
+      const toolCallId = msg.tool_call_id ?? "";
+      const toolName = msg.name || toolCallIdToName.get(toolCallId) || "";
+
+      if (!toolName) {
+        debug(`Warning: Tool result for call ${toolCallId} has no tool name. Gemini API may reject this.`);
+      }
+
       return {
         role: "tool",
         content: [{
           type: "tool-result",
-          toolCallId: msg.tool_call_id ?? "",
-          toolName: msg.name ?? "",
+          toolCallId,
+          toolName,
           output: wrapToolResultOutput(msg.content),
         }],
       } as unknown as LlmMessage;
@@ -249,6 +270,100 @@ export const CLAUDE_ANTI_XML_INSTRUCTION = `- NEVER use XML-style syntax like <i
 // ============================================================================
 // Shared Schema Utilities
 // ============================================================================
+
+/**
+ * Keywords that are validation-only and not supported by LLM structured output APIs.
+ */
+const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "pattern",
+  "multipleOf",
+]);
+
+/**
+ * Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
+ *
+ * LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
+ * the structural parts of JSON Schema, not validation constraints. This function
+ * removes unsupported keywords to ensure uniform behavior across all providers.
+ *
+ * @param schema - JSON schema to sanitize
+ * @returns New schema with unsupported validation keywords removed
+ */
+export function sanitizeSchemaForStructuredOutput(
+  schema: Record<string, unknown>
+): Record<string, unknown> {
+  // Deep clone to avoid mutating original
+  const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  stripUnsupportedKeywordsRecursive(result);
+  return result;
+}
+
+/**
+ * Recursively strip unsupported validation keywords from a schema object.
+ *
+ * @param obj - Schema object to process (mutated in place)
+ */
+function stripUnsupportedKeywordsRecursive(obj: unknown): void {
+  if (typeof obj !== "object" || obj === null) {
+    return;
+  }
+
+  const record = obj as Record<string, unknown>;
+
+  // Remove unsupported keywords at this level
+  for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
+    delete record[keyword];
+  }
+
+  // Process $defs (used for nested models)
+  if (record.$defs && typeof record.$defs === "object") {
+    for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
+      stripUnsupportedKeywordsRecursive(defSchema);
+    }
+  }
+
+  // Process properties
+  if (record.properties && typeof record.properties === "object") {
+    for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
+      stripUnsupportedKeywordsRecursive(propSchema);
+    }
+  }
+
+  // Process items (for arrays)
+  if (record.items) {
+    if (Array.isArray(record.items)) {
+      for (const item of record.items as unknown[]) {
+        stripUnsupportedKeywordsRecursive(item);
+      }
+    } else {
+      stripUnsupportedKeywordsRecursive(record.items);
+    }
+  }
+
+  // Process prefixItems (tuple validation)
+  if (Array.isArray(record.prefixItems)) {
+    for (const item of record.prefixItems as unknown[]) {
+      stripUnsupportedKeywordsRecursive(item);
+    }
+  }
+
+  // Process anyOf, oneOf, allOf
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    if (Array.isArray(record[key])) {
+      for (const item of record[key] as unknown[]) {
+        stripUnsupportedKeywordsRecursive(item);
+      }
+    }
+  }
+}
 
 /**
  * Options for making a schema strict.

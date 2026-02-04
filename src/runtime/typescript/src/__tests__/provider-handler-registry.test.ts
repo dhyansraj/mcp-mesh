@@ -37,9 +37,9 @@ describe("ProviderHandlerRegistry", () => {
       expect(handler.constructor.name).toBe("OpenAIHandler");
     });
 
-    it("should return GeminiHandler for google vendor", () => {
-      // Vercel AI SDK extracts "google" from model strings like "google/gemini-2.0-flash"
-      const handler = ProviderHandlerRegistry.getHandler("google");
+    it("should return GeminiHandler for gemini vendor", () => {
+      // GeminiHandler is registered under "gemini" to match model prefix extraction
+      const handler = ProviderHandlerRegistry.getHandler("gemini");
 
       expect(handler).toBeDefined();
       expect(handler.vendor).toBe("google");
@@ -192,10 +192,10 @@ describe("ProviderHandlerRegistry", () => {
 
       expect(vendors.has("anthropic")).toBe(true);
       expect(vendors.has("openai")).toBe(true);
-      expect(vendors.has("google")).toBe(true);
+      expect(vendors.has("gemini")).toBe(true);
       expect(vendors.get("anthropic")).toBe("ClaudeHandler");
       expect(vendors.get("openai")).toBe("OpenAIHandler");
-      expect(vendors.get("google")).toBe("GeminiHandler");
+      expect(vendors.get("gemini")).toBe("GeminiHandler");
     });
   });
 
@@ -203,7 +203,7 @@ describe("ProviderHandlerRegistry", () => {
     it("should return true for registered vendors", () => {
       expect(ProviderHandlerRegistry.hasHandler("anthropic")).toBe(true);
       expect(ProviderHandlerRegistry.hasHandler("openai")).toBe(true);
-      expect(ProviderHandlerRegistry.hasHandler("google")).toBe(true);
+      expect(ProviderHandlerRegistry.hasHandler("gemini")).toBe(true);
     });
 
     it("should return false for unregistered vendors", () => {

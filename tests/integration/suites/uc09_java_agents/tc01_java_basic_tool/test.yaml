@@ -1,0 +1,117 @@
+# Test Case: Java Basic Tool Call
+# Tests basic tool invocation via meshctl call with Java Spring Boot agent.
+#
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
+
+name: "Java Basic Tool Call"
+description: "Verify meshctl call invokes a Java tool and returns result"
+tags:
+  - tools
+  - meshctl
+  - java
+  - basic
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start the Java agent with meshctl (registry starts automatically)
+  - name: "Start Java agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java agent starting via meshctl"
+    capture: start_agent
+
+  # Wait for agent to start and register
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java agent to start..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Agent registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 60s"
+      echo "=== Agent logs ==="
+      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call greet tool
+  - name: "Call greet tool"
+    handler: shell
+    command: 'meshctl call greet ''{"name": "World"}'''
+    capture: call_greet
+
+  # Call getInfo tool
+  - name: "Call getInfo tool"
+    handler: shell
+    command: "meshctl call getInfo '{}'"
+    capture: call_info
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Java greeter agent should be registered"
+
+  # Tools are listed
+  - expr: "${captured.list_tools} contains 'greet'"
+    message: "greet tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'getInfo'"
+    message: "getInfo tool should be listed"
+
+  # Tool calls succeeded - use jq to parse nested JSON
+  - expr: "${jq:captured.call_greet:.content[0].text | fromjson | .message} contains 'Hello, World'"
+    message: "greet should return greeting message"
+
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "getInfo should return agent name"
+
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .runtime} contains 'Java'"
+    message: "getInfo should return Java runtime"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Also kill any remaining Java processes
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

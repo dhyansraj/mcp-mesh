@@ -1,0 +1,166 @@
+# Test Case: Java Agent Topology Change
+# Tests that Java agent auto-rewires when dependencies become available.
+#
+# Scenario:
+#   - Start java-assistant-agent (depends on date_service)
+#   - Verify dateServiceAvailable=false initially
+#   - Start py-system-agent (provides date_service)
+#   - Wait for auto-rewiring
+#   - Verify dateServiceAvailable=true after rewiring
+#   - Stop py-system-agent
+#   - Verify dateServiceAvailable=false again (detects removal)
+
+name: "Java Agent Topology Change"
+description: "Verify Java agent auto-rewires when mesh topology changes"
+tags:
+  - tools
+  - meshctl
+  - java
+  - topology
+  - rewiring
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy Java assistant to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-assistant-agent /workspace/
+    capture: copy_java
+
+  - name: "Copy Python system agent to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/py-system-agent
+      cp /uc-artifacts/py-system-agent.py /workspace/py-system-agent/main.py
+    capture: copy_py
+
+  # Install Java dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-assistant-agent
+    timeout: 600
+
+  # Start Java assistant WITHOUT provider
+  - name: "Start Java assistant (no provider yet)"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-assistant-agent -d
+    capture: start_java
+
+  - name: "Wait for assistant registration"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "assistant"; then
+          echo "Assistant registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      exit 1
+    capture: wait_java
+    timeout: 120
+
+  # Check status - should show dateServiceAvailable=false
+  - name: "Check status (before provider)"
+    handler: shell
+    command: "meshctl call getStatus '{}'"
+    capture: status_before
+
+  # Start Python provider
+  - name: "Start Python system agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/py-system-agent/main.py -d
+    capture: start_py
+
+  - name: "Wait for system agent registration"
+    handler: shell
+    command: |
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "system-agent"; then
+          echo "System agent registered"
+          exit 0
+        fi
+        sleep 2
+      done
+      exit 1
+    capture: wait_py
+    timeout: 45
+
+  # Wait for rewiring to happen
+  - name: "Wait for auto-rewiring"
+    handler: wait
+    seconds: 8
+
+  # Check status - should show dateServiceAvailable=true
+  - name: "Check status (after provider started)"
+    handler: shell
+    command: "meshctl call getStatus '{}'"
+    capture: status_after_start
+
+  # List agents
+  - name: "List agents (both running)"
+    handler: shell
+    command: "meshctl list"
+    capture: list_both
+
+  # Stop the Python provider
+  - name: "Stop Python system agent"
+    handler: shell
+    command: |
+      meshctl stop system-agent 2>/dev/null || pkill -f "python.*system_agent" || true
+      sleep 2
+      echo "System agent stopped"
+    capture: stop_py
+
+  # Wait for topology update
+  - name: "Wait for topology update"
+    handler: wait
+    seconds: 8
+
+  # Check status - should show dateServiceAvailable=false again
+  - name: "Check status (after provider stopped)"
+    handler: shell
+    command: "meshctl call getStatus '{}'"
+    capture: status_after_stop
+
+assertions:
+  # Initial state - no date service
+  - expr: ${jq:captured.status_before:.content[0].text | fromjson | .dateServiceAvailable} == false
+    message: "Initial status should show dateServiceAvailable=false"
+
+  # After provider starts - date service available
+  - expr: ${jq:captured.status_after_start:.content[0].text | fromjson | .dateServiceAvailable} == true
+    message: "After provider starts, dateServiceAvailable should be true"
+
+  # Both agents were running
+  - expr: "${captured.list_both} contains 'assistant'"
+    message: "Assistant should be running"
+
+  - expr: "${captured.list_both} contains 'system-agent'"
+    message: "System agent should have been running"
+
+  # After provider stops - date service unavailable again
+  - expr: ${jq:captured.status_after_stop:.content[0].text | fromjson | .dateServiceAvailable} == false
+    message: "After provider stops, dateServiceAvailable should return to false"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*assistant" 2>/dev/null || true
+      pkill -f "python.*system_agent" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

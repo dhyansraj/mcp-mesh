@@ -54,6 +54,25 @@ routines:
           python -c "import mesh; print(f'mesh module OK')"
         capture: mesh_check
 
+  # Verify Java is installed
+  check_java:
+    description: "Verify Java and Maven are available"
+    steps:
+      - handler: shell
+        command: |
+          if ! command -v java &> /dev/null; then
+            echo "ERROR: java not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          if ! command -v mvn &> /dev/null; then
+            echo "ERROR: maven not found in image"
+            echo "Use tsuite-mesh image from lib-tests or src-tests"
+            exit 1
+          fi
+          java --version && mvn --version | head -1
+        capture: java_version
+
   #############################################################################
   # PYTHON SETUP
   #############################################################################
@@ -85,6 +104,22 @@ routines:
       - handler: pip-install
         path: ${params.path}
         venv: /workspace/.venv
+
+  #############################################################################
+  # JAVA SETUP
+  #############################################################################
+
+  # Install Maven dependencies from a directory
+  install_maven_deps:
+    description: "Run mvn dependency:resolve in a directory"
+    params:
+      path:
+        type: string
+        required: true
+        description: "Path to directory with pom.xml"
+    steps:
+      - handler: maven-install
+        path: ${params.path}
 
   #############################################################################
   # NODE.JS SETUP
@@ -167,6 +202,39 @@ routines:
             exit 1
           fi
           echo "Prerequisites OK: meshctl=$(meshctl --version 2>&1 | head -1), node=$(node --version)"
+        capture: prereq_check
+        timeout: 30
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version
+
+  # Setup for Java agent tests
+  setup_for_java_agent:
+    description: "Setup for running Java agents"
+    steps:
+      - handler: shell
+        command: |
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          if ! command -v java &> /dev/null; then
+            echo "ERROR: java not found - use tsuite-mesh image"
+            exit 1
+          fi
+          if ! command -v mvn &> /dev/null; then
+            echo "ERROR: maven not found - use tsuite-mesh image"
+            exit 1
+          fi
+          # Verify native library is available
+          if [ ! -d "/native-libs" ] || [ -z "$(ls /native-libs/libmcp_mesh_core.* 2>/dev/null)" ]; then
+            echo "WARNING: native FFI library not found in /native-libs"
+          fi
+          echo "Prerequisites OK:"
+          echo "  meshctl: $(meshctl --version 2>&1 | head -1)"
+          echo "  java: $(java --version 2>&1 | head -1)"
+          echo "  maven: $(mvn --version 2>&1 | head -1)"
         capture: prereq_check
         timeout: 30
       - handler: shell

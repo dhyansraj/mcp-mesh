@@ -1,0 +1,180 @@
+# Test Case: tc13_py_filter_mesh_claude
+# Tests context_param with filter + mesh delegation (race condition fix)
+# Reproduces maya/v5 issue: KeyError 'config' when filter is specified with mesh delegation
+#
+# Key difference from tc02:
+# - tc02: filter=None + mesh delegation (works)
+# - tc13: filter={"tags": [...]} + mesh delegation (was broken before fix)
+#
+# The bug: When both filter and mesh delegation are specified:
+# 1. _process_function_provider runs first (sets provider_proxy but NOT config)
+# 2. Before _process_function_tools runs, an MCP request arrives
+# 3. _create_llm_agent tries llm_agent_data["config"] -> KeyError!
+#
+# The fix ensures config is always set from DecoratorRegistry in _process_function_provider.
+
+name: "Context with Filter + Mesh Delegation (Race Condition Fix)"
+description: "Test context_param works when filter is specified with mesh delegation"
+tags:
+  - llm
+  - mesh-delegation
+  - prompt-template
+  - self-dependency
+  - context-param
+  - filter
+  - race-condition
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/. /workspace/
+    capture: copy_output
+
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Verify test files exist
+  - name: "Verify test_009 files exist"
+    handler: shell
+    command: |
+      ls -la /workspace/prompt-template-examples/test_009*.py
+      ls -la /workspace/prompt-template-examples/prompts/support_avatar.jinja2
+    capture: files_check
+
+  # Start the Claude provider first (mesh delegation target)
+  - name: "Start claude-provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9010 -d"
+    workdir: /workspace
+    capture: provider_start_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list
+
+  # Start the generic tool provider (provides tools for filter matching)
+  - name: "Start generic-tool-provider"
+    handler: shell
+    command: "meshctl start prompt-template-examples/test_009_generic_tool_provider.py -d"
+    workdir: /workspace
+    capture: generic_tool_start_output
+
+  # Wait for generic tool provider to register
+  - name: "Wait for generic tool provider"
+    handler: wait
+    seconds: 8
+
+  # Start the test agent (depends on both providers)
+  - name: "Start context-with-filter-mesh-test agent"
+    handler: shell
+    command: "meshctl start prompt-template-examples/test_009_context_with_filter_mesh.py -d"
+    workdir: /workspace
+    capture: agent_start_output
+
+  # Wait for agent to register and resolve dependencies
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 12
+
+  # Verify all agents are running
+  - name: "Verify agents are running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: agent_list
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call the test tool (tests filter + mesh delegation race condition)
+  - name: "Call test_context_with_filter_mesh"
+    handler: shell
+    command: "meshctl call test_context_with_filter_mesh '{}'"
+    workdir: /workspace
+    capture: test_result
+
+  # Check agent logs for any errors
+  - name: "Check agent logs"
+    handler: shell
+    command: "meshctl logs context-with-filter-mesh-test 2>&1 | tail -50 || true"
+    workdir: /workspace
+    capture: agent_logs
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Claude provider registered successfully
+  - expr: ${captured.provider_list} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+
+  # Generic tool provider registered
+  - expr: ${captured.agent_list} contains 'generic-tool-provider'
+    message: "generic-tool-provider should appear in meshctl list"
+
+  # Test agent registered successfully
+  - expr: ${captured.agent_list} contains 'context-with-filter-mesh-test'
+    message: "context-with-filter-mesh-test agent should appear in meshctl list"
+
+  # Test tool is registered
+  - expr: ${captured.tools_output} contains 'test_context_with_filter_mesh'
+    message: "test_context_with_filter_mesh tool should be listed"
+
+  # Avatar chat tool is registered
+  - expr: ${captured.tools_output} contains 'avatar_chat_with_filter'
+    message: "avatar_chat_with_filter tool should be listed"
+
+  # Generic tool is registered (for filter matching)
+  - expr: ${captured.tools_output} contains 'memory_recall'
+    message: "memory_recall tool should be listed from generic-tool-provider"
+
+  # Claude provider tool is registered
+  - expr: ${captured.tools_output} contains 'claude_provider'
+    message: "claude_provider tool should be listed from provider"
+
+  # Test passed - no KeyError: 'config'
+  - expr: ${captured.test_result} contains 'test_passed'
+    message: "Test result should contain test_passed field"
+
+  # Main assertion: context_param works with filter + mesh delegation
+  - expr: ${captured.test_result} contains 'PASS'
+    message: "Test should pass - context_param should work with filter + mesh delegation (race condition fix)"
+
+  # Ensure no KeyError in results
+  - expr: ${captured.test_result} not contains 'KeyError'
+    message: "Test should not have KeyError - the race condition fix should prevent this"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

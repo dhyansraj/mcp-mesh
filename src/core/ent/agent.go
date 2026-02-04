@@ -20,7 +20,7 @@ type Agent struct {
 	ID string `json:"id,omitempty"`
 	// Type of agent
 	AgentType agent.AgentType `json:"agent_type,omitempty"`
-	// SDK runtime: python or typescript
+	// SDK runtime: python, typescript, or java
 	Runtime agent.Runtime `json:"runtime,omitempty"`
 	// Human-readable name of the agent
 	Name string `json:"name,omitempty"`

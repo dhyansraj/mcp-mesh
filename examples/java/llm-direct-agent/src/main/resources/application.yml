@@ -1,0 +1,38 @@
+# MCP Mesh LLM Direct Agent Configuration
+#
+# These settings can be overridden by environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+#   ANTHROPIC_API_KEY     - Anthropic API key (required for direct LLM)
+
+spring:
+  application:
+    name: chatbot-agent
+  ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        options:
+          model: claude-sonnet-4-5
+          max-tokens: 4096
+          temperature: 0.7
+
+# Server configuration
+server:
+  port: ${MCP_MESH_HTTP_PORT:9003}
+
+# MCP Mesh configuration
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:chatbot}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+# Logging
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG
+    org.springframework.ai: DEBUG

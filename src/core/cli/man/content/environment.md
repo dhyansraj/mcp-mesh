@@ -88,9 +88,6 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 
 # OpenAI
 export OPENAI_API_KEY=sk-your-key-here
-
-# Google Gemini
-export GOOGLE_GENERATIVE_AI_API_KEY=your-key-here
 ```
 
 ## LLM Agent Configuration
@@ -99,7 +96,7 @@ Override `@mesh.llm` decorator parameters at runtime:
 
 ```bash
 # Override LLM provider (direct mode only, not mesh delegation)
-# Values: claude, openai, gemini, anthropic, google
+# Values: claude, openai, anthropic
 export MESH_LLM_PROVIDER=openai
 
 # Override model

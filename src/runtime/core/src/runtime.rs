@@ -536,6 +536,7 @@ impl AgentRuntime {
         for (old_tool, new_tool) in old.iter().zip(new.iter()) {
             if old_tool.function_name != new_tool.function_name
                 || old_tool.capability != new_tool.capability
+                || old_tool.description != new_tool.description
                 || old_tool.endpoint != new_tool.endpoint
                 || old_tool.agent_id != new_tool.agent_id
                 || old_tool.input_schema != new_tool.input_schema
@@ -558,6 +559,7 @@ impl AgentRuntime {
                 .map(|t| LlmToolInfo {
                     function_name: t.function_name.clone(),
                     capability: t.capability.clone(),
+                    description: t.description.clone(),
                     endpoint: t.endpoint.clone(),
                     agent_id: t.agent_id.clone(),
                     input_schema: t
@@ -638,6 +640,7 @@ impl AgentRuntime {
                     endpoint: provider.endpoint.clone(),
                     function_name: provider.function_name.clone(),
                     model: provider.model.clone(),
+                    vendor: provider.vendor.clone(),
                 };
                 let _ = self
                     .event_tx

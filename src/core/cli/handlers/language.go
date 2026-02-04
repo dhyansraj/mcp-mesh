@@ -14,6 +14,7 @@ import (
 var LanguageMarkers = map[string][]string{
 	"python":     {"pyproject.toml", "requirements.txt", ".venv", "setup.py"},
 	"typescript": {"package.json", "tsconfig.json", "node_modules"},
+	"java":       {"pom.xml", "build.gradle", ".mvn", "target"},
 }
 
 // ScaffoldConfig contains configuration for generating agent files
@@ -61,6 +62,7 @@ type LanguageHandler interface {
 // NormalizeLanguage converts shorthand to canonical form.
 // Returns "python" for "py", "python", "Python", etc.
 // Returns "typescript" for "ts", "typescript", "TypeScript", etc.
+// Returns "java" for "java", "jv", "Java", etc.
 // Returns empty string normalized to "python" (default).
 // Unknown languages are returned as-is (lowercase).
 func NormalizeLanguage(lang string) string {
@@ -69,6 +71,8 @@ func NormalizeLanguage(lang string) string {
 		return "python"
 	case "typescript", "ts":
 		return "typescript"
+	case "java", "jv":
+		return "java"
 	default:
 		return strings.ToLower(lang) // Return as-is for validation to handle
 	}
@@ -83,8 +87,10 @@ func GetHandlerByLanguage(lang string) (LanguageHandler, error) {
 		return &PythonHandler{}, nil
 	case "typescript":
 		return &TypeScriptHandler{}, nil
+	case "java":
+		return &JavaHandler{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported language: %s (use: python, py, typescript, ts)", lang)
+		return nil, fmt.Errorf("unsupported language: %s (use: python, py, typescript, ts, java, jv)", lang)
 	}
 }
 
@@ -100,10 +106,24 @@ func DetectLanguage(path string) LanguageHandler {
 	if strings.HasSuffix(lowerPath, ".ts") || strings.HasSuffix(lowerPath, ".js") {
 		return &TypeScriptHandler{}
 	}
+	if strings.HasSuffix(lowerPath, ".java") || strings.HasSuffix(lowerPath, ".jar") {
+		return &JavaHandler{}
+	}
+	// Check if path is pom.xml directly
+	if filepath.Base(lowerPath) == "pom.xml" {
+		return &JavaHandler{}
+	}
 
 	// 2. Directory detection - check for language markers (using shared map)
 	info, err := os.Stat(path)
 	if err == nil && info.IsDir() {
+		// Java markers (check first since pom.xml is more specific than package.json)
+		for _, marker := range LanguageMarkers["java"] {
+			if fileExists(filepath.Join(path, marker)) {
+				return &JavaHandler{}
+			}
+		}
+
 		// Python markers
 		for _, marker := range LanguageMarkers["python"] {
 			if fileExists(filepath.Join(path, marker)) {
@@ -128,6 +148,7 @@ func GetAllHandlers() []LanguageHandler {
 	return []LanguageHandler{
 		&PythonHandler{},
 		&TypeScriptHandler{},
+		&JavaHandler{},
 	}
 }
 
@@ -145,6 +166,7 @@ type EntryPointCandidate struct {
 
 // entryPointPriority defines the search order for auto-detecting entry points.
 // Python main.py takes priority, then TypeScript in src/, then root TypeScript.
+// Java projects are detected by pom.xml (Maven) - the directory itself is the entry point.
 // Note: .tsx and .jsx are intentionally not supported (React-specific).
 var entryPointPriority = []EntryPointCandidate{
 	{"main.py", "python"},
@@ -152,6 +174,7 @@ var entryPointPriority = []EntryPointCandidate{
 	{"src/index.js", "typescript"},
 	{"index.ts", "typescript"},
 	{"index.js", "typescript"},
+	{"pom.xml", "java"},
 }
 
 // ResolveEntryPoint resolves a path (file or folder) to an executable entry point.
@@ -166,6 +189,7 @@ var entryPointPriority = []EntryPointCandidate{
 //  3. src/index.js    → typescript
 //  4. index.ts        → typescript
 //  5. index.js        → typescript
+//  6. pom.xml         → java (returns directory path, not pom.xml)
 func ResolveEntryPoint(path string) (string, string, error) {
 	// Get absolute path for consistent handling
 	absPath, err := filepath.Abs(path)
@@ -191,8 +215,22 @@ func ResolveEntryPoint(path string) (string, string, error) {
 		switch ext {
 		case ".py", ".ts", ".js":
 			return absPath, lang, nil
+		case ".jar":
+			return absPath, "java", nil
+		case ".java":
+			// For .java files, find the project root (directory with pom.xml)
+			javaHandler := &JavaHandler{}
+			projectRoot, err := javaHandler.FindProjectRoot(absPath)
+			if err != nil {
+				return "", "", fmt.Errorf("cannot find Maven project for %s: %w", path, err)
+			}
+			return projectRoot, "java", nil
 		default:
-			return "", "", fmt.Errorf("unsupported file type %q: use .py, .ts, or .js", ext)
+			// Check if it's pom.xml
+			if filepath.Base(absPath) == "pom.xml" {
+				return filepath.Dir(absPath), "java", nil
+			}
+			return "", "", fmt.Errorf("unsupported file type %q: use .py, .ts, .js, .jar, or .java", ext)
 		}
 	}
 
@@ -201,6 +239,10 @@ func ResolveEntryPoint(path string) (string, string, error) {
 	for _, candidate := range entryPointPriority {
 		candidatePath := filepath.Join(absPath, candidate.RelativePath)
 		if fileExists(candidatePath) {
+			// For Java (pom.xml), return the directory, not the pom.xml file
+			if candidate.Language == "java" && candidate.RelativePath == "pom.xml" {
+				return absPath, candidate.Language, nil
+			}
 			return candidatePath, candidate.Language, nil
 		}
 		checkedPaths = append(checkedPaths, candidate.RelativePath)

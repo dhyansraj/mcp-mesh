@@ -214,7 +214,6 @@ Uses LiteLLM model format:
 | --------- | ------------------------------ |
 | Anthropic | `anthropic/claude-sonnet-4-5`  |
 | OpenAI    | `openai/gpt-4o`                |
-| Google    | `gemini/gemini-pro`            |
 | Mistral   | `mistral/mistral-large-latest` |
 | Ollama    | `ollama/llama3`                |
 
@@ -226,7 +225,10 @@ import { z } from "zod";
 
 // 1. Create LLM Provider
 const providerServer = new FastMCP({ name: "Claude", version: "1.0.0" });
-const provider = mesh(providerServer, { name: "claude-provider", httpPort: 9001 });
+const provider = mesh(providerServer, {
+  name: "claude-provider",
+  httpPort: 9001,
+});
 
 provider.addLlmProvider({
   name: "chat",
@@ -250,7 +252,10 @@ calculator.addTool({
 
 // 3. Create LLM Agent
 const agentServer = new FastMCP({ name: "Smart Assistant", version: "1.0.0" });
-const assistant = mesh(agentServer, { name: "smart-assistant", httpPort: 9003 });
+const assistant = mesh(agentServer, {
+  name: "smart-assistant",
+  httpPort: 9003,
+});
 
 assistant.addTool({
   name: "assist",

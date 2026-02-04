@@ -1,0 +1,128 @@
+# Test Case: TC01 - PY Consumer -> CLAUDE Provider (py) -> PY Tool
+# Tests cross-SDK tool calling: py consumer invokes py tool via claude py provider
+#
+# Scenario:
+#   - Start weather-tool-py (port 9001)
+#   - Start claude-provider-py (port 9002)
+#   - Start analyst-py (port 9003)
+#   - Test non-tool query and tool query
+
+name: "Consumer PY -> Provider CLAUDE py -> Tool PY"
+description: "Test py consumer with claude py provider calling py tool"
+tags:
+  - toolcall
+  - py
+  - claude
+  - py
+  - phase1
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  # 1. Copy artifacts to workspace
+  - name: "Copy artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/analyst-py /workspace/
+      cp -r /uc-artifacts/claude-provider-py /workspace/
+      cp -r /uc-artifacts/weather-tool-py /workspace/
+      cp /uc-artifacts/.env /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # 2. Install dependencies
+  - name: "Install tool dependencies"
+    handler: pip-install
+    path: /workspace/weather-tool-py
+
+  - name: "Install provider dependencies"
+    handler: pip-install
+    path: /workspace/claude-provider-py
+
+  - name: "Install consumer dependencies"
+    handler: pip-install
+    path: /workspace/analyst-py
+
+  # 3. Start tool agent (port 9001)
+  - name: "Start tool agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start weather-tool-py/main.py --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Tool agent starting..."
+    capture: start_tool
+
+  - name: "Wait for tool agent"
+    handler: wait
+    seconds: 15
+
+  # 4. Start provider agent (port 9002)
+  - name: "Start provider agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start claude-provider-py/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+      echo "Provider agent starting..."
+    capture: start_provider
+
+  - name: "Wait for provider agent"
+    handler: wait
+    seconds: 20
+
+  # 5. Start consumer agent (port 9003)
+  - name: "Start consumer agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start analyst-py/main.py --env MCP_MESH_HTTP_PORT=9003 -d
+      echo "Consumer agent starting..."
+    capture: start_consumer
+
+  - name: "Wait for consumer and resolution"
+    handler: wait
+    seconds: 25
+
+  # 6. Verify all agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    command: |
+      meshctl list
+    capture: agent_list
+
+  # 7. Non-tool query (capital of France)
+  - name: "Non-tool query"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"query": "What is the capital of France?"}}'
+    capture: non_tool_response
+    timeout: 120
+
+  # 8. Tool query (weather in Boston)
+  - name: "Tool query"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"query": "What is the weather in Boston?"}}'
+    capture: tool_response
+    timeout: 120
+
+assertions:
+  - expr: "${captured.agent_list} contains 'analyst-py'"
+    message: "Consumer agent should be registered"
+  - expr: "${captured.agent_list} contains 'claude-provider-py'"
+    message: "Provider agent should be registered"
+  - expr: "${captured.agent_list} contains 'weather-tool-py'"
+    message: "Tool agent should be registered"
+  - expr: "${captured.non_tool_response} contains 'Paris'"
+    message: "Non-tool response should mention Paris"
+  - expr: "${captured.tool_response} contains 'Boston'"
+    message: "Tool response should mention Boston"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+
+    ignore_errors: true
+  - routine: global.cleanup_workspace

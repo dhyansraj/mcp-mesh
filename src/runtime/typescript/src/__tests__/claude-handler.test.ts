@@ -27,10 +27,10 @@ describe("ClaudeHandler", () => {
       const capabilities = handler.getCapabilities();
 
       expect(capabilities.nativeToolCalling).toBe(true);
-      expect(capabilities.structuredOutput).toBe(true);
+      expect(capabilities.structuredOutput).toBe(false); // Uses HINT mode, not native response_format
       expect(capabilities.streaming).toBe(true);
       expect(capabilities.vision).toBe(true);
-      expect(capabilities.jsonMode).toBe(true);
+      expect(capabilities.jsonMode).toBe(false); // No native JSON mode used
       expect(capabilities.promptCaching).toBe(false); // Disabled for AI SDK v6
     });
   });
@@ -239,7 +239,7 @@ describe("ClaudeHandler", () => {
       expect(request.responseFormat).toBeUndefined();
     });
 
-    it("should include response_format when outputMode: strict is explicitly set", () => {
+    it("should not include response_format even when outputMode: strict is explicitly set (STRICT removed)", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Response",
@@ -251,12 +251,10 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Explicitly set strict mode to get responseFormat
+      // STRICT mode was removed from Claude handler - always uses HINT
       const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
-      expect(request.responseFormat).toBeDefined();
-      expect(request.responseFormat?.type).toBe("json_schema");
-      expect(request.responseFormat?.jsonSchema.name).toBe("Response");
+      expect(request.responseFormat).toBeUndefined();
     });
 
     it("should not include response_format in hint mode (any schema)", () => {
@@ -283,7 +281,7 @@ describe("ClaudeHandler", () => {
       expect(request.responseFormat).toBeUndefined();
     });
 
-    it("should add additionalProperties:false to schema when explicit strict mode is set", () => {
+    it("should not set responseFormat even with explicit strict mode (STRICT removed)", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Test",
@@ -295,10 +293,10 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Must explicitly use strict mode for Claude to include responseFormat
+      // STRICT mode was removed - no responseFormat for Claude
       const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
-      expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
+      expect(request.responseFormat).toBeUndefined();
     });
 
     it("should pass through temperature, maxOutputTokens, and topP", () => {
@@ -435,7 +433,7 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("CRITICAL: Your response must be ONLY the raw JSON object");
     });
 
-    it("should add brief JSON note when explicit strict mode is set", () => {
+    it("should not add JSON instructions when strict is specified (STRICT removed, no hint fallback)", () => {
       const basePrompt = "You are a helpful assistant.";
       const schema: OutputSchema = {
         name: "StrictOutput",
@@ -447,11 +445,12 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Only with explicit "strict" mode override
+      // STRICT mode was removed - determineOutputMode returns "strict" but
+      // formatSystemPrompt has no branch for it, so no JSON instructions added
       const result = handler.formatSystemPrompt(basePrompt, null, schema, "strict");
 
-      expect(result).toContain("StrictOutput format");
-      // Should NOT contain detailed schema (that's handled by response_format)
+      // No JSON instructions since there is no strict branch in formatSystemPrompt
+      expect(result).toBe(basePrompt);
       expect(result).not.toContain("RESPONSE FORMAT:");
     });
 
@@ -487,10 +486,8 @@ describe("ClaudeHandler", () => {
     });
   });
 
-  describe("schema strictness (makeSchemaStrict) - only in explicit strict mode", () => {
-    // These tests verify that when outputMode: "strict" is explicitly set,
-    // the schema is properly modified with additionalProperties: false
-    it("should add additionalProperties:false to nested objects in strict mode", () => {
+  describe("schema strictness - STRICT mode removed for Claude", () => {
+    it("should not apply makeSchemaStrict since STRICT mode was removed", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const nestedSchema: OutputSchema = {
         name: "Nested",
@@ -508,68 +505,9 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Must explicitly use strict mode for Claude to include responseFormat
+      // Even with explicit strict mode, Claude no longer sets responseFormat
       const request = handler.prepareRequest(messages, null, nestedSchema, { outputMode: "strict" });
-
-      const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
-      expect(schema.additionalProperties).toBe(false);
-
-      const properties = schema.properties as Record<string, Record<string, unknown>>;
-      expect(properties.user.additionalProperties).toBe(false);
-    });
-
-    it("should add additionalProperties:false to $defs in strict mode", () => {
-      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
-      const schemaWithDefs: OutputSchema = {
-        name: "WithDefs",
-        schema: {
-          type: "object",
-          properties: {
-            a: { type: "string" },
-          },
-          $defs: {
-            Address: {
-              type: "object",
-              properties: { city: { type: "string" } },
-            },
-          },
-        },
-      };
-
-      // Must explicitly use strict mode for Claude to include responseFormat
-      const request = handler.prepareRequest(messages, null, schemaWithDefs, { outputMode: "strict" });
-
-      const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
-      const defs = schema.$defs as Record<string, Record<string, unknown>>;
-      expect(defs.Address.additionalProperties).toBe(false);
-    });
-
-    it("should add additionalProperties:false to array items in strict mode", () => {
-      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
-      const arraySchema: OutputSchema = {
-        name: "ArraySchema",
-        schema: {
-          type: "object",
-          properties: {
-            items: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { id: { type: "number" } },
-              },
-            },
-            a: { type: "string" },
-          },
-        },
-      };
-
-      // Must explicitly use strict mode for Claude to include responseFormat
-      const request = handler.prepareRequest(messages, null, arraySchema, { outputMode: "strict" });
-
-      const schema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
-      const properties = schema.properties as Record<string, Record<string, unknown>>;
-      const items = properties.items.items as Record<string, unknown>;
-      expect(items.additionalProperties).toBe(false);
+      expect(request.responseFormat).toBeUndefined();
     });
   });
 });

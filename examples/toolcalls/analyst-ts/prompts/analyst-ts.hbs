@@ -1,0 +1,26 @@
+{{!-- Handlebars prompt template for analyst-ts --}}
+{{!-- Context fields are available directly (e.g., inputText, not ctx.inputText) --}}
+
+You are AnalystTs, an AI assistant.
+
+
+
+## Instructions
+
+Analyze the following input and provide a structured JSON response.
+
+## Input
+
+{{inputText}}
+
+
+## Response Format
+
+Respond with valid JSON matching this schema:
+```json
+{
+    "result": "your analysis result",
+    "confidence": 0.95,
+    "reasoning": "explanation of your analysis"
+}
+```

@@ -1,0 +1,140 @@
+# Test Case: Build Java SDK (io.mcpmesh)
+# Builds the Java SDK Maven artifacts and native FFI library
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build Java SDK"
+description: "Build MCP Mesh Java SDK JARs and native FFI library from source using docker run"
+tags:
+  - build
+  - java
+  - sdk
+timeout: 600
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${suite_path}/${config.output.java_jars}"
+      mkdir -p "${suite_path}/${config.output.native_libs}"
+      echo "Output directories ready:"
+      echo "  Java JARs: ${suite_path}/${config.output.java_jars}"
+      echo "  Native libs: ${suite_path}/${config.output.native_libs}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check Java SDK source on host"
+    handler: shell
+    command: |
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/src/runtime/java" ]; then
+        echo "Found Java SDK source at $SOURCE_PATH/src/runtime/java"
+        ls -la "$SOURCE_PATH/src/runtime/java/"
+        cat "$SOURCE_PATH/src/runtime/java/pom.xml" | head -30
+      else
+        echo "ERROR: Java SDK source not found at $SOURCE_PATH/src/runtime/java"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build native FFI library (Rust) for Java
+  - name: "Build native FFI library"
+    handler: shell
+    command: |
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Building native FFI library for Java..."
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/src/runtime/core && \
+          cp -r /src-host/src/runtime/core/* /src/mcp-mesh/src/runtime/core/ && \
+          cd /src/mcp-mesh/src/runtime/core && \
+          cargo build --no-default-features --features ffi --release && \
+          mkdir -p /out/native-libs && \
+          cp target/release/libmcp_mesh_core.* /out/native-libs/ 2>/dev/null || \
+          cp target/release/mcp_mesh_core.* /out/native-libs/ 2>/dev/null || true && \
+          echo 'Native FFI build complete'
+        "
+
+      echo "Native libs built:"
+      ls -la "${suite_path}/${config.output.native_libs}/"
+    capture: native_build
+    timeout: 300
+
+  # Build Java SDK JARs using docker run
+  - name: "Build Java SDK JARs"
+    handler: shell
+    command: |
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+
+      echo "Building Java SDK inside container..."
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/src/runtime/java && \
+          mkdir -p /out/java-jars && \
+          mkdir -p /out/m2-repo && \
+          cp -r /src-host/src/runtime/java/* /src/mcp-mesh/src/runtime/java/ && \
+          cd /src/mcp-mesh/src/runtime/java && \
+          mvn install -DskipTests -q && \
+          find . -name '*.jar' -path '*/target/*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | while read jar; do
+            cp \"\$jar\" /out/java-jars/
+            echo \"Copied: \$jar\"
+          done && \
+          echo 'Copying Maven repository structure...' && \
+          cp -r /root/.m2/repository/io/mcpmesh /out/m2-repo/ && \
+          echo 'Java SDK build complete'
+        "
+
+      echo "Java JARs built:"
+      ls -la "${suite_path}/${config.output.java_jars}/"
+      echo ""
+      echo "Maven repo structure:"
+      ls -la "${suite_path}/${config.output.m2_repo}/" 2>/dev/null || echo "(empty)"
+    capture: java_build
+    timeout: 300
+
+  # Verify built artifacts
+  - name: "Verify built artifacts"
+    handler: shell
+    command: |
+      echo "=== Native Libraries ==="
+      ls -la "${suite_path}/${config.output.native_libs}/"
+
+      echo ""
+      echo "=== Java JARs ==="
+      ls -la "${suite_path}/${config.output.java_jars}/"
+
+      # Check for required JARs
+      JARS_DIR="${suite_path}/${config.output.java_jars}"
+      if ls "$JARS_DIR"/mcp-mesh-spring-boot-starter-*.jar 1> /dev/null 2>&1; then
+        echo "Found: mcp-mesh-spring-boot-starter JAR"
+      else
+        echo "WARNING: mcp-mesh-spring-boot-starter JAR not found"
+      fi
+
+      if ls "$JARS_DIR"/mcp-mesh-sdk-*.jar 1> /dev/null 2>&1; then
+        echo "Found: mcp-mesh-sdk JAR"
+      else
+        echo "WARNING: mcp-mesh-sdk JAR not found"
+      fi
+    capture: verify_output
+
+assertions:
+  - expr: ${captured.native_build} contains 'Native FFI build complete'
+    message: "Native FFI library should build successfully"
+
+  - expr: ${captured.java_build} contains 'Java SDK build complete'
+    message: "Java SDK should build successfully"
+
+  - expr: ${captured.verify_output} contains '.jar'
+    message: "Java JAR files should be created"

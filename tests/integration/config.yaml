@@ -16,6 +16,8 @@ packages:
   local:
     wheels_dir: /wheels
     packages_dir: /packages
+    java_jars_dir: /java-jars
+    native_libs_dir: /native-libs
 # Docker settings
 # Use tsuite-mesh image built by mcp-mesh-lib-test-suites for faster tests
 # Run lib-test-suites first: tsuite --all --suite-path ../mcp-mesh-lib-test-suites

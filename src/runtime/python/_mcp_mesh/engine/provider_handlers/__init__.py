@@ -9,6 +9,7 @@ from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
     CLAUDE_ANTI_XML_INSTRUCTION,
     BaseProviderHandler,
+    is_simple_schema,
     make_schema_strict,
 )
 from .claude_handler import ClaudeHandler
@@ -22,6 +23,7 @@ __all__ = [
     "BASE_TOOL_INSTRUCTIONS",
     "CLAUDE_ANTI_XML_INSTRUCTION",
     # Utilities
+    "is_simple_schema",
     "make_schema_strict",
     # Handlers
     "BaseProviderHandler",

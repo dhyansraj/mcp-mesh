@@ -19,10 +19,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::config::is_tracing_enabled;
 use crate::events::MeshEvent;
 use crate::handle::HandleState;
 use crate::runtime::{AgentRuntime, RuntimeConfig};
 use crate::spec::AgentSpec;
+use crate::tracing_publish;
 
 // Thread-local last error storage
 thread_local! {
@@ -456,6 +458,135 @@ pub unsafe extern "C" fn mesh_free_string(s: *mut c_char) {
     }
 }
 
+// =============================================================================
+// Config Resolution Functions
+// =============================================================================
+
+/// Resolve configuration value with priority: ENV > param > default.
+///
+/// For http_host, auto-detects external IP if no value provided.
+///
+/// # Arguments
+/// * `key_name` - Config key (e.g., "http_host", "registry_url", "namespace")
+/// * `param_value` - Optional value from code/config (NULL for none)
+///
+/// # Returns
+/// Resolved value (caller must free with `mesh_free_string`), or NULL if unknown key
+///
+/// # Safety
+/// * `key_name` must be a valid null-terminated C string
+/// * `param_value` may be NULL or a valid null-terminated C string
+/// * The returned string must be freed with `mesh_free_string`
+#[no_mangle]
+pub unsafe extern "C" fn mesh_resolve_config(
+    key_name: *const c_char,
+    param_value: *const c_char,
+) -> *mut c_char {
+    if key_name.is_null() {
+        set_last_error("key_name is null");
+        return ptr::null_mut();
+    }
+
+    let key = match CStr::from_ptr(key_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in key_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let param = if param_value.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(param_value).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            Ok(_) => None, // Empty string treated as no value
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in param_value: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::config::resolve_config_by_name(key, param);
+
+    if result.is_empty() {
+        // Unknown key or no value available
+        return ptr::null_mut();
+    }
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Resolve integer configuration value with priority: ENV > param > default.
+///
+/// # Arguments
+/// * `key_name` - Config key (e.g., "http_port", "health_interval")
+/// * `param_value` - Value from code/config (-1 for none)
+///
+/// # Returns
+/// Resolved value, or -1 if unknown key or no value available
+///
+/// # Safety
+/// * `key_name` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_resolve_config_int(
+    key_name: *const c_char,
+    param_value: i64,
+) -> i64 {
+    if key_name.is_null() {
+        set_last_error("key_name is null");
+        return -1;
+    }
+
+    let key = match CStr::from_ptr(key_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in key_name: {}", e));
+            return -1;
+        }
+    };
+
+    let param = if param_value < 0 { None } else { Some(param_value) };
+
+    match crate::config::ConfigKey::from_name(key) {
+        Some(k) => crate::config::resolve_config_int(k, param).unwrap_or(-1),
+        None => {
+            set_last_error(format!("Unknown config key: {}", key));
+            -1
+        }
+    }
+}
+
+/// Auto-detect external IP address.
+///
+/// Uses UDP socket trick to find IP that routes to external networks.
+/// Falls back to "localhost" if detection fails.
+///
+/// # Returns
+/// IP address string (caller must free with `mesh_free_string`)
+///
+/// # Safety
+/// * The returned string must be freed with `mesh_free_string`
+#[no_mangle]
+pub extern "C" fn mesh_auto_detect_ip() -> *mut c_char {
+    let ip = crate::config::auto_detect_external_ip();
+
+    match CString::new(ip) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Get library version string.
 ///
 /// # Returns
@@ -467,6 +598,124 @@ pub extern "C" fn mesh_version() -> *const c_char {
     VERSION_CSTR
         .get_or_init(|| CString::new(VERSION).unwrap())
         .as_ptr()
+}
+
+// =============================================================================
+// Tracing Functions
+// =============================================================================
+
+/// Global tokio runtime for tracing operations.
+/// Lazily initialized on first tracing call.
+static TRACING_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_tracing_runtime() -> &'static tokio::runtime::Runtime {
+    TRACING_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("mesh-trace")
+            .enable_all()
+            .build()
+            .expect("Failed to create tracing runtime")
+    })
+}
+
+/// Check if distributed tracing is enabled.
+///
+/// Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.
+///
+/// # Returns
+/// 1 if tracing is enabled, 0 otherwise
+#[no_mangle]
+pub extern "C" fn mesh_is_tracing_enabled() -> i32 {
+    if is_tracing_enabled() { 1 } else { 0 }
+}
+
+/// Initialize the trace publisher.
+///
+/// Must be called before `mesh_publish_span`. Connects to Redis.
+///
+/// # Returns
+/// 1 on success (Redis connected), 0 on failure
+#[no_mangle]
+pub extern "C" fn mesh_init_trace_publisher() -> i32 {
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::init_trace_publisher().await
+    });
+
+    if result {
+        info!("FFI: Trace publisher initialized successfully");
+        1
+    } else {
+        debug!("FFI: Trace publisher initialization failed (tracing disabled or Redis unavailable)");
+        0
+    }
+}
+
+/// Check if trace publisher is available.
+///
+/// # Returns
+/// 1 if publisher is initialized and ready, 0 otherwise
+#[no_mangle]
+pub extern "C" fn mesh_is_trace_publisher_available() -> i32 {
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::is_trace_publisher_available().await
+    });
+
+    if result { 1 } else { 0 }
+}
+
+/// Publish a trace span to Redis.
+///
+/// Non-blocking (from the caller's perspective) - returns after queuing the span.
+/// Silently handles failures to never break agent operations.
+///
+/// # Arguments
+/// * `span_json` - JSON string containing span data (all values should be strings)
+///
+/// # Returns
+/// 1 on success (queued), 0 on failure
+///
+/// # Safety
+/// * `span_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_publish_span(span_json: *const c_char) -> i32 {
+    if span_json.is_null() {
+        debug!("FFI: mesh_publish_span called with null span_json");
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(span_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            debug!("FFI: Invalid UTF-8 in span_json: {}", e);
+            return 0;
+        }
+    };
+
+    // Parse JSON into HashMap
+    let span_data: std::collections::HashMap<String, String> = match serde_json::from_str(json_str) {
+        Ok(data) => data,
+        Err(e) => {
+            debug!("FFI: Failed to parse span JSON: {}", e);
+            return 0;
+        }
+    };
+
+    // Publish to Redis
+    let rt = get_tracing_runtime();
+    let result = rt.block_on(async {
+        tracing_publish::publish_span(span_data).await
+    });
+
+    if result {
+        debug!("FFI: Trace span published successfully");
+        1
+    } else {
+        debug!("FFI: Failed to publish trace span");
+        0
+    }
 }
 
 // =============================================================================
@@ -551,6 +800,136 @@ mod tests {
         // Should not panic
         unsafe {
             mesh_free_string(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_namespace() {
+        unsafe {
+            let key = CString::new("namespace").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            // Default namespace is "default"
+            assert_eq!(value, "default");
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_with_param() {
+        unsafe {
+            let key = CString::new("namespace").unwrap();
+            let param = CString::new("production").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), param.as_ptr());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            assert_eq!(value, "production");
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_unknown_key() {
+        unsafe {
+            let key = CString::new("unknown_key").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(result.is_null());
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_null_key() {
+        unsafe {
+            let result = mesh_resolve_config(ptr::null(), ptr::null());
+            assert!(result.is_null());
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            mesh_free_string(err);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int() {
+        unsafe {
+            let key = CString::new("health_interval").unwrap();
+            // Default is 5
+            let result = mesh_resolve_config_int(key.as_ptr(), -1);
+            assert_eq!(result, 5);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int_with_param() {
+        unsafe {
+            let key = CString::new("health_interval").unwrap();
+            let result = mesh_resolve_config_int(key.as_ptr(), 10);
+            assert_eq!(result, 10);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_int_unknown_key() {
+        unsafe {
+            let key = CString::new("unknown_key").unwrap();
+            let result = mesh_resolve_config_int(key.as_ptr(), -1);
+            assert_eq!(result, -1);
+        }
+    }
+
+    #[test]
+    fn test_auto_detect_ip() {
+        let result = mesh_auto_detect_ip();
+        assert!(!result.is_null());
+        unsafe {
+            let ip = CStr::from_ptr(result).to_str().unwrap();
+            // Should return something (either real IP or localhost)
+            assert!(!ip.is_empty());
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_http_host_auto_detect() {
+        unsafe {
+            let key = CString::new("http_host").unwrap();
+            let result = mesh_resolve_config(key.as_ptr(), ptr::null());
+            assert!(!result.is_null());
+            let value = CStr::from_ptr(result).to_str().unwrap();
+            // Should return auto-detected IP (not empty)
+            assert!(!value.is_empty());
+            mesh_free_string(result);
+        }
+    }
+
+    #[test]
+    fn test_mesh_is_tracing_enabled_default() {
+        // Without env var set, should return 0
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        assert_eq!(mesh_is_tracing_enabled(), 0);
+    }
+
+    #[test]
+    fn test_mesh_is_tracing_enabled_with_env() {
+        std::env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
+        assert_eq!(mesh_is_tracing_enabled(), 1);
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    #[test]
+    fn test_mesh_publish_span_null_json() {
+        unsafe {
+            // Should return 0 for null input
+            assert_eq!(mesh_publish_span(ptr::null()), 0);
+        }
+    }
+
+    #[test]
+    fn test_mesh_publish_span_invalid_json() {
+        unsafe {
+            let invalid = CString::new("not valid json").unwrap();
+            // Should return 0 for invalid JSON
+            assert_eq!(mesh_publish_span(invalid.as_ptr()), 0);
         }
     }
 }

@@ -18,7 +18,7 @@ const server = new FastMCP({
 // ===== AGENT CONFIGURATION =====
 
 /**
- * LLM Provider agent that exposes gemini/gemini-2.0-flash via mesh.
+ * LLM Provider agent that exposes gemini/gemini-3-flash-preview via mesh.
  *
  * Other agents can use this provider by specifying matching tags
  * in their mesh.llm() config:
@@ -28,7 +28,7 @@ const server = new FastMCP({
 const agent = mesh(server, {
   name: "gemini-provider-ts",
   version: "1.0.0",
-  description: "LLM Provider for gemini/gemini-2.0-flash",
+  description: "LLM Provider for gemini/gemini-3-flash-preview",
   httpPort: 9006,
 });
 
@@ -46,11 +46,11 @@ const agent = mesh(server, {
  * - Registers with mesh network for dependency injection
  */
 agent.addLlmProvider({
-  model: "gemini/gemini-2.0-flash",
+  model: "gemini/gemini-3-flash-preview",
   capability: "llm",
   tags: ["llm", "gemini", "google", "provider"],
   version: "1.0.0",
-  description: "LLM provider via gemini/gemini-2.0-flash",
+  description: "LLM provider via gemini/gemini-3-flash-preview",
   maxTokens: 4096,
 });
 

@@ -201,6 +201,21 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
                     )
                 break
 
+        # Extract kwargs (non-standard fields like vendor)
+        # These are spread as top-level keys in metadata by @mesh.tool(**kwargs)
+        standard_fields = {
+            "capability",
+            "tags",
+            "version",
+            "description",
+            "dependencies",
+            "input_schema",
+        }
+        kwargs_data = {
+            k: v for k, v in tool_metadata.items() if k not in standard_fields
+        }
+        kwargs_json = json.dumps(kwargs_data) if kwargs_data else None
+
         tool_spec = core.ToolSpec(
             function_name=tool_name,
             capability=tool_metadata.get("capability", tool_name),
@@ -211,6 +226,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             input_schema=input_schema_json,
             llm_filter=llm_filter_json,
             llm_provider=llm_provider_json,
+            kwargs=kwargs_json,
         )
         tools.append(tool_spec)
         logger.info(
@@ -559,6 +575,7 @@ async def _handle_llm_tools_update(
             "input_schema": (
                 json.loads(tool.input_schema) if tool.input_schema else None
             ),
+            "description": tool.description if tool.description else "",
         }
         tool_list.append(tool_info)
 
@@ -606,6 +623,7 @@ async def _handle_llm_provider_update(
             "endpoint": provider_info.endpoint,
             "name": provider_info.function_name,  # OpenAPI contract uses "name"
             "model": provider_info.model,
+            "vendor": provider_info.vendor,  # For handler selection
         }
     }
     injector.process_llm_providers(llm_providers)

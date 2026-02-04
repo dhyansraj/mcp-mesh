@@ -1,0 +1,254 @@
+package com.example.greeter;
+
+import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshTool;
+import io.mcpmesh.Param;
+import io.mcpmesh.Selector;
+import io.mcpmesh.types.McpMeshTool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * Basic MCP Mesh agent example with a simple greeting tool.
+ *
+ * <p>This demonstrates:
+ * <ul>
+ *   <li>@MeshAgent for agent configuration</li>
+ *   <li>@MeshTool for capability registration</li>
+ *   <li>@Param for tool parameter documentation</li>
+ * </ul>
+ *
+ * <h2>Running</h2>
+ * <pre>
+ * # Start the registry
+ * meshctl start --registry-only
+ *
+ * # Run this agent
+ * mvn spring-boot:run
+ *
+ * # Or with environment overrides
+ * MCP_MESH_HTTP_PORT=9001 mvn spring-boot:run
+ *
+ * # Test with meshctl
+ * meshctl list                    # Should show "greeter" agent
+ * meshctl list -t                 # Should show "greeting" tool
+ * meshctl call greeting '{"name": "World"}'
+ * </pre>
+ */
+@MeshAgent(
+    name = "greeter",
+    version = "1.0.0",
+    description = "Simple greeting service",
+    port = 9000
+)
+@SpringBootApplication
+public class GreeterAgentApplication {
+
+    private static final Logger log = LoggerFactory.getLogger(GreeterAgentApplication.class);
+
+    public static void main(String[] args) {
+        log.info("Starting Greeter Agent...");
+        SpringApplication.run(GreeterAgentApplication.class, args);
+    }
+
+    /**
+     * Greet a user by name.
+     *
+     * @param name The name to greet
+     * @return A greeting message
+     */
+    @MeshTool(
+        capability = "greeting",
+        description = "Greet a user by name",
+        tags = {"greeting", "utility", "java"}
+    )
+    public GreetingResponse greet(
+        @Param(value = "name", description = "The name to greet") String name
+    ) {
+        log.info("Greeting: {}", name);
+
+        String timestamp = LocalDateTime.now()
+            .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+        String message = String.format("Hello, %s! Welcome to MCP Mesh.", name);
+
+        return new GreetingResponse(message, timestamp, "greeter-java");
+    }
+
+    /**
+     * Get agent information.
+     *
+     * @return Agent metadata
+     */
+    @MeshTool(
+        capability = "agent_info",
+        description = "Get information about this agent",
+        tags = {"info", "metadata", "java"}
+    )
+    public AgentInfo getInfo() {
+        return new AgentInfo(
+            "greeter",
+            "1.0.0",
+            "Java " + System.getProperty("java.version"),
+            System.getProperty("os.name")
+        );
+    }
+
+    /**
+     * Add two numbers using the remote calculator service.
+     * Demonstrates cross-agent tool calls (Java -> TypeScript).
+     *
+     * <p>The {@code McpMeshTool<Integer>} type parameter tells the SDK to
+     * automatically deserialize the calculator's response as an Integer,
+     * eliminating manual type-checking code.
+     *
+     * <p>Uses {@code callWith(record)} for clean parameter passing.
+     *
+     * @param a First number
+     * @param b Second number
+     * @param calculator Injected calculator tool from mesh (typed as Integer)
+     * @return Calculation result with metadata
+     */
+    @MeshTool(
+        capability = "add_via_mesh",
+        description = "Add two numbers using the remote calculator service (cross-agent call)",
+        tags = {"math", "cross-agent", "java"},
+        dependencies = @Selector(capability = "add")
+    )
+    public CalculationResult addViaMesh(
+        @Param(value = "a", description = "First number") int a,
+        @Param(value = "b", description = "Second number") int b,
+        McpMeshTool<Integer> calculator
+    ) {
+        log.info("addViaMesh called: {} + {} via {}", a, b, calculator.getCapability());
+
+        // Call with a record - field names become MCP parameter names
+        Integer sum = calculator.call(new AddParams(a, b));
+
+        log.info("Remote calculator response: {}", sum);
+
+        return new CalculationResult(
+            a,
+            b,
+            "+",
+            sum,
+            "greeter-java → calculator-typescript",
+            calculator.getEndpoint()
+        );
+    }
+
+    /** Parameters for the add tool. */
+    record AddParams(int a, int b) {}
+
+    /**
+     * Greet an employee by ID using the remote employee service.
+     * Demonstrates cross-agent calls with complex types (McpMeshTool&lt;Employee&gt;).
+     *
+     * <p>The {@code McpMeshTool<Employee>} type parameter tells the SDK to
+     * automatically deserialize the employee service's JSON response into
+     * an Employee record - no manual parsing needed.
+     *
+     * @param employeeId The employee ID to look up and greet
+     * @param employeeService Injected employee service tool (typed as Employee)
+     * @return Personalized greeting for the employee
+     */
+    @MeshTool(
+        capability = "greet_employee",
+        description = "Greet an employee by their ID (fetches from employee service)",
+        tags = {"greeting", "employee", "cross-agent", "java"},
+        dependencies = @Selector(capability = "get_employee")
+    )
+    public EmployeeGreeting greetEmployee(
+        @Param(value = "employee_id", description = "The employee ID to greet") int employeeId,
+        McpMeshTool<Employee> employeeService
+    ) {
+        log.info("greetEmployee called for ID: {} via {}", employeeId, employeeService.getCapability());
+
+        // For simple params, use varargs: call("key", value, "key2", value2)
+        Employee employee = employeeService.call("id", employeeId);
+
+        log.info("Remote employee service response: {} {} ({})",
+            employee.firstName(), employee.lastName(), employee.department());
+
+        String timestamp = LocalDateTime.now()
+            .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+        String message = String.format(
+            "Hello, %s %s! Welcome from the %s department.",
+            employee.firstName(),
+            employee.lastName(),
+            employee.department()
+        );
+
+        return new EmployeeGreeting(
+            message,
+            employee,
+            timestamp,
+            "greeter-java → employee-service-java",
+            employeeService.getEndpoint()
+        );
+    }
+
+    // =========================================================================
+    // Data Types
+    // =========================================================================
+
+    /**
+     * Calculation result record.
+     */
+    public record CalculationResult(
+        int operandA,
+        int operandB,
+        String operation,
+        int result,
+        String callPath,
+        String remoteEndpoint
+    ) {}
+
+    /**
+     * Greeting response record.
+     */
+    public record GreetingResponse(
+        String message,
+        String timestamp,
+        String source
+    ) {}
+
+    /**
+     * Agent information record.
+     */
+    public record AgentInfo(
+        String name,
+        String version,
+        String runtime,
+        String platform
+    ) {}
+
+    /**
+     * Employee record - matches the structure from employee-service.
+     * The SDK will deserialize the remote JSON response into this record.
+     */
+    public record Employee(
+        int id,
+        String firstName,
+        String lastName,
+        String department,
+        double salary
+    ) {}
+
+    /**
+     * Employee greeting response with full employee data.
+     */
+    public record EmployeeGreeting(
+        String message,
+        Employee employee,
+        String timestamp,
+        String callPath,
+        String remoteEndpoint
+    ) {}
+}

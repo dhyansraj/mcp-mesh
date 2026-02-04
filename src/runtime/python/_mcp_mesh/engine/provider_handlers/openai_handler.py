@@ -13,6 +13,7 @@ from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
     BaseProviderHandler,
     make_schema_strict,
+    sanitize_schema_for_structured_output,
 )
 
 
@@ -96,6 +97,9 @@ class OpenAIHandler(BaseProviderHandler):
             # rather than relying on prompt instructions alone
             schema = output_type.model_json_schema()
 
+            # Sanitize schema first to remove unsupported validation keywords (minimum, maximum, etc.)
+            schema = sanitize_schema_for_structured_output(schema)
+
             # Transform schema for OpenAI strict mode
             # OpenAI requires additionalProperties: false and all properties in required
             schema = make_schema_strict(schema, add_all_required=True)
@@ -176,4 +180,3 @@ class OpenAIHandler(BaseProviderHandler):
             "vision": True,  # GPT-4V and later support vision
             "json_mode": True,  # Has dedicated JSON mode via response_format
         }
-

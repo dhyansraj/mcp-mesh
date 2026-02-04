@@ -1,0 +1,214 @@
+# Test Case: Java Tool Call Tracing with Distributed Tracing
+# Verifies that tool calls between Java agents produce traceable spans
+#
+# Agent Setup:
+#   - java-math-agent (port 9010): provides "add" and "multiply" capabilities
+#   - java-calculator (port 9011): provides "calculate" that depends on add+multiply
+#
+# Flow: calculate -> add (repeated b times) -> multiply -> result
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
+
+name: "Java Tool Call Tracing"
+description: "Verify distributed tracing works across Java agent tool calls"
+tags:
+  - observability
+  - tracing
+  - tempo
+  - redis
+  - java
+timeout: 300
+
+pre_run:
+  # Start observability infrastructure (Redis + Tempo)
+  - routine: global.start_observability
+
+  # Setup for Java agents
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-math-agent /workspace/
+      cp -r /uc-artifacts/java-calculator /workspace/
+      cp /uc-artifacts/.env /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for java-math-agent
+  - name: "Install Maven dependencies for java-math-agent"
+    handler: maven-install
+    path: /workspace/java-math-agent
+    timeout: 600
+
+  # Install Maven dependencies for java-calculator
+  - name: "Install Maven dependencies for java-calculator"
+    handler: maven-install
+    path: /workspace/java-calculator
+    timeout: 600
+
+  # Start java-math-agent with tracing enabled
+  - name: "Start java-math-agent"
+    handler: shell
+    command: "meshctl start /workspace/java-math-agent --env-file .env -d"
+    workdir: /workspace
+    capture: start_math_agent
+
+  # Start java-calculator with tracing enabled
+  - name: "Start java-calculator"
+    handler: shell
+    command: "meshctl start /workspace/java-calculator --env-file .env -d"
+    workdir: /workspace
+    capture: start_calculator
+
+  # Wait for agents to register and dependencies to resolve
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java agents to start and register..."
+      for i in $(seq 1 45); do
+        # Check if both agents are registered and calculator has deps resolved
+        if meshctl list 2>/dev/null | grep -q "java-math-agent" && \
+           meshctl list 2>/dev/null | grep -q "java-calculator.*2/2"; then
+          echo "Both agents registered and deps resolved after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agents did not register properly within 90s"
+      echo "=== Agent list ==="
+      meshctl list 2>/dev/null || true
+      echo "=== java-math-agent logs ==="
+      meshctl logs java-math-agent 2>/dev/null | tail -30 || true
+      echo "=== java-calculator logs ==="
+      meshctl logs java-calculator 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify all agents are running
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify capabilities
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Call calculate with --trace to generate distributed trace
+  - name: "Call calculate with tracing"
+    handler: shell
+    command: |
+      meshctl call calculate '{"a": 7, "b": 6}' --trace 2>&1
+    workdir: /workspace
+    capture: calculate_output
+    timeout: 60
+
+  # Extract just the JSON result (strip trace lines for jq parsing)
+  - name: "Extract JSON result"
+    handler: shell
+    command: |
+      # Extract JSON by taking lines until we hit "Trace ID:"
+      echo '${captured.calculate_output}' | sed '/^Trace ID:/,$d'
+    workdir: /workspace
+    capture: calculate_json
+
+  # Extract trace ID from output
+  - name: "Extract trace ID"
+    handler: shell
+    command: |
+      # Extract trace ID from "Trace ID: <id>" line
+      TRACE_ID=$(echo "${captured.calculate_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract trace ID"
+        echo "Output was: ${captured.calculate_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: trace_id_output
+
+  # Wait for traces to be flushed to Tempo
+  - name: "Wait for trace flush"
+    handler: wait
+    seconds: 5
+
+  # Query trace from Tempo (capture only JSON output)
+  - name: "Query trace from Tempo"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.trace_id_output}" | grep "TRACE_ID=" | cut -d= -f2)
+      meshctl trace $TRACE_ID --json 2>&1
+    workdir: /workspace
+    capture: trace_output
+    timeout: 30
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # All agents should be registered
+  - expr: "${captured.list_output} contains 'java-math-agent'"
+    message: "java-math-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'java-calculator'"
+    message: "java-calculator should be registered"
+
+  # Tools should be available
+  - expr: "${captured.tools_output} contains 'calculate'"
+    message: "calculate tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'multiply'"
+    message: "multiply tool should be listed"
+
+  # Calculate should return correct result (7 * 6 = 42)
+  - expr: ${jq:captured.calculate_json:.content[0].text | fromjson | .direct_multiply} == 42
+    message: "Calculate should return 42 (7 * 6)"
+
+  # Results should match (repeated addition = direct multiply)
+  - expr: ${jq:captured.calculate_json:.content[0].text | fromjson | .match} == true
+    message: "Repeated addition should match direct multiplication"
+
+  # Trace ID should be extracted
+  - expr: "${captured.trace_id_output} contains 'TRACE_ID='"
+    message: "Trace ID should be extracted from output"
+
+  # Trace should have correct span count (8 spans: 1 calculate + 6 adds + 1 multiply)
+  - expr: ${jq:captured.trace_output:.SpanCount} == 8
+    message: "Trace should have exactly 8 spans (1 calculate + 6 adds + 1 multiply)"
+
+  # Trace should involve 2 agents
+  - expr: ${jq:captured.trace_output:.AgentCount} == 2
+    message: "Trace should involve 2 agents (java-calculator, java-math-agent)"
+
+  # Trace should be successful
+  - expr: ${jq:captured.trace_output:.Success} == true
+    message: "Trace should show successful execution"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Also kill any remaining Java processes
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*math" 2>/dev/null || true
+      pkill -f "java.*calculator" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

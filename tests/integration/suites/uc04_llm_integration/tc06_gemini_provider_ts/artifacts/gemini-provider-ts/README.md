@@ -1,6 +1,6 @@
 # gemini-provider-ts
 
-MCP Mesh LLM provider for gemini/gemini-2.0-flash.
+MCP Mesh LLM provider for gemini/gemini-3-flash-preview.
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ npm start
 
 This provider uses `mesh.llmProvider()` which:
 
-- Wraps the gemini/gemini-2.0-flash model using Vercel AI SDK
+- Wraps the gemini/gemini-3-flash-preview model using Vercel AI SDK
 - Registers with mesh for other agents to discover
 - Provides health checks for API connectivity
 - Handles rate limiting and error recovery

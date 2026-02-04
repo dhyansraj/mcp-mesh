@@ -275,6 +275,9 @@ pub enum RuntimeType {
     /// TypeScript SDK
     #[serde(rename = "typescript")]
     TypeScript = 1,
+    /// Java SDK
+    #[serde(rename = "java")]
+    Java = 2,
 }
 
 #[cfg(feature = "python")]
@@ -296,13 +299,15 @@ impl RuntimeType {
         match self {
             Self::Python => "python",
             Self::TypeScript => "typescript",
+            Self::Java => "java",
         }
     }
 
-    /// Create from string (for Python/TypeScript bindings).
+    /// Create from string (for Python/TypeScript/Java bindings).
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "typescript" | "ts" => Self::TypeScript,
+            "java" => Self::Java,
             _ => Self::Python,
         }
     }
