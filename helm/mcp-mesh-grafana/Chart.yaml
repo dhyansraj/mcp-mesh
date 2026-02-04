@@ -2,7 +2,7 @@ apiVersion: v2
 name: mcp-mesh-grafana
 description: Grafana observability component for MCP Mesh
 type: application
-version: 0.9.0-beta.6
+version: 0.9.0-beta.7
 appVersion: "12.3.1"
 keywords:
   - grafana
