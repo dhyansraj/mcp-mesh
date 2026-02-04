@@ -133,6 +133,7 @@ for MODULE in "${MODULES[@]}"; do
             mkdir -p /tmp/empty-sources
             jar cf "${SOURCES_FILE}" -C /tmp/empty-sources .
             rm -rf /tmp/empty-sources
+            gpg --batch --armor --detach-sign "${SOURCES_FILE}"
             cp "${SOURCES_FILE}" "${BUNDLE_MODULE_DIR}/"
             ARTIFACTS+=("${SOURCES_FILE}")
             log "  Created empty: $(basename "${SOURCES_FILE}")"
@@ -149,6 +150,7 @@ for MODULE in "${MODULES[@]}"; do
             mkdir -p /tmp/empty-javadoc
             jar cf "${JAVADOC_FILE}" -C /tmp/empty-javadoc .
             rm -rf /tmp/empty-javadoc
+            gpg --batch --armor --detach-sign "${JAVADOC_FILE}"
             cp "${JAVADOC_FILE}" "${BUNDLE_MODULE_DIR}/"
             ARTIFACTS+=("${JAVADOC_FILE}")
             log "  Created empty: $(basename "${JAVADOC_FILE}")"
