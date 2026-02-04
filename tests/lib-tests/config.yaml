@@ -10,10 +10,10 @@ suite:
 
 packages:
   # Version to test - update this for each release
-  cli_version: "0.9.0-beta.7"
-  sdk_python_version: "0.9.0-beta.7" # PEP 440 format for pip
-  sdk_typescript_version: "0.9.0-beta.7"
-  core_version: "0.9.0-beta.7"
+  cli_version: "0.9.0-beta.8"
+  sdk_python_version: "0.9.0-beta.8" # PEP 440 format for pip
+  sdk_typescript_version: "0.9.0-beta.8"
+  core_version: "0.9.0-beta.8"
 
 # Docker settings for the base image build
 docker:
