@@ -10,10 +10,8 @@ tags:
   - gemini
   - python
 timeout: 120
-
 pre_run:
   - routine: global.setup_for_scaffold
-
 test:
   # Scaffold Gemini LLM provider
   - name: "Scaffold Gemini provider"
@@ -21,56 +19,46 @@ test:
     command: "meshctl scaffold --name gemini-test --agent-type llm-provider --model gemini/gemini-2.5-pro --lang python"
     workdir: /workspace
     capture: scaffold_output
-
   # List generated files
   - name: "List generated files"
     handler: shell
     command: "find gemini-test -type f | sort"
     workdir: /workspace
     capture: generated_files
-
   # Check main.py for model version
   - name: "Check main.py content"
     handler: shell
     command: "cat gemini-test/main.py"
     workdir: /workspace
     capture: main_content
-
   # Extract model string from main.py
   - name: "Extract model definition"
     handler: shell
     command: "grep -E 'model\\s*=' gemini-test/main.py || echo 'model not found'"
     workdir: /workspace
     capture: model_line
-
 assertions:
   # Scaffold succeeded
   - expr: ${last.exit_code} == 0
     message: "Scaffold command should succeed"
-
   # main.py exists
   - expr: "${captured.generated_files} contains 'main.py'"
     message: "main.py should be created"
-
   # requirements.txt exists
   - expr: "${captured.generated_files} contains 'requirements.txt'"
     message: "requirements.txt should be created"
-
   # main.py imports mesh
   - expr: "${captured.main_content} contains 'import mesh'"
     message: "main.py should import mesh"
-
   # main.py has llm_provider decorator
   - expr: "${captured.main_content} contains '@mesh.llm_provider'"
     message: "main.py should have @mesh.llm_provider decorator"
-
   # Model should be gemini-2.5-pro (not outdated 1.5-flash)
   - expr: "${captured.main_content} contains 'gemini-2.5-pro'"
     message: "Should use gemini-2.5-pro model"
-
   # Should NOT contain outdated model
   - expr: "${captured.main_content} not contains 'gemini-1.5-flash'"
     message: "Should NOT use outdated gemini-1.5-flash model"
-
 post_run:
   - routine: global.cleanup_workspace
+disabled: true

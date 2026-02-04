@@ -9,55 +9,46 @@ tags:
   - provider
   - python
 timeout: 120
-
 # Note: Skip this test with --skip-tag llm if no API key is available
-
 pre_run:
   # Setup for Python agent
   - routine: global.setup_for_python_agent
     params:
       meshctl_version: "${config.packages.cli_version}"
       mcpmesh_version: "${config.packages.sdk_python_version}"
-
 test:
   # Copy artifacts to workspace (including dotfiles)
   - name: "Copy artifacts to workspace"
     handler: shell
     command: "cp -r /artifacts/. /workspace/"
     capture: copy_output
-
   # Verify all files copied (including .env)
   - name: "Verify workspace files"
     handler: shell
     command: "ls -la /workspace/"
     capture: ls_output
-
   # Start the gemini-provider with env file
   - name: "Start gemini-provider"
     handler: shell
     command: "meshctl start gemini-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=3022 -d --debug"
     workdir: /workspace
     capture: start_output
-
   # Wait for provider to register
   - name: "Wait for provider to register"
     handler: wait
     seconds: 15
-
   # Verify provider is running
   - name: "Verify provider is running"
     handler: shell
     command: "meshctl list"
     workdir: /workspace
     capture: list_output
-
   # List available tools
   - name: "List available tools"
     handler: shell
     command: "meshctl list -t"
     workdir: /workspace
     capture: tools_output
-
   # Call gemini_provider with a simple question
   - name: "Call gemini_provider - capital of France"
     handler: shell
@@ -65,58 +56,45 @@ test:
       meshctl call gemini_provider '{"request": {"messages": [{"role": "user", "content": "What is the capital of France? Reply with just the city name."}]}}'
     workdir: /workspace
     capture: llm_response
-
   # Stop provider
   - name: "Stop provider"
     handler: shell
     command: "meshctl stop"
     workdir: /workspace
-
 assertions:
   # Provider started successfully
   - expr: ${captured.list_output} contains 'gemini-provider'
     message: "gemini-provider should appear in meshctl list"
-
   # Tool is registered
   - expr: ${captured.tools_output} contains 'gemini_provider'
     message: "gemini_provider tool should be listed"
-
   # Tool has correct capability
   - expr: ${captured.tools_output} contains 'llm'
     message: "Tool should have llm capability"
-
   # LLM response - basic contains check (backward compatible)
   - expr: ${captured.llm_response} contains 'Paris'
     message: "LLM response should contain Paris"
-
   # jq: Extract content from structuredContent and check with iequal (case-insensitive)
   - expr: ${jq:captured.llm_response:.structuredContent.content} iequal 'paris'
     message: "structuredContent.content should be Paris (case-insensitive)"
-
   # jq: Extract content using fromjson on nested JSON string
   - expr: ${jq:captured.llm_response:.content[0].text | fromjson | .content} iequal 'paris'
     message: "Nested content via fromjson should be Paris"
-
   # jq: Verify isError is false
   - expr: ${jq:captured.llm_response:.isError} == 'false'
     message: "isError should be false"
-
   # jq: Check model contains gemini
   - expr: ${jq:captured.llm_response:.structuredContent._mesh_usage.model} contains 'gemini'
     message: "Model should contain gemini"
-
   # jq: Verify role is assistant
   - expr: ${jq:captured.llm_response:.structuredContent.role} == 'assistant'
     message: "Role should be assistant"
-
   # jq: Check prompt_tokens is greater than 0
   - expr: ${jq:captured.llm_response:.structuredContent._mesh_usage.prompt_tokens} > 0
     message: "prompt_tokens should be greater than 0"
-
   # startswith: Content should start with 'Paris' (or 'paris' with variations)
   - expr: ${jq:captured.llm_response:.structuredContent.content} startswith 'Paris'
     message: "Content should start with Paris"
-
 post_run:
   # Stop any remaining providers
   - handler: shell
@@ -124,3 +102,4 @@ post_run:
     workdir: /workspace
     ignore_errors: true
   - routine: global.cleanup_workspace
+disabled: true

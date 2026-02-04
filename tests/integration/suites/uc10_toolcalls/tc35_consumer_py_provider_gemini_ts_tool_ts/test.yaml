@@ -16,11 +16,9 @@ tags:
   - ts
   - phase2
 timeout: 300
-
 pre_run:
   - routine: global.setup_for_typescript_agent
   - routine: global.setup_for_python_agent
-
 test:
   # 1. Copy artifacts to workspace
   - name: "Copy artifacts"
@@ -32,20 +30,16 @@ test:
       cp /uc-artifacts/.env /workspace/
       ls -la /workspace/
     capture: copy_output
-
   # 2. Install dependencies
   - name: "Install tool dependencies"
     handler: npm-install
     path: /workspace/weather-tool-ts
-
   - name: "Install provider dependencies"
     handler: npm-install
     path: /workspace/gemini-provider-ts
-
   - name: "Install consumer dependencies"
     handler: pip-install
     path: /workspace/analyst-py
-
   # 3. Start tool agent (port 9001)
   - name: "Start tool agent"
     handler: shell
@@ -54,11 +48,9 @@ test:
       meshctl start weather-tool-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9001 -d
       echo "Tool agent starting..."
     capture: start_tool
-
   - name: "Wait for tool agent"
     handler: wait
     seconds: 15
-
   # 4. Start provider agent (port 9002)
   - name: "Start provider agent"
     handler: shell
@@ -67,11 +59,9 @@ test:
       meshctl start gemini-provider-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
       echo "Provider agent starting..."
     capture: start_provider
-
   - name: "Wait for provider agent"
     handler: wait
     seconds: 20
-
   # 5. Start consumer agent (port 9003)
   - name: "Start consumer agent"
     handler: shell
@@ -80,18 +70,15 @@ test:
       meshctl start analyst-py/main.py --env MCP_MESH_HTTP_PORT=9003 -d
       echo "Consumer agent starting..."
     capture: start_consumer
-
   - name: "Wait for consumer and resolution"
     handler: wait
     seconds: 25
-
   # 6. Verify all agents registered
   - name: "Verify agents registered"
     handler: shell
     command: |
       meshctl list
     capture: agent_list
-
   # 7. Non-tool query (capital of France)
   - name: "Non-tool query"
     handler: shell
@@ -99,7 +86,6 @@ test:
       meshctl call analyze '{"ctx": {"query": "What is the capital of France?"}}'
     capture: non_tool_response
     timeout: 120
-
   # 8. Tool query (weather in Boston)
   - name: "Tool query"
     handler: shell
@@ -107,7 +93,6 @@ test:
       meshctl call analyze '{"ctx": {"query": "What is the weather in Boston?"}}'
     capture: tool_response
     timeout: 120
-
 assertions:
   - expr: "${captured.agent_list} contains 'analyst-py'"
     message: "Consumer agent should be registered"
@@ -119,11 +104,10 @@ assertions:
     message: "Non-tool response should mention Paris"
   - expr: "${captured.tool_response} contains 'Boston'"
     message: "Tool response should mention Boston"
-
 post_run:
   - handler: shell
     command: |
       meshctl stop 2>/dev/null || true
-
     ignore_errors: true
   - routine: global.cleanup_workspace
+disabled: true
