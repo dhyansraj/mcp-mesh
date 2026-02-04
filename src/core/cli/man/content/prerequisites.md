@@ -2,7 +2,7 @@
 
 > What you need before building MCP Mesh agents
 
-**MCP Mesh supports both Python and TypeScript.** Choose the language that fits your needs—or use both in the same mesh.
+**MCP Mesh supports Python, TypeScript, and Java.** Choose the language that fits your needs—or use multiple languages in the same mesh.
 
 ## Windows Users
 
@@ -110,6 +110,44 @@ npm install
 meshctl start src/index.ts --debug
 ```
 
+### Java 17+ / Maven
+
+```bash
+# Check versions
+java -version    # Need 17+
+mvn -version     # Apache Maven 3.8+
+
+# Install if needed
+brew install openjdk@17      # macOS
+brew install maven           # macOS
+sudo apt install openjdk-17-jdk maven   # Ubuntu/Debian
+```
+
+### MCP Mesh Spring Boot Starter
+
+```xml
+<!-- In your pom.xml -->
+<dependency>
+    <groupId>io.mcpmesh</groupId>
+    <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+    <version>0.8.0-SNAPSHOT</version>
+</dependency>
+```
+
+### Quick Start (Java)
+
+```bash
+# 1. Use an example as template
+cp -r examples/java/basic-tool-agent my-agent
+cd my-agent
+
+# 2. Build and run
+mvn spring-boot:run
+
+# 3. Or use meshctl (auto-detects pom.xml)
+meshctl start my-agent --debug
+```
+
 ## Docker Deployment
 
 For containerized deployments.
@@ -194,6 +232,8 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 | ---------- | ------- | ----------- |
 | Python     | 3.11    | 3.12        |
 | Node.js    | 18      | 20+         |
+| Java       | 17      | 17+         |
+| Maven      | 3.8     | 3.9+        |
 | Docker     | 20.10   | Latest      |
 | Kubernetes | 1.25    | 1.28+       |
 | Helm       | 3.10    | 3.14+       |

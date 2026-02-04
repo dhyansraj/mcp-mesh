@@ -2,6 +2,8 @@
 
 > Get started with MCP Mesh in minutes (Python)
 
+**Note:** This page shows Python examples. See `meshctl man quickstart --typescript` for TypeScript or `meshctl man quickstart --java` for Java/Spring Boot examples.
+
 ## Prerequisites
 
 ```bash

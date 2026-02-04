@@ -2,6 +2,8 @@
 
 > Inter-agent communication and proxy configuration
 
+**Note:** This page shows Python examples. See `meshctl man proxies --typescript` for TypeScript or `meshctl man proxies --java` for Java/Spring Boot examples.
+
 ## Overview
 
 MCP Mesh uses proxy objects to enable seamless communication between agents. When you call an injected dependency, you're actually calling a proxy that routes to the remote agent via MCP JSON-RPC.

@@ -16,6 +16,7 @@ type Guide struct {
 	Title                string
 	Description          string
 	HasTypeScriptVariant bool // Whether a TypeScript variant page exists
+	HasJavaVariant       bool // Whether a Java variant page exists
 }
 
 // guideRegistry maps guide names to their metadata.
@@ -32,6 +33,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Capabilities System",
 		Description:          "Named services that agents provide",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"tags": {
 		Name:                 "tags",
@@ -39,13 +41,15 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Tag Matching System",
 		Description:          "Tag system with +/- operators for smart service selection",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"decorators": {
 		Name:                 "decorators",
 		Aliases:              []string{"decorator"},
 		Title:                "MCP Mesh Decorators",
-		Description:          "Python decorators and TypeScript function wrappers for mesh services",
+		Description:          "Python decorators, TypeScript function wrappers, and Java annotations for mesh services",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"dependency-injection": {
 		Name:                 "dependency-injection",
@@ -53,6 +57,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Dependency Injection",
 		Description:          "How DI works, proxy creation, and automatic wiring",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"health": {
 		Name:                 "health",
@@ -60,6 +65,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Health Monitoring & Auto-Rewiring",
 		Description:          "Heartbeat system, health checks, and automatic topology updates",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"registry": {
 		Name:        "registry",
@@ -73,6 +79,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "LLM Integration",
 		Description:          "LLM agents, @mesh.llm decorator, and tool filtering",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"proxies": {
 		Name:                 "proxies",
@@ -80,6 +87,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Proxy System & Communication",
 		Description:          "Inter-agent communication, proxy types, and configuration",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"environment": {
 		Name:        "environment",
@@ -93,6 +101,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Deployment Patterns",
 		Description:          "Local, Docker, and Kubernetes deployment",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"testing": {
 		Name:                 "testing",
@@ -100,6 +109,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Testing MCP Agents",
 		Description:          "Testing agents with curl, MCP JSON-RPC syntax",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"fastapi": {
 		Name:        "fastapi",
@@ -135,7 +145,7 @@ var guideRegistry = map[string]*Guide{
 		Name:        "prerequisites",
 		Aliases:     []string{"prereq", "setup", "install"},
 		Title:       "Prerequisites",
-		Description: "System requirements for Python and TypeScript development",
+		Description: "System requirements for Python, TypeScript, and Java development",
 	},
 	"quickstart": {
 		Name:                 "quickstart",
@@ -143,6 +153,7 @@ var guideRegistry = map[string]*Guide{
 		Title:                "Quick Start",
 		Description:          "Get started with MCP Mesh in minutes",
 		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 }
 
@@ -161,13 +172,13 @@ func init() {
 
 // GetGuide retrieves a guide by name or alias.
 func GetGuide(name string) (*Guide, string, error) {
-	return GetGuideWithVariant(name, false)
+	return GetGuideWithVariant(name, "")
 }
 
-// GetGuideWithVariant retrieves a guide with optional TypeScript variant.
-// If typescript is true and a TypeScript variant exists, it returns that instead.
-// For Python pages with TypeScript variants, appends a footer note.
-func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
+// GetGuideWithVariant retrieves a guide with optional language variant.
+// variant can be "" (default/Python), "typescript", or "java".
+// For default pages with variants, appends cross-language footer notes.
+func GetGuideWithVariant(name string, variant string) (*Guide, string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 
 	canonicalName, ok := aliasMap[name]
@@ -177,17 +188,19 @@ func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 
 	guide := guideRegistry[canonicalName]
 
-	// Determine which file to load (use HasTypeScriptVariant from Guide struct)
+	// Determine which file to load
 	filename := canonicalName
-	if typescript && guide.HasTypeScriptVariant {
+	if variant == "typescript" && guide.HasTypeScriptVariant {
 		filename = canonicalName + "_typescript"
+	} else if variant == "java" && guide.HasJavaVariant {
+		filename = canonicalName + "_java"
 	}
 
 	// Load content from embedded filesystem
 	content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", filename))
 	if err != nil {
-		if typescript {
-			// TypeScript variant not found, fall back to default
+		if variant != "" {
+			// Variant not found, fall back to default
 			content, err = guideContent.ReadFile(fmt.Sprintf("content/%s.md", canonicalName))
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to load guide content: %w", err)
@@ -199,9 +212,27 @@ func GetGuideWithVariant(name string, typescript bool) (*Guide, string, error) {
 
 	contentStr := string(content)
 
-	// For Python pages (not TypeScript), append footer if TypeScript variant exists
-	if !typescript && guide.HasTypeScriptVariant {
-		contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
+	// Append cross-language "See also" footer
+	switch variant {
+	case "": // Default (Python) page
+		var seeAlso []string
+		if guide.HasTypeScriptVariant {
+			seeAlso = append(seeAlso, fmt.Sprintf("`meshctl man %s --typescript` for TypeScript examples", canonicalName))
+		}
+		if guide.HasJavaVariant {
+			seeAlso = append(seeAlso, fmt.Sprintf("`meshctl man %s --java` for Java/Spring Boot examples", canonicalName))
+		}
+		if len(seeAlso) > 0 {
+			contentStr += "\n\n---\n\n**See also:** " + strings.Join(seeAlso, " | ") + "\n"
+		}
+	case "typescript":
+		if guide.HasJavaVariant {
+			contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --java` for Java/Spring Boot examples.\n", canonicalName)
+		}
+	case "java":
+		if guide.HasTypeScriptVariant {
+			contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
+		}
 	}
 
 	return guide, contentStr, nil
@@ -237,27 +268,44 @@ func SearchGuides(query string) ([]*SearchResult, error) {
 	var results []*SearchResult
 
 	for name, guide := range guideRegistry {
-		content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", name))
-		if err != nil {
-			continue
+		// Collect all files to search for this guide
+		files := []string{name}
+		if guide.HasTypeScriptVariant {
+			files = append(files, name+"_typescript")
+		}
+		if guide.HasJavaVariant {
+			files = append(files, name+"_java")
 		}
 
-		contentStr := string(content)
-		if strings.Contains(strings.ToLower(contentStr), query) {
-			// Find matching lines
-			var matches []string
-			lines := strings.Split(contentStr, "\n")
-			for _, line := range lines {
-				if strings.Contains(strings.ToLower(line), query) {
-					matches = append(matches, strings.TrimSpace(line))
-					if len(matches) >= 3 { // Limit to 3 matches per guide
-						break
+		var allMatches []string
+		found := false
+		for _, file := range files {
+			content, err := guideContent.ReadFile(fmt.Sprintf("content/%s.md", file))
+			if err != nil {
+				continue
+			}
+			contentStr := string(content)
+			if strings.Contains(strings.ToLower(contentStr), query) {
+				found = true
+				lines := strings.Split(contentStr, "\n")
+				for _, line := range lines {
+					if strings.Contains(strings.ToLower(line), query) {
+						allMatches = append(allMatches, strings.TrimSpace(line))
+						if len(allMatches) >= 3 {
+							break
+						}
 					}
 				}
+				if len(allMatches) >= 3 {
+					break
+				}
 			}
+		}
+
+		if found {
 			results = append(results, &SearchResult{
 				Guide:   guide,
-				Matches: matches,
+				Matches: allMatches,
 			})
 		}
 	}

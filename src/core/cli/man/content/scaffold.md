@@ -2,7 +2,7 @@
 
 > Generate MCP Mesh agents from templates
 
-Scaffold supports both **Python** and **TypeScript** agents. Use `--lang typescript` for TypeScript.
+Scaffold supports **Python**, **TypeScript**, and **Java** agents. Use `--lang typescript` for TypeScript or `--lang java` for Java/Spring Boot.
 
 ## Input Modes
 
@@ -28,6 +28,9 @@ meshctl scaffold --name my-agent --agent-type tool
 
 # Basic tool agent (TypeScript)
 meshctl scaffold --name my-agent --agent-type tool --lang typescript
+
+# Basic tool agent (Java/Spring Boot)
+meshctl scaffold --name my-agent --agent-type tool --lang java
 
 # LLM agent using Claude
 meshctl scaffold --name analyzer --agent-type llm-agent --llm-selector claude
@@ -67,20 +70,20 @@ meshctl scaffold --compose --project-name my-project
 
 ## Key Flags
 
-| Flag               | Description                                          |
-| ------------------ | ---------------------------------------------------- |
-| `--name`           | Agent name (required for non-interactive)            |
-| `--agent-type`     | `tool`, `llm-agent`, or `llm-provider`               |
-| `--lang`           | Language: `python` (default) or `typescript`         |
-| `--dry-run`        | Preview generated code                               |
-| `--no-interactive` | Disable prompts (for scripting)                      |
-| `--output`         | Output directory (default: `.`)                      |
-| `--port`           | HTTP port (default: 9000)                            |
-| `--model`          | LiteLLM model for llm-provider                       |
-| `--llm-selector`   | LLM provider for llm-agent: `claude`, `openai`       |
-| `--filter`         | Tool filter for llm-agent (capability selector JSON) |
-| `--compose`        | Generate docker-compose.yml                          |
-| `--observability`  | Add Redis/Tempo/Grafana to compose                   |
+| Flag               | Description                                           |
+| ------------------ | ----------------------------------------------------- |
+| `--name`           | Agent name (required for non-interactive)             |
+| `--agent-type`     | `tool`, `llm-agent`, or `llm-provider`                |
+| `--lang`           | Language: `python` (default), `typescript`, or `java` |
+| `--dry-run`        | Preview generated code                                |
+| `--no-interactive` | Disable prompts (for scripting)                       |
+| `--output`         | Output directory (default: `.`)                       |
+| `--port`           | HTTP port (default: 9000)                             |
+| `--model`          | LiteLLM model for llm-provider                        |
+| `--llm-selector`   | LLM provider for llm-agent: `claude`, `openai`        |
+| `--filter`         | Tool filter for llm-agent (capability selector JSON)  |
+| `--compose`        | Generate docker-compose.yml                           |
+| `--observability`  | Add Redis/Tempo/Grafana to compose                    |
 
 The `--filter` flag uses capability selector syntax. See `meshctl man capabilities` for details.
 
@@ -114,6 +117,7 @@ meshctl start agent.py --watch --env-file .env
 ```
 
 Benefits:
+
 - Fast local development (edit code, auto-reload with `--watch`)
 - Full observability (traces in Grafana at http://localhost:3000)
 - Shared registry (all agents discover each other)
