@@ -177,12 +177,12 @@ Available from OCI registry (no `helm repo add` needed):
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.0-beta.9 \
+  --version 0.9.0-beta.10 \
   -n mcp-mesh --create-namespace
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.0-beta.9 \
+  --version 0.9.0-beta.10 \
   -n mcp-mesh \
   -f helm-values.yaml
 ```

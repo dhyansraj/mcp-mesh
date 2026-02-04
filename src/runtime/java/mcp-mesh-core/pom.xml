@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-parent</artifactId>
-        <version>0.9.0-beta.9-SNAPSHOT</version>
+        <version>0.9.0-beta.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>mcp-mesh-core</artifactId>
@@ -17,6 +17,13 @@
     <description>JNR-FFI bindings to Rust core for MCP Mesh</description>
 
     <dependencies>
+        <!-- Native library artifacts (platform-specific .so/.dylib/.dll) -->
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-native</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- JNR-FFI for native bindings -->
         <dependency>
             <groupId>com.github.jnr</groupId>
