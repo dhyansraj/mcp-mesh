@@ -2,6 +2,8 @@
 
 > Named services that agents provide for discovery and dependency injection
 
+**Note:** This page shows Python examples. See `meshctl man capabilities --typescript` for TypeScript or `meshctl man capabilities --java` for Java/Spring Boot examples.
+
 ## Overview
 
 Capabilities are named services that agents register with the mesh. When an agent declares a capability, other agents can discover and use it through dependency injection. Multiple agents can provide the same capability with different implementations.

@@ -2,7 +2,7 @@
 
 > Core decorators for building distributed agent systems
 
-**Note:** This page shows Python examples. TypeScript uses equivalent function-based APIs (`mesh()`, `mesh.llm()`, `mesh.route()`). See `meshctl man decorators --typescript` for TypeScript examples.
+**Note:** This page shows Python examples. See `meshctl man decorators --typescript` for TypeScript or `meshctl man decorators --java` for Java/Spring Boot examples.
 
 ## Overview
 
@@ -75,7 +75,7 @@ async def greet(name: str, date_svc: mesh.McpMeshTool = None) -> str:
 
 | Type                | Use Case                               |
 | ------------------- | -------------------------------------- |
-| `mesh.McpMeshTool` | Tool calls via proxy                   |
+| `mesh.McpMeshTool`  | Tool calls via proxy                   |
 | `mesh.MeshLlmAgent` | LLM agent injection (with `@mesh.llm`) |
 
 ## @mesh.llm

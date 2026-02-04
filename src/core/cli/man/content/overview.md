@@ -2,7 +2,7 @@
 
 > Production-grade distributed mesh for intelligent agents
 
-**Supported Languages:** Python and TypeScript
+**Supported Languages:** Python, TypeScript, and Java
 
 ## Why MCP Mesh?
 
@@ -34,7 +34,7 @@ The central coordination service that:
 
 ### 2. Agents
 
-Python or TypeScript services using the MCP Mesh SDK that:
+Python, TypeScript, or Java services using the MCP Mesh SDK that:
 
 - Register capabilities with the registry on startup
 - Send periodic heartbeats to maintain registration

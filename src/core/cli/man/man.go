@@ -25,12 +25,18 @@ The --raw flag outputs plain markdown, which is useful for:
 The --typescript flag shows TypeScript examples for topics that have
 TypeScript variants (decorators, deployment, llm, testing, etc.).
 
+The --java flag shows Java/Spring Boot examples for topics that have
+Java variants (decorators, deployment, llm, testing, etc.).
+
 Examples:
   meshctl man                       # Show architecture overview
   meshctl man decorators            # Learn about mesh decorators (Python)
   meshctl man decorators -t         # TypeScript decorator examples
+  meshctl man decorators -j         # Java annotation examples
   meshctl man deployment --typescript  # TypeScript deployment guide
+  meshctl man deployment --java     # Java/Spring Boot deployment guide
   meshctl man llm -t                # TypeScript LLM integration
+  meshctl man llm -j                # Java LLM integration
   meshctl man --list                # List all available topics
   meshctl man --raw decorators      # Raw markdown output (LLM-friendly)
   meshctl man --search "health"     # Search across all topics
@@ -49,6 +55,7 @@ Code Generation:
 	cmd.Flags().BoolP("raw", "r", false, "Output raw markdown (LLM-friendly)")
 	cmd.Flags().StringP("search", "s", "", "Search across all topics")
 	cmd.Flags().BoolP("typescript", "t", false, "Show TypeScript examples (for topics with TypeScript variants)")
+	cmd.Flags().BoolP("java", "j", false, "Show Java/Spring Boot examples (for topics with Java variants)")
 
 	return cmd
 }
@@ -59,6 +66,7 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 	list, _ := cmd.Flags().GetBool("list")
 	search, _ := cmd.Flags().GetString("search")
 	typescript, _ := cmd.Flags().GetBool("typescript")
+	java, _ := cmd.Flags().GetBool("java")
 
 	renderer := NewRenderer(raw)
 
@@ -85,8 +93,19 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 		topic = args[0]
 	}
 
-	// Get and render guide (with optional TypeScript variant)
-	guide, content, err := GetGuideWithVariant(topic, typescript)
+	// Determine language variant
+	var variant string
+	if typescript && java {
+		return fmt.Errorf("cannot use both --typescript and --java flags; choose one language variant")
+	}
+	if typescript {
+		variant = "typescript"
+	} else if java {
+		variant = "java"
+	}
+
+	// Get and render guide (with optional language variant)
+	guide, content, err := GetGuideWithVariant(topic, variant)
 	if err != nil {
 		// Show suggestions for similar topics
 		suggestions := SuggestSimilarTopics(topic)

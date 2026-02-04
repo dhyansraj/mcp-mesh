@@ -2,7 +2,7 @@
 
 > Building LLM-powered agents with @mesh.llm decorator
 
-**Note:** This page shows Python examples. TypeScript uses equivalent `mesh.llm()` function wrapper. See `meshctl man llm --typescript` for TypeScript examples.
+**Note:** This page shows Python examples. See `meshctl man llm --typescript` for TypeScript or `meshctl man llm --java` for Java/Spring Boot examples.
 
 ## Overview
 

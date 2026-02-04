@@ -2,6 +2,8 @@
 
 > How to test MCP Mesh agents using meshctl and curl
 
+**Note:** This page shows Python examples. See `meshctl man testing --typescript` for TypeScript or `meshctl man testing --java` for Java/Spring Boot examples.
+
 ## Quick Way: meshctl call
 
 ```bash
