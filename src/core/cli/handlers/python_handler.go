@@ -248,5 +248,5 @@ const pythonInitTemplate = `# {{.Name}} MCP Mesh Agent
 const pythonMainModuleTemplate = `from .main import *
 `
 
-const pythonRequirementsTemplate = `mcp-mesh>=0.8.1
+const pythonRequirementsTemplate = `mcp-mesh>=0.9.0-beta.1
 `
