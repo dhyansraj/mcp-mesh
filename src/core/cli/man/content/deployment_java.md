@@ -14,7 +14,7 @@ MCP Mesh supports multiple deployment patterns for Java/Spring Boot agents. The 
 
 ```xml
 <dependency>
-    <groupId>io.mcpmesh</groupId>
+    <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
     <version>0.8.0-SNAPSHOT</version>
 </dependency>

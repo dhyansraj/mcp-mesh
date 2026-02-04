@@ -4,33 +4,34 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.mcpmesh</groupId>
+    <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-parent</artifactId>
     <version>0.8.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>MCP Mesh Java SDK</name>
     <description>Java SDK for MCP Mesh distributed agent framework</description>
-    <url>https://github.com/mcp-mesh/mcp-mesh</url>
+    <url>https://github.com/dhyansraj/mcp-mesh</url>
 
     <licenses>
         <license>
-            <name>Apache License, Version 2.0</name>
-            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
         </license>
     </licenses>
 
     <developers>
         <developer>
-            <name>MCP Mesh Team</name>
-            <email>team@mcpmesh.io</email>
+            <name>Dhyan Raj</name>
+            <email>dhyanraj@gmail.com</email>
         </developer>
     </developers>
 
     <scm>
-        <url>https://github.com/mcp-mesh/mcp-mesh</url>
-        <connection>scm:git:git://github.com/mcp-mesh/mcp-mesh.git</connection>
-        <developerConnection>scm:git:ssh://github.com/mcp-mesh/mcp-mesh.git</developerConnection>
+        <url>https://github.com/dhyansraj/mcp-mesh</url>
+        <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
     </scm>
 
     <modules>
@@ -59,6 +60,9 @@
         <!-- JUnit 6 for Spring Boot 4.0 -->
         <junit-jupiter.version>6.0.2</junit-jupiter.version>
         <freemarker.version>2.3.33</freemarker.version>
+
+        <!-- GPG signing: disabled by default, enable with -Dgpg.skip=false for releases -->
+        <gpg.skip>true</gpg.skip>
     </properties>
 
     <dependencyManagement>
@@ -74,27 +78,27 @@
 
             <!-- MCP Mesh modules -->
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-sdk</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-spring-ai</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-native</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -192,6 +196,56 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <doclint>none</doclint>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.2.7</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${gpg.skip}</skip>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 
     <repositories>

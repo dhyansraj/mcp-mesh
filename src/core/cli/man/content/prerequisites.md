@@ -128,7 +128,7 @@ sudo apt install openjdk-17-jdk maven   # Ubuntu/Debian
 ```xml
 <!-- In your pom.xml -->
 <dependency>
-    <groupId>io.mcpmesh</groupId>
+    <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
     <version>0.8.0-SNAPSHOT</version>
 </dependency>

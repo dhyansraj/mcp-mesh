@@ -1,4 +1,4 @@
-# Test Case: Build Java SDK (io.mcpmesh)
+# Test Case: Build Java SDK (io.mcp-mesh)
 # Builds the Java SDK Maven artifacts and native FFI library
 #
 # IMPORTANT: This test runs on the HOST (standalone mode)
@@ -91,7 +91,7 @@ test:
             echo \"Copied: \$jar\"
           done && \
           echo 'Copying Maven repository structure...' && \
-          cp -r /root/.m2/repository/io/mcpmesh /out/m2-repo/ && \
+          cp -r /root/.m2/repository/io/mcp-mesh /out/m2-repo/ && \
           echo 'Java SDK build complete'
         "
 

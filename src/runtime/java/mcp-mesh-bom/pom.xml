@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.mcpmesh</groupId>
+    <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-bom</artifactId>
     <version>0.8.0-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -15,27 +15,27 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-sdk</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-spring-ai</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.mcpmesh</groupId>
+                <groupId>io.mcp-mesh</groupId>
                 <artifactId>mcp-mesh-native</artifactId>
                 <version>${project.version}</version>
             </dependency>
