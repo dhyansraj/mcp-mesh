@@ -67,7 +67,7 @@ dependencies: [
 | `tags: [["a"], ["b"]]`         | a OR b (full OR)                         |
 | `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors - LLM filter) |
 
-**Tag-Level OR** (v0.9.0-beta.5+):
+**Tag-Level OR** (v0.9.0-beta.6+):
 
 Use nested arrays in tags for OR alternatives with fallback behavior:
 
