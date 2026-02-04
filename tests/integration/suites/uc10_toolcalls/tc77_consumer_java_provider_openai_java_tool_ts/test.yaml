@@ -1,0 +1,136 @@
+# Test Case: TC77 - JAVA Consumer -> OPENAI Provider (java) -> TS Tool
+# Tests cross-SDK tool calling: java consumer invokes ts tool via openai java provider
+#
+# Scenario:
+#   - Start weather-tool-ts (port 9001)
+#   - Start openai-provider-java (port 9002)
+#   - Start analyst-java (port 9003)
+#   - Test non-tool query and tool query
+
+name: "Consumer JAVA -> Provider OPENAI java -> Tool TS"
+description: "Test java consumer with openai java provider calling ts tool"
+tags:
+  - toolcall
+  - java
+  - openai
+  - java
+  - ts
+  - phase3
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_typescript_agent
+
+test:
+  # 1. Copy artifacts to workspace
+  - name: "Copy artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/analyst-java /workspace/
+      cp -r /uc-artifacts/openai-provider-java /workspace/
+      cp -r /uc-artifacts/weather-tool-ts /workspace/
+      cp /uc-artifacts/.env /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # 2. Install dependencies
+  - name: "Install tool dependencies"
+    handler: npm-install
+    path: /workspace/weather-tool-ts
+
+  - name: "Install provider dependencies"
+    handler: maven-install
+    path: /workspace/openai-provider-java
+    timeout: 600
+
+  - name: "Install consumer dependencies"
+    handler: maven-install
+    path: /workspace/analyst-java
+    timeout: 600
+
+  # 3. Start tool agent (port 9001)
+  - name: "Start tool agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start weather-tool-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Tool agent starting..."
+    capture: start_tool
+
+  - name: "Wait for tool agent"
+    handler: wait
+    seconds: 15
+
+  # 4. Start provider agent (port 9002)
+  - name: "Start provider agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start openai-provider-java --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+      echo "Provider agent starting..."
+    capture: start_provider
+
+  - name: "Wait for provider agent"
+    handler: wait
+    seconds: 20
+
+  # 5. Start consumer agent (port 9003)
+  - name: "Start consumer agent"
+    handler: shell
+    command: |
+      cd /workspace
+      meshctl start analyst-java --env MCP_MESH_HTTP_PORT=9003 -d
+      echo "Consumer agent starting..."
+    capture: start_consumer
+
+  - name: "Wait for consumer and resolution"
+    handler: wait
+    seconds: 25
+
+  # 6. Verify all agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    command: |
+      meshctl list
+    capture: agent_list
+
+  # 7. Non-tool query (capital of France)
+  - name: "Non-tool query"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"query": "What is the capital of France?"}}'
+    capture: non_tool_response
+    timeout: 120
+
+  # 8. Tool query (weather in Boston)
+  - name: "Tool query"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"query": "What is the weather in Boston?"}}'
+    capture: tool_response
+    timeout: 120
+
+assertions:
+  - expr: "${captured.agent_list} contains 'analyst-java'"
+    message: "Consumer agent should be registered"
+  - expr: "${captured.agent_list} contains 'openai-provider-java'"
+    message: "Provider agent should be registered"
+  - expr: "${captured.agent_list} contains 'weather-tool-ts'"
+    message: "Tool agent should be registered"
+  - expr: "${captured.non_tool_response} contains 'Paris'"
+    message: "Non-tool response should mention Paris"
+  - expr: "${captured.tool_response} contains 'Boston'"
+    message: "Tool response should mention Boston"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*openai" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
