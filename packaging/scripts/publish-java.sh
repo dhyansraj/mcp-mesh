@@ -122,26 +122,36 @@ for MODULE in "${MODULES[@]}"; do
             exit 1
         fi
 
-        # Sources JAR
+        # Sources JAR (create empty placeholder for native/resource-only modules)
         SOURCES_FILE="${TARGET_DIR}/${ARTIFACT_ID}-${VERSION}-sources.jar"
         if [ -f "${SOURCES_FILE}" ]; then
             cp "${SOURCES_FILE}" "${BUNDLE_MODULE_DIR}/"
             ARTIFACTS+=("${SOURCES_FILE}")
             log "  Collected: $(basename "${SOURCES_FILE}")"
         else
-            error "  Sources JAR not found: ${SOURCES_FILE}"
-            exit 1
+            log "  Sources JAR not found, creating empty placeholder"
+            mkdir -p /tmp/empty-sources
+            jar cf "${SOURCES_FILE}" -C /tmp/empty-sources .
+            rm -rf /tmp/empty-sources
+            cp "${SOURCES_FILE}" "${BUNDLE_MODULE_DIR}/"
+            ARTIFACTS+=("${SOURCES_FILE}")
+            log "  Created empty: $(basename "${SOURCES_FILE}")"
         fi
 
-        # Javadoc JAR
+        # Javadoc JAR (create empty placeholder for native/resource-only modules)
         JAVADOC_FILE="${TARGET_DIR}/${ARTIFACT_ID}-${VERSION}-javadoc.jar"
         if [ -f "${JAVADOC_FILE}" ]; then
             cp "${JAVADOC_FILE}" "${BUNDLE_MODULE_DIR}/"
             ARTIFACTS+=("${JAVADOC_FILE}")
             log "  Collected: $(basename "${JAVADOC_FILE}")"
         else
-            error "  Javadoc JAR not found: ${JAVADOC_FILE}"
-            exit 1
+            log "  Javadoc JAR not found, creating empty placeholder"
+            mkdir -p /tmp/empty-javadoc
+            jar cf "${JAVADOC_FILE}" -C /tmp/empty-javadoc .
+            rm -rf /tmp/empty-javadoc
+            cp "${JAVADOC_FILE}" "${BUNDLE_MODULE_DIR}/"
+            ARTIFACTS+=("${JAVADOC_FILE}")
+            log "  Created empty: $(basename "${JAVADOC_FILE}")"
         fi
 
         # POM file
