@@ -40,10 +40,10 @@ public class {{ .NamePascal }}Application {
         description = "{{ default "A sample tool" .ToolDescription }}",
         tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else }}"tools"{{ end }}{{ "}" }}
     )
-    public String {{ default "hello" .ToolName }}(
+    public String {{ default "hello" .ToolName | toCamelCase }}(
         @Param(value = "input", description = "Input parameter") String input
     ) {
-        log.info("{{ default "hello" .ToolName }} called with: {}", input);
+        log.info("{{ default "hello" .ToolName | toCamelCase }} called with: {}", input);
         return "Hello from {{ .Name }}: " + input;
     }
 }

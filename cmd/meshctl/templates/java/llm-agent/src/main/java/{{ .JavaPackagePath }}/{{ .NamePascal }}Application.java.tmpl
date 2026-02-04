@@ -81,7 +81,7 @@ public class {{ .NamePascal }}Application {
         description = "{{ default "Process input using LLM" .ToolDescription }}",
         tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else }}"llm"{{ end }}{{ "}" }}
     )
-    public {{ if eq .ResponseFormat "json" }}{{ .NamePascal }}Response{{ else }}String{{ end }} {{ default .NameSnake .ToolName }}(
+    public {{ if eq .ResponseFormat "json" }}{{ .NamePascal }}Response{{ else }}String{{ end }} {{ default .NameSnake .ToolName | toCamelCase }}(
         @Param(value = "{{ .ContextParam }}", description = "Processing context") {{ .NamePascal }}Context {{ .ContextParam }},
         MeshLlmAgent llm
     ) {
