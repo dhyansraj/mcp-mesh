@@ -35,12 +35,10 @@
   - LLM agent support with `mesh.llm()` and provider plugin architecture (#398, #400)
   - Vercel AI SDK v6 compatibility (#412)
   - meshctl TypeScript support - start, watch, and manage TS agents (#406)
-- **Gemini (Google AI) support** - New LLM provider alongside Claude/OpenAI (#416)
 
 ### 🔧 Improvements
 
 - **Rust core runtime** for multi-language FFI support (#388, #394)
-- **Gemini 2.5 Pro default** (#447) - Updated scaffold to use `gemini-2.5-pro` for parity with Claude Sonnet 4.5 and GPT-4o
 - **Agent name prefix matching** (#417) - `meshctl call calc` matches `calculator-agent`
 - **AGE and LAST SEEN columns** (#452) - `meshctl list` now shows time since registration/heartbeat, following kubectl conventions
 - **Rename McpMeshAgent to McpMeshTool** (#431) - Dependency injection type renamed for clarity

@@ -1,7 +1,7 @@
 /**
- * Gemini/Google provider handler.
+ * Gemini/Google provider handler for Gemini 3.x models.
  *
- * Optimized for Gemini models (Gemini 2.0 Flash, Gemini 1.5 Pro, etc.)
+ * Optimized for Gemini models (Gemini 3 Flash Preview, Gemini 2.0 Flash, etc.)
  * using Google's best practices for tool calling and structured output.
  *
  * Features:
@@ -52,12 +52,12 @@ const debug = createDebug("gemini-handler");
  * - Similar schema enforcement requirements
  *
  * Supported Models (via Vercel AI SDK):
+ * - gemini-3-flash-preview (reasoning support)
+ * - gemini-3-pro-preview (advanced reasoning)
  * - gemini-2.0-flash (fast, efficient)
  * - gemini-2.0-flash-lite (fastest, most efficient)
  * - gemini-1.5-pro (high capability)
  * - gemini-1.5-flash (balanced)
- * - gemini-3-flash-preview (reasoning support)
- * - gemini-3-pro-preview (advanced reasoning)
  */
 export class GeminiHandler implements ProviderHandler {
   readonly vendor = "google";
@@ -255,6 +255,6 @@ IMPORTANT:
 }
 
 // Register with the registry
-// Use "gemini" as vendor name to match model prefix (e.g., "gemini/gemini-2.0-flash")
+// Use "gemini" as vendor name to match model prefix (e.g., "gemini/gemini-3-flash-preview")
 // This is consistent with Python SDK's registration
 ProviderHandlerRegistry.register("gemini", GeminiHandler);

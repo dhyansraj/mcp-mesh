@@ -219,7 +219,6 @@ Uses LiteLLM model format:
 | --------- | ------------------------------ |
 | Anthropic | `anthropic/claude-sonnet-4-5`  |
 | OpenAI    | `openai/gpt-4o`                |
-| Google    | `gemini/gemini-pro`            |
 | Mistral   | `mistral/mistral-large-latest` |
 | Ollama    | `ollama/llama3`                |
 

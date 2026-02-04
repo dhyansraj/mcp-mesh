@@ -26,7 +26,7 @@ type InteractiveConfig struct {
 	Dependencies           []string
 
 	// LLM-agent specific
-	LLMProviderSelector string   // "claude", "openai", or "gemini"
+	LLMProviderSelector string   // "claude" or "openai"
 	ProviderTags        []string // Tags for provider filtering
 	MaxIterations       int
 	SystemPrompt        string
@@ -185,7 +185,6 @@ func promptLLMAgentConfig(config *InteractiveConfig) error {
 		Options: []string{
 			"claude - Anthropic Claude (recommended)",
 			"openai - OpenAI GPT models",
-			"gemini - Google Gemini models",
 		},
 		Default: "claude - Anthropic Claude (recommended)",
 	}
@@ -200,8 +199,6 @@ func promptLLMAgentConfig(config *InteractiveConfig) error {
 		config.ProviderTags = []string{"llm", "+claude"}
 	case "openai":
 		config.ProviderTags = []string{"llm", "+gpt"}
-	case "gemini":
-		config.ProviderTags = []string{"llm", "+gemini"}
 	}
 
 	// Tool filter configuration
@@ -423,8 +420,6 @@ func promptLLMProviderConfig(config *InteractiveConfig) error {
 			"openai/gpt-4o - GPT-4o (recommended)",
 			"openai/gpt-4o-mini - GPT-4o Mini (fast, cheap)",
 			"openai/gpt-4-turbo - GPT-4 Turbo",
-			"gemini/gemini-2.5-pro - Gemini 2.5 Pro (recommended)",
-			"gemini/gemini-2.0-flash - Gemini 2.0 Flash (fast)",
 			"custom - Enter custom model string",
 		},
 		Default: "anthropic/claude-sonnet-4-5 - Claude Sonnet 4.5 (latest)",
@@ -450,8 +445,6 @@ func promptLLMProviderConfig(config *InteractiveConfig) error {
 		config.Tags = []string{"llm", "claude", "anthropic", "provider"}
 	} else if strings.Contains(config.Model, "openai") {
 		config.Tags = []string{"llm", "openai", "gpt", "provider"}
-	} else if strings.Contains(config.Model, "gemini") {
-		config.Tags = []string{"llm", "gemini", "google", "provider"}
 	} else {
 		config.Tags = []string{"llm", "provider"}
 	}
@@ -503,7 +496,7 @@ type AddToolConfig struct {
 	Tags            []string // Tags for capability discovery
 
 	// LLM tool specific (for mesh.llm)
-	LLMProviderSelector string   // "claude", "openai", or "gemini"
+	LLMProviderSelector string   // "claude" or "openai"
 	ProviderTags        []string // Tags for provider filtering
 	MaxIterations       int
 	SystemPrompt        string
@@ -580,7 +573,6 @@ func promptAddToolLLMConfig(config *AddToolConfig) error {
 		Options: []string{
 			"claude - Anthropic Claude (recommended)",
 			"openai - OpenAI GPT models",
-			"gemini - Google Gemini models",
 		},
 		Default: "claude - Anthropic Claude (recommended)",
 	}
@@ -595,8 +587,6 @@ func promptAddToolLLMConfig(config *AddToolConfig) error {
 		config.ProviderTags = []string{"llm", "+claude"}
 	case "openai":
 		config.ProviderTags = []string{"llm", "+gpt"}
-	case "gemini":
-		config.ProviderTags = []string{"llm", "+gemini"}
 	}
 
 	// Tool filter configuration (which tools the LLM can access)

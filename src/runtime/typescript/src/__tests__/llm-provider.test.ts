@@ -17,7 +17,7 @@ describe("extractVendorFromModel", () => {
   it("should extract vendor from vendor/model format", () => {
     expect(extractVendorFromModel("anthropic/claude-sonnet-4-5")).toBe("anthropic");
     expect(extractVendorFromModel("openai/gpt-4o")).toBe("openai");
-    expect(extractVendorFromModel("google/gemini-2.0-flash")).toBe("google");
+    expect(extractVendorFromModel("google/gemini-3-flash-preview")).toBe("google");
   });
 
   it("should return null for model without vendor prefix", () => {
@@ -136,7 +136,7 @@ describe("llmProvider", () => {
     it("should extract vendor from model string", () => {
       const anthropicTool = llmProvider({ model: "anthropic/claude-sonnet-4-5" });
       const openaiTool = llmProvider({ model: "openai/gpt-4o" });
-      const googleTool = llmProvider({ model: "google/gemini-2.0-flash" });
+      const googleTool = llmProvider({ model: "google/gemini-3-flash-preview" });
 
       expect(anthropicTool._meshMeta?.vendor).toBe("anthropic");
       expect(openaiTool._meshMeta?.vendor).toBe("openai");
@@ -241,7 +241,7 @@ describe("LLM provider configurations", () => {
 
   it("should accept topP configuration", () => {
     const tool = llmProvider({
-      model: "google/gemini-2.0-flash",
+      model: "google/gemini-3-flash-preview",
       topP: 0.9,
     });
 

@@ -38,7 +38,7 @@ describe("ProviderHandlerRegistry", () => {
     });
 
     it("should return GeminiHandler for google vendor", () => {
-      // Vercel AI SDK extracts "google" from model strings like "google/gemini-2.0-flash"
+      // Vercel AI SDK extracts "google" from model strings like "google/gemini-3-flash-preview"
       const handler = ProviderHandlerRegistry.getHandler("google");
 
       expect(handler).toBeDefined();

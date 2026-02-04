@@ -6,7 +6,7 @@ mesh decorators to simplify common patterns like zero-code LLM providers.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from _mcp_mesh.shared.logging_config import format_log_value
 
@@ -225,10 +225,13 @@ def llm_provider(
             output_type_name = model_params_copy.pop("output_type_name", None)
 
             if output_schema:
-                # Apply structured output via handler (e.g., Gemini stores schema for prompt hints)
+                # Include messages so handler can modify system prompt (e.g., HINT mode injection)
+                model_params_copy["messages"] = request.messages
                 handler.apply_structured_output(
                     output_schema, output_type_name, model_params_copy
                 )
+                # Remove messages to avoid duplication in completion_args
+                model_params_copy.pop("messages", None)
                 logger.debug(
                     f"🎯 Applied {vendor} structured output via handler: "
                     f"{output_type_name}"

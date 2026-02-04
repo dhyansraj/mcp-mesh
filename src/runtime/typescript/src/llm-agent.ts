@@ -206,8 +206,8 @@ const DEFAULT_MODELS: Record<string, string> = {
   claude: "anthropic/claude-sonnet-4-5",
   openai: "openai/gpt-4o",
   anthropic: "anthropic/claude-sonnet-4-5",
-  gemini: "google/gemini-2.0-flash",
-  google: "google/gemini-2.0-flash",
+  gemini: "google/gemini-3-flash-preview",
+  google: "google/gemini-3-flash-preview",
   gpt4: "openai/gpt-4o",
   gpt35: "openai/gpt-3.5-turbo",
 };

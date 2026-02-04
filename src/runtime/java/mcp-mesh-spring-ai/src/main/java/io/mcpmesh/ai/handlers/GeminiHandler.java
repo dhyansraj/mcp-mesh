@@ -13,9 +13,10 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
-import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 
 import java.util.*;
+import java.util.LinkedHashMap;
 import java.util.function.Function;
 
 /**
@@ -26,13 +27,15 @@ import java.util.function.Function;
  *   <li>Full multi-turn conversation support</li>
  *   <li>Large context window support</li>
  *   <li>System instruction handling</li>
- *   <li>Structured output via response_format</li>
+ *   <li>Structured output via prompt-based hints (Spring AI limitation)</li>
  *   <li>Multimodal capabilities</li>
  * </ul>
  *
  * <h2>Structured Output</h2>
- * <p>Gemini (like OpenAI) uses response_format parameter for guaranteed JSON schema compliance.
- * All properties must be in the required array for strict mode.
+ * <p>Gemini Java uses prompt-based hints (HINT mode) for structured output.
+ * Spring AI 2.0.0-M2 has a request construction bug where responseMimeType + responseSchema
+ * alongside tools causes tool arguments to become empty objects ({}).
+ * Python and TypeScript runtimes use native response_format (STRICT mode) instead.
  *
  * @see LlmProviderHandler
  */
@@ -67,8 +70,10 @@ public class GeminiHandler implements LlmProviderHandler {
 
     @Override
     public String determineOutputMode(OutputSchema outputSchema) {
-        // Gemini always uses strict mode (response_format) for structured output
-        return outputSchema == null ? OUTPUT_MODE_TEXT : OUTPUT_MODE_STRICT;
+        // Gemini Java: HINT mode only -- Spring AI 2.0.0-M2 has a bug where
+        // responseMimeType + responseSchema alongside tools causes tool args to become {}.
+        // This is NOT a Gemini API issue; it's a Spring AI request construction bug.
+        return outputSchema == null ? OUTPUT_MODE_TEXT : OUTPUT_MODE_HINT;
     }
 
     @Override
@@ -84,22 +89,20 @@ public class GeminiHandler implements LlmProviderHandler {
             systemContent.append(BASE_TOOL_INSTRUCTIONS);
         }
 
-        // Add detailed JSON output instructions in prompt
-        // Spring AI's VertexAiGeminiChatOptions has issues with responseSchema,
-        // so we use prompt-based hints for structured output (like Claude hint mode)
+        // Add output format instructions
         if (outputSchema != null) {
-            // Build example showing the expected output structure (not the schema)
-            systemContent.append("\n\n")
-                .append("OUTPUT FORMAT:\n");
+            systemContent.append("\n\n");
 
-            // If tools are available, clarify when to use tools vs direct response
+            // Add DECISION GUIDE when tools are present (aligned with Python/TypeScript)
             if (tools != null && !tools.isEmpty()) {
                 systemContent.append("DECISION GUIDE:\n")
                     .append("- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.\n")
-                    .append("- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n\n");
+                    .append("- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n")
+                    .append("- After calling a tool and receiving results, STOP calling tools and return your final JSON response.\n\n");
             }
 
-            systemContent.append("Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n")
+            systemContent.append("RESPONSE FORMAT (for your final response after any tool calls):\n")
+                .append("Your final response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n")
                 .append("{\n");
 
             // Sanitize schema to remove unsupported validation keywords (minimum, maximum, etc.)
@@ -139,6 +142,7 @@ public class GeminiHandler implements LlmProviderHandler {
             }
 
             systemContent.append("}\n\n")
+                .append("Do NOT wrap the response in a type name key like {\"").append(outputSchema.name()).append("\": {...}}. Return the flat JSON object directly.\n")
                 .append("Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks.");
         }
 
@@ -316,7 +320,7 @@ public class GeminiHandler implements LlmProviderHandler {
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);
 
         // Build Gemini-specific chat options with tool execution DISABLED and response_format
-        VertexAiGeminiChatOptions.Builder geminiOptionsBuilder = VertexAiGeminiChatOptions.builder()
+        GoogleGenAiChatOptions.Builder geminiOptionsBuilder = GoogleGenAiChatOptions.builder()
             .toolCallbacks(toolCallbacks)
             .internalToolExecutionEnabled(false);  // Don't auto-execute tools!
 
@@ -324,7 +328,7 @@ public class GeminiHandler implements LlmProviderHandler {
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
         log.debug("Using prompt-based JSON hints for structured output (not responseSchema)");
 
-        VertexAiGeminiChatOptions chatOptions = geminiOptionsBuilder.build();
+        GoogleGenAiChatOptions chatOptions = geminiOptionsBuilder.build();
 
         // Create prompt with options
         org.springframework.ai.chat.prompt.Prompt prompt =
@@ -367,7 +371,16 @@ public class GeminiHandler implements LlmProviderHandler {
 
     /**
      * Apply response format for structured output.
+     *
+     * <p>DISABLED: Spring AI 2.0.0-M2 has a bug where setting responseMimeType +
+     * responseSchema alongside tools causes tool arguments to become empty objects ({}).
+     * This is NOT a Gemini API issue -- the same calls work via LiteLLM and Vercel SDK.
+     * Structured output is handled via prompt-based hints in formatSystemPrompt() instead.
+     *
+     * <p>This method is preserved for future use when Spring AI fixes the bug.
+     * See: Spring AI PR #4977 for related work.
      */
+    @SuppressWarnings("unused")
     private void applyResponseFormat(ChatClient.ChatClientRequestSpec requestSpec, OutputSchema outputSchema) {
         try {
             // Make schema strict (add additionalProperties: false, all properties required)
@@ -377,7 +390,7 @@ public class GeminiHandler implements LlmProviderHandler {
             String schemaJson = new tools.jackson.databind.ObjectMapper()
                 .writeValueAsString(strictSchema);
 
-            VertexAiGeminiChatOptions geminiOptions = VertexAiGeminiChatOptions.builder()
+            GoogleGenAiChatOptions geminiOptions = GoogleGenAiChatOptions.builder()
                 .responseMimeType("application/json")
                 .responseSchema(schemaJson)
                 .build();
@@ -403,12 +416,14 @@ public class GeminiHandler implements LlmProviderHandler {
                 return "{\"error\": \"Tool execution not supported in provider mode\"}";
             };
 
-            // Convert inputSchema Map to JSON string
+            // Convert inputSchema Map to JSON string with uppercase types for Gemini
             String inputSchemaJson = null;
             if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
                 try {
+                    Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
                     inputSchemaJson = new tools.jackson.databind.ObjectMapper()
-                        .writeValueAsString(tool.inputSchema());
+                        .writeValueAsString(convertedSchema);
+                    log.debug("Converted tool schema for {}: {}", tool.name(), inputSchemaJson);
                 } catch (Exception e) {
                     log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
                 }
@@ -431,6 +446,44 @@ public class GeminiHandler implements LlmProviderHandler {
     }
 
     /**
+     * Convert JSON Schema type values to uppercase for Gemini API compatibility.
+     * Google GenAI SDK expects uppercase types (STRING, OBJECT, etc.) while
+     * standard JSON Schema uses lowercase (string, object, etc.).
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> convertSchemaTypesToUpperCase(Map<String, Object> schema) {
+        if (schema == null) return null;
+        Map<String, Object> result = new LinkedHashMap<>(schema);
+
+        // Convert "type" to uppercase
+        if (result.containsKey("type") && result.get("type") instanceof String type) {
+            result.put("type", type.toUpperCase());
+        }
+
+        // Recurse into "properties"
+        if (result.containsKey("properties") && result.get("properties") instanceof Map) {
+            Map<String, Object> properties = (Map<String, Object>) result.get("properties");
+            Map<String, Object> convertedProperties = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                if (entry.getValue() instanceof Map) {
+                    convertedProperties.put(entry.getKey(),
+                        convertSchemaTypesToUpperCase((Map<String, Object>) entry.getValue()));
+                } else {
+                    convertedProperties.put(entry.getKey(), entry.getValue());
+                }
+            }
+            result.put("properties", convertedProperties);
+        }
+
+        // Recurse into "items" (for array types)
+        if (result.containsKey("items") && result.get("items") instanceof Map) {
+            result.put("items", convertSchemaTypesToUpperCase((Map<String, Object>) result.get("items")));
+        }
+
+        return result;
+    }
+
+    /**
      * Create a Spring AI ToolCallback from our ToolDefinition.
      */
     private ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
@@ -445,25 +498,40 @@ public class GeminiHandler implements LlmProviderHandler {
             }
         };
 
+        // Convert inputSchema with uppercase types for Gemini API compatibility
+        String inputSchemaJson = null;
+        if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
+            try {
+                Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
+                inputSchemaJson = new tools.jackson.databind.ObjectMapper()
+                    .writeValueAsString(convertedSchema);
+            } catch (Exception e) {
+                log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
+            }
+        }
+
         @SuppressWarnings("unchecked")
-        FunctionToolCallback<Map<String, Object>, String> callback = FunctionToolCallback
+        var builder = FunctionToolCallback
             .builder(tool.name(), toolFunction)
             .description(tool.description() != null ? tool.description() : "No description")
-            .inputType((Class<Map<String, Object>>) (Class<?>) Map.class)
-            .build();
+            .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
 
-        return callback;
+        if (inputSchemaJson != null) {
+            builder.inputSchema(inputSchemaJson);
+        }
+
+        return builder.build();
     }
 
     @Override
     public Map<String, Boolean> getCapabilities() {
         return Map.of(
             "native_tool_calling", true,
-            "structured_output", true,
+            "structured_output", true,   // Via prompt hints (not native response_format due to Spring AI bug)
             "streaming", true,
             "vision", true,
-            "json_mode", true,
-            "large_context", true  // Gemini-specific
+            "json_mode", false,          // No native JSON mode (Spring AI bug prevents it)
+            "large_context", true
         );
     }
 

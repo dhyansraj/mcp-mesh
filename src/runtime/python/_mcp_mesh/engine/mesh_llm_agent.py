@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -539,8 +539,8 @@ IMPORTANT TOOL CALLING RULES:
 
             logger.debug(
                 f"📥 Received response from mesh provider: "
-                f"content={message_dict.get('content', '')[:200]}..., "
-                f"tool_calls={len(message_dict.get('tool_calls', []))}"
+                f"content={(message_dict.get('content') or '')[:200]}..., "
+                f"tool_calls={len(message_dict.get('tool_calls') or [])}"
             )
 
             return MockResponse(message_dict)

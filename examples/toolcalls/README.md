@@ -4,7 +4,7 @@ Contains agents for comprehensive tool call testing across SDKs.
 
 ## Agents
 
-This test suite includes 15 agents total:
+This test suite includes 12 agents total:
 
 ### Consumer Agents (3)
 
@@ -12,17 +12,14 @@ This test suite includes 15 agents total:
 - **python-consumer** - Python consumer that calls tools from all providers
 - **java-consumer** - Java consumer that calls tools from all providers
 
-### Provider Agents (9)
+### Provider Agents (6)
 
 - **ts-claude-provider** - TypeScript provider using Claude
 - **ts-openai-provider** - TypeScript provider using OpenAI
-- **ts-gemini-provider** - TypeScript provider using Gemini
 - **python-claude-provider** - Python provider using Claude
 - **python-openai-provider** - Python provider using OpenAI
-- **python-gemini-provider** - Python provider using Gemini
 - **java-claude-provider** - Java provider using Claude
 - **java-openai-provider** - Java provider using OpenAI
-- **java-gemini-provider** - Java provider using Gemini
 
 ### Tool Agents (3)
 

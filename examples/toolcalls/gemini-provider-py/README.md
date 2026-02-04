@@ -4,7 +4,7 @@ A MCP Mesh LLM provider generated using `meshctl scaffold`.
 
 ## Overview
 
-This is a zero-code LLM provider that exposes gemini/gemini-2.0-flash to other MCP Mesh agents.
+This is a zero-code LLM provider that exposes gemini/gemini-3-flash-preview to other MCP Mesh agents.
 
 ## Getting Started
 
@@ -46,7 +46,7 @@ The provider will start on port 9000 by default.
 
 | Parameter | Value                         | Description              |
 | --------- | ----------------------------- | ------------------------ |
-| Model     | gemini/gemini-2.0-flash       | LiteLLM model identifier |
+| Model     | gemini/gemini-3-flash-preview | LiteLLM model identifier |
 | Port      | 9000                          | HTTP server port         |
 | Tags      | llm, gemini, python, provider | Discovery tags           |
 

@@ -41,7 +41,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     port = 9112
 )
 @MeshLlmProvider(
-    model = "gemini/gemini-2.0-flash",
+    model = "gemini/gemini-3-flash-preview",
     capability = "llm",
     tags = {"llm", "gemini", "google", "vertex-ai", "provider"},
     version = "1.0.0"
