@@ -356,9 +356,8 @@ jobs:
       - name: Import GPG key
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          KEYID=$(gpg --list-keys --keyid-format LONG | grep pub | head -1 | awk '{print $2}' | cut -d/ -f2)
-          echo "Imported GPG key: ${KEYID}"
-          echo "${KEYID}:6:" | gpg --import-ownertrust
+          echo "Imported GPG key: F94266795DCA259D"
+          echo "F94266795DCA259D:6:" | gpg --import-ownertrust
 
       - name: Download native libraries
         uses: actions/download-artifact@v4

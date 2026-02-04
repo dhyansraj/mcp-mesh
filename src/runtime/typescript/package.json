@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/sdk",
-  "version": "0.9.0-beta.1",
+  "version": "0.9.0-beta.2",
   "description": "MCP Mesh SDK for TypeScript - Build distributed MCP agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
