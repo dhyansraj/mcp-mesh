@@ -1,0 +1,41 @@
+package {{ .JavaPackage }};
+
+import io.mcpmesh.MeshAgent;
+import io.mcpmesh.MeshLlmProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+/**
+ * {{ .NamePascal }} - MCP Mesh LLM Provider
+ *
+ * {{ default "LLM provider agent generated using meshctl scaffold." .Description }}
+ *
+ * This agent provides LLM access to other agents via the mesh network.
+ */
+@MeshAgent(
+    name = "{{ .Name }}",
+    version = "1.0.0",
+    description = "{{ default "LLM provider" .Description }}",
+    port = {{ .Port }}
+)
+@MeshLlmProvider(
+    model = "{{ .Model }}",
+    capability = "llm",
+    tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains .Model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains .Model "openai" }}"llm", "openai", "gpt", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
+    version = "1.0.0"
+)
+@SpringBootApplication
+public class {{ .NamePascal }}Application {
+
+    private static final Logger log = LoggerFactory.getLogger({{ .NamePascal }}Application.class);
+
+    public static void main(String[] args) {
+        log.info("Starting {{ .NamePascal }} LLM Provider...");
+        log.info("This agent provides LLM capability to the mesh");
+        SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+
+    // No implementation needed - @MeshLlmProvider handles everything!
+}

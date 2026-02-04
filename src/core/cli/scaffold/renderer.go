@@ -286,6 +286,10 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		"SystemPromptIsFile":   strings.HasPrefix(ctx.SystemPrompt, "file://"),
 		"SystemPromptInline":   !strings.HasPrefix(ctx.SystemPrompt, "file://") && ctx.SystemPrompt != "",
 		"SystemPromptFilePath": strings.TrimPrefix(ctx.SystemPrompt, "file://"),
+
+		// Java-specific
+		"JavaPackage":     ctx.JavaPackage,
+		"JavaPackagePath": strings.ReplaceAll(ctx.JavaPackage, ".", "/"),
 	}
 
 	return data

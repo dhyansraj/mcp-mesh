@@ -1,0 +1,53 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh LLM agent generated using `meshctl scaffold`.{{ end }}
+
+## Overview
+
+This is a Java/Spring Boot LLM-powered MCP Mesh agent. It uses mesh delegation to access an LLM provider.
+
+## Getting Started
+
+### Prerequisites
+
+- Java 17+
+- Maven 3.9+
+- An LLM provider agent running on the mesh
+
+### Running the Agent
+
+` + "```" + `bash
+mvn spring-boot:run
+` + "```" + `
+
+Or with meshctl:
+
+` + "```" + `bash
+meshctl start {{ .Name }}
+` + "```" + `
+
+The agent will start on port {{ .Port }} by default.
+
+## Architecture
+
+This agent uses `@MeshLlm` to delegate LLM calls to a provider agent on the mesh network.
+
+### Project Structure
+
+` + "```" + `
+{{ .Name }}/
+├── pom.xml
+├── Dockerfile
+├── helm-values.yaml
+└── src/main/
+    ├── java/{{ .JavaPackagePath }}/
+    │   └── {{ .NamePascal }}Application.java
+    └── resources/
+        ├── application.yml
+        └── prompts/
+            └── {{ .Name }}.ftl
+` + "```" + `
+
+## License
+
+MIT

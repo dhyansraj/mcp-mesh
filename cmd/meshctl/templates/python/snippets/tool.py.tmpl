@@ -3,7 +3,7 @@
     capability="{{ .ToolName | default "new_tool" }}",
     description="{{ .ToolDescription | default "A new tool" }}",
 )
-async def {{ .ToolName | default "new_tool" }}({{ .ToolParams | default "" }}) -> str:
+async def {{ .ToolName | default "new_tool" | toSnakeCase }}({{ .ToolParams | default "" }}) -> str:
     """
     {{ .ToolDescription | default "A new tool" }}.
 

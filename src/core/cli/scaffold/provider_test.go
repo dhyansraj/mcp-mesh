@@ -163,14 +163,16 @@ func TestScaffoldContext_SupportedLanguages(t *testing.T) {
 
 	assert.Contains(t, languages, "python")
 	assert.Contains(t, languages, "typescript")
+	assert.Contains(t, languages, "java")
 	// Rust coming soon
 	assert.NotContains(t, languages, "rust")
-	assert.Len(t, languages, 2)
+	assert.Len(t, languages, 3)
 }
 
 func TestScaffoldContext_IsValidLanguage(t *testing.T) {
 	assert.True(t, IsValidLanguage("python"))
 	assert.True(t, IsValidLanguage("typescript"))
+	assert.True(t, IsValidLanguage("java"))
 	// Rust coming soon - not valid yet
 	assert.False(t, IsValidLanguage("rust"))
 	assert.False(t, IsValidLanguage("cobol"))
@@ -187,6 +189,10 @@ func TestNormalizeLanguage(t *testing.T) {
 	// TypeScript variations
 	assert.Equal(t, "typescript", NormalizeLanguage("typescript"))
 	assert.Equal(t, "typescript", NormalizeLanguage("ts"))
+
+	// Java variations
+	assert.Equal(t, "java", NormalizeLanguage("java"))
+	assert.Equal(t, "java", NormalizeLanguage("jv"))
 
 	// Unknown returns as-is
 	assert.Equal(t, "rust", NormalizeLanguage("rust"))

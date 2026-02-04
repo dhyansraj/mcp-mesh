@@ -1,0 +1,27 @@
+# Helm values for deploying {{ .Name }} with mcp-mesh-agent chart
+# Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
+
+image:
+  repository: your-registry/{{ .Name }}
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: {{ .Name }}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+
+env: []
+
+secrets: []
