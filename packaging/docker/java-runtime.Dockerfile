@@ -18,35 +18,33 @@ RUN apt-get update && apt-get install -y \
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     echo "Pre-caching io.mcp-mesh SDK ${VERSION} from Maven Central" && \
     mkdir -p /tmp/warmup && \
-    cat > /tmp/warmup/pom.xml << 'POMEOF' && \
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-    <groupId>io.mcp-mesh</groupId>
-    <artifactId>warmup</artifactId>
-    <version>1.0.0</version>
-    <repositories>
-        <repository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
-    <dependencies>
-        <dependency>
-            <groupId>io.mcp-mesh</groupId>
-            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-            <version>VERSION_PLACEHOLDER</version>
-        </dependency>
-    </dependencies>
-</project>
-POMEOF
-    sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" /tmp/warmup/pom.xml && \
+    printf '%s\n' \
+    '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<project xmlns="http://maven.apache.org/POM/4.0.0"' \
+    '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"' \
+    '         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">' \
+    '    <modelVersion>4.0.0</modelVersion>' \
+    '    <groupId>io.mcp-mesh</groupId>' \
+    '    <artifactId>warmup</artifactId>' \
+    '    <version>1.0.0</version>' \
+    '    <repositories>' \
+    '        <repository>' \
+    '            <id>spring-milestones</id>' \
+    '            <name>Spring Milestones</name>' \
+    '            <url>https://repo.spring.io/milestone</url>' \
+    '            <snapshots>' \
+    '                <enabled>false</enabled>' \
+    '            </snapshots>' \
+    '        </repository>' \
+    '    </repositories>' \
+    '    <dependencies>' \
+    '        <dependency>' \
+    '            <groupId>io.mcp-mesh</groupId>' \
+    '            <artifactId>mcp-mesh-spring-boot-starter</artifactId>' \
+    "            <version>${VERSION}</version>" \
+    '        </dependency>' \
+    '    </dependencies>' \
+    '</project>' > /tmp/warmup/pom.xml && \
     cd /tmp/warmup && mvn dependency:resolve -q && \
     rm -rf /tmp/warmup
 

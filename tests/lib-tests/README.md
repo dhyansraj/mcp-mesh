@@ -62,7 +62,7 @@ tsuite --uc uc03_build_image
 
 After successful run, you'll have:
 
-- `tsuite-mesh:0.9.0-beta.9` (or current version) Docker image
+- `tsuite-mesh:0.9.0-beta.10` (or current version) Docker image
 
 Verify with:
 
@@ -76,10 +76,10 @@ Edit `config.yaml` to update versions:
 
 ```yaml
 packages:
-  cli_version: "0.9.0-beta.9"
-  sdk_python_version: "0.9.0-beta.9" # PEP 440 format for Python
-  sdk_typescript_version: "0.9.0-beta.9"
-  core_version: "0.9.0-beta.9"
+  cli_version: "0.9.0-beta.10"
+  sdk_python_version: "0.9.0-beta.10" # PEP 440 format for Python
+  sdk_typescript_version: "0.9.0-beta.10"
+  core_version: "0.9.0-beta.10"
 ```
 
 ## Next Steps
