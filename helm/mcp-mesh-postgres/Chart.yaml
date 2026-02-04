@@ -2,7 +2,7 @@ apiVersion: v2
 name: mcp-mesh-postgres
 description: PostgreSQL database for MCP Mesh Registry
 type: application
-version: 0.9.0-beta.3
+version: 0.9.0-beta.4
 appVersion: "15"
 keywords:
   - mcp
