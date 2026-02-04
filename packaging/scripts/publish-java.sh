@@ -74,38 +74,39 @@ for MODULE in "${MODULES[@]}"; do
 
     log "Processing module: ${MODULE}"
 
-    if [ ! -d "${TARGET_DIR}" ]; then
-        error "Target directory not found: ${TARGET_DIR}"
-        exit 1
-    fi
-
     mkdir -p "${BUNDLE_MODULE_DIR}"
 
     # Collect artifacts based on module type
     if [ "${MODULE}" = "${BOM_MODULE}" ]; then
-        # BOM module: pom-packaging only (.pom + .pom.asc)
+        # BOM module: pom-packaging only - may not have target/ from Maven build
         log "  BOM module - collecting POM artifacts only"
-        ARTIFACTS=()
+
+        # Create target dir if Maven didn't
+        mkdir -p "${TARGET_DIR}"
 
         POM_FILE="${TARGET_DIR}/${ARTIFACT_ID}-${VERSION}.pom"
-        if [ -f "${POM_FILE}" ]; then
-            cp "${POM_FILE}" "${BUNDLE_MODULE_DIR}/"
-            ARTIFACTS+=("${POM_FILE}")
-            log "  Collected: $(basename "${POM_FILE}")"
-        else
-            error "  POM file not found: ${POM_FILE}"
-            exit 1
+
+        # If POM not in target, copy from module directory
+        if [ ! -f "${POM_FILE}" ]; then
+            log "  POM not in target/, copying from module directory"
+            cp "${MODULE}/pom.xml" "${POM_FILE}"
         fi
 
-        # GPG signature for POM
-        if [ -f "${POM_FILE}.asc" ]; then
-            cp "${POM_FILE}.asc" "${BUNDLE_MODULE_DIR}/"
-            log "  Collected: $(basename "${POM_FILE}").asc"
-        else
-            error "  GPG signature not found: ${POM_FILE}.asc"
+        cp "${POM_FILE}" "${BUNDLE_MODULE_DIR}/"
+        log "  Collected: $(basename "${POM_FILE}")"
+
+        # GPG signature - sign if not already signed by Maven
+        if [ ! -f "${POM_FILE}.asc" ]; then
+            log "  Signing POM with GPG..."
+            gpg --batch --armor --detach-sign "${POM_FILE}"
+        fi
+        cp "${POM_FILE}.asc" "${BUNDLE_MODULE_DIR}/"
+        log "  Collected: $(basename "${POM_FILE}").asc"
+    else
+        if [ ! -d "${TARGET_DIR}" ]; then
+            error "Target directory not found: ${TARGET_DIR}"
             exit 1
         fi
-    else
         # Standard module: JAR, sources, javadoc, POM + all .asc signatures
         log "  Standard module - collecting all artifacts"
         ARTIFACTS=()

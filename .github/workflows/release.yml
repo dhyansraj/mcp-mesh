@@ -380,12 +380,14 @@ jobs:
         run: |
           cd src/runtime/java
           mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+          # BOM has no <parent> element, so reactor versions:set doesn't reach it
+          mvn -f mcp-mesh-bom/pom.xml versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
           echo "Updated all POM versions to: ${{ steps.version.outputs.version }}"
 
       - name: Build, sign, and package all modules
         run: |
           cd src/runtime/java
-          mvn clean package -DskipTests \
+          mvn clean verify -DskipTests \
             -Dgpg.skip=false \
             -Dgpg.passphrase="" \
             -Dgpg.keyname="F94266795DCA259D!"
