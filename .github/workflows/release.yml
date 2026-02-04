@@ -357,7 +357,7 @@ jobs:
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
           echo "Imported GPG key: F94266795DCA259D"
-          echo "F94266795DCA259D:6:" | gpg --import-ownertrust
+          echo "D3B274C5F3344FD4DCC969F9F94266795DCA259D:6:" | gpg --import-ownertrust
 
       - name: Download native libraries
         uses: actions/download-artifact@v4
