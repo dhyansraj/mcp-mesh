@@ -262,6 +262,7 @@ rust-core-implementation.org
 src/runtime/core/index.js
 src/runtime/core/index.d.ts
 test/
+!src/runtime/java/**/src/test/
 scaffold-test/
 
 # Test suite build outputs
