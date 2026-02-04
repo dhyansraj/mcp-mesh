@@ -6,11 +6,33 @@
 
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-bom</artifactId>
-    <version>0.9.0-beta.8-SNAPSHOT</version>
+    <version>0.9.0-beta.9-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>MCP Mesh BOM</name>
     <description>Bill of Materials for MCP Mesh Java SDK</description>
+    <url>https://github.com/dhyansraj/mcp-mesh</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Dhyan Raj</name>
+            <email>dhyanraj@gmail.com</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>https://github.com/dhyansraj/mcp-mesh</url>
+        <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
+    </scm>
 
     <dependencyManagement>
         <dependencies>
