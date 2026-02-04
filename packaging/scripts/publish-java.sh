@@ -198,6 +198,7 @@ done
 
 # Create the bundle ZIP
 BUNDLE_ZIP=$(mktemp /tmp/mcp-mesh-java-bundle-XXXXXX.zip)
+rm -f "${BUNDLE_ZIP}"  # mktemp creates empty file; zip fails trying to update it as existing archive
 log "Creating bundle ZIP: ${BUNDLE_ZIP}"
 
 (cd "${BUNDLE_DIR}" && zip -r "${BUNDLE_ZIP}" .)
