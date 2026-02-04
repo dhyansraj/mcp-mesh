@@ -2,282 +2,282 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/02-local-development/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/03-docker-deployment/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/04-kubernetes-basics/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/architecture-and-design/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/comparison/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/contributing/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/deployment/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/enhanced-tag-matching-migration/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/environment-variables/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/faq/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/mesh-decorators/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/meshctl-cli/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/meshctl-scaffold/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/00-why-mcp-mesh/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/01-prerequisites/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/02-installation/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/03-hello-world/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/04-dependency-injection/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/05-first-agent/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/06-llm-integration/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/01-getting-started/troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/03-docker-deployment/04-networking/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/03-docker-deployment/troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/04-kubernetes-basics/05-troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/01-prometheus-integration/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/02-grafana-dashboards/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/03-distributed-tracing/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/04-centralized-logging/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/05-alerting-slos/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/07-observability/troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/cli/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/concepts/architecture/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/concepts/health-discovery/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/concepts/registry/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/concepts/tag-matching/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/capabilities-tags/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/decorators/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/dependency-injection/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/examples/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/fastapi-integration/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/getting-started/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/getting-started/prerequisites/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/llm/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/01-getting-started/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/02-scaffold/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/03-running-agents/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/04-inspecting-mesh/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/05-calling-tools/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/python/local-development/troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/capabilities-tags/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/dependency-injection/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/examples/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/express-integration/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/mesh-functions/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/prerequisites/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/llm/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/01-getting-started/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/02-scaffold/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/03-running-agents/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/04-inspecting-mesh/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/05-calling-tools/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
     <url>
          <loc>https://dhyansraj.github.io/mcp-mesh/typescript/local-development/troubleshooting/</loc>
-         <lastmod>2026-01-29</lastmod>
+         <lastmod>2026-02-04</lastmod>
     </url>
 </urlset>
