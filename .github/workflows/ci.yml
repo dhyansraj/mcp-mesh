@@ -154,6 +154,33 @@ jobs:
         working-directory: src/runtime/typescript
         run: npm test
 
+  java-test:
+    name: Java Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/runtime/java
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "maven"
+          cache-dependency-path: src/runtime/java/**/pom.xml
+
+      - name: Run Java tests
+        run: mvn test --no-transfer-progress
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: java-test-results
+          path: src/runtime/java/**/target/surefire-reports/*.xml
+
   python-test:
     name: Python Tests
     runs-on: ubuntu-latest
@@ -265,7 +292,7 @@ jobs:
   build-and-package:
     name: Build and Package
     runs-on: ubuntu-latest
-    needs: [python-test, go-test, rust-test, typescript-test]
+    needs: [python-test, go-test, rust-test, typescript-test, java-test]
     defaults:
       run:
         working-directory: packaging/pypi
@@ -303,7 +330,17 @@ jobs:
   integration-status:
     name: Integration Status
     runs-on: ubuntu-latest
-    needs: [lint-and-format, type-check, python-test, go-test, rust-test, typescript-test, build-and-package]
+    needs:
+      [
+        lint-and-format,
+        type-check,
+        python-test,
+        go-test,
+        rust-test,
+        typescript-test,
+        java-test,
+        build-and-package,
+      ]
     if: always()
 
     steps:
@@ -315,6 +352,7 @@ jobs:
           echo "Go Tests: ${{ needs.go-test.result }}"
           echo "Rust Tests: ${{ needs.rust-test.result }}"
           echo "TypeScript Tests: ${{ needs.typescript-test.result }}"
+          echo "Java Tests: ${{ needs.java-test.result }}"
           echo "Build and Package: ${{ needs.build-and-package.result }}"
 
           # Allow skipped status for temporarily disabled jobs
@@ -322,6 +360,7 @@ jobs:
              [[ "${{ needs.go-test.result }}" != "success" ]] || \
              [[ "${{ needs.rust-test.result }}" != "success" ]] || \
              [[ "${{ needs.typescript-test.result }}" != "success" ]] || \
+             [[ "${{ needs.java-test.result }}" != "success" ]] || \
              [[ "${{ needs.build-and-package.result }}" != "success" ]]; then
             echo "❌ CI pipeline failed"
             exit 1

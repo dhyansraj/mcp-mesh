@@ -1,44 +1,46 @@
-# Test Case: TC25 - JAVA Consumer -> GEMINI Provider (py) -> PY Tool
-# Tests cross-SDK tool calling: java consumer invokes py tool via gemini py provider
+# Test Case: TC80 - JAVA Consumer -> GEMINI Provider (java) -> TS Tool
+# Tests cross-SDK tool calling: java consumer invokes ts tool via gemini java provider
 #
 # Scenario:
-#   - Start weather-tool-py (port 9001)
-#   - Start gemini-provider-py (port 9002)
+#   - Start weather-tool-ts (port 9001)
+#   - Start gemini-provider-java (port 9002)
 #   - Start analyst-java (port 9003)
 #   - Test non-tool query and tool query
 
-name: "Consumer JAVA -> Provider GEMINI py -> Tool PY"
-description: "Test java consumer with gemini py provider calling py tool"
+name: "Consumer JAVA -> Provider GEMINI java -> Tool TS"
+description: "Test java consumer with gemini java provider calling ts tool"
 tags:
   - toolcall
   - java
   - gemini
-  - py
-  - phase1
+  - java
+  - ts
+  - phase3
 timeout: 300
 pre_run:
   - routine: global.setup_for_java_agent
     params:
       meshctl_version: "${config.packages.cli_version}"
-  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
 test:
   # 1. Copy artifacts to workspace
   - name: "Copy artifacts"
     handler: shell
     command: |
       cp -r /uc-artifacts/analyst-java /workspace/
-      cp -r /uc-artifacts/gemini-provider-py /workspace/
-      cp -r /uc-artifacts/weather-tool-py /workspace/
+      cp -r /uc-artifacts/gemini-provider-java /workspace/
+      cp -r /uc-artifacts/weather-tool-ts /workspace/
       cp /uc-artifacts/.env /workspace/
       ls -la /workspace/
     capture: copy_output
   # 2. Install dependencies
   - name: "Install tool dependencies"
-    handler: pip-install
-    path: /workspace/weather-tool-py
+    handler: npm-install
+    path: /workspace/weather-tool-ts
   - name: "Install provider dependencies"
-    handler: pip-install
-    path: /workspace/gemini-provider-py
+    handler: maven-install
+    path: /workspace/gemini-provider-java
+    timeout: 600
   - name: "Install consumer dependencies"
     handler: maven-install
     path: /workspace/analyst-java
@@ -48,7 +50,7 @@ test:
     handler: shell
     command: |
       cd /workspace
-      meshctl start weather-tool-py/main.py --env MCP_MESH_HTTP_PORT=9001 -d
+      meshctl start weather-tool-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9001 -d
       echo "Tool agent starting..."
     capture: start_tool
   - name: "Wait for tool agent"
@@ -59,7 +61,7 @@ test:
     handler: shell
     command: |
       cd /workspace
-      meshctl start gemini-provider-py/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+      meshctl start gemini-provider-java --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
       echo "Provider agent starting..."
     capture: start_provider
   - name: "Wait for provider agent"
@@ -99,9 +101,9 @@ test:
 assertions:
   - expr: "${captured.agent_list} contains 'analyst-java'"
     message: "Consumer agent should be registered"
-  - expr: "${captured.agent_list} contains 'gemini-provider-py'"
+  - expr: "${captured.agent_list} contains 'gemini-provider-java'"
     message: "Provider agent should be registered"
-  - expr: "${captured.agent_list} contains 'weather-tool-py'"
+  - expr: "${captured.agent_list} contains 'weather-tool-ts'"
     message: "Tool agent should be registered"
   - expr: "${captured.non_tool_response} contains 'Paris'"
     message: "Non-tool response should mention Paris"
@@ -112,6 +114,7 @@ post_run:
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*gemini" 2>/dev/null || true
       pkill -f "java.*analyst" 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace
