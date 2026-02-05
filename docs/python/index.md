@@ -1,6 +1,9 @@
 # Python SDK
 
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See the <a href="../../java/">Java SDK</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See the <a href="../../typescript/">TypeScript SDK</a></span>
 </div>
@@ -49,13 +52,13 @@ meshctl man <topic> --raw       # Get markdown output (LLM-friendly)
 
 ## Key Topics
 
-| Topic                | Command                  | Description                        |
-| -------------------- | ------------------------ | ---------------------------------- |
-| Quick Start          | `meshctl man quickstart` | Get started in minutes             |
-| Decorators           | `meshctl man decorators` | @mesh.tool, @mesh.agent, @mesh.llm |
-| Dependency Injection | `meshctl man di`         | How DI works                       |
-| LLM Integration      | `meshctl man llm`        | Build AI-powered agents            |
-| Deployment           | `meshctl man deployment` | Local, Docker, Kubernetes          |
+| Topic | Command | Description |
+|-------|---------|-------------|
+| Quick Start | `meshctl man quickstart` | Get started in minutes |
+| Decorators | `meshctl man decorators` | @mesh.tool, @mesh.agent, @mesh.llm |
+| Dependency Injection | `meshctl man di` | How DI works |
+| LLM Integration | `meshctl man llm` | Build AI-powered agents |
+| Deployment | `meshctl man deployment` | Local, Docker, Kubernetes |
 
 ## Next Steps
 

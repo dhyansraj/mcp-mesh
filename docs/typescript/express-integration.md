@@ -19,10 +19,10 @@ npm install -D @types/express tsx
 
 ## Two Architectures
 
-| Pattern         | Function            | Use Case                              |
-| --------------- | ------------------- | ------------------------------------- |
-| MCP Agent       | `mesh()` + auto-run | Service that _provides_ capabilities  |
-| Express Backend | `mesh.route()`      | REST API that _consumes_ capabilities |
+| Pattern         | Function                     | Use Case                              |
+| --------------- | ---------------------------- | ------------------------------------- |
+| MCP Agent       | `mesh()` + auto-run          | Service that _provides_ capabilities  |
+| Express Backend | `mesh.route()`               | REST API that _consumes_ capabilities |
 
 ```
 [Frontend] → [Express Backend] → [MCP Mesh] → [Agents]
@@ -40,22 +40,19 @@ import type { McpMeshTool } from "@mcpmesh/sdk";
 const app = express();
 app.use(express.json());
 
-app.post(
-  "/chat",
-  mesh.route(
-    [{ capability: "avatar_chat" }],
-    async (req, res, { avatar_chat }) => {
-      if (!avatar_chat) {
-        return res.status(503).json({ error: "Service unavailable" });
-      }
-      const result = await avatar_chat({
-        message: req.body.message,
-        user_email: "user@example.com",
-      });
-      res.json({ response: result.message });
-    },
-  ),
-);
+app.post("/chat", mesh.route(
+  [{ capability: "avatar_chat" }],
+  async (req, res, { avatar_chat }) => {
+    if (!avatar_chat) {
+      return res.status(503).json({ error: "Service unavailable" });
+    }
+    const result = await avatar_chat({
+      message: req.body.message,
+      user_email: "user@example.com",
+    });
+    res.json({ response: result.message });
+  }
+));
 
 app.listen(3000);
 ```
@@ -65,32 +62,26 @@ app.listen(3000);
 ### Simple (by capability name)
 
 ```typescript
-app.post(
-  "/users",
-  mesh.route(
-    ["user_service", "notification_service"],
-    async (req, res, { user_service, notification_service }) => {
-      // Dependencies are keyed by capability name
-    },
-  ),
-);
+app.post("/users", mesh.route(
+  ["user_service", "notification_service"],
+  async (req, res, { user_service, notification_service }) => {
+    // Dependencies are keyed by capability name
+  }
+));
 ```
 
 ### With Tag Filtering
 
 ```typescript
-app.post(
-  "/analyze",
-  mesh.route(
-    [
-      { capability: "llm", tags: ["+claude"] },
-      { capability: "storage", tags: ["-deprecated"] },
-    ],
-    async (req, res, { llm, storage }) => {
-      // Use filtered dependencies
-    },
-  ),
-);
+app.post("/analyze", mesh.route(
+  [
+    { capability: "llm", tags: ["+claude"] },
+    { capability: "storage", tags: ["-deprecated"] },
+  ],
+  async (req, res, { llm, storage }) => {
+    // Use filtered dependencies
+  }
+));
 ```
 
 ## Complete Example
@@ -114,50 +105,40 @@ interface ChatResponse {
 }
 
 // Chat endpoint that delegates to mesh avatar agent
-app.post(
-  "/api/chat",
-  mesh.route(
-    [{ capability: "avatar_chat" }],
-    async (
-      req: Request<{}, ChatResponse, ChatRequest>,
-      res: Response<ChatResponse>,
-      { avatar_chat },
-    ) => {
-      if (!avatar_chat) {
-        return res.status(503).json({
-          response: "Avatar service unavailable",
-          avatarId: "",
-        });
-      }
-
-      const result = await avatar_chat({
-        message: req.body.message,
-        avatar_id: req.body.avatarId || "default",
-        user_email: "user@example.com",
+app.post("/api/chat", mesh.route(
+  [{ capability: "avatar_chat" }],
+  async (req: Request<{}, ChatResponse, ChatRequest>, res: Response<ChatResponse>, { avatar_chat }) => {
+    if (!avatar_chat) {
+      return res.status(503).json({
+        response: "Avatar service unavailable",
+        avatarId: ""
       });
+    }
 
-      res.json({
-        response: result.message || "",
-        avatarId: req.body.avatarId || "default",
-      });
-    },
-  ),
-);
+    const result = await avatar_chat({
+      message: req.body.message,
+      avatar_id: req.body.avatarId || "default",
+      user_email: "user@example.com",
+    });
+
+    res.json({
+      response: result.message || "",
+      avatarId: req.body.avatarId || "default",
+    });
+  }
+));
 
 // History endpoint using mesh agent
-app.get(
-  "/api/history",
-  mesh.route(
-    [{ capability: "conversation_history_get" }],
-    async (req, res, { conversation_history_get }) => {
-      const result = await conversation_history_get({
-        avatar_id: req.query.avatarId || "default",
-        limit: parseInt(req.query.limit as string) || 50,
-      });
-      res.json({ messages: result.messages || [] });
-    },
-  ),
-);
+app.get("/api/history", mesh.route(
+  [{ capability: "conversation_history_get" }],
+  async (req, res, { conversation_history_get }) => {
+    const result = await conversation_history_get({
+      avatar_id: req.query.avatarId || "default",
+      limit: parseInt(req.query.limit as string) || 50,
+    });
+    res.json({ messages: result.messages || [] });
+  }
+));
 
 app.listen(3000, () => {
   console.log("Express server listening on port 3000");
@@ -197,20 +178,16 @@ app.use(express.json());
 // Explicit mesh configuration
 const meshApp = meshExpress(app, {
   name: "my-api",
-  port: 3000,
-  registryUrl: "http://localhost:8000",
+  httpPort: 3000,
 });
 
 // Define routes with mesh.route()
-app.post(
-  "/compute",
-  mesh.route(
-    [{ capability: "calculator" }],
-    async (req, res, { calculator }) => {
-      res.json({ result: await calculator(req.body) });
-    },
-  ),
-);
+app.post("/compute", mesh.route(
+  [{ capability: "calculator" }],
+  async (req, res, { calculator }) => {
+    res.json({ result: await calculator(req.body) });
+  }
+));
 
 // Explicitly start the mesh connection
 meshApp.start();
@@ -218,14 +195,14 @@ meshApp.start();
 
 ## Key Differences from mesh()
 
-| Aspect                | mesh() (MCP Agent) | mesh.route() (Express)          |
-| --------------------- | ------------------ | ------------------------------- |
-| Registers with mesh   | Yes                | No                              |
-| Provides capabilities | Yes                | No                              |
-| Consumes capabilities | Yes                | Yes                             |
-| Has heartbeat         | Yes                | Yes (for dependency resolution) |
-| Protocol              | MCP JSON-RPC       | REST/HTTP                       |
-| Use case              | Microservice       | API Gateway/Backend             |
+| Aspect                | mesh() (MCP Agent)   | mesh.route() (Express)              |
+| --------------------- | -------------------- | ----------------------------------- |
+| Registers with mesh   | Yes                  | No                                  |
+| Provides capabilities | Yes                  | No                                  |
+| Consumes capabilities | Yes                  | Yes                                 |
+| Has heartbeat         | Yes                  | Yes (for dependency resolution)     |
+| Protocol              | MCP JSON-RPC         | REST/HTTP                           |
+| Use case              | Microservice         | API Gateway/Backend                 |
 
 ## When to Use mesh.route()
 

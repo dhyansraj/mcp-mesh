@@ -1,3 +1,11 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">🐍</span>
+  <span>Looking for Python? See <a href="../../python/decorators/">Python Decorators</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">📘</span>
+  <span>Looking for TypeScript? See <a href="../../typescript/mesh-functions/">TypeScript Decorators</a></span>
+</div>
+
 # MCP Mesh Annotations (Java/Spring Boot)
 
 > Core annotations for building distributed agent systems

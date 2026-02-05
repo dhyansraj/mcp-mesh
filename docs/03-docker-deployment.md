@@ -24,9 +24,10 @@ MCP Mesh publishes official images to Docker Hub:
 
 | Image                            | Purpose                                          |
 | -------------------------------- | ------------------------------------------------ |
-| `mcpmesh/registry:0.8`           | Go-based registry service                        |
-| `mcpmesh/python-runtime:0.8`     | Python agent runtime (includes mcp-mesh SDK)     |
-| `mcpmesh/typescript-runtime:0.8` | TypeScript agent runtime (includes @mcpmesh/sdk) |
+| `mcpmesh/registry:0.9`           | Go-based registry service                        |
+| `mcpmesh/python-runtime:0.9`     | Python agent runtime (includes mcp-mesh SDK)     |
+| `mcpmesh/java-runtime:0.9`       | Java agent runtime (includes mcp-mesh SDK)       |
+| `mcpmesh/typescript-runtime:0.9` | TypeScript agent runtime (includes @mcpmesh/sdk) |
 
 ## Using Scaffold to Generate Compose Files
 
@@ -52,7 +53,7 @@ meshctl scaffold --compose --dry-run -d ./agents
 
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
         healthcheck:
@@ -62,7 +63,7 @@ meshctl scaffold --compose --dry-run -d ./agents
           retries: 3
 
       my-agent:
-        image: mcpmesh/python-runtime:0.8
+        image: mcpmesh/python-runtime:0.9
         ports:
           - "8080:8080"
         volumes:
@@ -80,14 +81,14 @@ meshctl scaffold --compose --dry-run -d ./agents
         name: mcp-mesh
     ```
 
-=== "TypeScript"
+=== "Java"
 
     ```yaml
     version: "3.8"
 
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
         healthcheck:
@@ -97,7 +98,41 @@ meshctl scaffold --compose --dry-run -d ./agents
           retries: 3
 
       my-agent:
-        image: mcpmesh/typescript-runtime:0.8
+        build:
+          context: ./my-agent
+          dockerfile: Dockerfile
+        ports:
+          - "9000:9000"
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
+          - MCP_MESH_HTTP_PORT=9000
+        depends_on:
+          registry:
+            condition: service_healthy
+
+    networks:
+      default:
+        name: mcp-mesh
+    ```
+
+=== "TypeScript"
+
+    ```yaml
+    version: "3.8"
+
+    services:
+      registry:
+        image: mcpmesh/registry:0.9
+        ports:
+          - "8000:8000"
+        healthcheck:
+          test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+
+      my-agent:
+        image: mcpmesh/typescript-runtime:0.9
         ports:
           - "8080:8080"
         volumes:
@@ -126,15 +161,36 @@ If you prefer manual control, here's a minimal compose file:
 
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/python-runtime:0.8
+        image: mcpmesh/python-runtime:0.9
         volumes:
           - ./agent.py:/app/agent.py:ro
         command: ["python", "/app/agent.py"]
+        environment:
+          - MCP_MESH_REGISTRY_URL=http://registry:8000
+
+    networks:
+      default:
+        name: mcp-mesh
+    ```
+
+=== "Java"
+
+    ```yaml
+    version: "3.8"
+
+    services:
+      registry:
+        image: mcpmesh/registry:0.9
+        ports:
+          - "8000:8000"
+
+      my-agent:
+        build: ./my-agent
         environment:
           - MCP_MESH_REGISTRY_URL=http://registry:8000
 
@@ -150,12 +206,12 @@ If you prefer manual control, here's a minimal compose file:
 
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/typescript-runtime:0.8
+        image: mcpmesh/typescript-runtime:0.9
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]
@@ -176,7 +232,7 @@ If you didn't use scaffold, here's a sample Dockerfile:
 === "Python"
 
     ```dockerfile
-    FROM mcpmesh/python-runtime:0.8
+    FROM mcpmesh/python-runtime:0.9
 
     COPY ./my-agent /app/agent
 
@@ -186,10 +242,22 @@ If you didn't use scaffold, here's a sample Dockerfile:
     CMD ["python", "/app/agent/main.py"]
     ```
 
+=== "Java"
+
+    ```dockerfile
+    FROM eclipse-temurin:17-jre-alpine
+
+    WORKDIR /app
+    COPY target/*.jar app.jar
+
+    EXPOSE 9000
+    CMD ["java", "-jar", "app.jar"]
+    ```
+
 === "TypeScript"
 
     ```dockerfile
-    FROM mcpmesh/typescript-runtime:0.8
+    FROM mcpmesh/typescript-runtime:0.9
 
     WORKDIR /app/agent
     COPY ./my-agent/package*.json ./
@@ -216,12 +284,12 @@ version: "3.8"
 
 services:
   registry:
-    image: mcpmesh/registry:0.8
+    image: mcpmesh/registry:0.9
     ports:
       - "8000:8000"
 
   auth-agent:
-    image: mcpmesh/python-runtime:0.8
+    image: mcpmesh/python-runtime:0.9
     volumes:
       - ./agents/auth:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -230,7 +298,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   data-agent:
-    image: mcpmesh/python-runtime:0.8
+    image: mcpmesh/python-runtime:0.9
     volumes:
       - ./agents/data:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -239,7 +307,7 @@ services:
       - MCP_MESH_HTTP_PORT=8080
 
   api-agent:
-    image: mcpmesh/python-runtime:0.8
+    image: mcpmesh/python-runtime:0.9
     volumes:
       - ./agents/api:/app/agent:ro
     command: ["python", "/app/agent/main.py"]
@@ -332,4 +400,4 @@ docker-compose run --rm my-agent /bin/bash
 ## Next Steps
 
 - [Networking Details](./03-docker-deployment/04-networking.md) - Deep dive into container networking
-- [Kubernetes Deployment](./06-helm-deployment.md) - Production deployment with Helm
+- [Kubernetes Deployment](./04-kubernetes-basics.md) - Production deployment with Helm

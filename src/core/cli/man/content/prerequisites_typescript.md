@@ -1,11 +1,3 @@
-<div class="runtime-crossref">
-  <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/getting-started/prerequisites/">Python Prerequisites</a></span>
-  <span> | </span>
-  <span class="runtime-crossref-icon">☕</span>
-  <span>Looking for Java? See <a href="../../java/getting-started/prerequisites/">Java Prerequisites</a></span>
-</div>
-
 # Prerequisites
 
 > What you need before building MCP Mesh agents with TypeScript

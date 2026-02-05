@@ -168,6 +168,20 @@ nav:
       - FastAPI Integration: python/fastapi-integration.md
       - Examples & Testing: python/examples.md
 
+  # Java SDK - Spring Boot based
+  - Java SDK:
+      - java/index.md
+      - Getting Started:
+          - Quick Start: java/getting-started/index.md
+          - Prerequisites: java/getting-started/prerequisites.md
+      - Core Concepts:
+          - Annotations: java/annotations.md
+          - Dependency Injection: java/dependency-injection.md
+          - Capabilities & Tags: java/capabilities-tags.md
+      - LLM Integration: java/llm/index.md
+      - Spring Boot Integration: java/spring-boot-integration.md
+      - Examples & Testing: java/examples.md
+
   # TypeScript SDK - Generated from meshctl man pages
   - TypeScript SDK:
       - typescript/index.md
@@ -199,6 +213,14 @@ nav:
           - Inspect the Mesh: python/local-development/04-inspecting-mesh.md
           - Call & Debug Tools: python/local-development/05-calling-tools.md
           - Troubleshooting: python/local-development/troubleshooting.md
+      - Java:
+          - java/local-development/index.md
+          - Getting Started: java/local-development/01-getting-started.md
+          - Scaffold Agents: java/local-development/02-scaffold.md
+          - Run Agents: java/local-development/03-running-agents.md
+          - Inspect the Mesh: java/local-development/04-inspecting-mesh.md
+          - Call & Debug Tools: java/local-development/05-calling-tools.md
+          - Troubleshooting: java/local-development/troubleshooting.md
       - TypeScript:
           - typescript/local-development/index.md
           - Getting Started: typescript/local-development/01-getting-started.md

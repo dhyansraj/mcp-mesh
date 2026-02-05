@@ -1,4 +1,7 @@
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/llm/index/">Java LLM Integration</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/llm/index/">TypeScript LLM Integration</a></span>
 </div>
@@ -7,7 +10,7 @@
 
 > Building LLM-powered agents with @mesh.llm decorator
 
-**Note:** This page shows Python examples. TypeScript uses equivalent `mesh.llm()` function wrapper. See `meshctl man llm --typescript` for TypeScript examples.
+**Note:** This page shows Python examples. See `meshctl man llm --typescript` for TypeScript or `meshctl man llm --java` for Java/Spring Boot examples.
 
 ## Overview
 

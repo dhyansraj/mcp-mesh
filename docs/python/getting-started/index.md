@@ -1,4 +1,7 @@
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/getting-started/index/">Java Quick Start</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/getting-started/index/">TypeScript Quick Start</a></span>
 </div>
@@ -6,6 +9,8 @@
 # Quick Start
 
 > Get started with MCP Mesh in minutes (Python)
+
+**Note:** This page shows Python examples. See `meshctl man quickstart --typescript` for TypeScript or `meshctl man quickstart --java` for Java/Spring Boot examples.
 
 ## Prerequisites
 

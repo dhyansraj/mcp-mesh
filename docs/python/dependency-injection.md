@@ -1,4 +1,7 @@
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/dependency-injection/">Java Dependency Injection</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/dependency-injection/">TypeScript Dependency Injection</a></span>
 </div>
@@ -6,6 +9,8 @@
 # Dependency Injection
 
 > Automatic wiring of capabilities between agents
+
+**Note:** This page shows Python examples. See `meshctl man dependency-injection --typescript` for TypeScript or `meshctl man dependency-injection --java` for Java/Spring Boot examples.
 
 ## Overview
 
@@ -58,6 +63,33 @@ async def generate_report(
     data = await data_svc(query="sales")
     return await formatter(data=data)
 ```
+
+### OR Alternatives (Tag-Level)
+
+Use nested arrays in tags to specify fallback providers:
+
+```python
+@app.tool()
+@mesh.tool(
+    capability="calculator",
+    dependencies=[
+        # Prefer python provider, fallback to typescript
+        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+    ],
+)
+async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
+    result = await math(a=a, b=b)
+    return result
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is unresolved (injected as `None`)
+
+This is useful when you have multiple implementations of the same capability
+and want to prefer one but fallback to another if unavailable.
 
 ## Injection Types
 

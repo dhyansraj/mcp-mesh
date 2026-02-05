@@ -1,14 +1,6 @@
-<div class="runtime-crossref">
-  <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/getting-started/prerequisites/">Python Prerequisites</a></span>
-  <span> | </span>
-  <span class="runtime-crossref-icon">☕</span>
-  <span>Looking for Java? See <a href="../../java/getting-started/prerequisites/">Java Prerequisites</a></span>
-</div>
-
 # Prerequisites
 
-> What you need before building MCP Mesh agents with TypeScript
+> What you need before building MCP Mesh agents with Java
 
 **MCP Mesh supports Python, Java, and TypeScript.** Choose the language that fits your needs—or use all three in the same mesh.
 
@@ -23,27 +15,50 @@ Alternatively, use Docker Desktop for containerized development.
 
 ## Local Development
 
-### Node.js 18+
+### Java 17+
 
 ```bash
 # Check version
-node --version   # Need 18+
-npm --version
+java --version  # Need 17+
 
 # Install if needed
-brew install node          # macOS
-sudo apt install nodejs    # Ubuntu/Debian
+brew install openjdk@17          # macOS
+sudo apt install openjdk-17-jdk  # Ubuntu/Debian
 ```
 
-### TypeScript SDK
+### Maven 3.8+
 
 ```bash
-# In your agent directory
-npm init -y
-npm install @mcpmesh/sdk
+# Check version
+mvn --version
 
-# Verify
-npx tsx -e "import { mesh } from '@mcpmesh/sdk'; console.log('Ready!')"
+# Install if needed
+brew install maven               # macOS
+sudo apt install maven           # Ubuntu/Debian
+```
+
+### MCP Mesh Java SDK
+
+Add the Spring Boot starter to your `pom.xml`:
+
+```xml
+<parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.0.2</version>
+</parent>
+
+<dependencies>
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+</dependencies>
 ```
 
 ### meshctl CLI
@@ -55,18 +70,18 @@ npm install -g @mcpmesh/cli
 meshctl --version
 ```
 
-### Quick Start (TypeScript)
+### Quick Start (Java)
 
 ```bash
-# 1. Scaffold TypeScript agent
-meshctl scaffold --name hello --agent-type basic --lang typescript
+# 1. Scaffold a Java agent
+meshctl scaffold --name hello --agent-type basic --lang java
 
-# 2. Install dependencies
-cd hello
-npm install
+# 2. Run with meshctl (detects pom.xml, supports --debug/--watch)
+meshctl start hello/ --debug
 
-# 3. Run agent - meshctl uses npx tsx automatically
-meshctl start src/index.ts --debug
+# 3. Test
+meshctl list
+meshctl call hello greeting --params '{"name": "World"}'
 ```
 
 ## Docker Deployment
@@ -90,20 +105,7 @@ docker compose version
 | `mcpmesh/java-runtime:0.9`       | Java runtime with SDK       |
 | `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with SDK |
 
-```bash
-# Pull images
-docker pull mcpmesh/registry:0.9
-docker pull mcpmesh/python-runtime:0.9
-docker pull mcpmesh/java-runtime:0.9
-docker pull mcpmesh/typescript-runtime:0.9
-```
-
-### Generate Docker Compose
-
-```bash
-meshctl scaffold --compose              # Basic stack
-meshctl scaffold --compose --observability  # With Grafana/Tempo
-```
+Java agents use standard Maven-based Docker builds (see Docker Deployment guide).
 
 ## Kubernetes Deployment
 
@@ -120,13 +122,15 @@ helm version
 
 | Component  | Minimum | Recommended |
 | ---------- | ------- | ----------- |
-| Node.js    | 18      | 20+         |
+| Java       | 17      | 21          |
+| Maven      | 3.8     | 3.9+        |
+| Spring Boot| 3.2     | 4.0+        |
 | Docker     | 20.10   | Latest      |
 | Kubernetes | 1.25    | 1.28+       |
 | Helm       | 3.10    | 3.14+       |
 
 ## See Also
 
-- `meshctl man deployment` - Deployment patterns
+- `meshctl man deployment --java` - Deployment patterns
 - `meshctl man environment` - Configuration options
 - `meshctl scaffold --help` - Generate agents

@@ -142,10 +142,12 @@ var guideRegistry = map[string]*Guide{
 		Description: "Distributed tracing, Grafana dashboards, and monitoring setup",
 	},
 	"prerequisites": {
-		Name:        "prerequisites",
-		Aliases:     []string{"prereq", "setup", "install"},
-		Title:       "Prerequisites",
-		Description: "System requirements for Python, TypeScript, and Java development",
+		Name:                 "prerequisites",
+		Aliases:              []string{"prereq", "setup", "install"},
+		Title:                "Prerequisites",
+		Description:          "System requirements for Python, TypeScript, and Java development",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"quickstart": {
 		Name:                 "quickstart",

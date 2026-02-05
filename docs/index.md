@@ -36,6 +36,49 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
         pass
     ```
 
+=== "Java"
+
+    ```xml
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    ```
+
+    ```java
+    import io.mcpmesh.MeshAgent;
+    import io.mcpmesh.MeshTool;
+    import io.mcpmesh.Param;
+    import io.mcpmesh.Selector;
+    import io.mcpmesh.types.McpMeshTool;
+    import org.springframework.boot.SpringApplication;
+    import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+    @MeshAgent(name = "my-service", version = "1.0.0", port = 9000)
+    @SpringBootApplication
+    public class MyServiceApplication {
+
+        public static void main(String[] args) {
+            SpringApplication.run(MyServiceApplication.class, args);
+        }
+
+        @MeshTool(
+            capability = "greeting",
+            dependencies = @Selector(capability = "date_service")
+        )
+        public String greet(
+            @Param("name") String name,
+            McpMeshTool<String> dateService
+        ) {
+            if (dateService != null && dateService.isAvailable()) {
+                return "Hello, " + name + "! " + dateService.call();
+            }
+            return "Hello, " + name + "!";
+        }
+    }
+    ```
+
 === "TypeScript"
 
     ```bash
@@ -198,7 +241,21 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     pip install "mcp-mesh>=0.8,<0.9"
     ```
 
-    Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
+    Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
+    Includes `@mesh.route()` for FastAPI integration.
+
+=== "Java Runtime"
+
+    ```xml
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    ```
+
+    Spring Boot starter for building agents with `@MeshAgent`, `@MeshTool`, `@MeshLlm`, and `@MeshLlmProvider` annotations.
+    Includes `@MeshRoute` for Spring Boot REST integration.
 
 === "TypeScript Runtime"
 
@@ -206,13 +263,16 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     npm install @mcpmesh/sdk
     ```
 
-    Runtime for building agents with `mesh()`, `agent()`, and `addTool()` functions.
+    Runtime for building agents with `mesh()`, `addTool()`, `addLlm()`, and `addLlmProvider()` functions.
+    Includes `addRoute()` for Express integration.
 
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:0.8
-    docker pull mcpmesh/python-runtime:0.8
+    docker pull mcpmesh/registry:0.9
+    docker pull mcpmesh/python-runtime:0.9
+    docker pull mcpmesh/java-runtime:0.9
+    docker pull mcpmesh/typescript-runtime:0.9
     ```
 
     Official container images for production deployments.
@@ -240,7 +300,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 - **Latest Release**: v0.9.0-beta.10 (February 2026)
 - **License**: MIT
-- **Languages**: Python 3.11+ and TypeScript/Node.js 18+ (runtime), Go 1.23+ (registry)
+- **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
 
 ---
@@ -259,6 +319,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 **Ready to get started?**
 
 [Python SDK](python/getting-started/index.md){ .md-button .md-button--primary }
+[Java SDK](java/getting-started/index.md){ .md-button .md-button--primary }
 [TypeScript SDK](typescript/getting-started/index.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
 

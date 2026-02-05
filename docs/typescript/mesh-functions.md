@@ -1,6 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See <a href="../../python/decorators/">Python Decorators</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/annotations/">Java Decorators</a></span>
 </div>
 
 # MCP Mesh Functions (TypeScript)
@@ -11,13 +14,13 @@
 
 MCP Mesh provides core functions that transform regular TypeScript functions into mesh-aware distributed services. These functions handle registration, dependency injection, and communication automatically.
 
-| Function             | Purpose                            |
-| -------------------- | ---------------------------------- |
-| `mesh()`             | Create mesh agent wrapping FastMCP |
-| `agent.addTool()`    | Register capability with DI        |
-| `mesh.llm()`         | Enable LLM-powered tools           |
-| `mesh.llmProvider()` | Create LLM provider (zero-code)    |
-| `mesh.route()`       | Express route with mesh DI         |
+| Function           | Purpose                            |
+| ------------------ | ---------------------------------- |
+| `mesh()`           | Create mesh agent wrapping FastMCP |
+| `agent.addTool()`  | Register capability with DI        |
+| `mesh.llm()`       | Enable LLM-powered tools           |
+| `mesh.llmProvider()` | Create LLM provider (zero-code)  |
+| `mesh.route()`     | Express route with mesh DI         |
 
 ## mesh() Function
 
@@ -33,13 +36,13 @@ const server = new FastMCP({
 });
 
 const agent = mesh(server, {
-  name: "my-service", // Required: unique agent identifier
-  version: "1.0.0", // Semantic version
-  description: "Service desc", // Human-readable description
-  port: 8080, // HTTP server port (0 = auto-assign)
-  host: "localhost", // Host announced to registry
-  namespace: "default", // Namespace for isolation
-  heartbeatInterval: 30, // Heartbeat interval in seconds
+  name: "my-service",           // Required: unique agent identifier
+  version: "1.0.0",             // Semantic version
+  description: "Service desc",  // Human-readable description
+  httpPort: 8080,                   // HTTP server port (0 = auto-assign)
+  host: "localhost",            // Host announced to registry
+  namespace: "default",         // Namespace for isolation
+  heartbeatInterval: 30,        // Heartbeat interval in seconds
 });
 ```
 
@@ -52,23 +55,23 @@ import { z } from "zod";
 
 agent.addTool({
   name: "greet",
-  capability: "greeting", // Capability name for discovery
-  description: "Greets users", // Human-readable description
-  version: "1.0.0", // Capability version
-  tags: ["greeting", "utility"], // Tags for filtering
-  dependencies: ["date_service"], // Required capabilities
+  capability: "greeting",              // Capability name for discovery
+  description: "Greets users",         // Human-readable description
+  version: "1.0.0",                    // Capability version
+  tags: ["greeting", "utility"],       // Tags for filtering
+  dependencies: ["date_service"],      // Required capabilities
   parameters: z.object({
     name: z.string(),
   }),
   execute: async (
-    { name }, // Input parameters
-    { date_service }, // Injected dependencies (nullable)
+    { name },                          // Input parameters
+    { date_service }                   // Injected dependencies (nullable)
   ) => {
     if (date_service) {
       const today = await date_service({});
       return `Hello ${name}! Today is ${today}`;
     }
-    return `Hello ${name}!`; // Graceful degradation
+    return `Hello ${name}!`;  // Graceful degradation
   },
 });
 ```
@@ -77,10 +80,10 @@ agent.addTool({
 
 ### Dependency Injection Types
 
-| Type           | Use Case               |
-| -------------- | ---------------------- |
-| `McpMeshTool` | Tool calls via proxy   |
-| `null`         | Dependency unavailable |
+| Type            | Use Case                               |
+| --------------- | -------------------------------------- |
+| `McpMeshTool`  | Tool calls via proxy                   |
+| `null`          | Dependency unavailable                 |
 
 ## mesh.llm()
 
@@ -92,12 +95,12 @@ import { z } from "zod";
 agent.addTool({
   name: "assist",
   ...mesh.llm({
-    provider: { capability: "llm", tags: ["+claude"] }, // LLM provider selector
-    maxIterations: 5, // Max agentic loop iterations
-    systemPrompt: "file://prompts/agent.hbs", // Handlebars template
-    contextParam: "ctx", // Parameter name for context
-    filter: [{ tags: ["tools"] }], // Tool filter for discovery
-    filterMode: "all", // "all", "best_match", or "*"
+    provider: { capability: "llm", tags: ["+claude"] },  // LLM provider selector
+    maxIterations: 5,                    // Max agentic loop iterations
+    systemPrompt: "file://prompts/agent.hbs",  // Handlebars template
+    contextParam: "ctx",                 // Parameter name for context
+    filter: [{ tags: ["tools"] }],       // Tool filter for discovery
+    filterMode: "all",                   // "all", "best_match", or "*"
   }),
   capability: "smart_assistant",
   description: "LLM-powered assistant",
@@ -128,10 +131,10 @@ Creates a zero-code LLM provider wrapping LiteLLM-compatible APIs.
 agent.addTool({
   name: "claude_chat",
   ...mesh.llmProvider({
-    model: "anthropic/claude-sonnet-4-5", // LiteLLM model string
-    capability: "llm", // Capability name
-    tags: ["llm", "claude", "provider"], // Discovery tags
-    version: "1.0.0", // Provider version
+    model: "anthropic/claude-sonnet-4-5",  // LiteLLM model string
+    capability: "llm",                      // Capability name
+    tags: ["llm", "claude", "provider"],    // Discovery tags
+    version: "1.0.0",                       // Provider version
   }),
 });
 ```
@@ -147,22 +150,19 @@ import { mesh } from "@mcpmesh/sdk";
 const app = express();
 app.use(express.json());
 
-app.post(
-  "/chat",
-  mesh.route(
-    [{ capability: "avatar_chat" }], // Dependencies
-    async (req, res, { avatar_chat }) => {
-      if (!avatar_chat) {
-        return res.status(503).json({ error: "Service unavailable" });
-      }
-      const result = await avatar_chat({
-        message: req.body.message,
-        user_email: "user@example.com",
-      });
-      res.json({ response: result.message });
-    },
-  ),
-);
+app.post("/chat", mesh.route(
+  [{ capability: "avatar_chat" }],  // Dependencies
+  async (req, res, { avatar_chat }) => {
+    if (!avatar_chat) {
+      return res.status(503).json({ error: "Service unavailable" });
+    }
+    const result = await avatar_chat({
+      message: req.body.message,
+      user_email: "user@example.com",
+    });
+    res.json({ response: result.message });
+  }
+));
 
 app.listen(3000);
 ```
@@ -196,7 +196,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "calculator",
-  port: 9000,
+  httpPort: 9000,
 });
 
 // Basic tool

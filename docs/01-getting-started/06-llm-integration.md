@@ -705,7 +705,7 @@ meshctl list --wide  # See all capabilities and tags
 
 - **[Advanced Patterns](../02-local-development.md)** - Multi-LLM orchestration
 - **[Observability](../07-observability.md)** - Monitor LLM calls and performance
-- **[Production Deployment](../06-helm-deployment.md)** - Deploy LLM agents to Kubernetes
+- **[Production Deployment](../04-kubernetes-basics.md)** - Deploy LLM agents to Kubernetes
 
 ---
 

@@ -14,7 +14,7 @@ Full-featured Python SDK with decorators.
 - Jinja2 template support
 - pytest integration
 
-[:material-arrow-right: Python Guide](../python/local-development/){ .md-button }
+[:material-arrow-right: Python Guide](python/local-development/index.md){ .md-button }
 
 </div>
 
@@ -27,7 +27,7 @@ Modern TypeScript SDK with full type safety.
 - Zod schema validation
 - Vitest integration
 
-[:material-arrow-right: TypeScript Guide](../typescript/local-development/){ .md-button }
+[:material-arrow-right: TypeScript Guide](typescript/local-development/index.md){ .md-button }
 
 </div>
 </div>
@@ -377,5 +377,5 @@ meshctl status
 ## Next Steps
 
 - [Docker Deployment](03-docker-deployment.md) - Package and deploy your agents
-- [Kubernetes Deployment](06-helm-deployment.md) - Scale to production
+- [Kubernetes Deployment](04-kubernetes-basics.md) - Scale to production
 - [Mesh Decorators Reference](mesh-decorators.md) - All decorator options

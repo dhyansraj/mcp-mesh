@@ -1,3 +1,11 @@
+<div class="runtime-crossref">
+  <span class="runtime-crossref-icon">🐍</span>
+  <span>Looking for Python? See <a href="../../python/capabilities-tags/">Python Capabilities</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">📘</span>
+  <span>Looking for TypeScript? See <a href="../../typescript/capabilities-tags/">TypeScript Capabilities</a></span>
+</div>
+
 # Capabilities System (Java/Spring Boot)
 
 > Named services that agents provide for discovery and dependency injection

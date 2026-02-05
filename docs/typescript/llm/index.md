@@ -1,6 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See <a href="../../python/llm/index/">Python LLM Integration</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/llm/index/">Java LLM Integration</a></span>
 </div>
 
 # LLM Integration (TypeScript)
@@ -33,7 +36,7 @@ import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Smart Assistant", version: "1.0.0" });
-const agent = mesh(server, { name: "smart-assistant", port: 9003 });
+const agent = mesh(server, { name: "smart-assistant", httpPort: 9003 });
 
 agent.addTool({
   name: "assist",
@@ -172,7 +175,7 @@ Create zero-code LLM providers with `agent.addLlmProvider()`:
 import { FastMCP, mesh } from "@mcpmesh/sdk";
 
 const server = new FastMCP({ name: "Claude Provider", version: "1.0.0" });
-const agent = mesh(server, { name: "claude-provider", port: 9001 });
+const agent = mesh(server, { name: "claude-provider", httpPort: 9001 });
 
 // Single provider (default name: "process_chat")
 agent.addLlmProvider({
@@ -230,7 +233,10 @@ import { z } from "zod";
 
 // 1. Create LLM Provider
 const providerServer = new FastMCP({ name: "Claude", version: "1.0.0" });
-const provider = mesh(providerServer, { name: "claude-provider", port: 9001 });
+const provider = mesh(providerServer, {
+  name: "claude-provider",
+  httpPort: 9001,
+});
 
 provider.addLlmProvider({
   name: "chat",
@@ -241,7 +247,7 @@ provider.addLlmProvider({
 
 // 2. Create Tool Agent
 const toolServer = new FastMCP({ name: "Calculator", version: "1.0.0" });
-const calculator = mesh(toolServer, { name: "calculator", port: 9002 });
+const calculator = mesh(toolServer, { name: "calculator", httpPort: 9002 });
 
 calculator.addTool({
   name: "add",
@@ -254,7 +260,10 @@ calculator.addTool({
 
 // 3. Create LLM Agent
 const agentServer = new FastMCP({ name: "Smart Assistant", version: "1.0.0" });
-const assistant = mesh(agentServer, { name: "smart-assistant", port: 9003 });
+const assistant = mesh(agentServer, {
+  name: "smart-assistant",
+  httpPort: 9003,
+});
 
 assistant.addTool({
   name: "assist",
