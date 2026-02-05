@@ -279,3 +279,4 @@ tests/lib-tests/out/
 or-tests/
 .envrc
 java-sdk-mcp-integration.md
+.python-version
