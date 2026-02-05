@@ -343,7 +343,7 @@ make install-dev
 
 ### 🏭 I want production deployment (30 minutes)
 
-1. **[Kubernetes Guide](04-kubernetes-basics.md)** - Production-ready setup
+1. **[Kubernetes Guide](04-kubernetes-basics.md)** - Setup
 2. **Deploy to cluster** - Scale and monitor
 3. **Test resilience** - Failure scenarios
 4. **Monitor with meshctl** - Operational insights

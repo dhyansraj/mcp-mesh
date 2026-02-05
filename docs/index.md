@@ -3,9 +3,9 @@ title: Home
 template: home.html
 ---
 
-# Enterprise-Grade Distributed Service Mesh for AI Agents
+# Distributed Service Mesh for AI Agents
 
-MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into an enterprise-grade distributed system. Build production-ready AI agent networks with zero boilerplate.
+MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into a distributed system. Build AI agent networks with zero boilerplate.
 
 !!! tip "Complete Platform for AI Agents"
 MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
@@ -122,7 +122,7 @@ Tag-based service resolution with version constraints. Agents automatically find
 </div>
 <div class="feature-card" markdown>
 ### :material-kubernetes: Kubernetes Native
-Production-ready Helm charts with horizontal scaling, health checks, and observability.
+Helm charts with horizontal scaling, health checks, and observability.
 </div>
 <div class="feature-card" markdown>
 ### :arrows_counterclockwise: Dynamic Updates
@@ -162,9 +162,9 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 === "For DevOps Teams"
 
-    **Production-ready AI infrastructure out of the box.**
+    **AI infrastructure out of the box.**
 
-    - Kubernetes-native with battle-tested Helm charts
+    - Kubernetes-native with Helm charts
     - Enterprise observability with Grafana, Tempo, and Redis
     - Zero-touch operations with auto-discovery
     - Scale from 2 agents to 200+ with same complexity
@@ -184,7 +184,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
     - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
     - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
-    - **Risk Mitigation**: Battle-tested enterprise patterns ensure reliable AI deployments that scale with your business
+    - **Risk Mitigation**: Proven patterns help ensure reliable AI deployments that scale with your business
     - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
 
     Turn your AI strategy from "promising experiments" to "competitive advantage in production."

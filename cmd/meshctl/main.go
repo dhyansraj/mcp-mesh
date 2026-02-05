@@ -18,6 +18,8 @@ var rootCmd = &cobra.Command{
 	Short: "MCP Mesh - Framework for building MCP agents",
 	Long: `MCP Mesh - Framework for building MCP agents with automatic service discovery and dependency injection.
 
+Build polyglot agent networks in Python, Java, and TypeScript.
+
 Scaffold agents from templates, run them locally or in containers. Agents discover each other
 and inject dependencies automatically—no central orchestrator or manual wiring needed.`,
 }

@@ -83,7 +83,7 @@ See `meshctl start --help` and `meshctl stop --help` for options.
 
 ### Generate Dockerfile (Recommended)
 
-`meshctl scaffold` automatically generates a production-ready Dockerfile:
+`meshctl scaffold` automatically generates a Dockerfile:
 
 ```bash
 # Create agent with Dockerfile

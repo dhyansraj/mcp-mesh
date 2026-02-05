@@ -71,7 +71,7 @@ meshctl stop               # Stop all
 
 ### Generated Dockerfile
 
-`meshctl scaffold --lang typescript` generates a production-ready Dockerfile:
+`meshctl scaffold --lang typescript` generates a Dockerfile:
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent

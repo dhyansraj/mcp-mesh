@@ -1,6 +1,6 @@
 # @mcpmesh/cli
 
-CLI for **MCP Mesh** - Enterprise-Grade Distributed Service Mesh for AI Agents.
+CLI for **MCP Mesh** - Distributed Service Mesh for AI Agents.
 
 ## Installation
 
@@ -42,7 +42,7 @@ mcp-mesh-registry --help
 
 ## What is MCP Mesh?
 
-MCP Mesh is an enterprise-grade distributed service mesh built on the Model Context Protocol (MCP). It enables:
+MCP Mesh is a distributed service mesh built on the Model Context Protocol (MCP). It enables:
 
 - **AI Agent Orchestration** - Connect and coordinate multiple AI agents
 - **Service Discovery** - Automatic registration and capability-based routing
