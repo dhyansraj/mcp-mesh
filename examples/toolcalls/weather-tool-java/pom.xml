@@ -21,7 +21,7 @@
 
     <properties>
         <java.version>17</java.version>
-        <mcp-mesh.version>0.9.0-beta.10</mcp-mesh.version>
+        <mcp-mesh.version>0.9.0-beta.10-SNAPSHOT</mcp-mesh.version>
     </properties>
 
     <dependencies>
@@ -58,7 +58,6 @@
         </plugins>
     </build>
 
-    <!-- Local repository for mcp-mesh artifacts (development) -->
     <repositories>
         <repository>
             <id>local-maven-repo</id>
