@@ -1,0 +1,118 @@
+# Test Case: Claude Provider Integration - Java
+# Verifies Claude LLM provider using Java Spring AI @MeshLlm annotation
+# Unlike UC09 tc07 which only tests registration, this tests end-to-end LLM invocation
+
+name: "Claude Provider Integration - Java"
+description: "Test Claude LLM provider end-to-end with Java Spring Boot"
+tags:
+  - llm
+  - claude
+  - provider
+  - java
+timeout: 300
+# Note: Skip this test with --skip-tag llm if no API key is available
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-claude-provider /workspace/
+      ls -la /workspace/java-claude-provider/
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/java-claude-provider/.env
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+
+  # Start the claude-provider with env file
+  - name: "Start claude-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-claude-provider --env-file /workspace/java-claude-provider/.env -d
+      echo "Claude provider starting via meshctl"
+    capture: start_output
+
+  # Wait for provider to register (Java is slow to start)
+  - name: "Wait for provider registration"
+    handler: shell
+    command: |
+      echo "Waiting for claude-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "claude-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 90s"
+      meshctl logs java-claude-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call claude_provider with a simple question
+  - name: "Call claude_provider - capital of France"
+    handler: shell
+    command: |
+      meshctl call claude_provider \
+        '{"request": {"messages": [{"role": "user", "content": "What is the capital of France?"}]}}'
+    capture: llm_response
+
+  # Stop provider
+  - name: "Stop provider"
+    handler: shell
+    command: "meshctl stop"
+
+assertions:
+  # Provider started successfully
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  # Tool is registered
+  - expr: "${captured.tools_output} contains 'claude_provider'"
+    message: "claude_provider tool should be listed"
+
+  # Tool has correct capability
+  - expr: "${captured.tools_output} contains 'llm'"
+    message: "Tool should have llm capability"
+
+  # LLM response contains Paris
+  - expr: "${captured.llm_response} contains 'Paris'"
+    message: "LLM response should contain Paris"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
