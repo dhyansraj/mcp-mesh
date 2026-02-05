@@ -169,7 +169,7 @@ MCP agents expose a JSON-RPC 2.0 API over HTTP. Java agents use the same protoco
 ### List Available Tools
 
 ```bash
-curl -s -X POST http://localhost:9000/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -183,7 +183,7 @@ curl -s -X POST http://localhost:9000/mcp \
 ### Call a Tool
 
 ```bash
-curl -s -X POST http://localhost:9000/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{

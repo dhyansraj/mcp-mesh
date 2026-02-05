@@ -55,7 +55,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     import org.springframework.boot.SpringApplication;
     import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-    @MeshAgent(name = "my-service", version = "1.0.0", port = 9000)
+    @MeshAgent(name = "my-service", version = "1.0.0", port = 8080)
     @SpringBootApplication
     public class MyServiceApplication {
 
@@ -90,7 +90,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     import { z } from "zod";
 
     const server = new FastMCP({ name: "my-service", version: "1.0.0" });
-    const agent = mesh(server, { name: "my-service", port: 9000 });
+    const agent = mesh(server, { name: "my-service", port: 8080 });
 
     agent.addTool({
       name: "greet",

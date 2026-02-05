@@ -58,7 +58,7 @@ def greet(name: str) -> str:
 @mesh.agent(
     name="greeter",
     version="1.0.0",
-    http_port=9000,
+    http_port=8080,
 )
 class GreeterAgent:
     pass

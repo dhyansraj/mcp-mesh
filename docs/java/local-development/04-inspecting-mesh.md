@@ -2,10 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">&#x1F40D;</span>
-  <span>Looking for Python? See <a href="../../python/local-development/04-inspecting-mesh/">Python Inspect Mesh</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/04-inspecting-mesh/">Python Inspect Mesh</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">&#x1F4D8;</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/04-inspecting-mesh/">TypeScript Inspect Mesh</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/04-inspecting-mesh/">TypeScript Inspect Mesh</a></span>
 </div>
 
 > View agents, tools, and dependencies with `meshctl list` and `meshctl status`

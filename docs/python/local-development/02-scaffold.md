@@ -1,8 +1,11 @@
 # Scaffold Agents (Python)
 
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/02-scaffold/">Java Scaffold</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/02-scaffold/">TypeScript Scaffold</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/02-scaffold/">TypeScript Scaffold</a></span>
 </div>
 
 > Generate agents with `meshctl scaffold`

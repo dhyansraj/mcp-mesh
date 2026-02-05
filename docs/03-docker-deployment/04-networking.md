@@ -8,21 +8,20 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
 
 ## How It Works
 
+```mermaid
+graph TD
+    subgraph DN["Docker Network"]
+        R[Registry :8000]
+        A[Agent A :8080]
+        B[Agent B :8081]
+
+        A -->|register| R
+        B -->|register| R
+        A <-->|call| B
+    end
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Network                        │
-│                                                          │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
-│  │ Registry │◄───│ Agent A  │    │ Agent B  │          │
-│  │ :8000    │    │ :8080    │◄──►│ :8081    │          │
-│  └──────────┘    └──────────┘    └──────────┘          │
-│       ▲                               │                 │
-│       └───────────────────────────────┘                 │
-│                                                          │
-│  Agents register with registry, discover each other     │
-│  automatically. No depends_on needed between agents.    │
-└─────────────────────────────────────────────────────────┘
-```
+
+> Agents register with the registry and discover each other automatically. No `depends_on` needed between agents.
 
 ## Simple Setup
 

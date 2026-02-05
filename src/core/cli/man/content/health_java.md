@@ -123,7 +123,7 @@ public String myTool(McpMeshTool<String> dateService) {
 The MCP Mesh Spring Boot starter automatically integrates with Spring Boot's health actuator. The `/actuator/health` endpoint includes mesh status:
 
 ```bash
-curl http://localhost:9000/actuator/health
+curl http://localhost:8080/actuator/health
 ```
 
 ## Configuration

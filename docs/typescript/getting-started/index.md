@@ -42,7 +42,7 @@ import { mesh, MeshAgent } from "@mcpmesh/sdk";
 const app = new MeshAgent({
   name: "greeter",
   version: "1.0.0",
-  httpPort: 9000,
+  httpPort: 8080,
 });
 
 app.tool(

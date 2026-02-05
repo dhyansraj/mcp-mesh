@@ -2,10 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">&#x1F40D;</span>
-  <span>Looking for Python? See <a href="../../python/local-development/05-calling-tools/">Python Call Tools</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/05-calling-tools/">Python Call Tools</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">&#x1F4D8;</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/05-calling-tools/">TypeScript Call Tools</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/05-calling-tools/">TypeScript Call Tools</a></span>
 </div>
 
 > Call tools and trace distributed calls with `meshctl call`, `meshctl trace`, and `meshctl logs`

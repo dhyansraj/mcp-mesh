@@ -196,7 +196,7 @@ const server = new FastMCP({
 
 const agent = mesh(server, {
   name: "calculator",
-  httpPort: 9000,
+  httpPort: 8080,
 });
 
 // Basic tool

@@ -2,10 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">&#x1F40D;</span>
-  <span>Looking for Python? See <a href="../../python/local-development/03-running-agents/">Python Run Agents</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/03-running-agents/">Python Run Agents</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">&#x1F4D8;</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/03-running-agents/">TypeScript Run Agents</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/03-running-agents/">TypeScript Run Agents</a></span>
 </div>
 
 > Start Java agents with `meshctl start`
@@ -17,7 +17,7 @@
 meshctl start hello/
 ```
 
-`meshctl` detects the `pom.xml`, runs `mvn package` if needed, and starts the agent JAR. The registry starts automatically on port 8000 if not already running.
+`meshctl` detects the `pom.xml`, builds via Maven, and starts the agent. It also starts the registry automatically if not already running.
 
 ## Debug Mode
 
@@ -103,7 +103,7 @@ meshctl start --registry-url http://registry:8000 hello/
 
 ## Alternative: Maven / JAR / IDE
 
-For cases where you need to run outside `meshctl` (e.g., attaching a Java debugger from your IDE):
+You can also run agents directly — they register with the mesh the same way and appear in `meshctl list/status/call`:
 
 ```bash
 # 1. Start the registry separately
@@ -122,8 +122,8 @@ java -jar target/hello-1.0.0-SNAPSHOT.jar
 #     Just run the main class with Spring Boot run configuration
 ```
 
-!!! info "When to use Maven/IDE directly"
-Running via `meshctl start` is preferred because it handles registry lifecycle, port assignment, and log management. Use Maven or IDE only when you need IDE debugging (breakpoints, step-through) or a custom JVM configuration.
+!!! tip "meshctl vs direct"
+    All approaches register with the mesh identically. `meshctl start` adds convenience flags (`--debug`, `--watch`, `--env-file`, `--detach`) that simplify the dev workflow.
 
 ## All Options
 

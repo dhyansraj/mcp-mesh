@@ -89,7 +89,7 @@ A single agent class can declare multiple capabilities:
 
 ```java
 @MeshAgent(name = "math-service", version = "1.0.0",
-           description = "Math operations", port = 9000)
+           description = "Math operations", port = 8080)
 @SpringBootApplication
 public class MathAgentApplication {
 

@@ -45,24 +45,15 @@ open http://localhost:3000
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          Data Flow                                       │
-│                                                                          │
-│  ┌─────────┐    publish     ┌─────────┐    consume    ┌──────────┐     │
-│  │ Agent A │───────────────►│  Redis  │◄──────────────│ Registry │     │
-│  │ Agent B │    events      │ Stream  │    events     │          │     │
-│  │ Agent C │                │         │               │          │     │
-│  └─────────┘                └─────────┘               └────┬─────┘     │
-│                                                            │            │
-│                                                   export   │            │
-│                                                   traces   │            │
-│                                                            ▼            │
-│  ┌─────────┐                                        ┌──────────┐       │
-│  │ Grafana │◄───────────────────────────────────────│  Tempo   │       │
-│  │         │              query traces              │          │       │
-│  └─────────┘                                        └──────────┘       │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph DF["Data Flow"]
+        direction LR
+        A["Agent A<br/>Agent B<br/>Agent C"] -->|publish<br/>events| RS[Redis<br/>Stream]
+        RS -->|consume<br/>events| R[Registry]
+        R -->|export<br/>traces| T[Tempo]
+        G[Grafana] -->|query traces| T
+    end
 ```
 
 ## Configuration

@@ -1,8 +1,11 @@
 # Call & Debug Tools (Python)
 
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/05-calling-tools/">Java Call Tools</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/05-calling-tools/">TypeScript Call Tools</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/05-calling-tools/">TypeScript Call Tools</a></span>
 </div>
 
 > Call tools and trace distributed calls with `meshctl call`, `meshctl trace`, and `meshctl logs`

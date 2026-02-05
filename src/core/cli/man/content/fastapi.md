@@ -162,7 +162,7 @@ The backend will:
 
 | Aspect                | @mesh.tool   | @mesh.route                     |
 | --------------------- | ------------ | ------------------------------- |
-| Registers with mesh   | Yes          | No                              |
+| Registers with mesh   | Yes          | Yes (as Type API)               |
 | Provides capabilities | Yes          | No                              |
 | Consumes capabilities | Yes          | Yes                             |
 | Has heartbeat         | Yes          | Yes (for dependency resolution) |

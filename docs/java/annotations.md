@@ -33,7 +33,7 @@ Configures the agent identity. Applied to your `@SpringBootApplication` class.
     name = "my-service",          // Required: unique agent identifier
     version = "1.0.0",            // Semantic version
     description = "Service desc", // Human-readable description
-    port = 9000                   // HTTP server port
+    port = 8080                   // HTTP server port
 )
 @SpringBootApplication
 public class MyAgentApplication {
@@ -297,7 +297,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @MeshAgent(name = "calculator", version = "1.0.0",
-           description = "Calculator with logging", port = 9000)
+           description = "Calculator with logging", port = 8080)
 @SpringBootApplication
 public class CalculatorApplication {
 

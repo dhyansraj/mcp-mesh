@@ -2,10 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">&#x1F40D;</span>
-  <span>Looking for Python? See <a href="../../python/local-development/troubleshooting/">Python Troubleshooting</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/troubleshooting/">Python Troubleshooting</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">&#x1F4D8;</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/troubleshooting/">TypeScript Troubleshooting</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/troubleshooting/">TypeScript Troubleshooting</a></span>
 </div>
 
 > Common issues and solutions for MCP Mesh Java development
@@ -156,14 +156,14 @@ Use `meshctl status <agent>` to see which agents are wired to which capabilities
 
 ### Port Already in Use
 
-**Symptom:** `Web server failed to start. Port 9000 was already in use.`
+**Symptom:** `Web server failed to start. Port 8080 was already in use.`
 
 ```bash
 # Find what's using the port
-lsof -i :9000
+lsof -i :8080
 
 # Kill it
-kill $(lsof -t -i:9000)
+kill $(lsof -t -i:8080)
 
 # Or let meshctl assign a port (recommended for local dev)
 meshctl start hello/

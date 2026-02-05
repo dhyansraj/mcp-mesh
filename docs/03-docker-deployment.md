@@ -102,10 +102,10 @@ meshctl scaffold --compose --dry-run -d ./agents
           context: ./my-agent
           dockerfile: Dockerfile
         ports:
-          - "9000:9000"
+          - "8080:8080"
         environment:
           - MCP_MESH_REGISTRY_URL=http://registry:8000
-          - MCP_MESH_HTTP_PORT=9000
+          - MCP_MESH_HTTP_PORT=8080
         depends_on:
           registry:
             condition: service_healthy
@@ -250,7 +250,7 @@ If you didn't use scaffold, here's a sample Dockerfile:
     WORKDIR /app
     COPY target/*.jar app.jar
 
-    EXPOSE 9000
+    EXPOSE 8080
     CMD ["java", "-jar", "app.jar"]
     ```
 

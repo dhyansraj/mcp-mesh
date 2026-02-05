@@ -2,7 +2,7 @@
 
 > Use mesh dependency injection in Express backends with mesh.route()
 
-**Note:** This page covers TypeScript/Express integration. For Python/FastAPI, see `meshctl man fastapi`.
+**Note:** This page covers TypeScript/Express integration. For Python/FastAPI, see `meshctl man fastapi`. For Java/Spring Boot, see `@MeshRoute`.
 
 ## Overview
 
@@ -197,7 +197,7 @@ meshApp.start();
 
 | Aspect                | mesh() (MCP Agent)   | mesh.route() (Express)              |
 | --------------------- | -------------------- | ----------------------------------- |
-| Registers with mesh   | Yes                  | No                                  |
+| Registers with mesh   | Yes                  | Yes (as Type API)                   |
 | Provides capabilities | Yes                  | No                                  |
 | Consumes capabilities | Yes                  | Yes                                 |
 | Has heartbeat         | Yes                  | Yes (for dependency resolution)     |

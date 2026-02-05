@@ -140,51 +140,32 @@ When agents join/leave, the registry updates topology:
 
 ### Local Development
 
-```
-┌─────────────────────────────────┐
-│           Developer Machine     │
-│  ┌─────────┐  ┌─────────┐      │
-│  │ Agent 1 │  │ Agent 2 │      │
-│  └────┬────┘  └────┬────┘      │
-│       │            │            │
-│       └──────┬─────┘            │
-│              │                  │
-│       ┌──────▼─────┐            │
-│       │  Registry  │            │
-│       └────────────┘            │
-└─────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph L_DM["Developer Machine"]
+        L_A1[Agent 1] --> L_R[Registry]
+        L_A2[Agent 2] --> L_R
+    end
 ```
 
 ### Docker Compose
 
-```
-┌─────────────────────────────────┐
-│         Docker Network          │
-│  ┌─────────┐  ┌─────────┐      │
-│  │ agent-1 │  │ agent-2 │      │
-│  └────┬────┘  └────┬────┘      │
-│       └──────┬─────┘            │
-│       ┌──────▼─────┐            │
-│       │  registry  │            │
-│       └────────────┘            │
-└─────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph D_DN["Docker Network"]
+        D_A1[agent-1] --> D_R[registry]
+        D_A2[agent-2] --> D_R
+    end
 ```
 
 ### Kubernetes
 
-```
-┌─────────────────────────────────────────┐
-│              Kubernetes Cluster         │
-│  ┌──────────────┐  ┌──────────────┐    │
-│  │  Agent Pod   │  │  Agent Pod   │    │
-│  │  (replicas)  │  │  (replicas)  │    │
-│  └──────┬───────┘  └──────┬───────┘    │
-│         └────────┬────────┘             │
-│           ┌──────▼──────┐               │
-│           │   Registry  │               │
-│           │   Service   │               │
-│           └─────────────┘               │
-└─────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph K_KC["Kubernetes Cluster"]
+        K_A1["Agent Pod (replicas)"] --> K_R[Registry Service]
+        K_A2["Agent Pod (replicas)"] --> K_R
+    end
 ```
 
 ## Design Principles

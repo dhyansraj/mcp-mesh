@@ -44,7 +44,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @MeshAgent(name = "greeter", version = "1.0.0",
-           description = "Simple greeting service", port = 9000)
+           description = "Simple greeting service", port = 8080)
 @SpringBootApplication
 public class GreeterAgentApplication {
 

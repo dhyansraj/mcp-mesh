@@ -19,7 +19,7 @@ MCP Mesh supports multiple deployment options to fit your infrastructure needs. 
 - Quick setup with Docker Compose
 - Pre-built images available
 - Auto-generated compose files with `meshctl scaffold`
-- Great for development and CI/CD
+- Great for development and testing
 
 ```bash
 # Quick start

@@ -2,10 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">&#x1F40D;</span>
-  <span>Looking for Python? See <a href="../../python/local-development/02-scaffold/">Python Scaffold</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/02-scaffold/">Python Scaffold</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">&#x1F4D8;</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/02-scaffold/">TypeScript Scaffold</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/02-scaffold/">TypeScript Scaffold</a></span>
 </div>
 
 > Generate Java agents with `meshctl scaffold`
