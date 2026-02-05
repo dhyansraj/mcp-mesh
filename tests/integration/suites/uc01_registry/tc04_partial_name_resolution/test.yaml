@@ -14,6 +14,8 @@ tags:
   - discovery
   - meshctl
   - partial-name
+  - python
+  - typescript
 timeout: 180
 
 pre_run:

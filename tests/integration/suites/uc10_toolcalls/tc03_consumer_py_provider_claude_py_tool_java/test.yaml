@@ -11,7 +11,7 @@ name: "Consumer PY -> Provider CLAUDE py -> Tool JAVA"
 description: "Test py consumer with claude py provider calling java tool"
 tags:
   - toolcall
-  - py
+  - python
   - claude
   - java
   - phase1

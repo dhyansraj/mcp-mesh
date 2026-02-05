@@ -13,7 +13,7 @@ tags:
   - toolcall
   - java
   - gemini
-  - py
+  - python
   - phase1
 timeout: 300
 pre_run:

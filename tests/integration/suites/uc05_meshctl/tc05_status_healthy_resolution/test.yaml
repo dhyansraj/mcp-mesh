@@ -13,6 +13,7 @@ tags:
   - status
   - resolution
   - health
+  - python
 timeout: 120
 pre_run:
   - routine: global.setup_for_python_agent

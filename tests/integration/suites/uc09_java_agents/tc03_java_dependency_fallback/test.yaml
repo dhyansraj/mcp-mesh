@@ -15,6 +15,7 @@ tags:
   - java
   - dependency
   - fallback
+  - python
 timeout: 360
 
 pre_run:

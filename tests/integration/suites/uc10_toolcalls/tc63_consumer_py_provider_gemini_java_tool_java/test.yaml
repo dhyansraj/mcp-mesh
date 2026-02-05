@@ -11,7 +11,7 @@ name: "Consumer PY -> Provider GEMINI java -> Tool JAVA"
 description: "Test py consumer with gemini java provider calling java tool"
 tags:
   - toolcall
-  - py
+  - python
   - gemini
   - java
   - java

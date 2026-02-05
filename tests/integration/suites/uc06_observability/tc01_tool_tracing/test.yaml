@@ -16,6 +16,8 @@ tags:
   - tracing
   - tempo
   - redis
+  - python
+  - typescript
 timeout: 180
 
 pre_run:

@@ -11,9 +11,9 @@ name: "Consumer TS -> Provider CLAUDE py -> Tool PY"
 description: "Test ts consumer with claude py provider calling py tool"
 tags:
   - toolcall
-  - ts
+  - typescript
   - claude
-  - py
+  - python
   - phase1
 timeout: 300
 

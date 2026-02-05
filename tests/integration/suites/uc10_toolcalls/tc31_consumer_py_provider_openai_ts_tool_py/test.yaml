@@ -11,9 +11,9 @@ name: "Consumer PY -> Provider OPENAI ts -> Tool PY"
 description: "Test py consumer with openai ts provider calling py tool"
 tags:
   - toolcall
-  - py
+  - python
   - openai
-  - ts
+  - typescript
   - phase2
 timeout: 300
 

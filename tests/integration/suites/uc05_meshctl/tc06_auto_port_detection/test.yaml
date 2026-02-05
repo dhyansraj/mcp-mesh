@@ -13,6 +13,7 @@ tags:
   - port
   - registry
   - auto-port
+  - python
 timeout: 120
 
 pre_run:

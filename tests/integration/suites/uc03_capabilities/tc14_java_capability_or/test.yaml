@@ -1,0 +1,289 @@
+# Test Case: tc14_java_capability_or
+# Tests Java capability OR logic and multiple implementations.
+# Consolidates 2 scenarios into 1 test to save Maven build time.
+#
+# Phase A (Multiple Impl): all providers + consumer -> fetch_combined -> JAVA_ACCURATE
+# Phase B (OR Logic): swap providers to verify any matching provider works
+
+name: "Java Capability OR + Multiple Implementations"
+description: "Verify Java capability selection with multiple implementations and OR logic"
+tags:
+  - capabilities
+  - tags
+  - java
+  - or-logic
+  - multiple-implementations
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy all artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-fast-provider /workspace/
+      cp -r /uc-artifacts/java-accurate-provider /workspace/
+      cp -r /uc-artifacts/java-deprecated-provider /workspace/
+      cp -r /uc-artifacts/java-tag-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies (may use cache from tc13)
+  - name: "Install fast-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-fast-provider
+    timeout: 600
+
+  - name: "Install accurate-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-accurate-provider
+    timeout: 600
+
+  - name: "Install deprecated-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-deprecated-provider
+    timeout: 600
+
+  - name: "Install tag-consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-tag-consumer
+    timeout: 600
+
+  # ========== Phase A: Multiple Implementations ==========
+  - name: "Phase A: Start all providers"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider -d
+      meshctl start /workspace/java-accurate-provider -d
+      meshctl start /workspace/java-deprecated-provider -d
+      echo "All providers starting"
+    capture: start_providers_a
+
+  - name: "Phase A: Wait for all providers"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "java-fast-provider" && \
+           echo "$LIST" | grep -q "java-accurate-provider" && \
+           echo "$LIST" | grep -q "java-deprecated-provider"; then
+          echo "All providers registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Not all providers registered"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_providers_a
+    timeout: 120
+
+  - name: "Phase A: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer -d
+      echo "Consumer starting"
+    capture: start_consumer_a
+
+  - name: "Phase A: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_a
+    timeout: 120
+
+  - name: "Phase A: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "Phase A: Call fetch_combined (require api, prefer accurate, exclude deprecated)"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_combined '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_DEPRECATED"; then
+        echo "FAIL_A: Should NOT match deprecated provider"
+        exit 1
+      elif echo "$RESULT" | grep -q "JAVA_ACCURATE"; then
+        echo "PASS_A: Selected accurate provider (preferred, not deprecated)"
+      else
+        echo "FAIL_A: Expected JAVA_ACCURATE"
+        exit 1
+      fi
+    capture: phase_a_result
+    timeout: 60
+
+  - name: "Phase A: Stop all agents"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      sleep 5
+    capture: stop_a
+
+  # ========== Phase B: OR Logic ==========
+  # Start only fast-provider + consumer, verify fetch_required matches fast
+  - name: "Phase B1: Start fast-provider only"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider -d
+      echo "Fast provider starting"
+    capture: start_fast_b
+
+  - name: "Phase B1: Wait for fast-provider"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-fast-provider"; then
+          echo "Fast provider registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Fast provider did not register"
+      exit 1
+    capture: wait_fast_b
+    timeout: 120
+
+  - name: "Phase B1: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer -d
+      echo "Consumer starting"
+    capture: start_consumer_b1
+
+  - name: "Phase B1: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_b1
+    timeout: 120
+
+  - name: "Phase B1: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "Phase B1: Call fetch_required with fast-provider"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_FAST"; then
+        echo "PASS_B1: fast-provider matched fetch_required"
+      else
+        echo "FAIL_B1: Expected JAVA_FAST"
+        exit 1
+      fi
+    capture: phase_b1_result
+    timeout: 60
+
+  - name: "Phase B1: Stop all agents"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      sleep 5
+    capture: stop_b1
+
+  # Now start only accurate-provider + consumer, verify fetch_required matches accurate
+  - name: "Phase B2: Start accurate-provider only"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-accurate-provider -d
+      echo "Accurate provider starting"
+    capture: start_accurate_b
+
+  - name: "Phase B2: Wait for accurate-provider"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-accurate-provider"; then
+          echo "Accurate provider registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Accurate provider did not register"
+      exit 1
+    capture: wait_accurate_b
+    timeout: 120
+
+  - name: "Phase B2: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer -d
+      echo "Consumer starting"
+    capture: start_consumer_b2
+
+  - name: "Phase B2: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_b2
+    timeout: 120
+
+  - name: "Phase B2: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "Phase B2: Call fetch_required with accurate-provider"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_ACCURATE"; then
+        echo "PASS_B2: accurate-provider matched fetch_required"
+      else
+        echo "FAIL_B2: Expected JAVA_ACCURATE"
+        exit 1
+      fi
+    capture: phase_b2_result
+    timeout: 60
+
+assertions:
+  - expr: "${captured.phase_a_result} contains 'PASS_A'"
+    message: "Phase A: Should select accurate provider with combined filters"
+
+  - expr: "${captured.phase_b1_result} contains 'PASS_B1'"
+    message: "Phase B1: fetch_required should match fast-provider"
+
+  - expr: "${captured.phase_b2_result} contains 'PASS_B2'"
+    message: "Phase B2: fetch_required should match accurate-provider"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

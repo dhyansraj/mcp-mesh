@@ -9,6 +9,7 @@ tags:
   - gemini
   - typescript
   - format
+  - python
 timeout: 180
 # Note: Skip this test with --skip-tag llm if no API key is available
 pre_run:

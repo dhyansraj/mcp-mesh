@@ -11,9 +11,9 @@ name: "Consumer PY -> Provider GEMINI py -> Tool PY"
 description: "Test py consumer with gemini py provider calling py tool"
 tags:
   - toolcall
-  - py
+  - python
   - gemini
-  - py
+  - python
   - phase1
 timeout: 300
 pre_run:

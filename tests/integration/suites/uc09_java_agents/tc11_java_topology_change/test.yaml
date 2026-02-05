@@ -18,6 +18,7 @@ tags:
   - java
   - topology
   - rewiring
+  - python
 timeout: 420
 
 pre_run:

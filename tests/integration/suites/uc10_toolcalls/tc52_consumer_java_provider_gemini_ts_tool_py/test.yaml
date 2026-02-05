@@ -13,8 +13,9 @@ tags:
   - toolcall
   - java
   - gemini
-  - ts
+  - typescript
   - phase2
+  - python
 timeout: 300
 pre_run:
   - routine: global.setup_for_java_agent

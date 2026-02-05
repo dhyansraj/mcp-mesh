@@ -13,7 +13,7 @@ tags:
   - toolcall
   - java
   - openai
-  - ts
+  - typescript
   - phase2
 timeout: 300
 

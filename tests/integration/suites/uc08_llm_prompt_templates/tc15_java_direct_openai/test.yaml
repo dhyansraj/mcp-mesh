@@ -1,0 +1,112 @@
+# Test Case: tc15_java_direct_openai
+# Tests Java agent with direct OpenAI LLM calls (no mesh delegation).
+#
+# Scenario:
+#   - Start openai-chatbot agent with OPENAI_API_KEY
+#   - Call chat tool directly
+#   - Verify response and source contains "direct:openai"
+
+name: "Java Direct OpenAI"
+description: "Verify Java agent can make direct OpenAI LLM calls"
+tags:
+  - llm
+  - openai
+  - direct
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-direct-openai /workspace/
+      ls -la /workspace/java-direct-openai/
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-direct-openai
+    timeout: 600
+
+  # Start agent
+  - name: "Start openai-chatbot agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-direct-openai --env-file /workspace/.env -d
+      echo "OpenAI chatbot starting"
+    capture: start_output
+
+  # Wait for agent to register
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for openai-chatbot..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "openai-chatbot"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      meshctl logs openai-chatbot 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify agent is registered
+  - name: "Verify agent registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call chat tool
+  - name: "Call chat tool (direct OpenAI)"
+    handler: shell
+    command: 'meshctl call chat ''{"message": "What is 2+2? Reply with just the number."}'''
+    capture: call_chat
+    timeout: 90
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'openai-chatbot'"
+    message: "OpenAI chatbot should be registered"
+
+  # Chat tool listed
+  - expr: "${captured.list_tools} contains 'chat'"
+    message: "chat tool should be listed"
+
+  # Response contains 4
+  - expr: "${captured.call_chat} contains '4'"
+    message: "Chat response should contain 4"
+
+  # Source is direct:openai
+  - expr: "${captured.call_chat} contains 'direct:openai'"
+    message: "Source should be direct:openai"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*openai-chatbot" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
