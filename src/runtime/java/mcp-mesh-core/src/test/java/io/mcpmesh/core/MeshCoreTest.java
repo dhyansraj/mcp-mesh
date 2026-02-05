@@ -1,5 +1,6 @@
 package io.mcpmesh.core;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -23,8 +24,8 @@ class MeshCoreTest {
             core = MeshCore.load();
         } catch (UnsatisfiedLinkError e) {
             System.err.println("Native library not available, skipping tests: " + e.getMessage());
-            System.err.println("Set MESH_NATIVE_LIB_PATH to the directory containing libmcp_mesh_core.dylib");
-            throw new AssumptionViolatedException("Native library not available", e);
+            System.err.println("Set MESH_NATIVE_LIB_PATH to the directory containing the native library");
+            Assumptions.assumeTrue(false, "Native library not available");
         }
     }
 
@@ -103,10 +104,4 @@ class MeshCoreTest {
         System.out.println("Library file name: " + fileName);
     }
 
-    // Helper class for JUnit 5 assumptions
-    private static class AssumptionViolatedException extends RuntimeException {
-        AssumptionViolatedException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
 }
