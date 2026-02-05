@@ -34,10 +34,15 @@ test:
     command: |
       cp -r /uc-artifacts/java-math-agent /workspace/
       cp -r /uc-artifacts/java-calculator /workspace/
-      cp /uc-artifacts/.env /workspace/
       echo "Artifacts copied"
       ls -la /workspace/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
 
   # Install Maven dependencies for java-math-agent
   - name: "Install Maven dependencies for java-math-agent"

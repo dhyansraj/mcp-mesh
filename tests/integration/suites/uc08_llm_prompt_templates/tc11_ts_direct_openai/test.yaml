@@ -24,8 +24,12 @@ test:
     handler: shell
     command: |
       cp -r /uc-artifacts/context-self-dep-ts-direct /workspace/
-      cp /uc-artifacts/.env /workspace/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
 
   - name: "Install dependencies"
     handler: npm-install

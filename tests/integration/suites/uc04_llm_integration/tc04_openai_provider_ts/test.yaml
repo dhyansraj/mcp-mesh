@@ -19,11 +19,15 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
 
 test:
-  # Copy artifacts to workspace (including dotfiles like .env)
+  # Copy artifacts to workspace
   - name: "Copy artifacts to workspace"
     handler: shell
-    command: "cp -r /artifacts/. /workspace/"
+    command: "cp -r /artifacts/* /workspace/"
     capture: copy_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
 
   # Verify all files copied
   - name: "Verify workspace files"

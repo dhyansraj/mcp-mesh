@@ -107,8 +107,8 @@ test:
 
       # Copy Maven repository structure if it exists
       mkdir -p $BUILD_DIR/m2-repo
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
-        cp -r "${suite_path}/${config.output.m2_repo}/mcpmesh" $BUILD_DIR/m2-repo/
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        cp -r "${suite_path}/${config.output.m2_repo}/mcp-mesh" $BUILD_DIR/m2-repo/
         echo "Maven repo structure copied"
       else
         echo "No Maven repo found (optional)"

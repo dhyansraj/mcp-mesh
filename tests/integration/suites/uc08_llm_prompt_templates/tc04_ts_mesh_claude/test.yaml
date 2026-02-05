@@ -26,8 +26,11 @@ test:
     command: |
       cp -r /uc-artifacts/context-self-dep-ts-mesh /workspace/
       cp -r /uc-artifacts/claude-provider /workspace/
-      cp /uc-artifacts/.env /workspace/
     capture: copy_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
   - name: "Install mesh agent dependencies"
     handler: npm-install
     path: /workspace/context-self-dep-ts-mesh

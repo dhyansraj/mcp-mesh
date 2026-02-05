@@ -74,8 +74,8 @@ test:
     handler: shell
     command: |
       echo "=== Maven repository ==="
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
-        ls -la "${suite_path}/${config.output.m2_repo}/mcpmesh/"
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        ls -la "${suite_path}/${config.output.m2_repo}/mcp-mesh/"
       else
         echo "No Maven repository found (optional)"
       fi
@@ -136,8 +136,8 @@ test:
       fi
       echo ""
       echo "Maven repository (optional):"
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcpmesh" ]; then
-        for mod in "${suite_path}/${config.output.m2_repo}"/mcpmesh/*/; do
+      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        for mod in "${suite_path}/${config.output.m2_repo}"/mcp-mesh/*/; do
           if [ -d "$mod" ]; then
             echo "  [OK] $(basename $mod)"
           fi

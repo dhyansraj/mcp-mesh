@@ -94,14 +94,15 @@ RUN npm install -g /packages/mcpmesh-core-*.tgz
 RUN npm install -g /packages/mcpmesh-sdk-*.tgz
 
 # Verify Java SDK installation (installed via m2-repo copy above)
-RUN if [ -d "/root/.m2/repository/io/mcpmesh" ]; then \
+RUN if [ -d "/root/.m2/repository/io/mcp-mesh" ]; then \
         echo "Java SDK installed in Maven repository:"; \
-        ls -la /root/.m2/repository/io/mcpmesh/; \
+        ls -la /root/.m2/repository/io/mcp-mesh/; \
     else \
         echo "No Java SDK found in Maven repository (optional)"; \
     fi
 
-# Set native library path for Java agents
+# Set native library path for Java agents (needed for src-tests builds where
+# the JAR only contains the host platform's native lib, not the Linux .so)
 ENV MESH_NATIVE_LIB_PATH=/native-libs
 
 # Install tsuite dependencies for running tests inside container

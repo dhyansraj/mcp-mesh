@@ -27,10 +27,15 @@ test:
       cp -r /uc-artifacts/analyst-ts /workspace/
       cp -r /uc-artifacts/gemini-provider-ts /workspace/
       cp -r /uc-artifacts/weather-tool-py /workspace/
-      cp /uc-artifacts/.env /workspace/
       ls -la /workspace/
     capture: copy_output
-  # 2. Install dependencies
+
+  # 2. Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # 3. Install dependencies
   - name: "Install tool dependencies"
     handler: pip-install
     path: /workspace/weather-tool-py

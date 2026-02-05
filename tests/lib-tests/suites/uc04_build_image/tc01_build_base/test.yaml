@@ -36,6 +36,7 @@ test:
 
   # Build the image
   - handler: shell
+    timeout: 600
     command: |
       DOCKERFILE_DIR=$(echo "${captured.dockerfile_path}" | grep "DOCKERFILE_DIR=" | cut -d= -f2)
       VERSION="${config.packages.cli_version}"
@@ -79,6 +80,33 @@ test:
       docker run --rm $IMAGE_NAME python -c "import mesh; print('mesh OK')"
     capture: mesh_check
 
+  # Test the image - verify Java
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME java -version 2>&1
+    capture: java_version
+
+  # Test the image - verify Maven
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME mvn --version 2>&1 | head -1
+    capture: maven_version
+
+  # Test the image - verify Java SDK in m2 repo
+  - handler: shell
+    command: |
+      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      docker run --rm $IMAGE_NAME bash -c "
+        echo 'Maven repository contents:'
+        ls /root/.m2/repository/io/mcp-mesh/
+        echo ''
+        echo 'Starter package:'
+        ls /root/.m2/repository/io/mcp-mesh/mcp-mesh-spring-boot-starter/
+      "
+    capture: java_sdk_check
+
   # Test the image - verify node
   - handler: shell
     command: |
@@ -98,6 +126,9 @@ test:
       echo "Image: $IMAGE_NAME"
       echo "meshctl: ${captured.meshctl_version}"
       echo "node: ${captured.node_version}"
+      echo "java: ${captured.java_version}"
+      echo "maven: ${captured.maven_version}"
+      echo "java-sdk: OK"
       echo "mesh: OK"
       echo ""
       echo "To use in mcp-mesh-test-suites, update config.yaml:"
@@ -130,3 +161,15 @@ assertions:
   # Node should be installed
   - expr: ${captured.node_version} contains 'v22'
     message: "Node.js 22 should be installed"
+
+  # Java should be installed
+  - expr: ${captured.java_version} contains '17'
+    message: "Java 17 should be installed"
+
+  # Maven should be installed
+  - expr: ${captured.maven_version} contains 'Apache Maven'
+    message: "Maven should be installed"
+
+  # Java SDK should be pre-installed
+  - expr: ${captured.java_sdk_check} contains 'mcp-mesh-spring-boot-starter'
+    message: "Java SDK should be pre-installed in m2 repository"

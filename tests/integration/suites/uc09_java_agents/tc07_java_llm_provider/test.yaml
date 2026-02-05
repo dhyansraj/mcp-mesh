@@ -27,9 +27,13 @@ test:
     handler: shell
     command: |
       cp -r /uc-artifacts/java-claude-provider /workspace/
-      cp /uc-artifacts/.env /workspace/java-claude-provider/
       ls -la /workspace/java-claude-provider/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/java-claude-provider/.env
 
   # Install Maven dependencies
   - name: "Install Maven dependencies"
