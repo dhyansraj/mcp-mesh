@@ -36,10 +36,15 @@ test:
       cp -r /uc-artifacts/py-math-agent /workspace/
       cp -r /uc-artifacts/ts-math-agent /workspace/
       cp -r /uc-artifacts/py-calculator /workspace/
-      cp /uc-artifacts/.env /workspace/
       echo "Artifacts copied"
       ls -la /workspace/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
 
   # Install npm dependencies for ts-math-agent
   - name: "Install npm dependencies"

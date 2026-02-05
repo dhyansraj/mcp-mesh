@@ -28,11 +28,17 @@ test:
       cp -r /uc-artifacts/analyst-py /workspace/
       cp -r /uc-artifacts/claude-provider-py /workspace/
       cp -r /uc-artifacts/weather-tool-py /workspace/
-      cp /uc-artifacts/.env /workspace/
       ls -la /workspace/
     capture: copy_output
 
-  # 2. Install dependencies
+  # 2. Create .env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+    keys:
+      - ANTHROPIC_API_KEY
+
+  # 3. Install dependencies
   - name: "Install tool dependencies"
     handler: pip-install
     path: /workspace/weather-tool-py
@@ -45,7 +51,7 @@ test:
     handler: pip-install
     path: /workspace/analyst-py
 
-  # 3. Start tool agent (port 9001)
+  # 4. Start tool agent (port 9001)
   - name: "Start tool agent"
     handler: shell
     command: |
@@ -58,7 +64,7 @@ test:
     handler: wait
     seconds: 15
 
-  # 4. Start provider agent (port 9002)
+  # 5. Start provider agent (port 9002)
   - name: "Start provider agent"
     handler: shell
     command: |
@@ -71,7 +77,7 @@ test:
     handler: wait
     seconds: 20
 
-  # 5. Start consumer agent (port 9003)
+  # 6. Start consumer agent (port 9003)
   - name: "Start consumer agent"
     handler: shell
     command: |
@@ -84,14 +90,14 @@ test:
     handler: wait
     seconds: 25
 
-  # 6. Verify all agents registered
+  # 7. Verify all agents registered
   - name: "Verify agents registered"
     handler: shell
     command: |
       meshctl list
     capture: agent_list
 
-  # 7. Non-tool query (capital of France)
+  # 8. Non-tool query (capital of France)
   - name: "Non-tool query"
     handler: shell
     command: |
@@ -99,7 +105,7 @@ test:
     capture: non_tool_response
     timeout: 120
 
-  # 8. Tool query (weather in Boston)
+  # 9. Tool query (weather in Boston)
   - name: "Tool query"
     handler: shell
     command: |

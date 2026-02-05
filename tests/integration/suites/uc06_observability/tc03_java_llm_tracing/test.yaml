@@ -36,10 +36,15 @@ test:
     command: |
       cp -r /uc-artifacts/llm-provider-agent /workspace/
       cp -r /uc-artifacts/llm-mesh-agent /workspace/
-      cp /uc-artifacts/.env /workspace/
       echo "Artifacts copied"
       ls -la /workspace/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
 
   # Install Maven dependencies for llm-provider-agent
   - name: "Install Maven dependencies for llm-provider-agent"

@@ -14,6 +14,7 @@ packages:
   sdk_python_version: "0.9.0-beta.10" # PEP 440 format for pip
   sdk_typescript_version: "0.9.0-beta.10"
   core_version: "0.9.0-beta.10"
+  sdk_java_version: "0.9.0-beta.10"
 
 # Docker settings for the base image build
 docker:

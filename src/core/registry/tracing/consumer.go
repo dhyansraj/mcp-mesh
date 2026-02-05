@@ -241,11 +241,11 @@ func (sc *StreamConsumer) connectionManager() {
 			case <-time.After(backoff):
 			}
 		} else {
-			// Normal interval when connected
+			// Health check interval when connected
 			select {
 			case <-sc.ctx.Done():
 				return
-			case <-time.After(10 * time.Second):
+			case <-time.After(2 * time.Second):
 			}
 		}
 	}

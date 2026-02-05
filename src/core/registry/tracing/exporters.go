@@ -846,8 +846,8 @@ func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
 		// Initialize trace buffering
 		traceBuffers:     make(map[string]*TraceBuffer),
 		bufferMutex:      sync.RWMutex{},
-		bufferTimeout:    3 * time.Second, // Wait up to 3 seconds for complete traces
-		flushTicker:      time.NewTicker(1 * time.Second), // Check for expired buffers every second
+		bufferTimeout:    1 * time.Second, // Wait up to 1 second for complete traces
+		flushTicker:      time.NewTicker(500 * time.Millisecond), // Check for expired buffers every 500ms
 
 		// Direct OTLP client for exact span ID preservation
 		directClient:     directClient,
@@ -1420,7 +1420,7 @@ func (oe *OTLPExporter) flushExpiredBuffers() {
 	var expiredTraces []string
 
 	for traceID, buffer := range oe.traceBuffers {
-		if now.Sub(buffer.CreatedAt) > oe.bufferTimeout {
+		if now.Sub(buffer.CreatedAt) >= oe.bufferTimeout {
 			expiredTraces = append(expiredTraces, traceID)
 		}
 	}

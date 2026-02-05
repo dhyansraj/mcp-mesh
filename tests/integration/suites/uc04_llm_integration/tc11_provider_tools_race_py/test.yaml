@@ -32,11 +32,10 @@ test:
     handler: shell
     command: "cp -r /artifacts/llm-tools-agent /workspace/"
     capture: copy_agent_output
-  # Copy .env file from UC artifacts
-  - name: "Copy env file"
-    handler: shell
-    command: "cp /uc-artifacts/.env /workspace/"
-    capture: copy_env_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
   # Verify workspace files
   - name: "Verify workspace files"
     handler: shell

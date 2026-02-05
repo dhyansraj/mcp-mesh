@@ -32,11 +32,15 @@ test:
       cp -r /uc-artifacts/analyst-java /workspace/
       cp -r /uc-artifacts/openai-provider-py /workspace/
       cp -r /uc-artifacts/weather-tool-ts /workspace/
-      cp /uc-artifacts/.env /workspace/
       ls -la /workspace/
     capture: copy_output
 
-  # 2. Install dependencies
+  # 2. Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # 3. Install dependencies
   - name: "Install tool dependencies"
     handler: npm-install
     path: /workspace/weather-tool-ts

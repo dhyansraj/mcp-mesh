@@ -1,0 +1,125 @@
+name: "Maven SDK Modules Verification"
+description: "Verify all MCP Mesh Java SDK modules exist on Maven Central"
+tags:
+  - maven
+  - java
+  - sdk
+  - modules
+timeout: 120
+
+test:
+  # Check all module POMs exist
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh"
+
+      MODULES="mcp-mesh-sdk mcp-mesh-core mcp-mesh-native mcp-mesh-spring-ai mcp-mesh-bom"
+
+      echo "Checking Maven Central for all MCP Mesh Java SDK modules..."
+      echo "Version: ${VERSION}"
+      echo ""
+
+      ALL_OK=true
+      for MODULE in $MODULES; do
+        # BOM only has POM, others have JAR too
+        POM_URL="${BASE_URL}/${MODULE}/${VERSION}/${MODULE}-${VERSION}.pom"
+        HTTP_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${POM_URL}")
+
+        if [ "${HTTP_CODE}" = "200" ]; then
+          echo "  ${MODULE}: POM OK (${HTTP_CODE})"
+        else
+          echo "  ${MODULE}: POM MISSING (${HTTP_CODE})"
+          ALL_OK=false
+        fi
+      done
+
+      echo ""
+      if [ "${ALL_OK}" = "true" ]; then
+        echo "ALL_MODULES_OK"
+      else
+        echo "SOME_MODULES_MISSING"
+        exit 1
+      fi
+    capture: pom_check
+
+  # Check JARs exist for non-BOM modules
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh"
+
+      # BOM is pom-only, no JAR expected
+      MODULES="mcp-mesh-sdk mcp-mesh-core mcp-mesh-native mcp-mesh-spring-ai"
+
+      echo "Checking JARs for non-BOM modules..."
+      echo ""
+
+      ALL_OK=true
+      for MODULE in $MODULES; do
+        JAR_URL="${BASE_URL}/${MODULE}/${VERSION}/${MODULE}-${VERSION}.jar"
+        HTTP_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${JAR_URL}")
+
+        if [ "${HTTP_CODE}" = "200" ]; then
+          echo "  ${MODULE}: JAR OK (${HTTP_CODE})"
+        else
+          echo "  ${MODULE}: JAR MISSING (${HTTP_CODE})"
+          ALL_OK=false
+        fi
+      done
+
+      echo ""
+      if [ "${ALL_OK}" = "true" ]; then
+        echo "ALL_JARS_OK"
+      else
+        echo "SOME_JARS_MISSING"
+        exit 1
+      fi
+    capture: jar_check
+
+  # Print summary table
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh"
+
+      echo ""
+      echo "=========================================="
+      echo "Maven Central Package Summary"
+      echo "=========================================="
+      echo "Version: ${VERSION}"
+      echo ""
+      printf "%-30s %-8s %-8s\n" "Module" "POM" "JAR"
+      printf "%-30s %-8s %-8s\n" "------" "---" "---"
+
+      for MODULE in mcp-mesh-sdk mcp-mesh-core mcp-mesh-native mcp-mesh-spring-ai mcp-mesh-bom mcp-mesh-spring-boot-starter; do
+        POM_URL="${BASE_URL}/${MODULE}/${VERSION}/${MODULE}-${VERSION}.pom"
+        POM_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${POM_URL}")
+
+        JAR_URL="${BASE_URL}/${MODULE}/${VERSION}/${MODULE}-${VERSION}.jar"
+        JAR_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${JAR_URL}")
+
+        POM_STATUS="OK"
+        [ "${POM_CODE}" != "200" ] && POM_STATUS="MISSING"
+
+        JAR_STATUS="OK"
+        [ "${JAR_CODE}" != "200" ] && JAR_STATUS="N/A"
+        # BOM is pom-only
+        [ "${MODULE}" = "mcp-mesh-bom" ] && JAR_STATUS="N/A (pom)"
+
+        printf "%-30s %-8s %-8s\n" "${MODULE}" "${POM_STATUS}" "${JAR_STATUS}"
+      done
+      echo ""
+      echo "=========================================="
+      echo "SUMMARY_COMPLETE"
+    capture: summary
+
+assertions:
+  - expr: "${captured.pom_check} contains 'ALL_MODULES_OK'"
+    message: "All module POMs should exist on Maven Central"
+
+  - expr: "${captured.jar_check} contains 'ALL_JARS_OK'"
+    message: "All non-BOM module JARs should exist on Maven Central"
+
+  - expr: "${captured.summary} contains 'SUMMARY_COMPLETE'"
+    message: "Summary should complete successfully"

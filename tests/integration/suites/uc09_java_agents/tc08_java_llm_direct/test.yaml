@@ -27,9 +27,13 @@ test:
     handler: shell
     command: |
       cp -r /uc-artifacts/java-chatbot-agent /workspace/
-      cp /uc-artifacts/.env /workspace/java-chatbot-agent/
       ls -la /workspace/java-chatbot-agent/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/java-chatbot-agent/.env
 
   # Install Maven dependencies
   - name: "Install Maven dependencies"

@@ -1,5 +1,14 @@
 package io.mcpmesh.spring;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.github.victools.jsonschema.generator.Option;
+import com.github.victools.jsonschema.generator.OptionPreset;
+import com.github.victools.jsonschema.generator.SchemaGenerator;
+import com.github.victools.jsonschema.generator.SchemaGeneratorConfig;
+import com.github.victools.jsonschema.generator.SchemaGeneratorConfigBuilder;
+import com.github.victools.jsonschema.generator.SchemaVersion;
+import com.github.victools.jsonschema.module.jackson.JacksonModule;
+import com.github.victools.jsonschema.module.jackson.JacksonOption;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.Param;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
@@ -17,6 +26,7 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.*;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +56,47 @@ public class MeshToolWrapper implements McpToolHandler {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolWrapper.class);
     private static final long ASYNC_TIMEOUT_SECONDS = 30;
+    private static final SchemaGenerator SCHEMA_GENERATOR;
+
+    static {
+        JacksonModule jacksonModule = new JacksonModule(
+            JacksonOption.RESPECT_JSONPROPERTY_REQUIRED,
+            JacksonOption.FLATTENED_ENUMS_FROM_JSONVALUE
+        );
+        SchemaGeneratorConfigBuilder configBuilder = new SchemaGeneratorConfigBuilder(
+                SchemaVersion.DRAFT_2020_12, OptionPreset.PLAIN_JSON)
+            .with(jacksonModule)
+            .with(Option.PLAIN_DEFINITION_KEYS)
+            .with(Option.DEFINITIONS_FOR_ALL_OBJECTS)          // Use $defs for nested types
+            .with(Option.NULLABLE_FIELDS_BY_DEFAULT)           // Optional fields get anyOf with null
+            .with(Option.NULLABLE_ALWAYS_AS_ANYOF)             // Use anyOf pattern for nullables
+            .without(Option.SCHEMA_VERSION_INDICATOR);
+
+        // Mark non-null fields as required
+        configBuilder.forFields()
+            .withRequiredCheck(field -> {
+                // Primitive types are always required
+                if (field.getType().getErasedType().isPrimitive()) {
+                    return true;
+                }
+                // Check for @JsonProperty(required = true)
+                com.fasterxml.jackson.annotation.JsonProperty jsonProp =
+                    field.getAnnotationConsideringFieldAndGetter(com.fasterxml.jackson.annotation.JsonProperty.class);
+                if (jsonProp != null) {
+                    return jsonProp.required();
+                }
+                // For records, check if the component has a default value (Optional types are not required)
+                Class<?> fieldType = field.getType().getErasedType();
+                if (Optional.class.isAssignableFrom(fieldType)) {
+                    return false;
+                }
+                // By default, reference types in records are required (can't be null in constructor)
+                return field.getDeclaringType().getErasedType().isRecord();
+            });
+
+        SchemaGeneratorConfig config = configBuilder.build();
+        SCHEMA_GENERATOR = new SchemaGenerator(config);
+    }
 
     private final String funcId;
     private final String capability;
@@ -170,6 +221,7 @@ public class MeshToolWrapper implements McpToolHandler {
 
     /**
      * Generate JSON Schema for MCP, excluding injected parameters.
+     * Uses victools/jsonschema-generator for proper nested type handling.
      */
     private Map<String, Object> generateInputSchema() {
         Map<String, Object> schema = new LinkedHashMap<>();
@@ -179,10 +231,12 @@ public class MeshToolWrapper implements McpToolHandler {
         List<String> required = new ArrayList<>();
 
         for (ParamInfo param : mcpParams) {
-            Map<String, Object> propSchema = new LinkedHashMap<>();
-            propSchema.put("type", getJsonType(param.type()));
+            // Use victools to generate schema for the parameter type
+            JsonNode paramSchema = SCHEMA_GENERATOR.generateSchema(param.type());
+            Map<String, Object> propSchema = convertJsonNodeToMap(paramSchema);
 
-            if (!param.description().isEmpty()) {
+            // Add description from @Param annotation if not already present
+            if (!param.description().isEmpty() && !propSchema.containsKey("description")) {
                 propSchema.put("description", param.description());
             }
 
@@ -201,21 +255,19 @@ public class MeshToolWrapper implements McpToolHandler {
         return schema;
     }
 
-    private String getJsonType(Class<?> type) {
-        if (type == String.class) {
-            return "string";
-        } else if (type == int.class || type == Integer.class ||
-                   type == long.class || type == Long.class) {
-            return "integer";
-        } else if (type == double.class || type == Double.class ||
-                   type == float.class || type == Float.class) {
-            return "number";
-        } else if (type == boolean.class || type == Boolean.class) {
-            return "boolean";
-        } else if (type.isArray() || List.class.isAssignableFrom(type)) {
-            return "array";
-        } else {
-            return "object";
+    /**
+     * Convert Jackson JsonNode to Map for schema representation.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> convertJsonNodeToMap(JsonNode node) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper fasterXmlMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            return fasterXmlMapper.convertValue(node, Map.class);
+        } catch (Exception e) {
+            log.warn("Failed to convert JsonNode to Map: {}", e.getMessage());
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("type", "object");
+            return fallback;
         }
     }
 

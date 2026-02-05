@@ -29,17 +29,25 @@ test:
     handler: shell
     command: |
       cp -r /uc-artifacts/java-claude-provider /workspace/
-      cp /uc-artifacts/.env /workspace/java-claude-provider/
       ls -la /workspace/java-claude-provider/
     capture: copy_provider
+
+  # Create env file for provider
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/java-claude-provider/.env
 
   - name: "Copy analyst to workspace"
     handler: shell
     command: |
       cp -r /uc-artifacts/java-analyst-agent /workspace/
-      cp /uc-artifacts/.env /workspace/java-analyst-agent/
       ls -la /workspace/java-analyst-agent/
     capture: copy_analyst
+
+  # Create env file for analyst
+  - name: "Create env file for analyst"
+    handler: secrets
+    target: /workspace/java-analyst-agent/.env
 
   # Install Maven dependencies for both
   - name: "Install provider dependencies"

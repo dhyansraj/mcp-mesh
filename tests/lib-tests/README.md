@@ -34,7 +34,8 @@ tsuite --all
 # Or run specific use case
 tsuite --uc uc01_npm_packages
 tsuite --uc uc02_pip_packages
-tsuite --uc uc03_build_image
+tsuite --uc uc03_maven_packages
+tsuite --uc uc04_build_image
 ```
 
 **IMPORTANT:** Run WITHOUT `--docker` flag. These tests run on the host machine because:
@@ -54,7 +55,12 @@ tsuite --uc uc03_build_image
 
 - `tc01_mcpmesh_package` - Verify `mcp-mesh` exists on PyPI, installs, is importable
 
-### UC03: Build Image
+### UC03: Maven Packages
+
+- `tc01_starter_package` - Verify `mcp-mesh-spring-boot-starter` POM and JAR exist on Maven Central
+- `tc02_sdk_modules` - Verify all Java SDK modules exist (sdk, core, native, spring-ai, bom)
+
+### UC04: Build Image
 
 - `tc01_build_base` - Build `tsuite-mesh:X.Y.Z` Docker image
 
@@ -80,6 +86,7 @@ packages:
   sdk_python_version: "0.9.0-beta.10" # PEP 440 format for Python
   sdk_typescript_version: "0.9.0-beta.10"
   core_version: "0.9.0-beta.10"
+  sdk_java_version: "0.9.0-beta.10"
 ```
 
 ## Next Steps

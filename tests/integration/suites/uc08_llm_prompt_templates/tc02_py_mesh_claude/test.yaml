@@ -20,12 +20,17 @@ pre_run:
       mcpmesh_version: "${config.packages.sdk_python_version}"
 
 test:
-  # Copy artifacts to workspace (including .env, prompts, and claude-provider)
+  # Copy artifacts to workspace
   - name: "Copy artifacts to workspace"
     handler: shell
     command: |
-      cp -r /uc-artifacts/. /workspace/
+      cp -r /uc-artifacts/* /workspace/
     capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
 
   # Verify workspace files
   - name: "Verify workspace files"

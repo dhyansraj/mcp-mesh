@@ -38,6 +38,27 @@ routines:
           rm -rf /tmp/pip-check
         capture: pip_check
 
+  check_maven_package:
+    description: "Check if a Maven package exists and is available"
+    params:
+      group_id:
+        type: string
+        required: true
+      artifact_id:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+    steps:
+      # Check package exists on Maven Central
+      - handler: shell
+        command: |
+          echo "Checking Maven package: ${params.group_id}:${params.artifact_id}:${params.version}"
+          GROUP_PATH=$(echo "${params.group_id}" | tr '.' '/')
+          curl --head --fail --silent "https://repo1.maven.org/maven2/${GROUP_PATH}/${params.artifact_id}/${params.version}/${params.artifact_id}-${params.version}.pom"
+        capture: maven_check
+
   cleanup_workspace:
     description: "Clean up workspace"
     steps:

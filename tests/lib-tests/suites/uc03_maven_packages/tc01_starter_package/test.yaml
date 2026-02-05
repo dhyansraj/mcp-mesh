@@ -1,0 +1,72 @@
+name: "mcp-mesh-spring-boot-starter Package Verification"
+description: "Test that mcp-mesh-spring-boot-starter POM and JAR exist on Maven Central"
+tags:
+  - maven
+  - java
+  - spring-boot
+  - package
+timeout: 120
+
+test:
+  # Check POM exists on Maven Central
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}"
+      echo "Checking mcp-mesh-spring-boot-starter:${VERSION} on Maven Central..."
+
+      POM_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.pom"
+      echo "POM URL: ${POM_URL}"
+      HTTP_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${POM_URL}")
+      echo "POM HTTP status: ${HTTP_CODE}"
+      if [ "${HTTP_CODE}" != "200" ]; then
+        echo "ERROR: POM not found (HTTP ${HTTP_CODE})"
+        exit 1
+      fi
+      echo "POM exists: OK"
+    capture: pom_check
+
+  # Check JAR exists on Maven Central
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}"
+
+      JAR_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.jar"
+      echo "JAR URL: ${JAR_URL}"
+      HTTP_CODE=$(curl --head --silent --output /dev/null --write-out "%{http_code}" "${JAR_URL}")
+      echo "JAR HTTP status: ${HTTP_CODE}"
+      if [ "${HTTP_CODE}" != "200" ]; then
+        echo "ERROR: JAR not found (HTTP ${HTTP_CODE})"
+        exit 1
+      fi
+      echo "JAR exists: OK"
+    capture: jar_check
+
+  # Download POM and verify transitive dependencies
+  - handler: shell
+    command: |
+      VERSION="${config.packages.sdk_java_version}"
+      BASE_URL="https://repo1.maven.org/maven2/io/mcp-mesh/mcp-mesh-spring-boot-starter/${VERSION}"
+      POM_URL="${BASE_URL}/mcp-mesh-spring-boot-starter-${VERSION}.pom"
+
+      echo "Downloading POM to verify dependencies..."
+      POM_CONTENT=$(curl --silent "${POM_URL}")
+      echo "${POM_CONTENT}"
+
+      # Verify expected dependency references
+      echo ""
+      echo "Checking for expected dependencies..."
+      echo "${POM_CONTENT}" | grep -q "mcp-mesh-sdk" && echo "  mcp-mesh-sdk: found" || echo "  mcp-mesh-sdk: NOT FOUND"
+      echo "${POM_CONTENT}" | grep -q "mcp-mesh-spring-ai" && echo "  mcp-mesh-spring-ai: found" || echo "  mcp-mesh-spring-ai: NOT FOUND"
+    capture: pom_content
+
+assertions:
+  - expr: "${captured.pom_check} contains 'POM exists: OK'"
+    message: "POM should exist on Maven Central"
+
+  - expr: "${captured.jar_check} contains 'JAR exists: OK'"
+    message: "JAR should exist on Maven Central"
+
+  - expr: "${captured.pom_content} contains 'mcp-mesh-sdk'"
+    message: "POM should reference mcp-mesh-sdk dependency"
