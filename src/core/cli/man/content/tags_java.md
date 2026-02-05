@@ -192,7 +192,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @MeshAgent(name = "weather-consumer", version = "1.0.0",
-           description = "Weather consumer with smart selection", port = 9000)
+           description = "Weather consumer with smart selection", port = 8080)
 @SpringBootApplication
 public class WeatherConsumerApplication {
 

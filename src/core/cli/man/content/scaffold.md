@@ -78,7 +78,7 @@ meshctl scaffold --compose --project-name my-project
 | `--dry-run`        | Preview generated code                                |
 | `--no-interactive` | Disable prompts (for scripting)                       |
 | `--output`         | Output directory (default: `.`)                       |
-| `--port`           | HTTP port (default: 9000)                             |
+| `--port`           | HTTP port (default: 8080)                             |
 | `--model`          | LiteLLM model for llm-provider                        |
 | `--llm-selector`   | LLM provider for llm-agent: `claude`, `openai`        |
 | `--filter`         | Tool filter for llm-agent (capability selector JSON)  |

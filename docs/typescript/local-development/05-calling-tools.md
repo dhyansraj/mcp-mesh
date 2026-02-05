@@ -2,7 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/local-development/05-calling-tools/">Python Call Tools</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/05-calling-tools/">Python Call Tools</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/05-calling-tools/">Java Call Tools</a></span>
 </div>
 
 > Call tools and trace distributed calls with `meshctl call`, `meshctl trace`, and `meshctl logs`

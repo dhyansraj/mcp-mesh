@@ -1,4 +1,7 @@
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/annotations/">Java Decorators</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/mesh-functions/">TypeScript Decorators</a></span>
 </div>
@@ -7,11 +10,11 @@
 
 > Core decorators for building distributed agent systems
 
-**Note:** This page shows Python examples. TypeScript uses equivalent function-based APIs (`mesh()`, `mesh.llm()`, `mesh.route()`). See `meshctl man decorators --typescript` for TypeScript examples.
+**Note:** This page shows Python examples. See `meshctl man decorators --typescript` for TypeScript or `meshctl man decorators --java` for Java/Spring Boot examples.
 
 ## Overview
 
-MCP Mesh provides core decorators (Python) and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.
+MCP Mesh provides decorators (Python), annotations (Java), and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.
 
 | Decorator            | Purpose                         |
 | -------------------- | ------------------------------- |
@@ -80,7 +83,7 @@ async def greet(name: str, date_svc: mesh.McpMeshTool = None) -> str:
 
 | Type                | Use Case                               |
 | ------------------- | -------------------------------------- |
-| `mesh.McpMeshTool` | Tool calls via proxy                   |
+| `mesh.McpMeshTool`  | Tool calls via proxy                   |
 | `mesh.MeshLlmAgent` | LLM agent injection (with `@mesh.llm`) |
 
 ## @mesh.llm
@@ -101,8 +104,8 @@ Enables LLM-powered tools with automatic tool discovery.
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return await llm("Help the user with their request")
+def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return llm("Help the user with their request")
 ```
 
 **Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON.

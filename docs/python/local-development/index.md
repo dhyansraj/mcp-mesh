@@ -1,6 +1,9 @@
 # Local Development (Python)
 
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/local-development/">Java Local Development</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/local-development/">TypeScript Local Development</a></span>
 </div>

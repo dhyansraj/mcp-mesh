@@ -8,21 +8,20 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
 
 ## How It Works
 
+```mermaid
+graph TD
+    subgraph DN["Docker Network"]
+        R[Registry :8000]
+        A[Agent A :8080]
+        B[Agent B :8081]
+
+        A -->|register| R
+        B -->|register| R
+        A <-->|call| B
+    end
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Network                        │
-│                                                          │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
-│  │ Registry │◄───│ Agent A  │    │ Agent B  │          │
-│  │ :8000    │    │ :8080    │◄──►│ :8081    │          │
-│  └──────────┘    └──────────┘    └──────────┘          │
-│       ▲                               │                 │
-│       └───────────────────────────────┘                 │
-│                                                          │
-│  Agents register with registry, discover each other     │
-│  automatically. No depends_on needed between agents.    │
-└─────────────────────────────────────────────────────────┘
-```
+
+> Agents register with the registry and discover each other automatically. No `depends_on` needed between agents.
 
 ## Simple Setup
 
@@ -32,12 +31,12 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
     # docker-compose.yml
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/python-runtime:0.8
+        image: mcpmesh/python-runtime:0.9
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["python", "/app/agent/main.py"]
@@ -45,7 +44,7 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
           - MCP_MESH_REGISTRY_URL=http://registry:8000
 
       another-agent:
-        image: mcpmesh/python-runtime:0.8
+        image: mcpmesh/python-runtime:0.9
         volumes:
           - ./another-agent:/app/agent:ro
         command: ["python", "/app/agent/main.py"]
@@ -63,12 +62,12 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
     # docker-compose.yml
     services:
       registry:
-        image: mcpmesh/registry:0.8
+        image: mcpmesh/registry:0.9
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/typescript-runtime:0.8
+        image: mcpmesh/typescript-runtime:0.9
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]
@@ -76,7 +75,7 @@ MCP Mesh agents communicate through the registry. In Docker Compose, all service
           - MCP_MESH_REGISTRY_URL=http://registry:8000
 
       another-agent:
-        image: mcpmesh/typescript-runtime:0.8
+        image: mcpmesh/typescript-runtime:0.9
         volumes:
           - ./another-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]

@@ -3,9 +3,9 @@ title: Home
 template: home.html
 ---
 
-# Enterprise-Grade Distributed Service Mesh for AI Agents
+# Distributed Service Mesh for AI Agents
 
-MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into an enterprise-grade distributed system. Build production-ready AI agent networks with zero boilerplate.
+MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into a distributed system. Build AI agent networks with zero boilerplate.
 
 !!! tip "Complete Platform for AI Agents"
 MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
@@ -36,6 +36,49 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
         pass
     ```
 
+=== "Java"
+
+    ```xml
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    ```
+
+    ```java
+    import io.mcpmesh.MeshAgent;
+    import io.mcpmesh.MeshTool;
+    import io.mcpmesh.Param;
+    import io.mcpmesh.Selector;
+    import io.mcpmesh.types.McpMeshTool;
+    import org.springframework.boot.SpringApplication;
+    import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+    @MeshAgent(name = "my-service", version = "1.0.0", port = 8080)
+    @SpringBootApplication
+    public class MyServiceApplication {
+
+        public static void main(String[] args) {
+            SpringApplication.run(MyServiceApplication.class, args);
+        }
+
+        @MeshTool(
+            capability = "greeting",
+            dependencies = @Selector(capability = "date_service")
+        )
+        public String greet(
+            @Param("name") String name,
+            McpMeshTool<String> dateService
+        ) {
+            if (dateService != null && dateService.isAvailable()) {
+                return "Hello, " + name + "! " + dateService.call();
+            }
+            return "Hello, " + name + "!";
+        }
+    }
+    ```
+
 === "TypeScript"
 
     ```bash
@@ -47,7 +90,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     import { z } from "zod";
 
     const server = new FastMCP({ name: "my-service", version: "1.0.0" });
-    const agent = mesh(server, { name: "my-service", port: 9000 });
+    const agent = mesh(server, { name: "my-service", port: 8080 });
 
     agent.addTool({
       name: "greet",
@@ -79,7 +122,7 @@ Tag-based service resolution with version constraints. Agents automatically find
 </div>
 <div class="feature-card" markdown>
 ### :material-kubernetes: Kubernetes Native
-Production-ready Helm charts with horizontal scaling, health checks, and observability.
+Helm charts with horizontal scaling, health checks, and observability.
 </div>
 <div class="feature-card" markdown>
 ### :arrows_counterclockwise: Dynamic Updates
@@ -119,9 +162,9 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 === "For DevOps Teams"
 
-    **Production-ready AI infrastructure out of the box.**
+    **AI infrastructure out of the box.**
 
-    - Kubernetes-native with battle-tested Helm charts
+    - Kubernetes-native with Helm charts
     - Enterprise observability with Grafana, Tempo, and Redis
     - Zero-touch operations with auto-discovery
     - Scale from 2 agents to 200+ with same complexity
@@ -141,7 +184,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
     - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
     - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
-    - **Risk Mitigation**: Battle-tested enterprise patterns ensure reliable AI deployments that scale with your business
+    - **Risk Mitigation**: Proven patterns help ensure reliable AI deployments that scale with your business
     - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
 
     Turn your AI strategy from "promising experiments" to "competitive advantage in production."
@@ -198,7 +241,21 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     pip install "mcp-mesh>=0.8,<0.9"
     ```
 
-    Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
+    Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
+    Includes `@mesh.route()` for FastAPI integration.
+
+=== "Java Runtime"
+
+    ```xml
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    ```
+
+    Spring Boot starter for building agents with `@MeshAgent`, `@MeshTool`, `@MeshLlm`, and `@MeshLlmProvider` annotations.
+    Includes `@MeshRoute` for Spring Boot REST integration.
 
 === "TypeScript Runtime"
 
@@ -206,13 +263,16 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     npm install @mcpmesh/sdk
     ```
 
-    Runtime for building agents with `mesh()`, `agent()`, and `addTool()` functions.
+    Runtime for building agents with `mesh()`, `addTool()`, `addLlm()`, and `addLlmProvider()` functions.
+    Includes `addRoute()` for Express integration.
 
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:0.8
-    docker pull mcpmesh/python-runtime:0.8
+    docker pull mcpmesh/registry:0.9
+    docker pull mcpmesh/python-runtime:0.9
+    docker pull mcpmesh/java-runtime:0.9
+    docker pull mcpmesh/typescript-runtime:0.9
     ```
 
     Official container images for production deployments.
@@ -240,7 +300,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 - **Latest Release**: v0.9.0-beta.10 (February 2026)
 - **License**: MIT
-- **Languages**: Python 3.11+ and TypeScript/Node.js 18+ (runtime), Go 1.23+ (registry)
+- **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
 
 ---
@@ -259,6 +319,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 **Ready to get started?**
 
 [Python SDK](python/getting-started/index.md){ .md-button .md-button--primary }
+[Java SDK](java/getting-started/index.md){ .md-button .md-button--primary }
 [TypeScript SDK](typescript/getting-started/index.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/dhyansraj/mcp-mesh){ .md-button }
 

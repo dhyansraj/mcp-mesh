@@ -373,7 +373,7 @@ kubectl exec <pod-name> -n mcp-mesh -- df -h
 **Symptoms:**
 
 ```
-Failed to pull image "mcpmesh/python-runtime:0.8": rpc error: code = Unknown desc = Error response from daemon: pull access denied
+Failed to pull image "mcpmesh/python-runtime:0.9": rpc error: code = Unknown desc = Error response from daemon: pull access denied
 ```
 
 **Solutions:**

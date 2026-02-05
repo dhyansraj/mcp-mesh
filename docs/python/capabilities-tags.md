@@ -1,4 +1,7 @@
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/capabilities-tags/">Java Capabilities</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
   <span>Looking for TypeScript? See <a href="../../typescript/capabilities-tags/">TypeScript Capabilities</a></span>
 </div>
@@ -6,6 +9,8 @@
 # Capabilities System
 
 > Named services that agents provide for discovery and dependency injection
+
+**Note:** This page shows Python examples. See `meshctl man capabilities --typescript` for TypeScript or `meshctl man capabilities --java` for Java/Spring Boot examples.
 
 ## Overview
 
@@ -20,7 +25,7 @@ MCP Mesh uses a unified syntax for selecting capabilities throughout the framewo
 | Field        | Required | Description                                   |
 | ------------ | -------- | --------------------------------------------- |
 | `capability` | Yes\*    | Capability name to match                      |
-| `tags`       | No       | Tag filters with +/- operators                |
+| `tags`       | No       | Tag filters. Optional `+` (preferred) / `-` (excluded) operators |
 | `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`) |
 
 \*When filtering by tags only (e.g., LLM tool filter), `capability` can be omitted.
@@ -63,12 +68,31 @@ dependencies=[
 
 ### Selector Logic (AND/OR)
 
-| Syntax                         | Semantics                             |
-| ------------------------------ | ------------------------------------- |
-| `tags: ["a", "b", "c"]`        | a AND b AND c (all required)          |
-| `tags: ["+a", "+b"]`           | Prefer a, prefer b (neither required) |
-| `tags: ["a", "-x"]`            | Must have a, must NOT have x          |
-| `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors)           |
+| Syntax                         | Semantics                                |
+| ------------------------------ | ---------------------------------------- |
+| `tags: ["a", "b", "c"]`        | a AND b AND c (all required)             |
+| `tags: ["+a", "+b"]`           | Prefer a, prefer b (neither required)    |
+| `tags: ["a", "-x"]`            | Must have a, must NOT have x             |
+| `tags: ["a", ["b", "c"]]`      | a AND (b OR c) - tag-level OR            |
+| `tags: [["a"], ["b"]]`         | a OR b (full OR)                         |
+| `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors - LLM filter) |
+
+**Tag-Level OR** (v0.9.0-beta.10+):
+
+Use nested arrays in tags for OR alternatives with fallback behavior:
+
+```python
+dependencies=[
+    # Prefer python implementation, fallback to typescript
+    {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
+]
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is unresolved
 
 See `meshctl man tags` for detailed tag matching behavior.
 

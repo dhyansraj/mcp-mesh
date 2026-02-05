@@ -2,7 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/local-development/01-getting-started/">Python Getting Started</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/01-getting-started/">Python Getting Started</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/01-getting-started/">Java Getting Started</a></span>
 </div>
 
 > Install meshctl CLI to start building MCP Mesh agents with TypeScript

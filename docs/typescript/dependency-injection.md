@@ -1,6 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See <a href="../../python/dependency-injection/">Python Dependency Injection</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/dependency-injection/">Java Dependency Injection</a></span>
 </div>
 
 # Dependency Injection (TypeScript)
@@ -68,6 +71,39 @@ agent.addTool({
 });
 ```
 
+### OR Alternatives (Tag-Level)
+
+Use nested arrays in tags to specify fallback providers:
+
+```typescript
+agent.addTool({
+  name: "calculate",
+  capability: "calculator",
+  dependencies: [
+    // Prefer python provider, fallback to typescript
+    { capability: "math", tags: ["addition", ["python", "typescript"]] },
+  ],
+  parameters: z.object({
+    a: z.number(),
+    b: z.number(),
+  }),
+  execute: async ({ a, b }, { math }) => {
+    if (!math) return "Math service unavailable";
+    const result = await math({ a, b });
+    return result;
+  },
+});
+```
+
+Resolution order:
+
+1. Try to find provider with `addition` AND `python` tags
+2. If not found, try provider with `addition` AND `typescript` tags
+3. If neither found, dependency is injected as `null`
+
+This is useful when you have multiple implementations of the same capability
+and want to prefer one but fallback to another if unavailable.
+
 ## Injection Types
 
 ### McpMeshTool
@@ -83,7 +119,7 @@ execute: async ({}, { helper }) => {
     // Named tool call
     const result2 = await helper.callTool("tool_name", { arg: "value" });
   }
-}
+};
 ```
 
 ### LLM Injection
@@ -218,7 +254,7 @@ import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Report Service", version: "1.0.0" });
-const agent = mesh(server, { name: "report-service", port: 9000 });
+const agent = mesh(server, { name: "report-service", httpPort: 8080 });
 
 // Tool with multiple dependencies
 agent.addTool({

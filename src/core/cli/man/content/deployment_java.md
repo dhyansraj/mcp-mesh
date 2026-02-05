@@ -54,7 +54,7 @@ MCP_MESH_HTTP_PORT=9001 mvn spring-boot:run
 meshctl start examples/java/basic-tool-agent examples/java/dependency-agent
 
 # Or run directly with different ports
-MCP_MESH_HTTP_PORT=9000 mvn -f agent1/pom.xml spring-boot:run &
+MCP_MESH_HTTP_PORT=8080 mvn -f agent1/pom.xml spring-boot:run &
 MCP_MESH_HTTP_PORT=9001 mvn -f agent2/pom.xml spring-boot:run &
 ```
 
@@ -81,7 +81,7 @@ meshctl stop
 ```yaml
 # src/main/resources/application.yml
 server:
-  port: ${MCP_MESH_HTTP_PORT:9000}
+  port: ${MCP_MESH_HTTP_PORT:8080}
 
 spring:
   application:
@@ -117,7 +117,7 @@ RUN mvn package -DskipTests -q
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
-EXPOSE 9000
+EXPOSE 8080
 CMD ["java", "-jar", "app.jar"]
 ```
 
@@ -131,7 +131,7 @@ docker build -t my-java-agent:latest .
 
 # Run with registry
 docker run -e MCP_MESH_REGISTRY_URL=http://host.docker.internal:8000 \
-    -p 9000:9000 my-java-agent:latest
+    -p 8080:8080 my-java-agent:latest
 ```
 
 ### Docker Compose
@@ -169,10 +169,10 @@ services:
   greeter:
     build: ./examples/java/basic-tool-agent
     ports:
-      - "9000:9000"
+      - "8080:8080"
     environment:
       MCP_MESH_REGISTRY_URL: http://registry:8000
-      MCP_MESH_HTTP_PORT: 9000
+      MCP_MESH_HTTP_PORT: 8080
     depends_on:
       registry:
         condition: service_healthy
@@ -257,10 +257,10 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 
 | Environment            | Port Strategy                | Why                                   |
 | ---------------------- | ---------------------------- | ------------------------------------- |
-| Local / docker-compose | Unique ports (9000, 9001...) | All containers share host network     |
+| Local / docker-compose | Unique ports (8080, 8081...) | All containers share host network     |
 | Kubernetes             | All agents use 8080          | Each pod has its own IP, no conflicts |
 
-The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port = 9000)`. Your code does not need to change between environments.
+The Helm chart sets `MCP_MESH_HTTP_PORT=8080` which overrides `@MeshAgent(port = 8080)`. Your code does not need to change between environments.
 
 ## Best Practices
 

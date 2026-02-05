@@ -140,7 +140,7 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 
 | Feature                  | LangChain    | AutoGen      | CrewAI       | MCP Mesh                                 |
 | ------------------------ | ------------ | ------------ | ------------ | ---------------------------------------- |
-| Production-ready         | :warning:    | :warning:    | :warning:    | :white_check_mark:                       |
+| Mature                   | :warning:    | :warning:    | :warning:    | :white_check_mark:                       |
 | Enterprise observability | :x:          | :x:          | :x:          | :white_check_mark:                       |
 | Team development         | :x: Blocking | :x: Blocking | :x: Blocking | :white_check_mark: Non-blocking          |
 | Multi-team support       | :x:          | :x:          | :x:          | :white_check_mark: Capability boundaries |

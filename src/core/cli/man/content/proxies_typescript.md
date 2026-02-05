@@ -226,7 +226,7 @@ import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({ name: "Data Processor", version: "1.0.0" });
-const agent = mesh(server, { name: "data-processor", httpPort: 9000 });
+const agent = mesh(server, { name: "data-processor", httpPort: 8080 });
 
 agent.addTool({
   name: "process_data",

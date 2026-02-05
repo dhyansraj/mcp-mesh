@@ -1,6 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See <a href="../../python/getting-started/index/">Python Quick Start</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/getting-started/index/">Java Quick Start</a></span>
 </div>
 
 # Quick Start
@@ -39,7 +42,7 @@ import { mesh, MeshAgent } from "@mcpmesh/sdk";
 const app = new MeshAgent({
   name: "greeter",
   version: "1.0.0",
-  port: 9000,
+  httpPort: 8080,
 });
 
 app.tool(
@@ -49,7 +52,7 @@ app.tool(
   }),
   async ({ name }: { name: string }) => {
     return `Hello, ${name}!`;
-  },
+  }
 );
 
 app.run();
@@ -91,25 +94,25 @@ import { mesh, MeshAgent, McpMeshTool } from "@mcpmesh/sdk";
 const app = new MeshAgent({
   name: "assistant",
   version: "1.0.0",
-  port: 9001,
+  httpPort: 9001,
 });
 
 app.tool(
   mesh({
     capability: "smart_greeting",
     description: "Enhanced greeting with time",
-    dependencies: ["greeting"], // Depend on greeter
+    dependencies: ["greeting"],  // Depend on greeter
   }),
   async (
     { name }: { name: string },
-    { greeting }: { greeting: McpMeshTool | null }, // Injected!
+    { greeting }: { greeting: McpMeshTool | null }  // Injected!
   ) => {
     if (greeting) {
       const baseGreeting = await greeting({ name });
       return `${baseGreeting} Welcome to MCP Mesh!`;
     }
     return `Hello, ${name}! (greeter unavailable)`;
-  },
+  }
 );
 
 app.run();

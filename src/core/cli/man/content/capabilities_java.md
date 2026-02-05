@@ -32,7 +32,7 @@ MCP Mesh uses the `@Selector` annotation for selecting capabilities. This same p
 | Field        | Required | Description                                   |
 | ------------ | -------- | --------------------------------------------- |
 | `capability` | Yes\*    | Capability name to match                      |
-| `tags`       | No       | Tag filters with +/- operators                |
+| `tags`       | No       | Tag filters. Optional `+` (preferred) / `-` (excluded) operators |
 | `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`) |
 
 \*When filtering by tags only (e.g., LLM tool filter), `capability` can be omitted.
@@ -81,7 +81,7 @@ A single agent class can declare multiple capabilities:
 
 ```java
 @MeshAgent(name = "math-service", version = "1.0.0",
-           description = "Math operations", port = 9000)
+           description = "Math operations", port = 8080)
 @SpringBootApplication
 public class MathAgentApplication {
 

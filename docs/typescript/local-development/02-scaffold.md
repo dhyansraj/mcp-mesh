@@ -2,7 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/local-development/02-scaffold/">Python Scaffold</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/02-scaffold/">Python Scaffold</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/02-scaffold/">Java Scaffold</a></span>
 </div>
 
 > Generate agents with `meshctl scaffold`

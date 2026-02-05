@@ -343,7 +343,7 @@ make install-dev
 
 ### 🏭 I want production deployment (30 minutes)
 
-1. **[Kubernetes Guide](06-helm-deployment.md)** - Production-ready setup
+1. **[Kubernetes Guide](04-kubernetes-basics.md)** - Setup
 2. **Deploy to cluster** - Scale and monitor
 3. **Test resilience** - Failure scenarios
 4. **Monitor with meshctl** - Operational insights
@@ -404,7 +404,7 @@ Your Code                    MCP Mesh Runtime               Automatic
 
 - 🚀 **Quick Demo**: Try the [Docker deployment](03-docker-deployment.md)
 - 🔧 **Local Development**: Follow the [local development guide](02-local-development.md)
-- 🏭 **Production Setup**: Deploy with [Helm to Kubernetes](06-helm-deployment.md)
+- 🏭 **Production Setup**: Deploy with [Helm to Kubernetes](04-kubernetes-basics.md)
 - 📚 **Deep Dive**: Read the [architecture and design](architecture-and-design.md)
 
 ---
@@ -485,5 +485,5 @@ meshctl scaffold --name my-agent --compose
 
 - **[Local Development](02-local-development.md)** - Set up your development environment
 - **[Docker Deployment](03-docker-deployment.md)** - Deploy agents with Docker Compose
-- **[Kubernetes Deployment](06-helm-deployment.md)** - Production deployment with Helm
+- **[Kubernetes Deployment](04-kubernetes-basics.md)** - Production deployment with Helm
 - **[meshctl CLI Reference](meshctl-cli.md)** - Command reference for meshctl

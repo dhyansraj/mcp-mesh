@@ -1,10 +1,11 @@
 # <img src="docs/assets/images/logo-cyan.svg" height="32" alt=""> MCP Mesh
 
 [![Release](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml/badge.svg?event=release)](https://github.com/dhyansraj/mcp-mesh/actions/workflows/release.yml)
-[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
-[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+[![Java Version](https://img.shields.io/badge/java-17+-orange.svg)](https://openjdk.org)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0+-blue.svg)](https://www.typescriptlang.org)
+[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![PyPI](https://img.shields.io/pypi/v/mcp-mesh?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mesh/)
 [![npm](https://img.shields.io/npm/v/@mcpmesh/cli?color=red&logo=npm&logoColor=white)](https://www.npmjs.com/package/@mcpmesh/cli)
 [![Docker](https://img.shields.io/badge/docker-hub-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/u/mcpmesh)
@@ -37,13 +38,13 @@ meshctl --help
 meshctl man
 ```
 
-**[Python Quick Start →](https://dhyansraj.github.io/mcp-mesh/python/getting-started/)** | **[TypeScript Quick Start →](https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/)**
+**[Python Quick Start →](https://dhyansraj.github.io/mcp-mesh/python/getting-started/)** | **[Java Quick Start →](https://dhyansraj.github.io/mcp-mesh/java/getting-started/)** | **[TypeScript Quick Start →](https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/)**
 
 ---
 
 ## 🎯 Why MCP Mesh?
 
-While MCP solved AI tool standardization, scaling MCP applications to production presents unique challenges. MCP Mesh transforms MCP from a development protocol into an enterprise-grade distributed system.
+While MCP solved AI tool standardization, scaling MCP applications to production presents unique challenges. MCP Mesh transforms MCP from a development protocol into a distributed system.
 
 ---
 
@@ -90,9 +91,9 @@ async def create_trip(trip_data: dict, plan_trip=None):
 
 ### **For DevOps & Platform Teams ⚙️**
 
-**Production-ready AI infrastructure out of the box.**
+**AI infrastructure out of the box.**
 
-- **Kubernetes-Native**: Deploy with battle-tested Helm charts - horizontal scaling, health checks, and service discovery included
+- **Kubernetes-Native**: Deploy with Helm charts - horizontal scaling, health checks, and service discovery included
 - **Enterprise Observability**: Built-in Grafana dashboards, distributed tracing, and centralized logging for complete system visibility
 - **Zero-Touch Operations**: Agents self-register, auto-discover dependencies, and gracefully handle failures without network restarts
 - **Standards-Based**: Leverage existing Kubernetes patterns - RBAC, network policies, service mesh integration, and security policies
@@ -118,7 +119,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 
 - **Accelerated Time-to-Market**: Move from PoC to production deployment in weeks, not months
 - **Cross-Team Collaboration**: Enable different departments to build agents that automatically enhance each other's capabilities
-- **Risk Mitigation**: Battle-tested enterprise patterns ensure reliable AI deployments that scale with your business
+- **Risk Mitigation**: Proven patterns help ensure reliable AI deployments that scale with your business
 - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
 
 **Turn your AI strategy from "promising experiments" to "competitive advantage in production."**
@@ -136,7 +137,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Complex Apps Made Simple**: Financial services example shows 6+ interconnected agents
 - **Production Ready**: Built-in resilience, distributed observability, and scaling
 
-**The Magic**: Write simple functions in Python or TypeScript, get enterprise-grade distributed systems.
+**The Magic**: Write simple functions in Python or TypeScript, get distributed systems.
 
 ---
 
@@ -150,14 +151,14 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Load balancing** across multiple service providers
 - **LLM dependency injection** - treat LLMs as first-class dependencies with automatic tool discovery and dynamic prompts
 
-### **Enterprise-Grade Resilience**
+### **Resilience**
 
 - **Registry as facilitator** - agents communicate directly with fault tolerance
 - **Self-healing architecture** - automatic reconnection when services return
 - **Graceful degradation** - agents work standalone when dependencies unavailable
 - **Background orchestration** - mesh coordinates without blocking business logic
 
-### **Production-Ready Observability**
+### **Observability**
 
 - **Complete observability stack** - Grafana dashboards, Tempo tracing, Redis session management
 - **Distributed tracing** with OTLP export and cross-agent context propagation
@@ -179,7 +180,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 | -------------------------------------------- | ----------------- | ---------------------- |
 | **Zero-config Dependency Injection**         | ❌                | ✅                     |
 | **Dynamic Agent Discovery & Hot Join/Leave** | ❌                | ✅                     |
-| **Cross-language Support**                   | ❌                | ✅ Python + TypeScript |
+| **Cross-language Support**                   | ❌                | ✅ Python + Java + TypeScript |
 | **Same Code: Local → Docker → K8s**          | ❌ Rewrite needed | ✅                     |
 | **Developer CLI (scaffold, trace, status)**  | ❌                | ✅ `meshctl`           |
 | **Kubernetes-native (Helm)**                 | ❌ DIY            | ✅                     |

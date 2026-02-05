@@ -1,6 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See <a href="../../python/examples/">Python Testing</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../java/examples/">Java Testing</a></span>
 </div>
 
 # Testing MCP Agents (TypeScript)
@@ -32,11 +35,13 @@ describe("Calculator Agent", () => {
   let agent: ReturnType<typeof mesh>;
 
   beforeAll(() => {
+    // Set env var to disable registry for unit tests
+    process.env.MCP_MESH_REGISTRY_URL = "";
+
     const server = new FastMCP({ name: "Test Calculator", version: "1.0.0" });
     agent = mesh(server, {
       name: "test-calculator",
-      port: 0, // Auto-assign port for testing
-      registryUrl: "", // No registry for unit tests
+      httpPort: 0, // Auto-assign port for testing
     });
 
     agent.addTool({
@@ -155,7 +160,7 @@ MCP agents expose a JSON-RPC 2.0 API over HTTP with SSE responses:
 ### List Available Tools
 
 ```bash
-curl -s -X POST http://localhost:9000/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{
@@ -169,7 +174,7 @@ curl -s -X POST http://localhost:9000/mcp \
 ### Call a Tool
 
 ```bash
-curl -s -X POST http://localhost:9000/mcp \
+curl -s -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{

@@ -164,7 +164,7 @@ tags:
 | `--name`           | `-n`  |          | Agent name (required)                           |
 | `--agent-type`     |       | `tool`   | Agent type: `tool`, `llm-agent`, `llm-provider` |
 | `--description`    |       |          | Agent description                               |
-| `--port`           | `-p`  | `9000`   | HTTP server port                                |
+| `--port`           | `-p`  | `8080`   | HTTP server port                                |
 | `--output`         | `-o`  | `.`      | Output directory                                |
 | `--lang`           | `-l`  | `python` | Language: `python`                              |
 | `--tags`           |       |          | Tags for discovery (comma-separated)            |

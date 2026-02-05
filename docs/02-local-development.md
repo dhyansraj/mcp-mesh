@@ -10,11 +10,24 @@
 
 Full-featured Python SDK with decorators.
 
-- `@mesh.agent`, `@mesh.tool` decorators
-- Jinja2 template support
+- `@mesh.agent`, `@mesh.tool`, `@mesh.llm` decorators
+- LiteLLM + Jinja2 templates
 - pytest integration
 
-[:material-arrow-right: Python Guide](../python/local-development/){ .md-button }
+[:material-arrow-right: Python Guide](python/local-development/index.md){ .md-button }
+
+</div>
+
+<div class="feature-card" markdown>
+### :fontawesome-brands-java: Java
+
+Spring Boot SDK with annotation-driven development.
+
+- `@MeshAgent`, `@MeshTool`, `@MeshLlm` annotations
+- Spring AI + FreeMarker templates
+- Maven build system
+
+[:material-arrow-right: Java Guide](java/local-development/index.md){ .md-button }
 
 </div>
 
@@ -23,11 +36,11 @@ Full-featured Python SDK with decorators.
 
 Modern TypeScript SDK with full type safety.
 
-- `mesh()`, `agent.addTool()` functions
-- Zod schema validation
+- `mesh()`, `agent.addTool()`, `mesh.llm()` functions
+- Vercel AI SDK + Handlebars templates
 - Vitest integration
 
-[:material-arrow-right: TypeScript Guide](../typescript/local-development/){ .md-button }
+[:material-arrow-right: TypeScript Guide](typescript/local-development/index.md){ .md-button }
 
 </div>
 </div>
@@ -36,7 +49,7 @@ Modern TypeScript SDK with full type safety.
 
 ## Overview
 
-This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine using **Python** or **TypeScript**.
+This guide walks you through setting up a local development environment for building your own MCP Mesh agents. You'll learn how to scaffold, develop, and test agents on your machine using **Python**, **Java**, or **TypeScript**.
 
 ## Development Workflow
 
@@ -77,6 +90,19 @@ graph LR
 
     Runtime for building agents with `@mesh.agent` and `@mesh.tool` decorators.
 
+=== "Java Runtime"
+
+    ```xml
+    <!-- pom.xml -->
+    <dependency>
+        <groupId>io.mcp-mesh</groupId>
+        <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+        <version>0.9.0-beta.10</version>
+    </dependency>
+    ```
+
+    Runtime for building agents with `@MeshAgent` and `@MeshTool` annotations (Spring Boot).
+
 === "TypeScript Runtime"
 
     ```bash
@@ -88,65 +114,175 @@ graph LR
 
 ### 2. Set Up Your Project
 
-```bash
-# Create project directory
-mkdir my-agent-project
-cd my-agent-project
+=== "Python"
 
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```bash
+    # Create project directory
+    mkdir my-agent-project
+    cd my-agent-project
 
-# Install MCP Mesh SDK (if not done above)
-pip install "mcp-mesh>=0.8,<0.9"
-```
+    # Create and activate virtual environment
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+    # Install MCP Mesh SDK (if not done above)
+    pip install "mcp-mesh>=0.8,<0.9"
+    ```
+
+=== "Java"
+
+    ```bash
+    # Scaffold a Java agent (generates Maven project)
+    meshctl scaffold --name my-agent --agent-type basic --lang java
+
+    # Or create manually with Maven
+    mvn archetype:generate -DgroupId=com.example -DartifactId=my-agent
+    # Then add mcp-mesh-spring-boot-starter to pom.xml
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    # Create project directory
+    mkdir my-agent-project
+    cd my-agent-project
+
+    # Initialize and install
+    npm init -y
+    npm install @mcpmesh/sdk zod
+    npm install -D typescript tsx @types/node
+    ```
 
 ### 3. Scaffold Your Agent
 
-```bash
-# Generate a new agent
-meshctl scaffold --name my-agent --capability my_service
+=== "Python"
 
-# Or with Docker Compose for deployment
-meshctl scaffold --name my-agent --compose
-```
+    ```bash
+    meshctl scaffold --name my-agent --capability my_service
+    ```
 
-This creates:
+    This creates:
 
-```
-my-agent/
-├── main.py           # Your agent code
-├── requirements.txt  # Dependencies
-└── README.md         # Documentation
-```
+    ```
+    my-agent/
+    ├── main.py           # Your agent code
+    ├── requirements.txt  # Dependencies
+    └── README.md         # Documentation
+    ```
+
+=== "Java"
+
+    ```bash
+    meshctl scaffold --name my-agent --capability my_service --lang java
+    ```
+
+    This creates:
+
+    ```
+    my-agent/
+    ├── pom.xml                        # Maven build
+    └── src/main/java/.../MyAgent.java # Agent code
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    meshctl scaffold --name my-agent --capability my_service --lang typescript
+    ```
+
+    This creates:
+
+    ```
+    my-agent/
+    ├── src/index.ts      # Your agent code
+    ├── package.json      # Dependencies
+    └── tsconfig.json     # TypeScript config
+    ```
 
 ### 4. Develop Your Agent
 
-Edit `main.py` to add your functionality:
+=== "Python"
 
-```python
-import mesh
-from fastmcp import FastMCP
+    Edit `main.py` to add your functionality:
 
-app = FastMCP("My Agent")
+    ```python
+    import mesh
+    from fastmcp import FastMCP
 
-@app.tool()
-@mesh.tool(capability="my_service")
-def my_function(data: str) -> str:
-    """Your custom functionality."""
-    return f"Processed: {data}"
+    app = FastMCP("My Agent")
 
-@mesh.agent(name="my-agent", http_port=8080, auto_run=True)
-class MyAgent:
-    pass
-```
+    @app.tool()
+    @mesh.tool(capability="my_service")
+    def my_function(data: str) -> str:
+        """Your custom functionality."""
+        return f"Processed: {data}"
+
+    @mesh.agent(name="my-agent", http_port=8080, auto_run=True)
+    class MyAgent:
+        pass
+    ```
+
+=== "Java"
+
+    Edit `MyAgent.java`:
+
+    ```java
+    @MeshAgent(name = "my-agent", version = "1.0.0")
+    @SpringBootApplication
+    public class MyAgent {
+
+        @MeshTool(capability = "my_service")
+        @Param(name = "data", description = "Input data")
+        public String myFunction(String data) {
+            return "Processed: " + data;
+        }
+
+        public static void main(String[] args) {
+            SpringApplication.run(MyAgent.class, args);
+        }
+    }
+    ```
+
+=== "TypeScript"
+
+    Edit `src/index.ts`:
+
+    ```typescript
+    import { mesh } from '@mcpmesh/sdk';
+    import { z } from 'zod';
+
+    const agent = mesh({ name: 'my-agent', version: '1.0.0' });
+
+    agent.addTool({
+      name: 'my_function',
+      capability: 'my_service',
+      description: 'Your custom functionality',
+      parameters: z.object({ data: z.string() }),
+      execute: async ({ data }) => `Processed: ${data}`,
+    });
+
+    agent.start({ port: 8080 });
+    ```
 
 ### 5. Start Your Agent
 
-```bash
-# Start your agent (registry auto-starts if not running)
-meshctl start main.py
-```
+=== "Python"
+
+    ```bash
+    meshctl start main.py
+    ```
+
+=== "Java"
+
+    ```bash
+    meshctl start my-agent/
+    ```
+
+=== "TypeScript"
+
+    ```bash
+    meshctl start src/index.ts
+    ```
 
 ### 6. Test Your Agent
 
@@ -186,10 +322,10 @@ Develop multiple agents that work together:
 
 ```bash
 # Terminal 1: Start first agent
-meshctl start agents/auth_agent.py
+meshctl start agents/auth-agent/
 
 # Terminal 2: Start second agent (depends on first)
-meshctl start agents/api_agent.py
+meshctl start agents/api-agent/
 
 # Test dependency injection
 meshctl call secure_operation
@@ -201,19 +337,15 @@ Each scaffolded agent gets its own directory:
 
 ```
 my-project/
-├── my-agent/
-│   ├── main.py           # Agent code
-│   ├── requirements.txt  # Dependencies
-│   ├── Dockerfile        # Container build
-│   ├── helm-values.yaml  # Kubernetes config
-│   ├── __init__.py
-│   ├── __main__.py
-│   └── README.md
-├── another-agent/
+├── my-python-agent/
 │   ├── main.py
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── ...
+│   └── requirements.txt
+├── my-java-agent/
+│   ├── pom.xml
+│   └── src/main/java/...
+├── my-ts-agent/
+│   ├── src/index.ts
+│   └── package.json
 └── docker-compose.yml    # Generated with --compose
 ```
 
@@ -286,62 +418,101 @@ meshctl start --log-level DEBUG main.py
 # Quick check - shows agent count and dependency resolution
 meshctl list
 
-# Detailed view - shows capabilities, dependencies, endpoints
+# Detailed view - shows capabilities, resolved dependencies, and endpoints
 meshctl status
 ```
 
 ### VS Code Configuration
 
-Create `.vscode/launch.json`:
+=== "Python"
 
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
+    Create `.vscode/launch.json`:
+
+    ```json
     {
-      "name": "Debug Agent",
-      "type": "python",
-      "request": "launch",
-      "module": "mesh",
-      "args": ["start", "main.py"],
-      "env": {
-        "MCP_MESH_LOG_LEVEL": "DEBUG"
-      }
+      "version": "0.2.0",
+      "configurations": [
+        {
+          "name": "Debug Agent",
+          "type": "python",
+          "request": "launch",
+          "module": "mesh",
+          "args": ["start", "main.py"],
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG"
+          }
+        }
+      ]
     }
-  ]
-}
-```
+    ```
+
+=== "Java"
+
+    Run with debug flag:
+
+    ```bash
+    meshctl start my-agent/ --debug
+    ```
+
+    Or use your IDE's Spring Boot run/debug configuration.
+
+=== "TypeScript"
+
+    Create `.vscode/launch.json`:
+
+    ```json
+    {
+      "version": "0.2.0",
+      "configurations": [
+        {
+          "name": "Debug Agent",
+          "type": "node",
+          "request": "launch",
+          "runtimeExecutable": "npx",
+          "runtimeArgs": ["tsx", "src/index.ts"],
+          "env": {
+            "MCP_MESH_LOG_LEVEL": "DEBUG"
+          }
+        }
+      ]
+    }
+    ```
 
 ## Testing Your Agents
 
-```python
-# tests/test_agents.py
-import pytest
-import requests
+=== "Python"
 
-def test_my_function():
-    response = requests.post(
-        "http://localhost:8080/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "my_function",
-                "arguments": {"data": "test"}
+    ```python
+    # tests/test_agents.py
+    import pytest
+    import requests
+
+    def test_my_function():
+        response = requests.post(
+            "http://localhost:8080/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "my_function",
+                    "arguments": {"data": "test"}
+                }
             }
-        }
-    )
-    assert response.status_code == 200
-    result = response.json()
-    assert "Processed: test" in str(result)
-```
+        )
+        assert response.status_code == 200
+    ```
 
-Run tests:
+    ```bash
+    pytest tests/
+    ```
 
-```bash
-pytest tests/
-```
+=== "Java / TypeScript"
+
+    ```bash
+    # Use meshctl for language-agnostic testing
+    meshctl call my_function '{"data": "test"}'
+    ```
 
 ## Troubleshooting
 
@@ -377,5 +548,5 @@ meshctl status
 ## Next Steps
 
 - [Docker Deployment](03-docker-deployment.md) - Package and deploy your agents
-- [Kubernetes Deployment](06-helm-deployment.md) - Scale to production
+- [Kubernetes Deployment](04-kubernetes-basics.md) - Scale to production
 - [Mesh Decorators Reference](mesh-decorators.md) - All decorator options

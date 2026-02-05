@@ -19,7 +19,7 @@ MCP Mesh supports multiple deployment options to fit your infrastructure needs. 
 - Quick setup with Docker Compose
 - Pre-built images available
 - Auto-generated compose files with `meshctl scaffold`
-- Great for development and CI/CD
+- Great for development and testing
 
 ```bash
 # Quick start
@@ -36,7 +36,7 @@ docker-compose up
 
 **Best for**: Production deployments (Recommended)
 
-- Production-ready Helm charts
+- Helm charts
 - Horizontal pod autoscaling
 - Built-in observability (Grafana, Tempo)
 - Multi-environment support
@@ -83,7 +83,7 @@ helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
 - Follow GitOps practices
 
 !!! tip "Recommendation"
-For **production deployments**, we strongly recommend **Kubernetes with Helm charts**. They include battle-tested configurations, built-in observability, and follow Kubernetes best practices.
+For **production deployments**, we strongly recommend **Kubernetes with Helm charts**. They include tested configurations, built-in observability, and follow Kubernetes best practices.
 
 ---
 
@@ -102,4 +102,4 @@ graph LR
 ## Next Steps
 
 - **[Docker Deployment](03-docker-deployment.md)** - Start here for local development
-- **[Kubernetes Deployment](04-kubernetes-basics.md)** - Production-ready deployment with Helm
+- **[Kubernetes Deployment](04-kubernetes-basics.md)** - Deployment with Helm

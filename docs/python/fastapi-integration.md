@@ -2,13 +2,13 @@
 
 > Use mesh dependency injection in FastAPI backends with @mesh.route
 
-**Note:** This page covers Python/FastAPI integration. For TypeScript/Express, use `mesh.route()` middleware. See `meshctl man express` for Express examples.
+**Note:** This page covers Python/FastAPI integration. For Java/Spring Boot, see `@MeshRoute`. For TypeScript/Express, see `mesh.route()` middleware.
 
 ## Overview
 
 MCP Mesh provides the `@mesh.route` decorator for FastAPI applications that need to consume mesh capabilities without being MCP agents themselves. This enables traditional REST APIs to leverage the mesh service layer.
 
-**Important**: This is for integrating MCP Mesh into your EXISTING FastAPI app. There is no `meshctl scaffold` command for FastAPI. To create a new MCP agent, use `meshctl scaffold` instead.
+**Important**: This page is for adding mesh capabilities to an **existing** FastAPI app. If you're starting fresh, use `meshctl scaffold` to create a standard MCP agent instead.
 
 > **TypeScript/Express**: A similar `mesh.route()` middleware exists for Express applications. See `meshctl man express` for details.
 
@@ -162,7 +162,7 @@ The backend will:
 
 | Aspect                | @mesh.tool   | @mesh.route                     |
 | --------------------- | ------------ | ------------------------------- |
-| Registers with mesh   | Yes          | No                              |
+| Registers with mesh   | Yes          | Yes (as Type API)               |
 | Provides capabilities | Yes          | No                              |
 | Consumes capabilities | Yes          | Yes                             |
 | Has heartbeat         | Yes          | Yes (for dependency resolution) |

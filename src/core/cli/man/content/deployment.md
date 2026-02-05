@@ -83,7 +83,7 @@ See `meshctl start --help` and `meshctl stop --help` for options.
 
 ### Generate Dockerfile (Recommended)
 
-`meshctl scaffold` automatically generates a production-ready Dockerfile:
+`meshctl scaffold` automatically generates a Dockerfile:
 
 ```bash
 # Create agent with Dockerfile
@@ -106,7 +106,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-EXPOSE 9000
+EXPOSE 8080
 CMD ["python", "main.py"]
 ```
 
@@ -116,7 +116,7 @@ Use `--compose` to auto-generate docker-compose.yml for all agents in a director
 
 ```bash
 # Create multiple agents
-meshctl scaffold --name agent1 --port 9000
+meshctl scaffold --name agent1 --port 8080
 meshctl scaffold --name agent2 --port 9001
 
 # Generate docker-compose.yml for all agents

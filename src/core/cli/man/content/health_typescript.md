@@ -203,7 +203,7 @@ import { z } from "zod";
 const server = new FastMCP({ name: "Resilient Service", version: "1.0.0" });
 const agent = mesh(server, {
   name: "resilient-service",
-  httpPort: 9000,
+  httpPort: 8080,
   heartbeatInterval: 30,  // Custom heartbeat interval
 });
 

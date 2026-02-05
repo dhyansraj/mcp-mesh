@@ -3,6 +3,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
   <span>Looking for Python? See the <a href="../../python/">Python SDK</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See the <a href="../../java/">Java SDK</a></span>
 </div>
 
 > Build distributed MCP agents with TypeScript and zero boilerplate
@@ -48,13 +51,13 @@ meshctl man <topic> --typescript --raw  # Get markdown output
 
 ## Key Topics
 
-| Topic                | Command                               | Description                   |
-| -------------------- | ------------------------------------- | ----------------------------- |
-| Quick Start          | `meshctl man quickstart --typescript` | Get started in minutes        |
-| Mesh Functions       | `meshctl man decorators --typescript` | mesh(), addTool(), mesh.llm() |
-| Dependency Injection | `meshctl man di --typescript`         | How DI works                  |
-| LLM Integration      | `meshctl man llm --typescript`        | Build AI-powered agents       |
-| Deployment           | `meshctl man deployment --typescript` | Local, Docker, Kubernetes     |
+| Topic | Command | Description |
+|-------|---------|-------------|
+| Quick Start | `meshctl man quickstart --typescript` | Get started in minutes |
+| Mesh Functions | `meshctl man decorators --typescript` | mesh(), addTool(), mesh.llm() |
+| Dependency Injection | `meshctl man di --typescript` | How DI works |
+| LLM Integration | `meshctl man llm --typescript` | Build AI-powered agents |
+| Deployment | `meshctl man deployment --typescript` | Local, Docker, Kubernetes |
 
 ## Next Steps
 

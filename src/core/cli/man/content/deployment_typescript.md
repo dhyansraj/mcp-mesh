@@ -71,7 +71,7 @@ meshctl stop               # Stop all
 
 ### Generated Dockerfile
 
-`meshctl scaffold --lang typescript` generates a production-ready Dockerfile:
+`meshctl scaffold --lang typescript` generates a Dockerfile:
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent
@@ -94,7 +94,7 @@ RUN chown -R mcp-mesh:mcp-mesh /app
 USER mcp-mesh
 
 # Expose the agent port (configured via --port flag)
-EXPOSE 9000
+EXPOSE 8080
 
 # Run the agent (tsx for .ts files)
 CMD ["npx", "tsx", "src/index.ts"]
@@ -104,13 +104,13 @@ CMD ["npx", "tsx", "src/index.ts"]
 
 - **USER root / USER mcp-mesh**: The base image runs as the non-root `mcp-mesh` user by default. We temporarily switch to root for file operations, then drop privileges back to `mcp-mesh` for runtime security.
 - **COPY --chmod=755 / chown**: Ensures files have correct permissions and ownership for the `mcp-mesh` user to execute.
-- **EXPOSE**: The port is configured via `--port` flag during scaffold (defaults to 9000).
+- **EXPOSE**: The port is configured via `--port` flag during scaffold (defaults to 8080).
 
 ### Generate Docker Compose
 
 ```bash
 # Create multiple TypeScript agents
-meshctl scaffold --name agent1 --port 9000 --lang typescript
+meshctl scaffold --name agent1 --port 8080 --lang typescript
 meshctl scaffold --name agent2 --port 9001 --lang typescript
 
 # Generate docker-compose.yml for all agents

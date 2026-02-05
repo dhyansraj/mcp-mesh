@@ -2,7 +2,10 @@
 
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">🐍</span>
-  <span>Looking for Python? See <a href="../../python/local-development/troubleshooting/">Python Troubleshooting</a></span>
+  <span>Looking for Python? See <a href="../../../python/local-development/troubleshooting/">Python Troubleshooting</a></span>
+  <span> | </span>
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/troubleshooting/">Java Troubleshooting</a></span>
 </div>
 
 > Common issues and solutions for MCP Mesh TypeScript development

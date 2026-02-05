@@ -6,7 +6,7 @@
 
 ## Overview
 
-MCP Mesh provides core decorators (Python) and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.
+MCP Mesh provides decorators (Python), annotations (Java), and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.
 
 | Decorator            | Purpose                         |
 | -------------------- | ------------------------------- |

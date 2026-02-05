@@ -25,7 +25,7 @@ Configures the agent identity. Applied to your `@SpringBootApplication` class.
     name = "my-service",          // Required: unique agent identifier
     version = "1.0.0",            // Semantic version
     description = "Service desc", // Human-readable description
-    port = 9000                   // HTTP server port
+    port = 8080                   // HTTP server port
 )
 @SpringBootApplication
 public class MyAgentApplication {
@@ -115,7 +115,7 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 | Attribute    | Required | Description                    |
 | ------------ | -------- | ------------------------------ |
 | `capability` | No\*     | Capability name to match       |
-| `tags`       | No       | Tag filters with +/- operators |
+| `tags`       | No       | Tag filters. Optional `+` (preferred) / `-` (excluded) operators |
 | `version`    | No       | Semantic version constraint    |
 
 \*Required for dependencies; optional for LLM tool filters.
@@ -289,7 +289,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @MeshAgent(name = "calculator", version = "1.0.0",
-           description = "Calculator with logging", port = 9000)
+           description = "Calculator with logging", port = 8080)
 @SpringBootApplication
 public class CalculatorApplication {
 

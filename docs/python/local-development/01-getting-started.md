@@ -1,8 +1,11 @@
 # Getting Started (Python)
 
 <div class="runtime-crossref">
+  <span class="runtime-crossref-icon">☕</span>
+  <span>Looking for Java? See <a href="../../../java/local-development/01-getting-started/">Java Getting Started</a></span>
+  <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/local-development/01-getting-started/">TypeScript Getting Started</a></span>
+  <span>Looking for TypeScript? See <a href="../../../typescript/local-development/01-getting-started/">TypeScript Getting Started</a></span>
 </div>
 
 > Install meshctl CLI and Python SDK
