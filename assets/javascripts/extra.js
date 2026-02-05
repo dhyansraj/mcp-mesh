@@ -8,6 +8,7 @@
   const STORAGE_KEY = 'mcp-mesh-runtime';
   const RUNTIMES = {
     python: { label: 'Python', icon: '🐍', navId: 'python-sdk' },
+    java: { label: 'Java', icon: '☕', navId: 'java-sdk' },
     typescript: { label: 'TypeScript', icon: '📘', navId: 'typescript-sdk' }
   };
 
@@ -22,39 +23,40 @@
     }
   }
 
-  // Page mappings between Python and TypeScript equivalents
-  // Note: paths should NOT include 'index' - just the directory path
-  const PAGE_MAPPINGS = {
-    // Python -> TypeScript
-    'python': 'typescript',
-    'python/getting-started': 'typescript/getting-started',
-    'python/getting-started/prerequisites': 'typescript/getting-started/prerequisites',
-    'python/getting-started/installation': 'typescript/getting-started/installation',
-    'python/getting-started/hello-world': 'typescript/getting-started/hello-world',
-    'python/decorators': 'typescript/mesh-functions',
-    'python/dependency-injection': 'typescript/dependency-injection',
-    'python/capabilities-tags': 'typescript/capabilities-tags',
-    'python/llm': 'typescript/llm',
-    'python/llm/llm-agents': 'typescript/llm/llm-agents',
-    'python/llm/llm-providers': 'typescript/llm/llm-providers',
-    'python/llm/prompt-templates': 'typescript/llm/prompt-templates',
-    'python/fastapi-integration': 'typescript/express-integration',
-    'python/examples': 'typescript/examples',
-    // Local Development mappings (both use same structure now)
-    'python/local-development': 'typescript/local-development',
-    'python/local-development/01-getting-started': 'typescript/local-development/01-getting-started',
-    'python/local-development/02-scaffold': 'typescript/local-development/02-scaffold',
-    'python/local-development/03-running-agents': 'typescript/local-development/03-running-agents',
-    'python/local-development/04-inspecting-mesh': 'typescript/local-development/04-inspecting-mesh',
-    'python/local-development/05-calling-tools': 'typescript/local-development/05-calling-tools',
-    'python/local-development/troubleshooting': 'typescript/local-development/troubleshooting',
-  };
+  // Equivalent page groups - each array contains [python_path, typescript_path, java_path]
+  const PAGE_EQUIVALENTS = [
+    ['python', 'typescript', 'java'],
+    ['python/getting-started', 'typescript/getting-started', 'java/getting-started'],
+    ['python/getting-started/prerequisites', 'typescript/getting-started/prerequisites', 'java/getting-started/prerequisites'],
+    ['python/decorators', 'typescript/mesh-functions', 'java/annotations'],
+    ['python/dependency-injection', 'typescript/dependency-injection', 'java/dependency-injection'],
+    ['python/capabilities-tags', 'typescript/capabilities-tags', 'java/capabilities-tags'],
+    ['python/llm', 'typescript/llm', 'java/llm'],
+    ['python/fastapi-integration', 'typescript/express-integration', 'java/spring-boot-integration'],
+    ['python/examples', 'typescript/examples', 'java/examples'],
+    ['python/local-development', 'typescript/local-development', 'java/local-development'],
+    ['python/local-development/01-getting-started', 'typescript/local-development/01-getting-started', 'java/local-development/01-getting-started'],
+    ['python/local-development/02-scaffold', 'typescript/local-development/02-scaffold', 'java/local-development/02-scaffold'],
+    ['python/local-development/03-running-agents', 'typescript/local-development/03-running-agents', 'java/local-development/03-running-agents'],
+    ['python/local-development/04-inspecting-mesh', 'typescript/local-development/04-inspecting-mesh', 'java/local-development/04-inspecting-mesh'],
+    ['python/local-development/05-calling-tools', 'typescript/local-development/05-calling-tools', 'java/local-development/05-calling-tools'],
+    ['python/local-development/troubleshooting', 'typescript/local-development/troubleshooting', 'java/local-development/troubleshooting'],
+  ];
 
-  // Build reverse mappings (TypeScript -> Python)
-  const REVERSE_MAPPINGS = {};
-  for (const [py, ts] of Object.entries(PAGE_MAPPINGS)) {
-    REVERSE_MAPPINGS[ts] = py;
-  }
+  // Build bidirectional mappings: PAGE_MAP[sourcePath] = { python: pyPath, typescript: tsPath, java: javaPath }
+  const PAGE_MAP = {};
+  const RUNTIME_KEYS = ['python', 'typescript', 'java'];
+  PAGE_EQUIVALENTS.forEach(group => {
+    group.forEach((path, idx) => {
+      const mapping = {};
+      RUNTIME_KEYS.forEach((runtime, rIdx) => {
+        if (rIdx !== idx) {
+          mapping[runtime] = group[rIdx];
+        }
+      });
+      PAGE_MAP[path] = mapping;
+    });
+  });
 
   function getStoredRuntime() {
     return localStorage.getItem(STORAGE_KEY) || 'python';
@@ -65,46 +67,37 @@
   }
 
   function getCurrentPagePath() {
-    // Extract path without domain and trailing slash/index.html
     const path = window.location.pathname
       .replace(/\/$/, '')
       .replace(/\/index\.html$/, '')
       .replace(/\.html$/, '');
 
-    // Try to find runtime path segments (python or typescript)
-    // This handles cases with or without base path (e.g., /mcp-mesh/python/ or /python/)
     const pythonMatch = path.match(/\/(python(?:\/.*)?)?$/);
     const tsMatch = path.match(/\/(typescript(?:\/.*)?)?$/);
+    const javaMatch = path.match(/\/(java(?:\/.*)?)?$/);
 
-    if (pythonMatch && pythonMatch[1]) {
-      return pythonMatch[1];
-    }
-    if (tsMatch && tsMatch[1]) {
-      return tsMatch[1];
-    }
+    if (pythonMatch && pythonMatch[1]) return pythonMatch[1];
+    if (tsMatch && tsMatch[1]) return tsMatch[1];
+    if (javaMatch && javaMatch[1]) return javaMatch[1];
 
-    // Fallback: Remove base path if present (e.g., /mcp-mesh/)
     const basePath = document.querySelector('base')?.href || '';
     if (basePath) {
       const basePathname = new URL(basePath, window.location.origin).pathname.replace(/\/$/, '');
       return path.replace(basePathname, '').replace(/^\//, '');
     }
-
-    // Last resort: return path without leading slash
     return path.replace(/^\//, '');
   }
 
   function isRuntimePage(path) {
     return path === 'python' || path.startsWith('python/') ||
-           path === 'typescript' || path.startsWith('typescript/');
+           path === 'typescript' || path.startsWith('typescript/') ||
+           path === 'java' || path.startsWith('java/');
   }
 
   function getEquivalentPage(currentPath, targetRuntime) {
-    if (targetRuntime === 'typescript' && PAGE_MAPPINGS[currentPath]) {
-      return PAGE_MAPPINGS[currentPath];
-    }
-    if (targetRuntime === 'python' && REVERSE_MAPPINGS[currentPath]) {
-      return REVERSE_MAPPINGS[currentPath];
+    const mapping = PAGE_MAP[currentPath];
+    if (mapping && mapping[targetRuntime]) {
+      return mapping[targetRuntime];
     }
     return null;
   }
@@ -117,7 +110,7 @@
       // Navigate to equivalent page
       // Detect base path from current URL (everything before /python/ or /typescript/)
       const pathname = window.location.pathname;
-      const runtimeMatch = pathname.match(/^(.*?)\/(python|typescript)(\/|$)/);
+      const runtimeMatch = pathname.match(/^(.*?)\/(python|typescript|java)(\/|$)/);
       const basePath = runtimeMatch ? runtimeMatch[1] + '/' : '/';
 
       window.location.href = basePath + equivalentPage + '/';
@@ -130,23 +123,22 @@
   }
 
   function updateNavVisibility(runtime) {
-    // Show/hide nav sections based on runtime preference
     const navItems = document.querySelectorAll('.md-nav__item');
-
     navItems.forEach(item => {
       const link = item.querySelector('.md-nav__link');
       if (!link) return;
-
       const href = link.getAttribute('href') || '';
       const text = link.textContent?.toLowerCase() || '';
 
-      // Check if this is a Python or TypeScript SDK nav item
       if (text.includes('python sdk') || href.includes('/python/')) {
         item.style.display = runtime === 'python' ? '' : 'none';
         item.dataset.runtime = 'python';
       } else if (text.includes('typescript sdk') || href.includes('/typescript/')) {
         item.style.display = runtime === 'typescript' ? '' : 'none';
         item.dataset.runtime = 'typescript';
+      } else if (text.includes('java sdk') || href.includes('/java/')) {
+        item.style.display = runtime === 'java' ? '' : 'none';
+        item.dataset.runtime = 'java';
       }
     });
   }
@@ -185,6 +177,9 @@
       <div class="runtime-toggle-dropdown">
         <button class="runtime-option ${runtime === 'python' ? 'active' : ''}" data-runtime="python">
           🐍 Python
+        </button>
+        <button class="runtime-option ${runtime === 'java' ? 'active' : ''}" data-runtime="java">
+          ☕ Java
         </button>
         <button class="runtime-option ${runtime === 'typescript' ? 'active' : ''}" data-runtime="typescript">
           📘 TypeScript
@@ -247,14 +242,9 @@
 
   function init() {
     const runtime = getStoredRuntime();
-
-    // Insert toggle widget
     insertToggleWidget();
-
-    // Update nav visibility based on stored preference
     updateNavVisibility(runtime);
 
-    // If on a runtime page, ensure correct runtime is set
     const currentPath = getCurrentPagePath();
     if (currentPath === 'python' || currentPath.startsWith('python/')) {
       setStoredRuntime('python');
@@ -264,6 +254,10 @@
       setStoredRuntime('typescript');
       updateNavVisibility('typescript');
       updateToggleUI('typescript');
+    } else if (currentPath === 'java' || currentPath.startsWith('java/')) {
+      setStoredRuntime('java');
+      updateNavVisibility('java');
+      updateToggleUI('java');
     }
   }
 
