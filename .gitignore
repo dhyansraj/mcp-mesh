@@ -277,3 +277,4 @@ tests/lib-tests/out/
 # Maven flatten plugin output
 .flattened-pom.xml
 or-tests/
+.envrc
