@@ -278,3 +278,4 @@ tests/lib-tests/out/
 .flattened-pom.xml
 or-tests/
 .envrc
+java-sdk-mcp-integration.md
