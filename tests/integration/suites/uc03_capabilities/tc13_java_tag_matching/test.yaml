@@ -104,7 +104,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase A: Call fetch_required"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase A: Call fetchRequired"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
@@ -183,7 +188,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase B: Call fetch_prefer_fast"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase B: Call fetchPreferFast"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchPreferFast '{"query": "test"}' 2>&1)
@@ -262,7 +272,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase C: Call fetch_exclude_deprecated"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase C: Call fetchExcludeDeprecated"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchExcludeDeprecated '{"query": "test"}' 2>&1)

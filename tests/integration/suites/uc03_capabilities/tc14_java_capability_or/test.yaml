@@ -108,7 +108,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase A: Call fetch_combined (require api, prefer accurate, exclude deprecated)"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase A: Call fetchCombined (require api, prefer accurate, exclude deprecated)"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchCombined '{"query": "test"}' 2>&1)
@@ -134,7 +139,7 @@ test:
     capture: stop_a
 
   # ========== Phase B: OR Logic ==========
-  # Start only fast-provider + consumer, verify fetch_required matches fast
+  # Start only fast-provider + consumer, verify fetchRequired matches fast
   - name: "Phase B1: Start fast-provider only"
     handler: shell
     command: |
@@ -183,7 +188,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase B1: Call fetch_required with fast-provider"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase B1: Call fetchRequired with fast-provider"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
@@ -205,7 +215,7 @@ test:
       sleep 5
     capture: stop_b1
 
-  # Now start only accurate-provider + consumer, verify fetch_required matches accurate
+  # Now start only accurate-provider + consumer, verify fetchRequired matches accurate
   - name: "Phase B2: Start accurate-provider only"
     handler: shell
     command: |
@@ -254,7 +264,12 @@ test:
     handler: wait
     seconds: 5
 
-  - name: "Phase B2: Call fetch_required with accurate-provider"
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase B2: Call fetchRequired with accurate-provider"
     handler: shell
     command: |
       RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
@@ -273,10 +288,10 @@ assertions:
     message: "Phase A: Should select accurate provider with combined filters"
 
   - expr: "${captured.phase_b1_result} contains 'PASS_B1'"
-    message: "Phase B1: fetch_required should match fast-provider"
+    message: "Phase B1: fetchRequired should match fast-provider"
 
   - expr: "${captured.phase_b2_result} contains 'PASS_B2'"
-    message: "Phase B2: fetch_required should match accurate-provider"
+    message: "Phase B2: fetchRequired should match accurate-provider"
 
 post_run:
   - handler: shell
