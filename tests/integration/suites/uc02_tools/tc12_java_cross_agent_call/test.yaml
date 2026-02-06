@@ -6,7 +6,7 @@
 #   - ts-calculator provides capability="add"
 #   - Call addViaMesh which proxies to ts-calculator
 
-name: "Java Cross-Agent Tool Call"
+name: "UC02: Java Cross-Agent Tool Call"
 description: "Verify Java agent can call TypeScript agent tool via mesh dependency injection"
 tags:
   - tools

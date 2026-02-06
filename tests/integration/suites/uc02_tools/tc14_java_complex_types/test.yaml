@@ -7,7 +7,7 @@
 #   - Test listEmployees returns filtered list
 #   - Test employee_count returns DepartmentStats
 
-name: "Java Employee Service Complex Types"
+name: "UC02: Java Employee Service Complex Types"
 description: "Verify Java agent with complex return types (records) works correctly"
 tags:
   - tools

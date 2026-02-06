@@ -6,7 +6,7 @@
 #   - java-employee-service provides get_employee capability
 #   - Call greetEmployee which fetches Employee and greets them
 
-name: "Java to Java Cross-Agent Call"
+name: "UC02: Java to Java Cross-Agent Call"
 description: "Verify Java agent can call another Java agent tool via mesh"
 tags:
   - tools

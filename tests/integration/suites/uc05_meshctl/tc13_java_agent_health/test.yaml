@@ -7,7 +7,7 @@
 #   - Verify agent responds to multiple concurrent calls
 #   - Check agent stability after multiple invocations
 
-name: "Java Agent Health and Status"
+name: "UC05: Java Agent Health and Status"
 description: "Verify Java agent health endpoints and status reporting"
 tags:
   - tools

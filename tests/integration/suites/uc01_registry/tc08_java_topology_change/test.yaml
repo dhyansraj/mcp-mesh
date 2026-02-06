@@ -10,7 +10,7 @@
 #   - Stop py-system-agent
 #   - Verify dateServiceAvailable=false again (detects removal)
 
-name: "Java Agent Topology Change"
+name: "UC01: Java Agent Topology Change"
 description: "Verify Java agent auto-rewires when mesh topology changes"
 tags:
   - tools

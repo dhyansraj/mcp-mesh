@@ -6,7 +6,7 @@
 #   - Verify all tools are registered and callable
 #   - Tools without dependencies should work without external agents
 
-name: "Java Multi-Tool Agent"
+name: "UC02: Java Multi-Tool Agent"
 description: "Verify Java agent registers and exposes multiple tools correctly"
 tags:
   - tools

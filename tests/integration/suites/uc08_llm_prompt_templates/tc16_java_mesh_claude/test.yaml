@@ -7,7 +7,7 @@
 #   - Call analyst's chat tool - should delegate to provider
 #   - Verify response comes back correctly
 
-name: "Java LLM Mesh Delegation"
+name: "UC08: Java LLM Mesh Delegation"
 description: "Verify Java agent can delegate LLM calls to mesh provider"
 tags:
   - tools

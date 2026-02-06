@@ -6,7 +6,7 @@
 #   - Call chat tool with a simple prompt
 #   - Verify LLM responds correctly
 
-name: "Java LLM Direct Agent"
+name: "UC04: Java LLM Direct Agent"
 description: "Verify Java agent can make direct LLM calls via Spring AI"
 tags:
   - tools

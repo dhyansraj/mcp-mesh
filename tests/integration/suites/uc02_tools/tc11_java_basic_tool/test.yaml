@@ -3,7 +3,7 @@
 #
 # Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
 
-name: "Java Basic Tool Call"
+name: "UC02: Java Basic Tool Call"
 description: "Verify meshctl call invokes a Java tool and returns result"
 tags:
   - tools

@@ -8,7 +8,7 @@
 #   - Call analyst's analyze tool asking about employees
 #   - Verify it uses tools and returns structured analysis
 
-name: "Java LLM Agentic Loop"
+name: "UC04: Java LLM Agentic Loop"
 description: "Verify Java analyst agent can use tools in agentic loop"
 tags:
   - tools

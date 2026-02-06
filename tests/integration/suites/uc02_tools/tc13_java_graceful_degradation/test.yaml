@@ -7,7 +7,7 @@
 #   - Start py-system-agent (provides date_service)
 #   - Second call WITH date_service - should use mesh proxy
 
-name: "Java Dependency Injection Fallback"
+name: "UC02: Java Dependency Injection Fallback"
 description: "Verify Java agent gracefully degrades when dependency unavailable"
 tags:
   - tools
