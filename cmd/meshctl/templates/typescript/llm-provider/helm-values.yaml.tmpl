@@ -1,14 +1,18 @@
 # Helm values for deploying {{ .Name }} with mcp-mesh-agent chart
 # Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
 
 image:
   repository: your-registry/{{ .Name }}
-  tag: "v1.0.0"
+  tag: "v1.0.0"  # Your image version. Override with: --set image.tag=v1.2.3
   pullPolicy: IfNotPresent
 
 agent:
   name: {{ .Name }}
   runtime: typescript
+  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
+  # http:
+  #   port: 8080
 
 resources:
   limits:
@@ -18,29 +22,31 @@ resources:
     cpu: 200m
     memory: 256Mi
 
+# Enable mesh connectivity
 mesh:
   enabled: true
   registryUrl: http://mcp-core-mcp-mesh-registry:8000
 
+# LLM provider needs API keys for the backend LLM service
 env:
-{{ if contains .Model "anthropic" }}
   - name: ANTHROPIC_API_KEY
     valueFrom:
       secretKeyRef:
         name: llm-secrets
         key: anthropic-api-key
-{{ else if contains .Model "openai" }}
+        optional: true
   - name: OPENAI_API_KEY
     valueFrom:
       secretKeyRef:
         name: llm-secrets
         key: openai-api-key
-{{ else if contains .Model "gemini" }}
+        optional: true
   - name: GOOGLE_API_KEY
     valueFrom:
       secretKeyRef:
         name: llm-secrets
         key: google-api-key
-{{ end }}
+        optional: true
 
+# Optional: Configure additional secrets
 secrets: []
