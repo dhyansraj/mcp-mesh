@@ -43,7 +43,7 @@ test:
   - name: "Start Java agent"
     handler: shell
     command: |
-      meshctl start /workspace/java-greeter-agent -d
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
       echo "Java greeter agent starting via meshctl"
     capture: start_agent
 
@@ -51,10 +51,10 @@ test:
   - name: "Wait for registration"
     handler: shell
     command: |
-      echo "Waiting for java-greeter-agent..."
+      echo "Waiting for greeter agent..."
       for i in $(seq 1 45); do
         AGENTS=$(meshctl list 2>/dev/null || echo "")
-        if echo "$AGENTS" | grep -q "java-greeter-agent"; then
+        if echo "$AGENTS" | grep -q "greeter"; then
           echo "Agent registered after $((i*2))s"
           exit 0
         fi
@@ -63,8 +63,8 @@ test:
         fi
         sleep 2
       done
-      echo "ERROR: Agent did not register within 90s"
-      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
+      echo "ERROR: Greeter agent did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -50 || true
       exit 1
     capture: wait_registration
     timeout: 120
@@ -167,7 +167,7 @@ test:
 
 assertions:
   # Agent was registered before killing registry
-  - expr: "${captured.list_before} contains 'java-greeter-agent'"
+  - expr: "${captured.list_before} contains 'greeter'"
     message: "Agent should be registered before stopping registry"
 
   # meshctl call worked before (via registry)

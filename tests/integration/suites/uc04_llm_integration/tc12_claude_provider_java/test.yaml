@@ -40,7 +40,7 @@ test:
   - name: "Start claude-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-claude-provider --env-file /workspace/java-claude-provider/.env -d
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/java-claude-provider/.env -d
       echo "Claude provider starting via meshctl"
     capture: start_output
 
@@ -78,12 +78,12 @@ test:
     command: "meshctl list -t"
     capture: tools_output
 
-  # Call claude_provider with a simple question
-  - name: "Call claude_provider - capital of France"
+  # Call llm_generate with a simple question
+  - name: "Call llm_generate - capital of France"
     handler: shell
     command: |
-      meshctl call claude_provider \
-        '{"request": {"messages": [{"role": "user", "content": "What is the capital of France?"}]}}'
+      meshctl call llm_generate \
+        '{"messages": [{"role": "user", "content": "What is the capital of France?"}]}'
     capture: llm_response
 
   # Stop provider
@@ -97,8 +97,8 @@ assertions:
     message: "claude-provider should appear in meshctl list"
 
   # Tool is registered
-  - expr: "${captured.tools_output} contains 'claude_provider'"
-    message: "claude_provider tool should be listed"
+  - expr: "${captured.tools_output} contains 'llm_generate'"
+    message: "llm_generate tool should be listed"
 
   # Tool has correct capability
   - expr: "${captured.tools_output} contains 'llm'"

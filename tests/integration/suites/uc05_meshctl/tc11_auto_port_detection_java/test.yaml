@@ -96,7 +96,7 @@ test:
   # Verify tool still works on auto-assigned port
   - name: "Call greet tool"
     handler: shell
-    command: 'meshctl call greeting ''{"name": "AutoPort"}'''
+    command: 'meshctl call greet ''{"name": "AutoPort"}'''
     capture: call_greet
 
 assertions:

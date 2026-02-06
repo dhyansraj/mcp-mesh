@@ -59,7 +59,7 @@ test:
   - name: "Phase A: Start fast-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-fast-provider -d
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
     capture: start_fast_a
 
@@ -81,7 +81,7 @@ test:
   - name: "Phase A: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_a
 
@@ -130,14 +130,14 @@ test:
   - name: "Phase B: Start fast-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-fast-provider -d
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
     capture: start_fast_b
 
   - name: "Phase B: Start accurate-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-accurate-provider -d
+      meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Accurate provider starting"
     capture: start_accurate_b
 
@@ -160,7 +160,7 @@ test:
   - name: "Phase B: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_b
 
@@ -209,14 +209,14 @@ test:
   - name: "Phase C: Start fast-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-fast-provider -d
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
     capture: start_fast_c
 
   - name: "Phase C: Start deprecated-provider"
     handler: shell
     command: |
-      meshctl start /workspace/java-deprecated-provider -d
+      meshctl start /workspace/java-deprecated-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Deprecated provider starting"
     capture: start_deprecated_c
 
@@ -239,7 +239,7 @@ test:
   - name: "Phase C: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_c
 

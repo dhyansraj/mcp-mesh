@@ -57,9 +57,9 @@ test:
   - name: "Phase A: Start all providers"
     handler: shell
     command: |
-      meshctl start /workspace/java-fast-provider -d
-      meshctl start /workspace/java-accurate-provider -d
-      meshctl start /workspace/java-deprecated-provider -d
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
+      meshctl start /workspace/java-deprecated-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "All providers starting"
     capture: start_providers_a
 
@@ -85,7 +85,7 @@ test:
   - name: "Phase A: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_a
 
@@ -138,7 +138,7 @@ test:
   - name: "Phase B1: Start fast-provider only"
     handler: shell
     command: |
-      meshctl start /workspace/java-fast-provider -d
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
     capture: start_fast_b
 
@@ -160,7 +160,7 @@ test:
   - name: "Phase B1: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_b1
 
@@ -209,7 +209,7 @@ test:
   - name: "Phase B2: Start accurate-provider only"
     handler: shell
     command: |
-      meshctl start /workspace/java-accurate-provider -d
+      meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Accurate provider starting"
     capture: start_accurate_b
 
@@ -231,7 +231,7 @@ test:
   - name: "Phase B2: Start consumer"
     handler: shell
     command: |
-      meshctl start /workspace/java-tag-consumer -d
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
     capture: start_consumer_b2
 

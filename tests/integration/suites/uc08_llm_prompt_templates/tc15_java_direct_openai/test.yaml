@@ -40,11 +40,11 @@ test:
     path: /workspace/java-direct-openai
     timeout: 600
 
-  # Start agent
+  # Start agent - application.properties maps OPENAI_API_KEY to spring.ai.openai.api-key
   - name: "Start openai-chatbot agent"
     handler: shell
     command: |
-      meshctl start /workspace/java-direct-openai --env-file /workspace/.env -d
+      meshctl start /workspace/java-direct-openai --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
       echo "OpenAI chatbot starting"
     capture: start_output
 

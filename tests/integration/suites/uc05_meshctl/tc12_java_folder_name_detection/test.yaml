@@ -40,7 +40,7 @@ test:
   # This is the key test - meshctl must detect pom.xml and run mvn spring-boot:run
   - name: "Start agent with folder name"
     handler: shell
-    command: "meshctl start java-greeter-agent -d"
+    command: "meshctl start java-greeter-agent --env MCP_MESH_HTTP_PORT=0 -d"
     workdir: /workspace
     capture: start_output
 
@@ -48,10 +48,10 @@ test:
   - name: "Wait for agent to register"
     handler: shell
     command: |
-      echo "Waiting for java-greeter-agent..."
+      echo "Waiting for greeter agent..."
       for i in $(seq 1 45); do
         AGENTS=$(meshctl list 2>/dev/null || echo "")
-        if echo "$AGENTS" | grep -q "java-greeter-agent"; then
+        if echo "$AGENTS" | grep -q "greeter"; then
           echo "Agent registered after $((i*2))s"
           exit 0
         fi
@@ -60,8 +60,8 @@ test:
         fi
         sleep 2
       done
-      echo "ERROR: Agent did not register within 90s"
-      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
+      echo "ERROR: Greeter agent did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -50 || true
       exit 1
     capture: wait_registration
     timeout: 120
@@ -95,7 +95,7 @@ test:
   # === Test 2: Start with ABSOLUTE FOLDER PATH ===
   - name: "Start agent with absolute folder path"
     handler: shell
-    command: "meshctl start /workspace/java-greeter-agent -d"
+    command: "meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=0 -d"
     workdir: /workspace
     capture: abs_start_output
 
@@ -103,10 +103,10 @@ test:
   - name: "Wait for agent to register (absolute path)"
     handler: shell
     command: |
-      echo "Waiting for java-greeter-agent (absolute path)..."
+      echo "Waiting for greeter agent (absolute path)..."
       for i in $(seq 1 45); do
         AGENTS=$(meshctl list 2>/dev/null || echo "")
-        if echo "$AGENTS" | grep -q "java-greeter-agent"; then
+        if echo "$AGENTS" | grep -q "greeter"; then
           echo "Agent registered after $((i*2))s"
           exit 0
         fi
@@ -115,7 +115,7 @@ test:
         fi
         sleep 2
       done
-      echo "ERROR: Agent did not register within 90s"
+      echo "ERROR: Greeter agent did not register within 90s"
       exit 1
     capture: wait_abs_registration
     timeout: 120
@@ -132,8 +132,8 @@ assertions:
   - expr: ${steps.start_output.exit_code} == 0
     message: "meshctl start with Java folder name should succeed"
 
-  - expr: "${captured.agent_list} contains 'java-greeter-agent'"
-    message: "java-greeter-agent should be registered (resolved from folder)"
+  - expr: "${captured.agent_list} contains 'greeter'"
+    message: "Greeter agent should be registered (resolved from folder)"
 
   - expr: "${captured.greet_response} contains 'Hello'"
     message: "greet tool should respond with Hello"
@@ -142,8 +142,8 @@ assertions:
   - expr: ${steps.abs_start_output.exit_code} == 0
     message: "meshctl start with absolute Java folder path should succeed"
 
-  - expr: "${captured.abs_agent_list} contains 'java-greeter-agent'"
-    message: "java-greeter-agent should be registered (absolute folder path)"
+  - expr: "${captured.abs_agent_list} contains 'greeter'"
+    message: "Greeter agent should be registered (absolute folder path)"
 
 post_run:
   - handler: shell
