@@ -76,8 +76,6 @@ def {{ toSnakeCase .Name }}(
     return llm("Process the input based on the context provided")
 
 
-# ===== AGENT CONFIGURATION =====
-
 @mesh.agent(
     name="{{ .Name }}",
     version="1.0.0",

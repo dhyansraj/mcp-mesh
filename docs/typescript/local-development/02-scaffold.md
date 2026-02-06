@@ -69,14 +69,6 @@ my-agent/
 1. `cd my-agent && npm install`
 2. Edit `src/index.ts` to implement your tool logic (placeholder returns `"Not implemented"`)
 
-## Add Tools to Existing Agent
-
-```bash
-meshctl scaffold --name my-agent --lang typescript --add-tool \
-  --tool-name process_data \
-  --tool-description "Process incoming data"
-```
-
 ## Generate Docker Compose
 
 ```bash

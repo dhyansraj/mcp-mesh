@@ -157,10 +157,10 @@ func parseAgentDecorator(content string) (*DetectedAgent, error) {
 		return nil, fmt.Errorf("could not extract agent name from decorator")
 	}
 
-	// Extract port (optional, default 9000)
+	// Extract port (optional, default 8080)
 	portPattern := regexp.MustCompile(`http_port\s*=\s*(\d+)`)
 	portMatch := portPattern.FindStringSubmatch(match)
-	port := 9000 // Default
+	port := 8080 // Default
 	if len(portMatch) >= 2 {
 		port, _ = strconv.Atoi(portMatch[1])
 	}
@@ -189,10 +189,10 @@ func parseTypeScriptAgent(content string) (*DetectedAgent, error) {
 		return nil, fmt.Errorf("could not extract agent name from mesh() call")
 	}
 
-	// Extract httpPort (optional, default 9000)
+	// Extract httpPort (optional, default 8080)
 	portPattern := regexp.MustCompile(`httpPort\s*:\s*(\d+)`)
 	portMatch := portPattern.FindStringSubmatch(match)
-	port := 9000 // Default
+	port := 8080 // Default
 	if len(portMatch) >= 2 {
 		port, _ = strconv.Atoi(portMatch[1])
 	}
@@ -241,7 +241,7 @@ func parseJavaAgent(dir string) (*DetectedAgent, error) {
 		// Extract port
 		portPattern := regexp.MustCompile(`port\s*=\s*(\d+)`)
 		portMatch := portPattern.FindStringSubmatch(match)
-		port := 9000
+		port := 8080
 		if len(portMatch) >= 2 {
 			port, _ = strconv.Atoi(portMatch[1])
 		}

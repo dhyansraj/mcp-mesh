@@ -45,16 +45,6 @@ meshctl scaffold --name my-agent --agent-type tool --dry-run
 meshctl scaffold --name my-agent --agent-type tool --no-interactive
 ```
 
-## Adding Tools to Existing Agents
-
-```bash
-# Add a basic tool
-meshctl scaffold --name my-agent --add-tool new_function --tool-type mesh.tool
-
-# Add an LLM-powered tool
-meshctl scaffold --name my-agent --add-tool smart_function --tool-type mesh.llm
-```
-
 ## Docker Compose Generation
 
 ```bash

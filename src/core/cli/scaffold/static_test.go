@@ -178,7 +178,7 @@ func TestStaticProvider_Execute_OutputDirCreated(t *testing.T) {
 		Name:        "test-agent",
 		Language:    "python",
 		OutputDir:   outputDir,
-		Port:        9000,
+		Port:        8080,
 		Template:    "basic",
 		TemplateDir: templateDir,
 	}
@@ -202,7 +202,7 @@ func TestStaticProvider_Execute_TemplateNotFound(t *testing.T) {
 		Name:        "my-agent",
 		Language:    "python",
 		OutputDir:   filepath.Join(tmpDir, "output"),
-		Port:        9000,
+		Port:        8080,
 		Template:    "basic",
 		TemplateDir: templateDir,
 	}
@@ -220,7 +220,7 @@ func TestStaticProvider_Execute_InvalidTemplateDir(t *testing.T) {
 		Name:        "my-agent",
 		Language:    "python",
 		OutputDir:   filepath.Join(tmpDir, "output"),
-		Port:        9000,
+		Port:        8080,
 		Template:    "basic",
 		TemplateDir: "/nonexistent/template/dir",
 	}
@@ -239,7 +239,7 @@ func TestStaticProvider_Execute_PrintsSuccessMessage(t *testing.T) {
 		Name:        "my-agent",
 		Language:    "python",
 		OutputDir:   filepath.Join(tmpDir, "output"),
-		Port:        9000,
+		Port:        8080,
 		Template:    "basic",
 		TemplateDir: templateDir,
 	}
@@ -258,7 +258,7 @@ func TestStaticProvider_Execute_PythonOnly(t *testing.T) {
 		Name:        "test-agent",
 		Language:    "python",
 		OutputDir:   filepath.Join(tmpDir, "output"),
-		Port:        9000,
+		Port:        8080,
 		Template:    "basic",
 		TemplateDir: templateDir,
 	}

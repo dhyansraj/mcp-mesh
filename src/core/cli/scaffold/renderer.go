@@ -276,11 +276,9 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		// LLM-provider specific
 		"Model": ctx.Model,
 
-		// Add-tool mode
-		"AddTool":         ctx.AddTool,
+		// Tool fields
 		"ToolName":        ctx.ToolName,
 		"ToolDescription": ctx.ToolDescription,
-		"ToolType":        ctx.ToolType,
 
 		// Helper computed values
 		"SystemPromptIsFile":   strings.HasPrefix(ctx.SystemPrompt, "file://"),
@@ -433,44 +431,6 @@ func toJSON(v interface{}) string {
 		return "[]"
 	}
 	return string(b)
-}
-
-// AgentMarker is the comment marker before @mesh.agent decorator.
-const AgentMarker = "# ===== AGENT CONFIGURATION ====="
-
-// AppendToolToFile appends a tool snippet before the @mesh.agent decorator in an existing main.py.
-// It finds the AgentMarker comment and inserts the snippet before it.
-// Returns true if the tool was appended, false if the marker wasn't found.
-func (r *TemplateRenderer) AppendToolToFile(filePath string, snippetTemplate string, data map[string]interface{}) (bool, error) {
-	// Read existing file
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return false, fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
-
-	// Render the snippet template
-	snippet, err := r.RenderString(snippetTemplate, data)
-	if err != nil {
-		return false, fmt.Errorf("failed to render snippet template: %w", err)
-	}
-
-	existingContent := string(content)
-
-	// Find the agent marker
-	markerIdx := strings.Index(existingContent, AgentMarker)
-	if markerIdx == -1 {
-		return false, nil // Marker not found
-	}
-
-	// Insert the snippet before the marker with proper spacing
-	newContent := existingContent[:markerIdx] + "\n" + strings.TrimSpace(snippet) + "\n\n\n" + existingContent[markerIdx:]
-
-	// Write back to file
-	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
-		return false, fmt.Errorf("failed to write file %s: %w", filePath, err)
-	}
-
-	return true, nil
 }
 
 // FileExists checks if a file exists.

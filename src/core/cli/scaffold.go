@@ -84,7 +84,7 @@ Infrastructure:
 	cmd.Flags().StringP("name", "n", "", "Agent name (required unless interactive or config)")
 	cmd.Flags().StringP("lang", "l", "python", "Language: python, typescript, java (or py, ts, jv)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
-	cmd.Flags().IntP("port", "p", 9000, "HTTP port for the agent")
+	cmd.Flags().IntP("port", "p", 8080, "HTTP port for the agent")
 	cmd.Flags().String("description", "", "Agent description")
 	cmd.Flags().Bool("list-modes", false, "List available scaffold modes")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive mode (for scripting)")
@@ -148,32 +148,10 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		// Check for add-tool mode
-		addTool, _ := cmd.Flags().GetString("add-tool")
 		name, _ := cmd.Flags().GetString("name")
 		noInteractive, _ := cmd.Flags().GetBool("no-interactive")
-		toolType, _ := cmd.Flags().GetString("tool-type")
 
-		if addTool != "" {
-			// Add-tool mode: require agent name
-			if name == "" {
-				return fmt.Errorf("--name is required when using --add-tool; specify the agent to add the tool to")
-			}
-
-			// Run interactive mode for add-tool if tool-type is not specified
-			if toolType == "" && !noInteractive && isInteractiveTerminal() {
-				ctx, err = runAddToolInteractiveMode(cmd, name, addTool)
-				if err != nil {
-					return err
-				}
-			} else {
-				// Use CLI flags for add-tool
-				ctx, err = loadFromFlags(cmd)
-				if err != nil {
-					return err
-				}
-			}
-		} else if name == "" && !noInteractive && isInteractiveTerminal() {
+		if name == "" && !noInteractive && isInteractiveTerminal() {
 			// Run interactive mode for creating new agents
 			ctx, err = runInteractiveMode(cmd)
 			if err != nil {
@@ -243,15 +221,7 @@ func runInteractiveMode(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 		return nil, fmt.Errorf("interactive scaffold failed: %w", err)
 	}
 
-	var ctx *scaffold.ScaffoldContext
-
-	if result.IsAddTool {
-		// User wants to add a tool to existing agent
-		ctx = scaffold.ContextFromAddToolInteractive(result.AddToolConfig, result.AgentName)
-	} else {
-		// Creating a new agent
-		ctx = scaffold.ContextFromInteractive(result.Config)
-	}
+	ctx := scaffold.ContextFromInteractive(result.Config)
 
 	// Override output dir if provided via CLI
 	if output != "." {
@@ -260,31 +230,6 @@ func runInteractiveMode(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 
 	ctx.Cmd = cmd
 	ctx.IsInteractive = true
-	return ctx, nil
-}
-
-// runAddToolInteractiveMode runs the interactive wizard for adding a tool
-func runAddToolInteractiveMode(cmd *cobra.Command, agentName, toolName string) (*scaffold.ScaffoldContext, error) {
-	cmd.Println("Add Tool to MCP Mesh Agent")
-	cmd.Println("==========================")
-	cmd.Printf("Agent: %s\n", agentName)
-	cmd.Printf("Tool: %s\n", toolName)
-	cmd.Println()
-
-	addToolConfig, err := scaffold.RunAddToolInteractive(toolName)
-	if err != nil {
-		return nil, fmt.Errorf("interactive add-tool failed: %w", err)
-	}
-
-	ctx := scaffold.ContextFromAddToolInteractive(addToolConfig, agentName)
-
-	// Override output dir if provided via CLI
-	output, _ := cmd.Flags().GetString("output")
-	if output != "." {
-		ctx.OutputDir = output
-	}
-
-	ctx.Cmd = cmd
 	return ctx, nil
 }
 
@@ -337,19 +282,11 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	model, _ := cmd.Flags().GetString("model")
 	tags, _ := cmd.Flags().GetStringSlice("tags")
 
-	// Get tool flags (for new agent or add-tool mode)
-	addTool, _ := cmd.Flags().GetString("add-tool")
+	// Get tool flags (for new agent creation)
 	toolName, _ := cmd.Flags().GetString("tool-name")
 	toolDescription, _ := cmd.Flags().GetString("tool-description")
-	toolType, _ := cmd.Flags().GetString("tool-type")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	javaPackage, _ := cmd.Flags().GetString("package")
-
-	// If --add-tool is provided, it specifies the tool name
-	// Otherwise use --tool-name for new agent creation
-	if addTool != "" {
-		toolName = addTool
-	}
 
 	// Set default provider tags based on selector
 	var providerTags []string
@@ -385,10 +322,8 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 		Prompt:              prompt,
 		LLMProvider:         llmProvider,
 		ValidateCode:        validateCode,
-		AddTool:             addTool != "",
 		ToolName:            toolName,
 		ToolDescription:     toolDescription,
-		ToolType:            toolType,
 		Cmd:                 cmd,
 		DryRun:              dryRun,
 		JavaPackage:         javaPackage,

@@ -109,7 +109,7 @@ func TestContextFromInteractive_LLMAgentInlinePrompt(t *testing.T) {
 		AgentType:           "llm-agent",
 		Name:                "simple-agent",
 		Description:         "Simple agent",
-		Port:                9000,
+		Port:                8080,
 		LLMProviderSelector: "claude",
 		ProviderTags:        []string{"llm", "+claude"},
 		MaxIterations:       1,
@@ -148,7 +148,7 @@ func TestContextFromInteractive_DefaultValues(t *testing.T) {
 	ic := &InteractiveConfig{
 		AgentType: "tool",
 		Name:      "test-agent",
-		Port:      9000,
+		Port:      8080,
 	}
 
 	ctx := ContextFromInteractive(ic)

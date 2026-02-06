@@ -113,7 +113,7 @@ name: minimal-agent
 	require.NoError(t, err)
 
 	assert.Equal(t, "tool", config.AgentType)
-	assert.Equal(t, 9000, config.Port)
+	assert.Equal(t, 8080, config.Port)
 }
 
 func TestLoadConfig_FileNotFound(t *testing.T) {
@@ -288,7 +288,7 @@ func TestContextFromConfig_LLMAgentDefaults(t *testing.T) {
 	config := &ScaffoldConfig{
 		AgentType: "llm-agent",
 		Name:      "simple",
-		Port:      9000,
+		Port:      8080,
 		LLM: &LLMConfig{
 			Provider: "openai",
 		},

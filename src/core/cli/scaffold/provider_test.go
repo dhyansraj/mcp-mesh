@@ -38,7 +38,7 @@ func TestNewScaffoldContext(t *testing.T) {
 
 	assert.Equal(t, "python", ctx.Language)
 	assert.Equal(t, ".", ctx.OutputDir)
-	assert.Equal(t, 9000, ctx.Port)
+	assert.Equal(t, 8080, ctx.Port)
 	assert.Equal(t, "basic", ctx.Template)
 	assert.Equal(t, "claude", ctx.LLMProvider)
 }
