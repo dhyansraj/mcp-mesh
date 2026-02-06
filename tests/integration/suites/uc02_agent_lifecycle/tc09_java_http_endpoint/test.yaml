@@ -1,0 +1,109 @@
+# Test Case: Java Agent HTTP Endpoint
+# Verifies that a Java agent's HTTP endpoints work correctly
+
+name: "Java Agent HTTP Endpoint"
+description: "Test Java agent HTTP endpoints respond correctly"
+tags:
+  - lifecycle
+  - java
+  - http
+  - api
+timeout: 300
+
+pre_run:
+  # Setup for Java agent (Maven + meshctl)
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Scaffold a test agent
+  - name: "Scaffold test agent"
+    handler: shell
+    command: "meshctl scaffold --name http-agent-java --agent-type tool --lang java"
+    workdir: /workspace
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/http-agent-java
+    timeout: 600
+
+  # Start agent with meshctl (detached mode, custom port)
+  - name: "Start agent in detached mode"
+    handler: shell
+    command: "meshctl start http-agent-java --env MCP_MESH_HTTP_PORT=3009 -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for Java agent registration (Java is slow to start)
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java agent to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "http-agent-java"; then
+          echo "Agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      meshctl logs http-agent-java 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Check if agent is running
+  - name: "Check if agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Test MCP endpoint with tools/list request using curl
+  - name: "Test MCP endpoint with tools/list request"
+    handler: shell
+    command: |
+      curl -s -X POST http://localhost:3009/mcp \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}' \
+        || echo 'CURL_FAILED'
+    capture: tools_response
+
+  # Get agent logs for debugging
+  - name: "Get agent logs for debugging"
+    handler: shell
+    command: "meshctl logs http-agent-java 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+  # Stop agent
+  - name: "Stop agent"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'http-agent-java'
+    message: "Agent should appear in meshctl list"
+
+  # Tools list returns valid JSON-RPC response
+  - expr: ${captured.tools_response} contains 'jsonrpc'
+    message: "Tools endpoint should return JSON-RPC response"
+
+  # Check for tools in response
+  - expr: ${captured.tools_response} contains 'tools'
+    message: "Response should contain tools list"
+
+post_run:
+  # Stop any remaining agents (including Java-specific cleanup)
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*http-agent-java" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

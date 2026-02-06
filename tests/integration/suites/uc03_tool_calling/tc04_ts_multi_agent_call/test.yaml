@@ -1,0 +1,178 @@
+# Test Case: TypeScript Multi-Agent Tool Call
+# Verifies cross-agent tool calls via dependency injection in TypeScript.
+# Ports the Python tc02_multi_agent_call to TypeScript.
+#
+# Scenario:
+#   - ts-math-agent provides add, subtract, multiply, divide tools
+#     (capability: math_operations)
+#   - ts-calculator-agent provides a calculate(a, b, operator) tool
+#     that depends on ts-math-agent's tools via dependency injection
+#   - Calling calculate triggers cross-agent calls to ts-math-agent
+
+name: "TypeScript Multi-Agent Tool Call"
+description: "Test ts-calculator-agent calling ts-math-agent via dependency injection"
+tags:
+  - tool_calling
+  - typescript
+  - multi_agent
+  - dependency_injection
+timeout: 300
+
+pre_run:
+  # Setup for TypeScript agent (node + meshctl)
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Install npm dependencies for both agents
+  - name: "Install ts-math-agent npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install ts-calculator-agent npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  # Start ts-math-agent first (provider)
+  - name: "Start ts-math-agent with fixed port"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts --env MCP_MESH_HTTP_PORT=3013 -d"
+    workdir: /workspace
+    capture: start_math_output
+
+  # Wait for ts-math-agent to register
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  # Start ts-calculator-agent (consumer with dependencies)
+  - name: "Start ts-calculator-agent with fixed port"
+    handler: shell
+    command: "meshctl start ts-calculator-agent/src/index.ts --env MCP_MESH_HTTP_PORT=3014 -d 2>&1 || echo 'START_FAILED'"
+    workdir: /workspace
+    capture: start_calc_output
+
+  # Wait for ts-calculator-agent to register and wire dependencies
+  - name: "Wait for ts-calculator-agent to register"
+    handler: wait
+    seconds: 15
+
+  # Debug: Check ts-calculator-agent startup logs
+  - name: "Debug: Check ts-calculator-agent startup logs"
+    handler: shell
+    command: "meshctl logs ts-calculator-agent 2>&1 | tail -50 || echo 'NO_CALC_LOGS'"
+    workdir: /workspace
+    capture: calc_start_logs
+
+  # Verify both agents are running
+  - name: "Verify both agents are running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List all available tools
+  - name: "List all available tools"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: tools_output
+
+  # Test calculate with addition: 5 + 3 = 8 (cross-agent call to ts-math-agent)
+  - name: "Test calculate addition (5 + 3 = 8)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 5, "b": 3, "operator": "+"}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: calc_add_result
+
+  # Test calculate with subtraction: 10 - 4 = 6 (cross-agent call)
+  - name: "Test calculate subtraction (10 - 4 = 6)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 10, "b": 4, "operator": "-"}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: calc_subtract_result
+
+  # Test calculate with multiplication: 7 * 6 = 42 (cross-agent call)
+  - name: "Test calculate multiplication (7 * 6 = 42)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 7, "b": 6, "operator": "*"}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: calc_multiply_result
+
+  # Test calculate with division: 20 / 4 = 5 (cross-agent call)
+  - name: "Test calculate division (20 / 4 = 5)"
+    handler: shell
+    command: 'meshctl call calculate ''{"a": 20, "b": 4, "operator": "/"}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: calc_divide_result
+
+  # Get logs for debugging
+  - name: "Get ts-math-agent logs"
+    handler: shell
+    command: "meshctl logs ts-math-agent 2>/dev/null | tail -20 || echo 'no math logs'"
+    workdir: /workspace
+    capture: math_logs
+
+  - name: "Get ts-calculator-agent logs"
+    handler: shell
+    command: "meshctl logs ts-calculator-agent 2>/dev/null | tail -20 || echo 'no calc logs'"
+    workdir: /workspace
+    capture: calc_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Both agents running
+  - expr: ${captured.list_output} contains 'ts-math-agent'
+    message: "ts-math-agent should be running"
+
+  - expr: ${captured.list_output} contains 'ts-calculator-agent'
+    message: "ts-calculator-agent should be running"
+
+  # Tools from both agents available
+  - expr: ${captured.tools_output} contains 'add'
+    message: "add tool should be available (from ts-math-agent)"
+
+  - expr: ${captured.tools_output} contains 'calculate'
+    message: "calculate tool should be available (from ts-calculator-agent)"
+
+  - expr: ${captured.tools_output} contains 'calc_add'
+    message: "calc_add tool should be available (from ts-calculator-agent)"
+
+  # calculate(5, 3, "+") = 8 (cross-agent via ts-math-agent)
+  - expr: ${captured.calc_add_result} contains '8'
+    message: "calculate(5, 3, '+') should return 8"
+
+  # calculate(10, 4, "-") = 6 (cross-agent via ts-math-agent)
+  - expr: ${captured.calc_subtract_result} contains '6'
+    message: "calculate(10, 4, '-') should return 6"
+
+  # calculate(7, 6, "*") = 42 (cross-agent via ts-math-agent)
+  - expr: ${captured.calc_multiply_result} contains '42'
+    message: "calculate(7, 6, '*') should return 42"
+
+  # calculate(20, 4, "/") = 5 (cross-agent via ts-math-agent)
+  - expr: ${captured.calc_divide_result} contains '5'
+    message: "calculate(20, 4, '/') should return 5"
+
+  # Verify cross-agent source (calculate returns JSON with source field)
+  - expr: ${captured.calc_add_result} contains 'ts-math-agent'
+    message: "calculate should use ts-math-agent (not local fallback)"
+
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

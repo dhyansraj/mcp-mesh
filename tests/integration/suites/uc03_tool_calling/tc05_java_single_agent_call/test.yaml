@@ -1,0 +1,140 @@
+# Test Case: Java Single Agent Tool Call
+# Verifies that meshctl call can invoke tools on a running Java Spring Boot agent.
+#
+# Uses java-math-agent which provides 'add' and 'multiply' tools.
+# Note: The Java math agent only has add and multiply (not subtract/divide like Python).
+
+name: "Java Single Agent Tool Call"
+description: "Test calling tools on a Java math agent using meshctl call"
+tags:
+  - tool_calling
+  - java
+  - meshctl
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy java-math-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/java-math-agent /workspace/
+      ls -la /workspace/java-math-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-math-agent
+    timeout: 600
+
+  # Start the Java math agent with meshctl
+  - name: "Start java-math-agent with meshctl"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-math-agent -d
+      echo "Java math agent starting via meshctl"
+    capture: start_output
+
+  # Wait for agent to register (Java/Spring Boot is slow to start)
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java math agent to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "java-math-agent"; then
+          echo "Agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs java-math-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: tools_output
+
+  # Test add tool: 5 + 3 = 8
+  - name: "Test add tool (5 + 3 = 8)"
+    handler: shell
+    command: 'meshctl call add ''{"a": 5, "b": 3}'''
+    capture: add_result
+
+  # Test multiply tool: 7 * 6 = 42
+  - name: "Test multiply tool (7 * 6 = 42)"
+    handler: shell
+    command: 'meshctl call multiply ''{"a": 7, "b": 6}'''
+    capture: multiply_result
+
+  # Test add tool with negative numbers: -3 + 10 = 7
+  - name: "Test add with negative numbers (-3 + 10 = 7)"
+    handler: shell
+    command: 'meshctl call add ''{"a": -3, "b": 10}'''
+    capture: add_neg_result
+
+  # Test multiply with zero: 42 * 0 = 0
+  - name: "Test multiply with zero (42 * 0 = 0)"
+    handler: shell
+    command: 'meshctl call multiply ''{"a": 42, "b": 0}'''
+    capture: multiply_zero_result
+
+  # Get agent logs for debugging
+  - name: "Get agent logs for debugging"
+    handler: shell
+    command: "meshctl logs java-math-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    capture: agent_logs
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'java-math-agent'"
+    message: "java-math-agent should appear in meshctl list"
+
+  # Tools are listed
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'multiply'"
+    message: "multiply tool should be listed"
+
+  # add(5, 3) = 8.0
+  - expr: "${jq:captured.add_result:.content[0].text | fromjson | .result} == 8"
+    message: "add(5, 3) should return result 8"
+
+  # multiply(7, 6) = 42.0
+  - expr: "${jq:captured.multiply_result:.content[0].text | fromjson | .result} == 42"
+    message: "multiply(7, 6) should return result 42"
+
+  # add(-3, 10) = 7.0
+  - expr: "${jq:captured.add_neg_result:.content[0].text | fromjson | .result} == 7"
+    message: "add(-3, 10) should return result 7"
+
+  # multiply(42, 0) = 0.0
+  - expr: "${jq:captured.multiply_zero_result:.content[0].text | fromjson | .result} == 0"
+    message: "multiply(42, 0) should return result 0"
+
+post_run:
+  # Stop all agents and kill Java processes
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*math" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

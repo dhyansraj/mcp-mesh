@@ -1,0 +1,81 @@
+# Test Case: TypeScript Agent Start/Stop
+# Verifies that a TypeScript agent can be started and stopped properly
+
+name: "TypeScript Agent Start and Stop"
+description: "Test starting and gracefully stopping a TypeScript agent"
+tags:
+  - lifecycle
+  - typescript
+  - smoke
+timeout: 300
+pre_run:
+  # Setup for TypeScript agent (node + meshctl)
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # Scaffold a test agent
+  - name: "Scaffold test agent"
+    handler: shell
+    command: "meshctl scaffold --name lifecycle-agent-ts --agent-type tool --lang typescript"
+    workdir: /workspace
+    capture: scaffold_output
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/lifecycle-agent-ts
+  # Start agent with meshctl (detached mode, custom port)
+  - name: "Start agent in detached mode"
+    handler: shell
+    command: "meshctl start lifecycle-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3004 -d"
+    workdir: /workspace
+    capture: start_output
+  # Wait for agent to start
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+  # Check if agent is running with meshctl list
+  - name: "Check agent is running with meshctl list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+  # Show agent logs for debugging
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs lifecycle-agent-ts 2>/dev/null | tail -20 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+  # Stop agents with meshctl stop
+  - name: "Stop agents with meshctl stop"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    capture: stop_output
+  # Wait for process to terminate
+  - name: "Wait for process to terminate"
+    handler: wait
+    seconds: 2
+  # Verify agent is stopped
+  - name: "Verify agent is stopped"
+    handler: shell
+    command: "meshctl list 2>&1 || echo 'no agents'"
+    workdir: /workspace
+    capture: stop_check
+assertions:
+  # Agent was scaffolded
+  - expr: ${file:/workspace/lifecycle-agent-ts/src/index.ts} exists
+    message: "Agent should be scaffolded"
+  # meshctl start succeeded
+  - expr: ${captured.start_output} contains 'lifecycle-agent-ts'
+    message: "meshctl start should report agent started"
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'lifecycle-agent-ts'
+    message: "Agent should appear in meshctl list"
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
