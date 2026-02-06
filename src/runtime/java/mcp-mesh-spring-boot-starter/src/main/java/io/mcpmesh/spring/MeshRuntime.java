@@ -30,6 +30,7 @@ public class MeshRuntime implements SmartLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private MeshHandle handle;
+    private volatile int pendingPort = -1;
 
     public MeshRuntime(AgentSpec agentSpec) {
         this.agentSpec = agentSpec;
@@ -43,6 +44,13 @@ public class MeshRuntime implements SmartLifecycle {
             try {
                 handle = MeshHandle.start(agentSpec);
                 log.info("MCP Mesh runtime started successfully");
+
+                // Apply deferred port update if WebServerInitializedEvent fired before start
+                if (pendingPort > 0) {
+                    log.info("Applying deferred port update: {}", pendingPort);
+                    handle.updatePort(pendingPort);
+                    pendingPort = -1;
+                }
             } catch (Exception e) {
                 running.set(false);
                 throw new RuntimeException("Failed to start mesh runtime", e);
@@ -100,6 +108,26 @@ public class MeshRuntime implements SmartLifecycle {
         if (handle != null && isRunning()) {
             handle.reportHealth(status);
         }
+    }
+
+    /**
+     * Update the HTTP port after auto-detection.
+     *
+     * <p>Call this when the actual port is known (e.g., from WebServerInitializedEvent)
+     * to update the registry with the correct endpoint. This is needed when
+     * port=0 is used and the OS assigns a random port.
+     *
+     * @param port The actual port the HTTP server is listening on
+     * @return true if the update was sent successfully
+     */
+    public boolean updatePort(int port) {
+        if (handle != null && isRunning()) {
+            return handle.updatePort(port);
+        }
+        // Runtime not started yet — save for application during start()
+        log.info("Runtime not yet started. Saving port {} for deferred update", port);
+        this.pendingPort = port;
+        return true;
     }
 
     /**

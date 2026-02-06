@@ -152,6 +152,31 @@ public class MeshHandle implements Closeable {
     }
 
     /**
+     * Update the HTTP port after auto-detection.
+     *
+     * <p>Call this after the HTTP server starts with port=0 to update
+     * the registry with the actual assigned port. This triggers a full
+     * heartbeat to re-register with the correct endpoint.
+     *
+     * @param port The actual port the HTTP server is listening on
+     * @return true if the update was sent successfully
+     */
+    public boolean updatePort(int port) {
+        if (closed.get()) {
+            throw new MeshException("Handle is closed");
+        }
+
+        int result = core.mesh_update_port(handle, port);
+        if (result != 0) {
+            String error = getLastError(core);
+            log.warn("Failed to update port to {}: {}", port, error);
+            return false;
+        }
+        log.info("Port updated to {}", port);
+        return true;
+    }
+
+    /**
      * Request graceful shutdown of the agent.
      *
      * <p>This is non-blocking. Use {@link #nextEvent(long)} to wait for the

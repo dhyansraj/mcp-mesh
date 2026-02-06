@@ -12,7 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -139,6 +141,20 @@ public class MeshAutoConfiguration {
             spec.getName(), spec.getTools().size());
 
         return new MeshRuntime(spec);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "meshPortUpdater")
+    public ApplicationListener<WebServerInitializedEvent> meshPortUpdater(MeshRuntime runtime) {
+        return event -> {
+            int actualPort = event.getWebServer().getPort();
+            int specPort = runtime.getAgentSpec().getHttpPort();
+            if (specPort == 0 || specPort != actualPort) {
+                log.info("Web server started on port {}. Updating mesh registry (spec port was {})",
+                    actualPort, specPort);
+                runtime.updatePort(actualPort);
+            }
+        };
     }
 
     @Bean

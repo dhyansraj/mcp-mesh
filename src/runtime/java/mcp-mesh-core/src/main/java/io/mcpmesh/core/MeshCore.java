@@ -95,6 +95,18 @@ public interface MeshCore {
      */
     int mesh_report_health(Pointer handle, String status);
 
+    /**
+     * Update the HTTP port after auto-detection.
+     *
+     * <p>Call this after the HTTP server starts with port=0 to update
+     * the registry with the actual assigned port.
+     *
+     * @param handle Agent handle
+     * @param port The actual port the HTTP server is listening on
+     * @return 0 on success, -1 on error
+     */
+    int mesh_update_port(Pointer handle, int port);
+
     // ==========================================================================
     // Config Resolution Functions
     // ==========================================================================

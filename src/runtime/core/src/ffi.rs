@@ -422,6 +422,50 @@ pub unsafe extern "C" fn mesh_report_health(
     0
 }
 
+/// Update the HTTP port after auto-detection.
+///
+/// Call this after the HTTP server starts with port=0 to update
+/// the registry with the actual assigned port. Triggers a full
+/// heartbeat to re-register with the correct endpoint.
+///
+/// # Arguments
+/// * `handle` - Agent handle
+/// * `port` - The actual port the HTTP server is listening on
+///
+/// # Returns
+/// 0 on success, -1 on error
+///
+/// # Safety
+/// * `handle` must be a valid handle from `mesh_start_agent`
+#[no_mangle]
+pub unsafe extern "C" fn mesh_update_port(
+    handle: *mut MeshAgentHandle,
+    port: i32,
+) -> i32 {
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+
+    if port < 0 || port > 65535 {
+        set_last_error(format!("Invalid port: {}", port));
+        return -1;
+    }
+
+    let handle = &*handle;
+
+    match handle.command_tx.try_send(crate::runtime::RuntimeCommand::UpdatePort(port as u16)) {
+        Ok(_) => {
+            info!("FFI: Port updated to {}", port);
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("Failed to send port update: {}", e));
+            -1
+        }
+    }
+}
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -930,6 +974,29 @@ mod tests {
             let invalid = CString::new("not valid json").unwrap();
             // Should return 0 for invalid JSON
             assert_eq!(mesh_publish_span(invalid.as_ptr()), 0);
+        }
+    }
+
+    #[test]
+    fn test_update_port_null_handle() {
+        unsafe {
+            let result = mesh_update_port(ptr::null_mut(), 8080);
+            assert_eq!(result, -1);
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            mesh_free_string(err);
+        }
+    }
+
+    #[test]
+    fn test_update_port_invalid() {
+        unsafe {
+            // Negative port
+            let result = mesh_update_port(ptr::null_mut(), -1);
+            assert_eq!(result, -1);
+            // Port too high
+            let result = mesh_update_port(ptr::null_mut(), 70000);
+            assert_eq!(result, -1);
         }
     }
 }
