@@ -102,12 +102,12 @@ Edit `config.yaml` to set versions:
 
 ```yaml
 packages:
-  cli_version: "0.9.0-beta.10" # @mcpmesh/cli
-  sdk_python_version: "0.9.0-beta.10" # mcp-mesh (pip) - PEP 440 format
-  sdk_typescript_version: "0.9.0-beta.10" # @mcpmesh/sdk
+  cli_version: "0.9.0-beta.11" # @mcpmesh/cli
+  sdk_python_version: "0.9.0-beta.11" # mcp-mesh (pip) - PEP 440 format
+  sdk_typescript_version: "0.9.0-beta.11" # @mcpmesh/sdk
 
 docker:
-  base_image: "tsuite-mesh:0.9.0-beta.10"
+  base_image: "tsuite-mesh:0.9.0-beta.11"
 ```
 
 ## Environment Variables
