@@ -1,0 +1,64 @@
+# Test Case: Scaffold LLM Provider - OpenAI TypeScript
+# Verifies meshctl scaffold generates OpenAI provider with correct model version for TypeScript
+
+name: "Scaffold LLM Provider - OpenAI TS"
+description: "Verify OpenAI TypeScript provider scaffold uses current model (gpt-4o)"
+tags:
+  - scaffolding
+  - meshctl
+  - openai
+  - typescript
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold OpenAI LLM provider for TypeScript
+  - name: "Scaffold OpenAI provider"
+    handler: shell
+    command: "meshctl scaffold --name openai-test-ts --agent-type llm-provider --model openai/gpt-4o --lang typescript"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find openai-test-ts -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check src/index.ts for model version
+  - name: "Check src/index.ts content"
+    handler: shell
+    command: "cat openai-test-ts/src/index.ts"
+    workdir: /workspace
+    capture: index_content
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # src/index.ts exists
+  - expr: "${captured.generated_files} contains 'src/index.ts'"
+    message: "src/index.ts should be created"
+
+  # package.json exists
+  - expr: "${captured.generated_files} contains 'package.json'"
+    message: "package.json should be created"
+
+  # src/index.ts has addLlmProvider
+  - expr: "${captured.index_content} contains 'addLlmProvider'"
+    message: "src/index.ts should have addLlmProvider call"
+
+  # Model should be gpt-4o
+  - expr: "${captured.index_content} contains 'gpt-4o'"
+    message: "Should use gpt-4o model"
+
+  # Should have openai in model path
+  - expr: "${captured.index_content} contains 'openai/'"
+    message: "Model should have openai/ prefix"
+
+post_run:
+  - routine: global.cleanup_workspace

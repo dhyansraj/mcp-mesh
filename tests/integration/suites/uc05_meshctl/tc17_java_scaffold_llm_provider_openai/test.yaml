@@ -1,0 +1,68 @@
+# Test Case: Scaffold LLM Provider - OpenAI Java
+# Verifies meshctl scaffold generates OpenAI provider with correct model version for Java
+
+name: "Scaffold LLM Provider - OpenAI Java"
+description: "Verify OpenAI Java provider scaffold uses current model (gpt-4o)"
+tags:
+  - scaffolding
+  - meshctl
+  - openai
+  - java
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold OpenAI LLM provider for Java
+  - name: "Scaffold OpenAI provider"
+    handler: shell
+    command: "meshctl scaffold --name openai-test-java --agent-type llm-provider --model openai/gpt-4o --lang java"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find openai-test-java -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check Application.java for model version
+  - name: "Check Application.java content"
+    handler: shell
+    command: "find openai-test-java -name '*Application.java' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_content
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # pom.xml exists
+  - expr: "${captured.generated_files} contains 'pom.xml'"
+    message: "pom.xml should be created"
+
+  # Application.java exists
+  - expr: "${captured.generated_files} contains 'Application.java'"
+    message: "Application.java should be created"
+
+  # Application.java has @MeshLlmProvider
+  - expr: "${captured.app_content} contains '@MeshLlmProvider'"
+    message: "Application.java should have @MeshLlmProvider annotation"
+
+  # Application.java has @MeshAgent
+  - expr: "${captured.app_content} contains '@MeshAgent'"
+    message: "Application.java should have @MeshAgent annotation"
+
+  # Model should be gpt-4o
+  - expr: "${captured.app_content} contains 'gpt-4o'"
+    message: "Should use gpt-4o model"
+
+  # Should have openai in model path
+  - expr: "${captured.app_content} contains 'openai/'"
+    message: "Model should have openai/ prefix"
+
+post_run:
+  - routine: global.cleanup_workspace

@@ -1,0 +1,72 @@
+# Test Case: Scaffold LLM Provider - Claude Java
+# Verifies meshctl scaffold generates Claude provider with correct model version for Java
+
+name: "Scaffold LLM Provider - Claude Java"
+description: "Verify Claude Java provider scaffold uses current model (claude-sonnet-4-5)"
+tags:
+  - scaffolding
+  - meshctl
+  - claude
+  - java
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold Claude LLM provider for Java
+  - name: "Scaffold Claude provider"
+    handler: shell
+    command: "meshctl scaffold --name claude-test-java --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --lang java"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find claude-test-java -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check Application.java for model version
+  - name: "Check Application.java content"
+    handler: shell
+    command: "find claude-test-java -name '*Application.java' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_content
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # pom.xml exists
+  - expr: "${captured.generated_files} contains 'pom.xml'"
+    message: "pom.xml should be created"
+
+  # Application.java exists
+  - expr: "${captured.generated_files} contains 'Application.java'"
+    message: "Application.java should be created"
+
+  # helm-values.yaml exists
+  - expr: "${captured.generated_files} contains 'helm-values.yaml'"
+    message: "helm-values.yaml should be created"
+
+  # Application.java has @MeshLlmProvider
+  - expr: "${captured.app_content} contains '@MeshLlmProvider'"
+    message: "Application.java should have @MeshLlmProvider annotation"
+
+  # Application.java has @MeshAgent
+  - expr: "${captured.app_content} contains '@MeshAgent'"
+    message: "Application.java should have @MeshAgent annotation"
+
+  # Model should be claude-sonnet-4-5
+  - expr: "${captured.app_content} contains 'claude-sonnet-4-5'"
+    message: "Should use claude-sonnet-4-5 model"
+
+  # Should have anthropic in model path
+  - expr: "${captured.app_content} contains 'anthropic/'"
+    message: "Model should have anthropic/ prefix"
+
+post_run:
+  - routine: global.cleanup_workspace
