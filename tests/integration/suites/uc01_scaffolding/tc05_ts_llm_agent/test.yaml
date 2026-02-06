@@ -59,6 +59,15 @@ test:
     handler: npm-install
     path: /workspace/test-llm-agent-ts
 
+  # Verify TypeScript compiles
+  - name: "Verify TypeScript compiles"
+    handler: shell
+    command: "cd /workspace/test-llm-agent-ts && npx tsc --noEmit"
+    timeout: 60
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated TypeScript code should compile without errors"
+
   # Start the agent
   - name: "Start LLM agent"
     handler: shell

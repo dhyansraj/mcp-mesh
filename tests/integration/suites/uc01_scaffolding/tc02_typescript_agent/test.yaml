@@ -48,6 +48,24 @@ test:
     command: "cat test-ts-agent/helm-values.yaml"
     capture: helm_values
 
+  # Install dependencies
+  - name: "Install dependencies"
+    handler: shell
+    command: "cd test-ts-agent && npm install"
+    timeout: 120
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "npm install should succeed"
+
+  # Verify TypeScript compiles
+  - name: "Verify TypeScript compiles"
+    handler: shell
+    command: "cd test-ts-agent && npx tsc --noEmit"
+    timeout: 60
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated TypeScript code should compile without errors"
+
 # Assertions
 assertions:
   # Scaffold command succeeded

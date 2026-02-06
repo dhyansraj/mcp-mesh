@@ -42,6 +42,14 @@ test:
     command: "cat test-python-agent/helm-values.yaml"
     capture: helm_values
 
+  # Verify generated Python code compiles
+  - name: "Verify Python code compiles"
+    handler: shell
+    command: "python3 -m py_compile test-python-agent/main.py"
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated Python code should compile without errors"
+
 # Assertions
 assertions:
   # Scaffold command succeeded

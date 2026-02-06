@@ -67,6 +67,24 @@ test:
     command: "grep 'file:' test-ts-agent/package.json && echo 'FOUND_FILE_REF' || echo 'NO_FILE_REF'"
     capture: file_ref_check
 
+  # Install dependencies
+  - name: "Install dependencies"
+    handler: shell
+    command: "cd test-ts-agent && npm install"
+    timeout: 120
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "npm install should succeed"
+
+  # Verify TypeScript compiles
+  - name: "Verify TypeScript compiles"
+    handler: shell
+    command: "cd test-ts-agent && npx tsc --noEmit"
+    timeout: 60
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated TypeScript code should compile without errors"
+
 # Assertions
 assertions:
   # Last command succeeded (file_ref_check)
