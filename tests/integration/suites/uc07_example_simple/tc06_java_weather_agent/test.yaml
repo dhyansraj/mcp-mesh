@@ -1,0 +1,123 @@
+# Test Case: tc06_java_weather_agent
+# Tests Java Spring Boot weather agent with external REST API integration (wttr.in)
+# Standalone agent with 3 tools: getWeatherByCity, getWeatherByZip, getForecast
+
+name: "Java Weather Agent (wttr.in)"
+description: "Test Java Spring Boot weather agent with external REST API calls to wttr.in"
+tags:
+  - java
+  - spring
+  - weather
+  - external-api
+  - example
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy weather agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-weather-agent /workspace/
+      ls -la /workspace/java-weather-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-weather-agent
+    timeout: 600
+
+  # Start the weather agent
+  - name: "Start Java weather agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-weather-agent -d
+      echo "Java weather agent starting"
+    capture: start_output
+
+  # Wait for agent registration
+  - name: "Wait for weather agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java weather agent..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "weather"; then
+          echo "Weather agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Weather agent did not register within 60s"
+      meshctl logs weather 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_output
+    timeout: 90
+
+  # Verify agent is registered
+  - name: "Verify agent registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools to verify all 3 are exposed
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: tools_output
+
+  # Call getWeatherByCity
+  - name: "Call getWeatherByCity for London"
+    handler: shell
+    command: "meshctl call getWeatherByCity '{\"city\": \"London\"}'"
+    capture: weather_city_result
+    timeout: 30
+
+  # Call getForecast
+  - name: "Call getForecast for London"
+    handler: shell
+    command: "meshctl call getForecast '{\"city\": \"London\"}'"
+    capture: forecast_result
+    timeout: 30
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'weather'"
+    message: "Weather agent should be registered in mesh"
+
+  # Tools are listed
+  - expr: "${captured.tools_output} contains 'getWeatherByCity'"
+    message: "getWeatherByCity tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'getWeatherByZip'"
+    message: "getWeatherByZip tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'getForecast'"
+    message: "getForecast tool should be listed"
+
+  # Weather response structure validation
+  - expr: "${captured.weather_city_result} icontains 'london'"
+    message: "Weather response should contain London (city name or location)"
+
+  - expr: "${captured.weather_city_result} contains 'wttr.in'"
+    message: "Weather response should contain wttr.in source"
+
+  - expr: "${captured.weather_city_result} icontains 'temperature'"
+    message: "Weather response should contain temperature data"
+
+  # Forecast response structure validation
+  - expr: "${captured.forecast_result} icontains 'forecast'"
+    message: "Forecast response should contain forecast data"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*weather" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
