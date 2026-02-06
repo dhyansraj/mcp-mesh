@@ -1,0 +1,114 @@
+# Test Case: Java Agent Registration
+# Tests that a Java Spring Boot agent registers with the registry on startup.
+#
+# Ported from tc01_agent_registration (Python/TypeScript) to Java.
+# Java agents register as {name}-{8char_uuid} (e.g., greeter-8918ca3c),
+# so we grep for the base name "greeter" instead of the full registered name.
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - java-greeter-agent: Java Spring Boot agent with @MeshTool "greet"
+
+name: "Java Agent Registration"
+description: "Verify Java Spring Boot agent registers with registry on startup"
+tags:
+  - registry
+  - registration
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifact to workspace
+  - name: "Copy Java greeter agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start Java agent in detached mode (registry auto-starts)
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Java greeter agent starting via meshctl"
+    capture: start_output
+
+  # Wait for registration (Java is slow to start due to Spring Boot)
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      echo "Waiting for greeter agent to register..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "greeter"; then
+          echo "Agent registered after $((i*2))s"
+          echo "PASS: Java agent registered successfully"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter agent did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify agent appears in meshctl list
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # Verify agent count
+  - name: "Verify agent count"
+    handler: shell
+    command: |
+      count=$(meshctl list 2>/dev/null | grep -c "greeter" || echo "0")
+      echo "Greeter agent count: $count"
+      if [ "$count" -ge 1 ]; then
+        echo "PASS: Java greeter agent registered"
+      else
+        echo "FAIL: Expected at least 1 greeter agent, found $count"
+        meshctl list
+        exit 1
+      fi
+    capture: agent_count
+
+assertions:
+  - expr: "${captured.copy_output} contains 'java-greeter-agent'"
+    message: "Java greeter agent should be copied to workspace"
+
+  - expr: "${captured.start_output} contains 'java-greeter-agent'"
+    message: "Java greeter agent should start successfully"
+
+  - expr: "${captured.wait_registration} contains 'PASS'"
+    message: "Java agent should register within 90s polling window"
+
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Java greeter agent should appear in meshctl list"
+
+  - expr: "${captured.agent_count} contains 'PASS'"
+    message: "At least one greeter agent should be registered"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

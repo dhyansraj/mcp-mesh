@@ -1,0 +1,140 @@
+# Test Case: Java Partial Name Resolution
+# Tests that meshctl status accepts partial agent names for Java agents.
+#
+# Ported from tc04_partial_name_resolution (Python/TypeScript) to Java.
+# Java agents register as {name}-{8char_uuid} (e.g., greeter-8918ca3c),
+# so partial name "greeter" should resolve to the unique Java agent.
+#
+# Tests:
+#   1. "greeter" resolves to the registered greeter-XXXXXXXX agent
+#   2. "greet" also resolves (shorter unique prefix)
+#   3. "nonexistent" is rejected (no match)
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - java-greeter-agent: Java Spring Boot agent with @MeshTool "greet"
+
+name: "Java Partial Name Resolution"
+description: "Verify meshctl status works with partial names for Java agents"
+tags:
+  - registry
+  - discovery
+  - meshctl
+  - partial-name
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifact to workspace
+  - name: "Copy Java greeter agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start Java agent in detached mode
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Java greeter agent starting"
+    capture: start_output
+
+  # Wait for registration (Java is slow to start)
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      echo "Waiting for greeter agent to register..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "greeter"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter agent did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # === TEST 1: Partial name "greeter" should resolve ===
+  - name: "Test partial name greeter resolves"
+    handler: shell
+    command: |
+      if meshctl status greeter 2>&1; then
+        echo "PASS: greeter resolved correctly"
+      else
+        echo "FAIL: greeter did not resolve"
+        exit 1
+      fi
+    capture: greeter_partial
+
+  # === TEST 2: Shorter partial "greet" should also resolve ===
+  - name: "Test shorter partial name greet resolves"
+    handler: shell
+    command: |
+      if meshctl status greet 2>&1; then
+        echo "PASS: greet resolved correctly"
+      else
+        echo "FAIL: greet did not resolve"
+        exit 1
+      fi
+    capture: greet_short
+
+  # === TEST 3: Non-existent partial should fail ===
+  - name: "Test non-existent partial name is rejected"
+    handler: shell
+    command: |
+      if meshctl status nonexistent 2>&1; then
+        echo "FAIL: Non-existent name should not resolve"
+        exit 1
+      else
+        echo "PASS: Non-existent name correctly rejected"
+      fi
+    capture: nonexistent_check
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Java greeter agent should be registered"
+
+  # Partial name resolution works
+  - expr: "${captured.greeter_partial} contains 'PASS'"
+    message: "Partial name 'greeter' should resolve to the Java agent"
+
+  - expr: "${captured.greet_short} contains 'PASS'"
+    message: "Short partial 'greet' should resolve to the Java agent"
+
+  # Non-existent name rejected
+  - expr: "${captured.nonexistent_check} contains 'PASS'"
+    message: "Non-existent partial name should be rejected"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

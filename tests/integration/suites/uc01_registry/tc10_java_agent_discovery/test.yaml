@@ -1,0 +1,137 @@
+# Test Case: Java Agent Discovery
+# Tests meshctl discovery commands with a Java Spring Boot agent.
+#
+# Ported from tc02_agent_discovery (Python/TypeScript) to Java.
+# Verifies meshctl list, list --wide, list --tools, and status commands
+# work correctly with a registered Java agent.
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - java-greeter-agent: Java Spring Boot agent with @MeshTool "greet"
+
+name: "Java Agent Discovery"
+description: "Verify meshctl list, list --tools, and status commands with Java agent"
+tags:
+  - registry
+  - discovery
+  - meshctl
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifact to workspace
+  - name: "Copy Java greeter agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start Java agent in detached mode
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Java greeter agent starting"
+    capture: start_output
+
+  # Wait for registration (Java is slow to start)
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      echo "Waiting for greeter agent to register..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "greeter"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter agent did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Test: meshctl list (shows healthy agents)
+  - name: "Test meshctl list command"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # Test: meshctl list --wide (extended info with ports)
+  - name: "Test meshctl list --wide command"
+    handler: shell
+    command: "meshctl list --wide"
+    capture: list_wide
+
+  # Test: meshctl list --tools (shows available tools)
+  - name: "Test meshctl list --tools command"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Test: meshctl status (shows wiring details)
+  - name: "Test meshctl status command"
+    handler: shell
+    command: "meshctl status"
+    capture: status_output
+
+  # Verify greet tool is discoverable
+  - name: "Verify greet tool is discoverable"
+    handler: shell
+    command: |
+      if meshctl list --tools | grep -q "greet"; then
+        echo "PASS: greet tool found in tool listing"
+      else
+        echo "FAIL: greet tool not found"
+        meshctl list --tools
+        exit 1
+      fi
+    capture: tool_check
+
+assertions:
+  # meshctl list shows the Java agent
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "meshctl list should show Java greeter agent"
+
+  # meshctl list --wide shows port info
+  - expr: "${captured.list_wide} contains '900'"
+    message: "meshctl list --wide should show agent port"
+
+  - expr: "${captured.list_wide} contains 'greeter'"
+    message: "meshctl list --wide should show greeter agent"
+
+  # meshctl list --tools shows the greet tool
+  - expr: "${captured.list_tools} contains 'greet'"
+    message: "meshctl list --tools should show greet tool"
+
+  # meshctl status works
+  - expr: "${captured.status_output} contains 'greeter'"
+    message: "meshctl status should show greeter agent information"
+
+  # Tool check passed
+  - expr: "${captured.tool_check} contains 'PASS'"
+    message: "greet tool should be discoverable via meshctl list --tools"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
