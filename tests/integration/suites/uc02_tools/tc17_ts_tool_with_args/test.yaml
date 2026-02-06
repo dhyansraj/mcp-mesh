@@ -1,0 +1,159 @@
+# Test Case: TypeScript Tool With Arguments
+# Tests tool calls with various argument types and values using TypeScript agent.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "TypeScript Tool With Arguments"
+description: "Verify TypeScript tool calls work with different argument types"
+tags:
+  - tools
+  - meshctl
+  - arguments
+  - typescript
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+    capture: copy_output
+
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # Start agent
+  - name: "Start agent"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Test add with positive numbers
+  - name: "Test add with positive numbers"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call add '{"a": 10, "b": 20}' 2>&1)
+      echo "add(10,20): $RESULT"
+      if echo "$RESULT" | grep -q "30"; then
+        echo "PASS: add with positive numbers"
+      else
+        echo "FAIL: Expected 30"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_positive
+
+  # Test add with negative numbers
+  - name: "Test add with negative numbers"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call add '{"a": -5, "b": 3}' 2>&1)
+      echo "add(-5,3): $RESULT"
+      if echo "$RESULT" | grep -q "\-2"; then
+        echo "PASS: add with negative numbers"
+      else
+        echo "FAIL: Expected -2"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_negative
+
+  # Test subtract
+  - name: "Test subtract"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call subtract '{"a": 100, "b": 42}' 2>&1)
+      echo "subtract(100,42): $RESULT"
+      if echo "$RESULT" | grep -q "58"; then
+        echo "PASS: subtract works"
+      else
+        echo "FAIL: Expected 58"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_subtract
+
+  # Test multiply
+  - name: "Test multiply"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call multiply '{"a": 7, "b": 8}' 2>&1)
+      echo "multiply(7,8): $RESULT"
+      if echo "$RESULT" | grep -q "56"; then
+        echo "PASS: multiply works"
+      else
+        echo "FAIL: Expected 56"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_multiply
+
+  # Test divide
+  - name: "Test divide"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call divide '{"a": 100, "b": 4}' 2>&1)
+      echo "divide(100,4): $RESULT"
+      if echo "$RESULT" | grep -q "25"; then
+        echo "PASS: divide works"
+      else
+        echo "FAIL: Expected 25"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_divide
+
+  # Test with zero
+  - name: "Test with zero"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call add '{"a": 0, "b": 0}' 2>&1)
+      echo "add(0,0): $RESULT"
+      if echo "$RESULT" | grep -q "0"; then
+        echo "PASS: zero handling works"
+      else
+        echo "FAIL: Expected 0"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: test_zero
+
+assertions:
+  - expr: "${captured.test_positive} contains 'PASS'"
+    message: "Add with positive numbers should work"
+
+  - expr: "${captured.test_negative} contains 'PASS'"
+    message: "Add with negative numbers should work"
+
+  - expr: "${captured.test_subtract} contains 'PASS'"
+    message: "Subtract should work"
+
+  - expr: "${captured.test_multiply} contains 'PASS'"
+    message: "Multiply should work"
+
+  - expr: "${captured.test_divide} contains 'PASS'"
+    message: "Divide should work"
+
+  - expr: "${captured.test_zero} contains 'PASS'"
+    message: "Zero handling should work"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

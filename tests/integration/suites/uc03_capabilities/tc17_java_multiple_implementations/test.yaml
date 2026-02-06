@@ -1,0 +1,152 @@
+# Test Case: tc17_java_multiple_implementations
+# Tests that Java tag filters distinguish between multiple providers
+# with the same capability but different tags.
+#
+# Scenario: Start fast-provider (tags: ["api", "fast"]) and accurate-provider
+# (tags: ["api", "accurate"]) -- both have data_service capability.
+# Consumer calls fetchCombined (requires "api", prefers "accurate", excludes "deprecated").
+# Expected: JAVA_ACCURATE is selected due to +accurate preference.
+
+name: "Java Multiple Implementations"
+description: "Verify Java tag filters distinguish between multiple providers with same capability"
+tags:
+  - capabilities
+  - tags
+  - multiple
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-fast-provider /workspace/
+      cp -r /uc-artifacts/java-accurate-provider /workspace/
+      cp -r /uc-artifacts/java-tag-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for all agents
+  - name: "Install fast-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-fast-provider
+    timeout: 600
+
+  - name: "Install accurate-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-accurate-provider
+    timeout: 600
+
+  - name: "Install tag-consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-tag-consumer
+    timeout: 600
+
+  # Start both providers
+  - name: "Start fast-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Fast provider starting"
+    capture: start_fast
+
+  - name: "Start accurate-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Accurate provider starting"
+    capture: start_accurate
+
+  - name: "Wait for both providers to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "java-fast-provider" && echo "$LIST" | grep -q "java-accurate-provider"; then
+          echo "Both providers registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Providers did not register"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_providers
+    timeout: 120
+
+  # Start consumer
+  - name: "Start tag-consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Consumer starting"
+    capture: start_consumer
+
+  - name: "Wait for consumer to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  # Verify data_service capability is visible
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call fetchCombined: requires "api", prefers "accurate", excludes "deprecated"
+  - name: "Call fetchCombined with combined tag filter"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetchCombined '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_ACCURATE"; then
+        echo "PASS: Selected accurate provider via combined tag filter"
+      else
+        echo "FAIL: Expected JAVA_ACCURATE (preferred accurate, both match api requirement)"
+        exit 1
+      fi
+    capture: call_combined
+    timeout: 60
+
+assertions:
+  - expr: "${captured.list_tools} contains 'data_service'"
+    message: "data_service capability should be visible in tool list"
+
+  - expr: "${captured.list_tools} contains 'fetchCombined'"
+    message: "fetchCombined tool should be registered"
+
+  - expr: "${captured.call_combined} contains 'PASS'"
+    message: "Should select accurate provider via combined tag filter"
+
+  - expr: "${captured.call_combined} contains 'JAVA_ACCURATE'"
+    message: "Result should contain JAVA_ACCURATE from preferred provider"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
