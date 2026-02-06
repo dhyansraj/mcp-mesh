@@ -111,7 +111,7 @@ test:
   - name: "Phase A: Call fetch_combined (require api, prefer accurate, exclude deprecated)"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_combined '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchCombined '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_DEPRECATED"; then
         echo "FAIL_A: Should NOT match deprecated provider"
@@ -186,10 +186,10 @@ test:
   - name: "Phase B1: Call fetch_required with fast-provider"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_FAST"; then
-        echo "PASS_B1: fast-provider matched fetch_required"
+        echo "PASS_B1: fast-provider matched fetchRequired"
       else
         echo "FAIL_B1: Expected JAVA_FAST"
         exit 1
@@ -257,10 +257,10 @@ test:
   - name: "Phase B2: Call fetch_required with accurate-provider"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_ACCURATE"; then
-        echo "PASS_B2: accurate-provider matched fetch_required"
+        echo "PASS_B2: accurate-provider matched fetchRequired"
       else
         echo "FAIL_B2: Expected JAVA_ACCURATE"
         exit 1

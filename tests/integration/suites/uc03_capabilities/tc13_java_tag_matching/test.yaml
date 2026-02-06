@@ -107,7 +107,7 @@ test:
   - name: "Phase A: Call fetch_required"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_required '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_FAST"; then
         echo "PASS_A: Matched provider with required 'api' tag"
@@ -186,7 +186,7 @@ test:
   - name: "Phase B: Call fetch_prefer_fast"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_prefer_fast '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchPreferFast '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_FAST"; then
         echo "PASS_B: Preferred fast provider was selected"
@@ -265,7 +265,7 @@ test:
   - name: "Phase C: Call fetch_exclude_deprecated"
     handler: shell
     command: |
-      RESULT=$(meshctl call fetch_exclude_deprecated '{"query": "test"}' 2>&1)
+      RESULT=$(meshctl call fetchExcludeDeprecated '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
       if echo "$RESULT" | grep -q "JAVA_DEPRECATED"; then
         echo "FAIL_C: Should NOT match deprecated provider"
