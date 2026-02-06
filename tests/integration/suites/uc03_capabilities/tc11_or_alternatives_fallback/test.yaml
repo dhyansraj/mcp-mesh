@@ -21,6 +21,7 @@ tags:
   - or-alternatives
   - issue-471
   - python
+  - typescript
 timeout: 300
 
 pre_run:

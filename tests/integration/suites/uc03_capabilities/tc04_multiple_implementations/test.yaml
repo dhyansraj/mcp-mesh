@@ -16,6 +16,7 @@ tags:
   - capabilities
   - tags
   - multiple
+  - python
 timeout: 180
 
 pre_run:

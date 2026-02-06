@@ -9,6 +9,7 @@ tags:
   - tools
   - meshctl
   - arguments
+  - python
 timeout: 120
 
 pre_run:

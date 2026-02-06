@@ -133,6 +133,23 @@ int32_t mesh_is_running(const struct MeshAgentHandle *handle);
 // * `status` must be a valid null-terminated C string
 int32_t mesh_report_health(struct MeshAgentHandle *handle, const char *status);
 
+// Update the HTTP port after auto-detection.
+//
+// Call this after the HTTP server starts with port=0 to update
+// the registry with the actual assigned port. Triggers a full
+// heartbeat to re-register with the correct endpoint.
+//
+// # Arguments
+// * `handle` - Agent handle
+// * `port` - The actual port the HTTP server is listening on
+//
+// # Returns
+// 0 on success, -1 on error
+//
+// # Safety
+// * `handle` must be a valid handle from `mesh_start_agent`
+int32_t mesh_update_port(struct MeshAgentHandle *handle, int32_t port);
+
 // Get last error message.
 //
 // Thread-local, cleared on next `mesh_*` call.

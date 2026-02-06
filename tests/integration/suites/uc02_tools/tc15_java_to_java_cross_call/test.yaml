@@ -1,0 +1,172 @@
+# Test Case: Java to Java Cross-Agent Call
+# Tests Java agent calling another Java agent via mesh.
+#
+# Scenario:
+#   - java-greeter-agent has greetEmployee tool (depends on get_employee capability)
+#   - java-employee-service provides get_employee capability
+#   - Call greetEmployee which fetches Employee and greets them
+
+name: "UC02: Java to Java Cross-Agent Call"
+description: "Verify Java agent can call another Java agent tool via mesh"
+tags:
+  - tools
+  - meshctl
+  - java
+  - cross-agent
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java greeter artifact to workspace
+  - name: "Copy Java greeter to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_greeter
+
+  # Copy Java employee service artifact to workspace
+  - name: "Copy Java employee service to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      ls -la /workspace/java-employee-service/
+    capture: copy_employee
+
+  # Install Maven dependencies for greeter
+  - name: "Install Maven dependencies (greeter)"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Install Maven dependencies for employee service
+  - name: "Install Maven dependencies (employee)"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Start employee service first (provides get_employee capability)
+  - name: "Start Java employee service"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting via meshctl"
+    capture: start_employee
+
+  # Wait for employee service to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    command: |
+      echo "Waiting for employee-service..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "employee-service"; then
+          echo "Employee service registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 60s"
+      meshctl logs employee-service 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_employee
+    timeout: 90
+
+  # Start greeter agent (depends on get_employee capability)
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java greeter agent starting via meshctl"
+    capture: start_greeter
+
+  # Wait for greeter to register
+  - name: "Wait for greeter registration"
+    handler: shell
+    command: |
+      echo "Waiting for greeter..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not register within 60s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_greeter
+    timeout: 90
+
+  # Verify both agents are registered
+  - name: "Verify both agents registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call greetEmployee - this calls employee service via mesh
+  - name: "Call greetEmployee (Java -> Java)"
+    handler: shell
+    command: 'meshctl call greetEmployee ''{"employee_id": 1}'''
+    capture: call_greet_employee
+
+  # Call greetEmployee for another employee
+  - name: "Call greetEmployee for Carol"
+    handler: shell
+    command: 'meshctl call greetEmployee ''{"employee_id": 3}'''
+    capture: call_greet_carol
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'employee-service'"
+    message: "Employee service should be registered"
+
+  - expr: "${captured.list_agents} contains 'greeter'"
+    message: "Greeter should be registered"
+
+  # Tools are listed
+  - expr: "${captured.list_tools} contains 'greetEmployee'"
+    message: "greetEmployee tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'getEmployee'"
+    message: "getEmployee tool should be listed"
+
+  # Cross-agent call succeeded with Alice - use jq to parse nested JSON
+  - expr: "${jq:captured.call_greet_employee:.content[0].text | fromjson | .employee.firstName} == 'Alice'"
+    message: "Greeting should include employee name Alice"
+
+  - expr: "${jq:captured.call_greet_employee:.content[0].text | fromjson | .employee.lastName} == 'Smith'"
+    message: "Greeting should include employee last name"
+
+  - expr: "${jq:captured.call_greet_employee:.content[0].text | fromjson | .employee.department} == 'Engineering'"
+    message: "Greeting should mention department"
+
+  - expr: "${jq:captured.call_greet_employee:.content[0].text | fromjson | .callPath} contains 'greeter-java'"
+    message: "Response should indicate call path"
+
+  # Second cross-agent call with Carol
+  - expr: "${jq:captured.call_greet_carol:.content[0].text | fromjson | .employee.firstName} == 'Carol'"
+    message: "Second greeting should include Carol"
+
+  - expr: "${jq:captured.call_greet_carol:.content[0].text | fromjson | .employee.department} == 'Product'"
+    message: "Carol's greeting should mention Product department"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

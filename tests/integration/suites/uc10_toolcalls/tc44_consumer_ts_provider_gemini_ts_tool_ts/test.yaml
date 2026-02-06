@@ -11,9 +11,9 @@ name: "Consumer TS -> Provider GEMINI ts -> Tool TS"
 description: "Test ts consumer with gemini ts provider calling ts tool"
 tags:
   - toolcall
-  - ts
+  - typescript
   - gemini
-  - ts
+  - typescript
   - phase2
 timeout: 300
 pre_run:

@@ -276,3 +276,7 @@ tests/lib-tests/out/
 
 # Maven flatten plugin output
 .flattened-pom.xml
+or-tests/
+.envrc
+java-sdk-mcp-integration.md
+.python-version

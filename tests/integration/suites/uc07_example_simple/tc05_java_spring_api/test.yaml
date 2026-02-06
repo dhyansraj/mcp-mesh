@@ -1,0 +1,166 @@
+# Test Case: tc05_java_spring_api
+# Tests Java Spring Boot REST API with @MeshRoute dependency injection
+# Dependency chain: REST API (rest-api-consumer) -> greeter agent (basic-tool-agent)
+
+name: "Java Spring Boot REST API"
+description: "Test Java Spring Boot REST API with @MeshRoute for mesh dependency injection"
+tags:
+  - java
+  - spring
+  - rest
+  - mesh-route
+  - dependency-injection
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter /workspace/
+      cp -r /uc-artifacts/java-rest-api /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for greeter
+  - name: "Install greeter dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  # Install Maven dependencies for REST API
+  - name: "Install REST API dependencies"
+    handler: maven-install
+    path: /workspace/java-rest-api
+    timeout: 600
+
+  # Start Java greeter agent (provides greeting + agent_info capabilities)
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter -d
+      echo "Java greeter starting"
+    capture: start_greeter
+
+  # Wait for greeter to register
+  - name: "Wait for greeter registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java greeter..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Greeter did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_greeter
+    timeout: 120
+
+  # Start REST API consumer
+  - name: "Start REST API consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-rest-api -d
+      echo "REST API consumer starting"
+    capture: start_rest_api
+
+  # Wait for REST API to register
+  - name: "Wait for REST API registration"
+    handler: shell
+    command: |
+      echo "Waiting for REST API consumer..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "rest-api-consumer"; then
+          echo "REST API registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: REST API did not register within 90s"
+      meshctl logs rest-api-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_rest_api
+    timeout: 120
+
+  # Wait for Spring Boot to fully start serving HTTP
+  - name: "Wait for HTTP server ready"
+    handler: shell
+    command: |
+      echo "Waiting for Spring Boot HTTP..."
+      for i in $(seq 1 20); do
+        if curl -s --max-time 3 http://localhost:8080/api/health 2>/dev/null | grep -q "healthy"; then
+          echo "HTTP server ready after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: HTTP server not ready within 60s"
+      exit 1
+    capture: wait_http
+    timeout: 90
+
+  # Verify both agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_output
+
+  # Test health endpoint
+  - name: "Test health endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 http://localhost:8080/api/health"
+    capture: health_result
+
+  # Test greet endpoint (uses greeting dependency via @MeshRoute)
+  - name: "Test greet endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/greet?name=TestUser'"
+    capture: greet_result
+
+  # Test optional-greet endpoint (optional dependency with fallback)
+  - name: "Test optional-greet endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/optional-greet?name=World'"
+    capture: optional_greet_result
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Greeter agent should be registered"
+
+  - expr: "${captured.list_output} contains 'rest-api-consumer'"
+    message: "REST API consumer should be registered"
+
+  # Health endpoint works
+  - expr: "${captured.health_result} contains 'healthy'"
+    message: "Health endpoint should return healthy status"
+
+  # Greet endpoint works (calls mesh agent)
+  - expr: "${captured.greet_result} contains 'TestUser'"
+    message: "Greet endpoint should return greeting with TestUser"
+
+  - expr: "${captured.greet_result} contains 'mesh-agent'"
+    message: "Greet endpoint should use mesh-agent source"
+
+  # Optional greet works (with mesh agent available)
+  - expr: "${captured.optional_greet_result} contains 'mesh-agent'"
+    message: "Optional greet should use mesh-agent when available"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+      pkill -f "java.*rest-api" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -11,10 +11,11 @@ name: "Consumer PY -> Provider CLAUDE ts -> Tool JAVA"
 description: "Test py consumer with claude ts provider calling java tool"
 tags:
   - toolcall
-  - py
+  - python
   - claude
-  - ts
+  - typescript
   - phase2
+  - java
 timeout: 300
 
 pre_run:

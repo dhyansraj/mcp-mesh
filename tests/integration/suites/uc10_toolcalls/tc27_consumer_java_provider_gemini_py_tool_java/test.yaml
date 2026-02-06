@@ -15,6 +15,7 @@ tags:
   - gemini
   - java
   - phase1
+  - python
 timeout: 300
 pre_run:
   - routine: global.setup_for_java_agent

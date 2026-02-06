@@ -11,7 +11,7 @@ name: "Consumer PY -> Provider OPENAI py -> Tool JAVA"
 description: "Test py consumer with openai py provider calling java tool"
 tags:
   - toolcall
-  - py
+  - python
   - openai
   - java
   - phase1

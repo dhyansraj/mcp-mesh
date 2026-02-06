@@ -14,7 +14,7 @@ tags:
   - java
   - gemini
   - java
-  - ts
+  - typescript
   - phase3
 timeout: 300
 pre_run:

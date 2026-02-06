@@ -1,0 +1,134 @@
+# Test Case: Java Auto Port Detection
+# Verifies that auto-assigned port (http_port=0) is correctly reported to registry
+# with a Java Spring Boot agent.
+#
+# When using MCP_MESH_HTTP_PORT=0, the SDK should:
+# 1. Get a random port from the OS
+# 2. Report the ACTUAL port to registry (not 9999 or 0)
+
+name: "Java Auto Port Detection"
+description: "Verify auto-assigned port is correctly reported to registry with Java agent"
+tags:
+  - meshctl
+  - port
+  - auto-port
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start agent with auto-port (MCP_MESH_HTTP_PORT=0)
+  - name: "Start agent with auto-port"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Java agent starting with auto-port"
+    capture: start_output
+
+  # Wait for agent to register (Java is slower)
+  - name: "Wait for agent registration"
+    handler: shell
+    command: |
+      echo "Waiting for Java agent to start..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Agent registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Agent did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Get JSON output for detailed port check
+  - name: "Get agent JSON"
+    handler: shell
+    command: "meshctl list --json"
+    capture: list_json
+
+  # Extract port from endpoint
+  - name: "Extract endpoint port"
+    handler: shell
+    command: |
+      json=$(meshctl list --json)
+      endpoint=$(echo "$json" | jq -r '.agents[0].endpoint // empty')
+      echo "Endpoint: $endpoint"
+
+      port=$(echo "$endpoint" | sed -E 's/.*:([0-9]+)$/\1/')
+      echo "Port: $port"
+
+      if [ "$port" = "0" ]; then
+        echo "FAIL: Port is 0 (not detected)"
+        exit 1
+      elif [ "$port" = "9999" ]; then
+        echo "FAIL: Port is 9999 (default, not auto-assigned)"
+        exit 1
+      elif [ -z "$port" ] || [ "$port" = "null" ]; then
+        echo "FAIL: Could not extract port"
+        exit 1
+      else
+        echo "PASS: Auto-assigned port $port correctly reported"
+      fi
+    capture: port_check
+
+  # Verify tool still works on auto-assigned port
+  - name: "Call greet tool"
+    handler: shell
+    command: 'meshctl call greet ''{"name": "AutoPort"}'''
+    capture: call_greet
+
+assertions:
+  # Agent started
+  - expr: "${captured.start_output} contains 'auto-port'"
+    message: "Agent should start with auto-port"
+
+  # Agent registered
+  - expr: ${jq:captured.list_json:.agents | length} > 0
+    message: "Should have at least one agent in JSON output"
+
+  # Endpoint should NOT be port 9999
+  - expr: "${jq:captured.list_json:.agents[0].endpoint} not contains ':9999'"
+    message: "Endpoint should NOT report default port 9999"
+
+  # Endpoint should NOT be port 0
+  - expr: "${jq:captured.list_json:.agents[0].endpoint} not contains ':0/'"
+    message: "Endpoint should NOT report port 0"
+
+  # Port check passed
+  - expr: "${captured.port_check} contains 'PASS'"
+    message: "Auto-assigned port should be correctly detected and reported"
+
+  # Tool call works on auto-assigned port
+  - expr: "${captured.call_greet} contains 'AutoPort'"
+    message: "Tool call should work on auto-assigned port"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

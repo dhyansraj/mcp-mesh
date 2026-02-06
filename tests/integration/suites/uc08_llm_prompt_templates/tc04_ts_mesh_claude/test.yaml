@@ -11,6 +11,7 @@ tags:
   - claude
   - prompt-template
   - context-param
+  - python
 timeout: 300
 pre_run:
   - routine: global.setup_for_typescript_agent

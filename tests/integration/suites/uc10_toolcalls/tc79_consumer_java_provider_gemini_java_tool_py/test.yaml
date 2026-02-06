@@ -14,7 +14,7 @@ tags:
   - java
   - gemini
   - java
-  - py
+  - python
   - phase3
 timeout: 300
 pre_run:

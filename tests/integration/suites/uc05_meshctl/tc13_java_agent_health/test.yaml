@@ -1,0 +1,135 @@
+# Test Case: Java Agent Health and Status
+# Tests Java agent health endpoints and status reporting.
+#
+# Scenario:
+#   - Start java-greeter-agent
+#   - Call getInfo tool to verify agent reports correct metadata
+#   - Verify agent responds to multiple concurrent calls
+#   - Check agent stability after multiple invocations
+
+name: "UC05: Java Agent Health and Status"
+description: "Verify Java agent health endpoints and status reporting"
+tags:
+  - tools
+  - meshctl
+  - java
+  - health
+  - status
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy greeter agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+
+  # Install dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start agent
+  - name: "Start greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+    capture: start_agent
+
+  - name: "Wait for registration"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered"
+          exit 0
+        fi
+        sleep 2
+      done
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # Get agent info
+  - name: "Get agent info"
+    handler: shell
+    command: "meshctl call getInfo '{}'"
+    capture: agent_info
+
+  # Make multiple calls to test stability
+  - name: "Multiple greet calls"
+    handler: shell
+    command: |
+      echo "Making 5 sequential calls..."
+      for i in 1 2 3 4 5; do
+        RESULT=$(meshctl call greet "{\"name\": \"User$i\"}" 2>&1)
+        if echo "$RESULT" | grep -q "Hello"; then
+          echo "Call $i: OK"
+        else
+          echo "Call $i: FAILED - $RESULT"
+          exit 1
+        fi
+      done
+      echo "All calls succeeded"
+    capture: multiple_calls
+
+  # Get info again to verify agent still healthy
+  - name: "Get agent info after calls"
+    handler: shell
+    command: "meshctl call getInfo '{}'"
+    capture: agent_info_after
+
+  # Check meshctl list still shows agent
+  - name: "Verify agent still registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_after
+
+  # Test with special characters in input
+  - name: "Test special characters"
+    handler: shell
+    command: 'meshctl call greet ''{"name": "Test User!"}'''
+    capture: special_chars
+
+assertions:
+  # Agent info is correct
+  - expr: "${jq:captured.agent_info:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "Agent name should be 'greeter'"
+
+  - expr: "${jq:captured.agent_info:.content[0].text | fromjson | .version} == '1.0.0'"
+    message: "Agent version should be '1.0.0'"
+
+  - expr: "${jq:captured.agent_info:.content[0].text | fromjson | .runtime} contains 'Java'"
+    message: "Runtime should contain 'Java'"
+
+  # Multiple calls succeeded
+  - expr: "${captured.multiple_calls} contains 'All calls succeeded'"
+    message: "All 5 sequential calls should succeed"
+
+  # Agent still healthy after calls
+  - expr: "${jq:captured.agent_info_after:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "Agent should still report correct info after multiple calls"
+
+  # Agent still registered
+  - expr: "${captured.list_after} contains 'greeter'"
+    message: "Agent should still be registered after multiple calls"
+
+  # Special characters handled
+  - expr: "${jq:captured.special_chars:.content[0].text | fromjson | .message} contains 'Test User'"
+    message: "Agent should handle special characters in input"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

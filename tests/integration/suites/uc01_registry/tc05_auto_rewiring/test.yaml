@@ -18,6 +18,7 @@ tags:
   - registry
   - wiring
   - resilience
+  - python
 timeout: 120
 
 pre_run:

@@ -1,0 +1,315 @@
+# Test Case: tc13_java_tag_matching
+# Tests Java tag matching: required, preferred, and excluded.
+# Consolidates 3 scenarios into 1 test to save Maven build time.
+#
+# Phase A (Required): fast-provider + consumer -> fetch_required -> JAVA_FAST
+# Phase B (Preferred): fast + accurate + consumer -> fetch_prefer_fast -> JAVA_FAST
+# Phase C (Excluded): fast + deprecated + consumer -> fetch_exclude_deprecated -> NOT JAVA_DEPRECATED
+
+name: "Java Tag Matching"
+description: "Verify Java tag matching with required, preferred, and excluded tags"
+tags:
+  - capabilities
+  - tags
+  - java
+  - required
+  - preferred
+  - excluded
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy all artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-fast-provider /workspace/
+      cp -r /uc-artifacts/java-accurate-provider /workspace/
+      cp -r /uc-artifacts/java-deprecated-provider /workspace/
+      cp -r /uc-artifacts/java-tag-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for all agents
+  - name: "Install fast-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-fast-provider
+    timeout: 600
+
+  - name: "Install accurate-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-accurate-provider
+    timeout: 600
+
+  - name: "Install deprecated-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-deprecated-provider
+    timeout: 600
+
+  - name: "Install tag-consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-tag-consumer
+    timeout: 600
+
+  # ========== Phase A: Required Tag Matching ==========
+  - name: "Phase A: Start fast-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Fast provider starting"
+    capture: start_fast_a
+
+  - name: "Phase A: Wait for fast-provider"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-fast-provider"; then
+          echo "Fast provider registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Fast provider did not register"
+      exit 1
+    capture: wait_fast_a
+    timeout: 120
+
+  - name: "Phase A: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Consumer starting"
+    capture: start_consumer_a
+
+  - name: "Phase A: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_a
+    timeout: 120
+
+  - name: "Phase A: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase A: Call fetchRequired"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_FAST"; then
+        echo "PASS_A: Matched provider with required 'api' tag"
+      else
+        echo "FAIL_A: Expected JAVA_FAST provider"
+        exit 1
+      fi
+    capture: phase_a_result
+    timeout: 60
+
+  - name: "Phase A: Stop all agents"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      sleep 5
+    capture: stop_a
+
+  # ========== Phase B: Preferred Tag Matching ==========
+  - name: "Phase B: Start fast-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Fast provider starting"
+    capture: start_fast_b
+
+  - name: "Phase B: Start accurate-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Accurate provider starting"
+    capture: start_accurate_b
+
+  - name: "Phase B: Wait for both providers"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "java-fast-provider" && echo "$LIST" | grep -q "java-accurate-provider"; then
+          echo "Both providers registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Providers did not register"
+      exit 1
+    capture: wait_providers_b
+    timeout: 120
+
+  - name: "Phase B: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Consumer starting"
+    capture: start_consumer_b
+
+  - name: "Phase B: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_b
+    timeout: 120
+
+  - name: "Phase B: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase B: Call fetchPreferFast"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetchPreferFast '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_FAST"; then
+        echo "PASS_B: Preferred fast provider was selected"
+      else
+        echo "FAIL_B: Expected JAVA_FAST (preferred)"
+        exit 1
+      fi
+    capture: phase_b_result
+    timeout: 60
+
+  - name: "Phase B: Stop all agents"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      sleep 5
+    capture: stop_b
+
+  # ========== Phase C: Excluded Tag Matching ==========
+  - name: "Phase C: Start fast-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Fast provider starting"
+    capture: start_fast_c
+
+  - name: "Phase C: Start deprecated-provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-deprecated-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Deprecated provider starting"
+    capture: start_deprecated_c
+
+  - name: "Phase C: Wait for both providers"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "java-fast-provider" && echo "$LIST" | grep -q "java-deprecated-provider"; then
+          echo "Both providers registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Providers did not register"
+      exit 1
+    capture: wait_providers_c
+    timeout: 120
+
+  - name: "Phase C: Start consumer"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Consumer starting"
+    capture: start_consumer_c
+
+  - name: "Phase C: Wait for consumer"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer_c
+    timeout: 120
+
+  - name: "Phase C: Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "List registered tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Phase C: Call fetchExcludeDeprecated"
+    handler: shell
+    command: |
+      RESULT=$(meshctl call fetchExcludeDeprecated '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_DEPRECATED"; then
+        echo "FAIL_C: Should NOT match deprecated provider"
+        exit 1
+      elif echo "$RESULT" | grep -q "JAVA_FAST"; then
+        echo "PASS_C: Correctly excluded deprecated, matched fast provider"
+      else
+        echo "FAIL_C: Unexpected result"
+        exit 1
+      fi
+    capture: phase_c_result
+    timeout: 60
+
+assertions:
+  - expr: "${captured.phase_a_result} contains 'PASS_A'"
+    message: "Phase A: Should match provider with required tag"
+
+  - expr: "${captured.phase_b_result} contains 'PASS_B'"
+    message: "Phase B: Should prefer fast provider"
+
+  - expr: "${captured.phase_c_result} contains 'PASS_C'"
+    message: "Phase C: Should exclude deprecated provider"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

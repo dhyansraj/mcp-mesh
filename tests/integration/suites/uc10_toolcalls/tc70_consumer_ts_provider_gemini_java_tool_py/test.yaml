@@ -11,10 +11,10 @@ name: "Consumer TS -> Provider GEMINI java -> Tool PY"
 description: "Test ts consumer with gemini java provider calling py tool"
 tags:
   - toolcall
-  - ts
+  - typescript
   - gemini
   - java
-  - py
+  - python
   - phase3
 timeout: 300
 pre_run:

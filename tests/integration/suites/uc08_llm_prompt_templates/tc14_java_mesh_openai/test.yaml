@@ -1,0 +1,160 @@
+# Test Case: tc14_java_mesh_openai
+# Tests Java agent delegating LLM calls to OpenAI GPT provider via mesh.
+#
+# Scenario:
+#   - Start java-gpt-provider (provides 'llm' capability via OpenAI)
+#   - Start java-analyst-agent (consumes LLM via mesh delegation)
+#   - Call analyst's chat tool - should delegate to GPT provider
+#   - Verify response comes back correctly
+
+name: "Java Mesh Delegation - OpenAI"
+description: "Verify Java agent can delegate LLM calls to OpenAI GPT provider via mesh"
+tags:
+  - llm
+  - openai
+  - mesh-delegation
+  - java
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy provider to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-gpt-provider /workspace/
+      ls -la /workspace/java-gpt-provider/
+    capture: copy_provider
+
+  - name: "Copy analyst to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-analyst-agent /workspace/
+      ls -la /workspace/java-analyst-agent/
+    capture: copy_analyst
+
+  # Create env files with secrets
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Maven dependencies for both
+  - name: "Install provider dependencies"
+    handler: maven-install
+    path: /workspace/java-gpt-provider
+    timeout: 600
+
+  - name: "Install analyst dependencies"
+    handler: maven-install
+    path: /workspace/java-analyst-agent
+    timeout: 600
+
+  # Start GPT provider first
+  - name: "Start GPT provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-gpt-provider --env-file /workspace/.env --env MCP_MESH_HTTP_PORT=9111 -d
+      echo "GPT provider starting"
+    capture: start_provider
+
+  # Wait for provider to register
+  - name: "Wait for provider registration"
+    handler: shell
+    command: |
+      echo "Waiting for gpt-provider..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "gpt-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register"
+      meshctl logs gpt-provider 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_provider
+    timeout: 120
+
+  # Start analyst agent
+  - name: "Start analyst agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-analyst-agent --env-file /workspace/.env -d
+      echo "Analyst agent starting"
+    capture: start_analyst
+
+  # Wait for analyst to register
+  - name: "Wait for analyst registration"
+    handler: shell
+    command: |
+      echo "Waiting for analyst agent..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "analyst"; then
+          echo "Analyst registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Analyst did not register"
+      meshctl logs analyst 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+
+  # Wait for dependency resolution
+  - name: "Wait for LLM dependency resolution"
+    handler: wait
+    seconds: 5
+
+  # Verify both agents running
+  - name: "Verify both agents running"
+    handler: shell
+    command: "meshctl list"
+    capture: list_both
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call analyst's chat tool (delegates to GPT provider)
+  - name: "Call analyst chat (mesh delegation to OpenAI)"
+    handler: shell
+    command: 'meshctl call chat ''{"message": "What is 2+2? Reply with just the number."}'''
+    capture: call_chat
+    timeout: 90
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_both} contains 'gpt-provider'"
+    message: "GPT provider should be registered"
+
+  - expr: "${captured.list_both} contains 'analyst'"
+    message: "Analyst agent should be registered"
+
+  # Provider's llm tool visible
+  - expr: "${captured.list_tools} contains 'llm'"
+    message: "Provider's llm tool should be listed"
+
+  # Analyst's chat tool visible
+  - expr: "${captured.list_tools} contains 'chat'"
+    message: "Analyst's chat tool should be listed"
+
+  # Chat response contains 4
+  - expr: "${captured.call_chat} contains '4'"
+    message: "Chat response should contain 4"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*gpt-provider" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

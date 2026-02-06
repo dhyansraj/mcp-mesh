@@ -11,6 +11,7 @@ tags:
   - registry
   - heartbeat
   - health
+  - python
 timeout: 120
 
 pre_run:

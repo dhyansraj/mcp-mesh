@@ -14,6 +14,7 @@ tags:
   - capabilities
   - tags
   - required
+  - python
 timeout: 120
 
 pre_run:

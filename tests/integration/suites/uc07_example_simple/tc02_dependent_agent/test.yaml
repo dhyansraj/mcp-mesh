@@ -9,6 +9,7 @@ tags:
   - dependent_agent
   - dependency_injection
   - dependency_chain
+  - python
 timeout: 300
 
 pre_run:

@@ -15,6 +15,7 @@ tags:
   - capabilities
   - tags
   - or-logic
+  - python
 timeout: 180
 
 pre_run:

@@ -1,0 +1,165 @@
+# Test Case: Java LLM Mesh Delegation
+# Tests Java agent delegating LLM calls to mesh provider.
+#
+# Scenario:
+#   - Start java-claude-provider (provides 'llm' capability)
+#   - Start java-analyst-agent (consumes LLM via mesh delegation)
+#   - Call analyst's chat tool - should delegate to provider
+#   - Verify response comes back correctly
+
+name: "UC08: Java LLM Mesh Delegation"
+description: "Verify Java agent can delegate LLM calls to mesh provider"
+tags:
+  - tools
+  - meshctl
+  - java
+  - llm
+  - mesh
+  - delegation
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy provider to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-claude-provider /workspace/
+      ls -la /workspace/java-claude-provider/
+    capture: copy_provider
+
+  # Create env file for provider
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/java-claude-provider/.env
+
+  - name: "Copy analyst to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-analyst-agent /workspace/
+      ls -la /workspace/java-analyst-agent/
+    capture: copy_analyst
+
+  # Create env file for analyst
+  - name: "Create env file for analyst"
+    handler: secrets
+    target: /workspace/java-analyst-agent/.env
+
+  # Install Maven dependencies for both
+  - name: "Install provider dependencies"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+
+  - name: "Install analyst dependencies"
+    handler: maven-install
+    path: /workspace/java-analyst-agent
+    timeout: 600
+
+  # Start provider first
+  - name: "Start LLM provider"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-claude-provider --env-file /workspace/java-claude-provider/.env -d
+      echo "LLM provider starting"
+    capture: start_provider
+
+  # Wait for provider to register
+  - name: "Wait for provider registration"
+    handler: shell
+    command: |
+      echo "Waiting for claude-provider..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "claude-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register"
+      exit 1
+    capture: wait_provider
+    timeout: 120
+
+  # Start analyst agent
+  - name: "Start analyst agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
+      echo "Analyst agent starting"
+    capture: start_analyst
+
+  # Wait for analyst to register
+  - name: "Wait for analyst registration"
+    handler: shell
+    command: |
+      echo "Waiting for analyst agent..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "analyst"; then
+          echo "Analyst registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Analyst did not register"
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+
+  # Wait for dependency resolution
+  - name: "Wait for LLM dependency resolution"
+    handler: wait
+    seconds: 5
+
+  # Verify both agents running
+  - name: "Verify both agents running"
+    handler: shell
+    command: "meshctl list"
+    capture: list_both
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call analyst's chat tool (delegates to provider)
+  - name: "Call analyst chat (mesh delegation)"
+    handler: shell
+    command: 'meshctl call chat ''{"message": "What is the capital of France? Reply in one word."}'''
+    capture: call_chat
+    timeout: 90
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_both} contains 'claude-provider'"
+    message: "Claude provider should be registered"
+
+  - expr: "${captured.list_both} contains 'analyst'"
+    message: "Analyst agent should be registered"
+
+  # Provider's llm tool visible
+  - expr: "${captured.list_tools} contains 'llm'"
+    message: "Provider's llm tool should be listed"
+
+  # Analyst's chat tool visible
+  - expr: "${captured.list_tools} contains 'chat'"
+    message: "Analyst's chat tool should be listed"
+
+  # Chat response contains Paris
+  - expr: "${jq:captured.call_chat:.content[0].text | fromjson | .response} contains 'Paris'"
+    message: "Chat response should mention Paris"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

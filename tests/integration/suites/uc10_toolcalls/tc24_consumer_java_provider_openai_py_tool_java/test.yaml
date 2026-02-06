@@ -15,6 +15,7 @@ tags:
   - openai
   - java
   - phase1
+  - python
 timeout: 300
 
 pre_run:

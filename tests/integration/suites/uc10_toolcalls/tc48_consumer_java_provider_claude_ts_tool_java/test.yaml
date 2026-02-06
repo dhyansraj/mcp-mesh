@@ -13,7 +13,7 @@ tags:
   - toolcall
   - java
   - claude
-  - ts
+  - typescript
   - phase2
 timeout: 300
 

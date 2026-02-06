@@ -11,7 +11,7 @@ name: "Consumer TS -> Provider GEMINI java -> Tool JAVA"
 description: "Test ts consumer with gemini java provider calling java tool"
 tags:
   - toolcall
-  - ts
+  - typescript
   - gemini
   - java
   - java

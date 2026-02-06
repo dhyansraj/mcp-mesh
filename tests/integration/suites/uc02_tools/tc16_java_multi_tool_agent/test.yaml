@@ -1,0 +1,164 @@
+# Test Case: Java Multi-Tool Agent
+# Tests that Java agent with multiple tools registers all tools correctly.
+#
+# Scenario:
+#   - java-greeter-agent has multiple tools: greet, getInfo, addViaMesh, greetEmployee
+#   - Verify all tools are registered and callable
+#   - Tools without dependencies should work without external agents
+
+name: "UC02: Java Multi-Tool Agent"
+description: "Verify Java agent registers and exposes multiple tools correctly"
+tags:
+  - tools
+  - meshctl
+  - java
+  - multi-tool
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java greeter artifact to workspace
+  - name: "Copy Java greeter to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_java
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start the Java agent
+  - name: "Start Java greeter agent"
+    handler: shell
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java greeter agent starting via meshctl"
+    capture: start_java
+
+  # Wait for agent to register
+  - name: "Wait for greeter registration"
+    handler: shell
+    command: |
+      echo "Waiting for greeter..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not register within 60s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java
+    timeout: 90
+
+  # Verify agent is registered
+  - name: "Verify greeter registered"
+    handler: shell
+    command: "meshctl list"
+    capture: list_agents
+
+  # List all tools with full details
+  - name: "List all tools"
+    handler: shell
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get schema for greet tool
+  - name: "Get greet tool schema"
+    handler: shell
+    command: "meshctl list --tools=greet"
+    capture: tool_greet_schema
+
+  # Get schema for getInfo tool
+  - name: "Get getInfo tool schema"
+    handler: shell
+    command: "meshctl list --tools=getInfo"
+    capture: tool_info_schema
+
+  # Call greet tool
+  - name: "Call greet tool"
+    handler: shell
+    command: 'meshctl call greet ''{"name": "MultiToolTest"}'''
+    capture: call_greet
+
+  # Call getInfo tool (no parameters needed)
+  - name: "Call getInfo tool"
+    handler: shell
+    command: "meshctl call getInfo '{}'"
+    capture: call_info
+
+  # Verify tool count
+  - name: "Count registered tools"
+    handler: shell
+    command: |
+      TOOL_COUNT=$(meshctl list --tools 2>/dev/null | grep -c "greeter" || echo "0")
+      echo "Tools from greeter: $TOOL_COUNT"
+      # Greeter has at least 2 tools without dependencies: greet, getInfo
+      # May have more with dependencies: addViaMesh, greetEmployee
+      if [ "$TOOL_COUNT" -ge 2 ]; then
+        echo "PASS: Found at least 2 tools"
+      else
+        echo "FAIL: Expected at least 2 tools, found $TOOL_COUNT"
+        exit 1
+      fi
+    capture: tool_count
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_agents} contains 'greeter'"
+    message: "Greeter agent should be registered"
+
+  # Multiple tools are listed
+  - expr: "${captured.list_tools} contains 'greet'"
+    message: "greet tool should be listed"
+
+  - expr: "${captured.list_tools} contains 'getInfo'"
+    message: "getInfo tool should be listed"
+
+  # Tools with dependencies should also be registered (even if deps not resolved)
+  - expr: "${captured.list_tools} contains 'addViaMesh'"
+    message: "addViaMesh tool should be listed (even without add dependency)"
+
+  - expr: "${captured.list_tools} contains 'greetEmployee'"
+    message: "greetEmployee tool should be listed (even without employee dependency)"
+
+  # Tool schemas available
+  - expr: "${captured.tool_greet_schema} contains 'name'"
+    message: "greet tool schema should show name parameter"
+
+  # Tool calls work - use jq to parse nested JSON
+  - expr: "${jq:captured.call_greet:.content[0].text | fromjson | .message} contains 'Hello, MultiToolTest'"
+    message: "greet should return greeting"
+
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "getInfo should return agent name"
+
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .runtime} contains 'Java'"
+    message: "getInfo should return Java runtime"
+
+  - expr: "${jq:captured.call_info:.content[0].text | fromjson | .version} == '1.0.0'"
+    message: "getInfo should include version field"
+
+  # Tool count verification
+  - expr: "${captured.tool_count} contains 'PASS'"
+    message: "Should have at least 2 tools from greeter"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

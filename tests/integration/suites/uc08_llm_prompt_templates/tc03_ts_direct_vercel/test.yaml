@@ -11,6 +11,7 @@ tags:
   - direct
   - prompt-template
   - context-param
+  - python
 timeout: 300
 
 pre_run:
