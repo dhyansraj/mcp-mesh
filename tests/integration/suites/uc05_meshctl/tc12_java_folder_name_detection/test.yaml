@@ -47,6 +47,7 @@ test:
   # Wait for registration (Java is slow to start)
   - name: "Wait for agent to register"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter agent..."
       for i in $(seq 1 45); do
@@ -102,6 +103,7 @@ test:
   # Wait for registration
   - name: "Wait for agent to register (absolute path)"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter agent (absolute path)..."
       for i in $(seq 1 45); do
@@ -147,6 +149,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

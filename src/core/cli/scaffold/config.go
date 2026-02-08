@@ -96,7 +96,7 @@ func LoadConfig(path string) (*ScaffoldConfig, error) {
 
 	// Set defaults
 	if config.Port == 0 {
-		config.Port = 9000
+		config.Port = 8080
 	}
 	if config.AgentType == "" {
 		config.AgentType = "tool"

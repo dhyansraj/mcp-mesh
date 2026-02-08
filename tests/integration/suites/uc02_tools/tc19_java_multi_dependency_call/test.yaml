@@ -1,0 +1,190 @@
+# Test Case: Java Multi-Dependency Tool Call
+# Tests that a Java tool with dependencies on add and multiply capabilities
+# can correctly wire and call all dependent tools.
+#
+# Scenario:
+#   - java-math-agent provides 2 tools: add, multiply (port 9010)
+#   - java-calculator's calculate() depends on add + multiply capabilities (port 9011)
+#   - Call calculate with a=3, b=4
+#   - Verify repeated_addition (3+3+3+3 = 12) and direct_multiply (3*4 = 12)
+#   - Verify match = true (both should equal 12)
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "UC02: Java Multi-Dependency Tool Call"
+description: "Verify Java tool with add and multiply dependencies wires and calls correctly"
+tags:
+  - tools
+  - multi-dependency
+  - dependency-injection
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-math-agent /workspace/
+      cp -r /uc-artifacts/java-calculator /workspace/
+      ls -la /workspace/java-math-agent/
+      ls -la /workspace/java-calculator/
+    capture: copy_output
+
+  # Install Maven dependencies for math agent
+  - name: "Install Maven dependencies for math agent"
+    handler: maven-install
+    path: /workspace/java-math-agent
+    timeout: 600
+
+  # Install Maven dependencies for calculator agent
+  - name: "Install Maven dependencies for calculator agent"
+    handler: maven-install
+    path: /workspace/java-calculator
+    timeout: 600
+
+  # Start math agent first (provider of add and multiply)
+  - name: "Start Java math agent (provider)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-math-agent -d
+      echo "Java math agent starting via meshctl"
+    capture: start_math
+
+  # Wait for math agent to register
+  - name: "Wait for math agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for java-math-agent..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "math"; then
+          echo "Math agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Math agent did not register within 60s"
+      meshctl logs math 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_math
+    timeout: 90
+
+  # Verify math agent is registered
+  - name: "Verify math agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_after_math
+
+  # List tools from math agent
+  - name: "List math tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: math_tools
+
+  # Start calculator agent (consumer with add + multiply dependencies)
+  - name: "Start Java calculator agent (consumer)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-calculator -d
+      echo "Java calculator agent starting via meshctl"
+    capture: start_calculator
+
+  # Wait for calculator agent to register and wire
+  - name: "Wait for calculator registration and wiring"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for java-calculator..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "calculator"; then
+          echo "Calculator agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Calculator agent did not register within 60s"
+      meshctl logs calculator 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_calculator
+    timeout: 90
+
+  # Verify both agents are registered
+  - name: "List all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List all tools to verify calculate is available
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Test calculate: a=3, b=4
+  # Expected: repeated_addition = 3+3+3+3 = 12, direct_multiply = 3*4 = 12, match = true
+  - name: "Test calculate with a=3 b=4"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call calculate ''{"a": 3, "b": 4}'''
+    capture: test_calculate
+    timeout: 60
+
+assertions:
+  # Both agents should be registered
+  - expr: "${captured.list_output} contains 'math'"
+    message: "java-math-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'calculator'"
+    message: "java-calculator should be registered"
+
+  # Math tools should be listed
+  - expr: "${captured.math_tools} contains 'add'"
+    message: "add tool should be listed from math agent"
+
+  - expr: "${captured.math_tools} contains 'multiply'"
+    message: "multiply tool should be listed from math agent"
+
+  # calculate tool should be listed
+  - expr: "${captured.tools_output} contains 'calculate'"
+    message: "calculate tool should be listed"
+
+  # Verify calculate result using jq
+  # Java returns result in content[0].text as JSON string
+  - expr: ${jq:captured.test_calculate:.content[0].text | fromjson | .a} == 3
+    message: "Calculate should echo back a=3"
+
+  - expr: ${jq:captured.test_calculate:.content[0].text | fromjson | .b} == 4
+    message: "Calculate should echo back b=4"
+
+  - expr: ${jq:captured.test_calculate:.content[0].text | fromjson | .repeated_addition} == 12
+    message: "Repeated addition (3+3+3+3) should equal 12"
+
+  - expr: ${jq:captured.test_calculate:.content[0].text | fromjson | .direct_multiply} == 12
+    message: "Direct multiply (3*4) should equal 12"
+
+  - expr: "${jq:captured.test_calculate:.content[0].text | fromjson | .match} == 'true'"
+    message: "Both methods should match (both equal 12)"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*math" 2>/dev/null || true
+      pkill -f "java.*calculator" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

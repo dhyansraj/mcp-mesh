@@ -1,7 +1,7 @@
 package {{ .JavaPackage }};
 
-import io.mcpmesh.FilterMode;
-import io.mcpmesh.MeshAgent;
+{{ if .ToolFilter }}import io.mcpmesh.FilterMode;
+{{ end }}import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;

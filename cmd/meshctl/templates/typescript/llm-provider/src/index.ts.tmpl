@@ -14,9 +14,6 @@ const server = new FastMCP({
   name: "{{ toPascalCase .Name }}",
   version: "1.0.0",
 });
-
-// ===== AGENT CONFIGURATION =====
-
 /**
  * LLM Provider agent that exposes {{ .Model }} via mesh.
  *
@@ -51,7 +48,7 @@ agent.addLlmProvider({
   tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else if contains .Model "anthropic" }}["llm", "claude", "anthropic", "provider"]{{ else if contains .Model "openai" }}["llm", "openai", "gpt", "provider"]{{ else if contains .Model "gemini" }}["llm", "gemini", "google", "provider"]{{ else }}["llm", "provider"]{{ end }},
   version: "1.0.0",
   description: "{{ if .Description }}{{ .Description }}{{ else }}LLM provider via {{ .Model }}{{ end }}",
-  maxTokens: 4096,
+  maxOutputTokens: 4096,
 });
 
 // No server.start() needed!

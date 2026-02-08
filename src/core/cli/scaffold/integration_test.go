@@ -150,7 +150,7 @@ func TestIntegration_ScaffoldWithMESHCTL_TEMPLATE_DIR(t *testing.T) {
 		Name:      "env-test-agent",
 		Language:  "python",
 		OutputDir: tmpDir,
-		Port:      9000,
+		Port:      8080,
 		Template:  "basic",
 		// No TemplateDir - should use env var
 	}

@@ -1,0 +1,135 @@
+# Test Case: tc17_java_direct_claude
+# Tests Java agent with direct Claude LLM calls (no mesh delegation).
+#
+# Scenario:
+#   - Start chatbot agent with ANTHROPIC_API_KEY
+#   - Call chat tool directly
+#   - Call explainCode tool directly
+#   - Verify response and source contains "direct:claude"
+
+name: "Java Direct Claude"
+description: "Verify Java agent can make direct Claude LLM calls"
+tags:
+  - llm
+  - claude
+  - direct
+  - java
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-chatbot-agent /workspace/
+      ls -la /workspace/java-chatbot-agent/
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-chatbot-agent
+    timeout: 600
+
+  # Start agent - application.properties maps ANTHROPIC_API_KEY to spring.ai.anthropic.api-key
+  - name: "Start chatbot agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-chatbot-agent --env-file /workspace/.env -d
+      echo "Claude chatbot starting"
+    capture: start_output
+
+  # Wait for agent to register
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for chatbot..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "chatbot"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      meshctl logs chatbot 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify agent is registered
+  - name: "Verify agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call chat tool
+  - name: "Call chat tool (direct Claude)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call chat ''{"message": "What is 2+2? Reply with just the number."}'''
+    capture: call_chat
+    timeout: 90
+
+  # Call explainCode tool
+  - name: "Call explainCode tool (direct Claude)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call explainCode ''{"code": "print(\"hello\")", "language": "python"}'''
+    capture: call_explain
+    timeout: 90
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'chatbot'"
+    message: "Chatbot should be registered"
+
+  # Chat tool listed
+  - expr: "${captured.list_tools} contains 'chat'"
+    message: "chat tool should be listed"
+
+  # explainCode tool listed
+  - expr: "${captured.list_tools} contains 'explainCode'"
+    message: "explainCode tool should be listed"
+
+  # Response contains 4
+  - expr: "${captured.call_chat} contains '4'"
+    message: "Chat response should contain 4"
+
+  # Source is direct:claude
+  - expr: "${captured.call_chat} contains 'direct:claude'"
+    message: "Source should be direct:claude"
+
+  # Explain response references print
+  - expr: "${captured.call_explain} contains 'print'"
+    message: "Explain response should reference print"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*chatbot" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

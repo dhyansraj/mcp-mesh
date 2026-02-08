@@ -54,12 +54,14 @@ test:
   # Start Java assistant WITHOUT provider
   - name: "Start Java assistant (no provider yet)"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-assistant-agent -d
     capture: start_java
 
   - name: "Wait for assistant registration"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 45); do
         if meshctl list 2>/dev/null | grep -q "assistant"; then
@@ -75,18 +77,21 @@ test:
   # Check status - should show dateServiceAvailable=false
   - name: "Check status (before provider)"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getStatus '{}'"
     capture: status_before
 
   # Start Python provider
   - name: "Start Python system agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/py-system-agent/main.py -d
     capture: start_py
 
   - name: "Wait for system agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 15); do
         if meshctl list 2>/dev/null | grep -q "system-agent"; then
@@ -107,18 +112,21 @@ test:
   # Check status - should show dateServiceAvailable=true
   - name: "Check status (after provider started)"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getStatus '{}'"
     capture: status_after_start
 
   # List agents
   - name: "List agents (both running)"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_both
 
   # Stop the Python provider
   - name: "Stop Python system agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl stop system-agent 2>/dev/null || pkill -f "python.*system_agent" || true
       sleep 2
@@ -133,6 +141,7 @@ test:
   # Check status - should show dateServiceAvailable=false again
   - name: "Check status (after provider stopped)"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getStatus '{}'"
     capture: status_after_stop
 
@@ -158,6 +167,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

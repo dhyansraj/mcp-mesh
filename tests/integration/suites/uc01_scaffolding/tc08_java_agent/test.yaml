@@ -1,0 +1,109 @@
+# Test Case: Scaffold Java Agent
+# Verifies that meshctl can scaffold a Java tool agent with correct structure
+
+name: "Scaffold Java Agent"
+description: "Test scaffolding a Java tool agent and verify generated files compile"
+tags:
+  - scaffolding
+  - java
+timeout: 300 # 5 minutes (includes Maven compile)
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+# Main test steps
+test:
+  # Scaffold the agent
+  - name: "Scaffold Java agent"
+    handler: shell
+    command: "meshctl scaffold --name test-java-agent --agent-type tool --lang java --no-interactive"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-java-agent -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check Application.java content
+  - name: "Check Application.java content"
+    handler: shell
+    command: "find test-java-agent -name '*Application.java' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_content
+
+  # Check helm-values.yaml content
+  - name: "Check helm-values.yaml content"
+    handler: shell
+    command: "cat test-java-agent/helm-values.yaml"
+    workdir: /workspace
+    capture: helm_values
+
+  # Check application.yml content
+  - name: "Check application.yml content"
+    handler: shell
+    command: "find test-java-agent -name 'application.yml' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_yml
+
+  # Compile Java agent with Maven
+  - name: "Compile Java agent"
+    handler: shell
+    command: "cd test-java-agent && mvn compile -q"
+    workdir: /workspace
+    timeout: 300
+    capture: compile_output
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated Java code should compile without errors"
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # pom.xml exists
+  - expr: "${captured.generated_files} contains 'pom.xml'"
+    message: "pom.xml should be created"
+
+  # Application.java exists
+  - expr: "${captured.generated_files} contains 'Application.java'"
+    message: "Application.java should be created"
+
+  # Dockerfile exists
+  - expr: "${captured.generated_files} contains 'Dockerfile'"
+    message: "Dockerfile should be created"
+
+  # helm-values.yaml exists
+  - expr: "${captured.generated_files} contains 'helm-values.yaml'"
+    message: "helm-values.yaml should be created"
+
+  # application.yml exists
+  - expr: "${captured.generated_files} contains 'application.yml'"
+    message: "application.yml should be created"
+
+  # Application.java contains @MeshAgent annotation
+  - expr: "${captured.app_content} contains '@MeshAgent'"
+    message: "Application.java should contain @MeshAgent annotation"
+
+  # Application.java contains @MeshTool annotation
+  - expr: "${captured.app_content} contains '@MeshTool'"
+    message: "Application.java should contain @MeshTool annotation"
+
+  # Application.java contains @Param annotation
+  - expr: "${captured.app_content} contains '@Param'"
+    message: "Application.java should contain @Param annotation"
+
+  # helm-values contains agent name
+  - expr: "${captured.helm_values} contains 'test-java-agent'"
+    message: "helm-values.yaml should contain agent name"
+
+# Post-run: Cleanup
+post_run:
+  - routine: global.cleanup_workspace

@@ -1,0 +1,113 @@
+# Test Case: Java Agent Status Check
+# Verifies that meshctl status command works correctly with a Java agent
+
+name: "Java Agent Status Check"
+description: "Test meshctl status command for running Java agents"
+tags:
+  - lifecycle
+  - java
+  - status
+timeout: 300
+
+pre_run:
+  # Setup for Java agent (Maven + meshctl)
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Scaffold a test agent
+  - name: "Scaffold test agent"
+    handler: shell
+    command: "meshctl scaffold --name status-agent-java --agent-type tool --lang java"
+    workdir: /workspace
+
+  # Check meshctl list (should show no running agents initially)
+  - name: "Check meshctl list initially"
+    handler: shell
+    command: "meshctl list 2>&1 || true"
+    workdir: /workspace
+    capture: initial_list
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/status-agent-java
+    timeout: 600
+
+  # Start agent with meshctl (detached mode, custom port)
+  - name: "Start agent in detached mode"
+    handler: shell
+    command: "meshctl start status-agent-java --env MCP_MESH_HTTP_PORT=3008 -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for Java agent registration (Java is slow to start)
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java agent to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "status-agent-java"; then
+          echo "Agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      meshctl logs status-agent-java 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Check meshctl list (should show running agent)
+  - name: "Check meshctl list shows running agent"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: running_list
+
+  # Check meshctl status for detailed info
+  - name: "Check meshctl status for detailed info"
+    handler: shell
+    command: "meshctl status 2>&1 || true"
+    workdir: /workspace
+    capture: status_output
+
+  # Get agent logs
+  - name: "Get agent logs"
+    handler: shell
+    command: "meshctl logs status-agent-java 2>/dev/null | tail -20 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+  # Stop agent
+  - name: "Stop agent"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Agent was scaffolded
+  - expr: ${file:/workspace/status-agent-java/pom.xml} exists
+    message: "Agent should be scaffolded with pom.xml"
+
+  # meshctl start succeeded
+  - expr: ${captured.start_output} contains 'status-agent-java'
+    message: "meshctl start should report agent started"
+
+  # Agent appears in meshctl list
+  - expr: ${captured.running_list} contains 'status-agent-java'
+    message: "Agent should appear in meshctl list"
+
+post_run:
+  # Stop any remaining agents (including Java-specific cleanup)
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*status-agent-java" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -42,6 +42,7 @@ test:
   # Start Java greeter agent (provides greeting + agent_info capabilities)
   - name: "Start Java greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter -d
       echo "Java greeter starting"
@@ -50,6 +51,7 @@ test:
   # Wait for greeter to register
   - name: "Wait for greeter registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java greeter..."
       for i in $(seq 1 30); do
@@ -68,6 +70,7 @@ test:
   # Start REST API consumer
   - name: "Start REST API consumer"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-rest-api -d
       echo "REST API consumer starting"
@@ -76,6 +79,7 @@ test:
   # Wait for REST API to register
   - name: "Wait for REST API registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for REST API consumer..."
       for i in $(seq 1 30); do
@@ -111,6 +115,7 @@ test:
   # Verify both agents registered
   - name: "Verify agents registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
@@ -157,6 +162,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

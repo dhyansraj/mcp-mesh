@@ -35,6 +35,7 @@ test:
   # Start the Java agent with meshctl (registry starts automatically)
   - name: "Start Java agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent -d
       echo "Java agent starting via meshctl"
@@ -43,6 +44,7 @@ test:
   # Wait for agent to start and register
   - name: "Wait for agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java agent to start..."
       for i in $(seq 1 30); do
@@ -62,24 +64,28 @@ test:
   # Verify agent is registered
   - name: "Verify agent is registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call greet tool
   - name: "Call greet tool"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greet ''{"name": "World"}'''
     capture: call_greet
 
   # Call getInfo tool
   - name: "Call getInfo tool"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getInfo '{}'"
     capture: call_info
 
@@ -108,6 +114,7 @@ assertions:
 post_run:
   # Stop all agents
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       # Also kill any remaining Java processes

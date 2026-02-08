@@ -1,0 +1,231 @@
+# Test Case: Java Heartbeat System
+# Tests Java agent heartbeat behavior:
+#   1. Graceful stop (meshctl stop) - agent unregisters immediately
+#   2. Abrupt kill (kill -9) - agent removed after missed heartbeats
+#
+# Ported from tc03_heartbeat_system (Python) to Java.
+# Java agents are Spring Boot apps, so we kill the java process to simulate crash.
+#
+# Uses UC-level artifacts from /uc-artifacts:
+#   - java-greeter-agent: Java Spring Boot agent with @MeshTool "greet"
+
+name: "Java Heartbeat System"
+description: "Verify Java agent heartbeat keeps agent alive and proper unregistration"
+tags:
+  - registry
+  - heartbeat
+  - health
+  - java
+timeout: 300
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # Copy artifact to workspace
+  - name: "Copy Java greeter agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+  # Install Maven dependencies (only once, reused for both tests)
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+  # Start agent
+  - name: "Start agent for graceful stop test"
+    # === TEST 1: Graceful unregister ===
+
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Started Java greeter for graceful stop test"
+    capture: start_1
+  # Wait for registration
+  - name: "Wait for registration (graceful test)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for greeter agent to register..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "greeter"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      exit 1
+    capture: wait_1
+    timeout: 120
+  # Verify agent is registered before graceful stop
+  - name: "Verify agent is registered before graceful stop"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_before_stop
+  # Graceful stop
+  - name: "Graceful stop agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+  # Wait for unregistration
+  - name: "Wait for unregistration after graceful stop"
+    handler: wait
+    seconds: 10
+  # Verify agent is gone
+  - name: "Verify agent unregistered after graceful stop"
+    handler: shell
+    workdir: /workspace
+    command: |
+      if meshctl list 2>/dev/null | grep -q "greeter"; then
+        echo "FAIL: Agent still registered after graceful stop"
+        meshctl list
+        exit 1
+      else
+        echo "PASS: Agent unregistered after graceful stop"
+      fi
+    capture: graceful_check
+  # Clean up any remaining Java processes before test 2
+  - name: "Clean up before abrupt kill test"
+    handler: shell
+    command: |
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+      sleep 3
+      echo "Cleanup done"
+    capture: cleanup_between
+  # Start agent again
+  - name: "Start agent for abrupt kill test"
+    # === TEST 2: Abrupt kill (missed heartbeats) ===
+
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Started Java greeter for abrupt kill test"
+    capture: start_2
+  # Wait for registration
+  - name: "Wait for registration (abrupt kill test)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for greeter agent to register..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "greeter"; then
+          echo "Agent registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      exit 1
+    capture: wait_2
+    timeout: 120
+  # Verify agent is registered before abrupt kill
+  - name: "Verify agent is registered before abrupt kill"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_before_kill
+  # Kill Java agent abruptly via PGID (no graceful shutdown/unregister)
+  # We kill the entire process group so that both the Maven wrapper (mvn spring-boot:run)
+  # and the child JVM (java ... greeter) are terminated atomically.  Without PGID-based
+  # killing, Maven can detect its child died and either clean up or respawn before a
+  # separate pkill reaches it.
+  - name: "Kill Java agent abruptly without cleanup"
+    handler: shell
+    command: |
+      # Find the process group leader for our agent using /proc
+      # We need to kill the entire process group (mvn -> java) atomically
+      PGID=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        # Skip PID 1 (tini) and check cmdline for our agent
+        if [ "$pid" != "1" ] && [ -f "$p/cmdline" ]; then
+          if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "greeter"; then
+            # Get the PGID from /proc/[pid]/status (more reliable than stat)
+            if [ -f "$p/status" ]; then
+              PGID=$(grep -E '^NSpgid:|^Pgid:' "$p/status" | head -1 | awk '{print $2}')
+              echo "Found agent process PID: $pid, PGID: $PGID"
+              break
+            fi
+          fi
+        fi
+      done
+
+      if [ -n "$PGID" ] && [ "$PGID" != "1" ]; then
+        echo "Killing process group PGID: $PGID"
+        kill -9 -"$PGID"
+        echo "Agent process group killed abruptly"
+        # Verify no greeter process remains
+        sleep 1
+        for p in /proc/[0-9]*; do
+          pid="${p##*/}"
+          if [ "$pid" != "1" ] && [ -f "$p/cmdline" ]; then
+            if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "greeter"; then
+              echo "WARN: greeter process PID $pid still alive after PGID kill"
+            fi
+          fi
+        done
+      else
+        echo "WARN: Could not find agent PGID"
+        echo "Processes in /proc:"
+        for p in /proc/[0-9]*; do
+          pid="${p##*/}"
+          if [ -f "$p/cmdline" ]; then
+            echo "  PID $pid: $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | head -c 100)"
+          fi
+        done
+      fi
+    capture: kill_output
+  # Wait for missed heartbeats (default timeout ~20s = 4 missed 5s heartbeats)
+  - name: "Wait for missed heartbeats timeout"
+    handler: wait
+    seconds: 32
+  # Verify agent is removed after missed heartbeats
+  - name: "Verify agent removed after missed heartbeats"
+    handler: shell
+    workdir: /workspace
+    command: |
+      if meshctl list 2>/dev/null | grep -q "greeter"; then
+        echo "FAIL: Agent still showing as healthy after kill"
+        meshctl list
+        exit 1
+      else
+        echo "PASS: Agent removed after missed heartbeats"
+      fi
+    capture: abrupt_check
+assertions:
+  # Agent was registered before graceful stop
+  - expr: "${captured.list_before_stop} contains 'greeter'"
+    message: "Agent should be registered before graceful stop"
+  # Graceful unregister worked
+  - expr: "${captured.graceful_check} contains 'PASS'"
+    message: "Agent should unregister immediately on graceful stop"
+  # Agent was registered before abrupt kill
+  - expr: "${captured.list_before_kill} contains 'greeter'"
+    message: "Agent should be registered before abrupt kill"
+  # Abrupt kill detection worked
+  - expr: "${captured.abrupt_check} contains 'PASS'"
+    message: "Agent should be removed after missed heartbeats"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

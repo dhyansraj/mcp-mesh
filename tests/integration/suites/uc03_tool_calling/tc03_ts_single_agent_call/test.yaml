@@ -1,0 +1,124 @@
+# Test Case: TypeScript Single Agent Tool Call
+# Verifies that meshctl call can invoke tools on a running TypeScript agent.
+# Ports the Python tc01_single_agent_call to TypeScript.
+
+name: "TypeScript Single Agent Tool Call"
+description: "Test calling tools on a TypeScript math agent using meshctl call"
+tags:
+  - tool_calling
+  - typescript
+  - meshctl
+timeout: 300
+
+pre_run:
+  # Setup for TypeScript agent (node + meshctl)
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace (artifacts auto-mounted at /artifacts)
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+    capture: copy_output
+
+  # Verify ts-math-agent was copied
+  - name: "Verify ts-math-agent was copied"
+    handler: shell
+    command: "ls -la /workspace/ts-math-agent/"
+    capture: ls_output
+
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # Start the ts-math-agent with meshctl
+  - name: "Start ts-math-agent with meshctl"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts --env MCP_MESH_HTTP_PORT=3013 -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for agent to start
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is running
+  - name: "Verify agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Test add tool: 5 + 3 = 8
+  - name: "Test add tool (5 + 3 = 8)"
+    handler: shell
+    command: 'meshctl call add ''{"a": 5, "b": 3}'''
+    workdir: /workspace
+    capture: add_result
+
+  # Test subtract tool: 10 - 4 = 6
+  - name: "Test subtract tool (10 - 4 = 6)"
+    handler: shell
+    command: 'meshctl call subtract ''{"a": 10, "b": 4}'''
+    workdir: /workspace
+    capture: subtract_result
+
+  # Test multiply tool: 7 * 6 = 42
+  - name: "Test multiply tool (7 * 6 = 42)"
+    handler: shell
+    command: 'meshctl call multiply ''{"a": 7, "b": 6}'''
+    workdir: /workspace
+    capture: multiply_result
+
+  # Test divide tool: 20 / 4 = 5
+  - name: "Test divide tool (20 / 4 = 5)"
+    handler: shell
+    command: 'meshctl call divide ''{"a": 20, "b": 4}'''
+    workdir: /workspace
+    capture: divide_result
+
+  # Get agent logs for debugging
+  - name: "Get agent logs for debugging"
+    handler: shell
+    command: "meshctl logs ts-math-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+  # Stop agent
+  - name: "Stop agent"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Agent started successfully
+  - expr: ${captured.list_output} contains 'ts-math-agent'
+    message: "ts-math-agent should appear in meshctl list"
+
+  # add(5, 3) = 8
+  - expr: ${captured.add_result} contains '8'
+    message: "add(5, 3) should return 8"
+
+  # subtract(10, 4) = 6
+  - expr: ${captured.subtract_result} contains '6'
+    message: "subtract(10, 4) should return 6"
+
+  # multiply(7, 6) = 42
+  - expr: ${captured.multiply_result} contains '42'
+    message: "multiply(7, 6) should return 42"
+
+  # divide(20, 4) = 5
+  - expr: ${captured.divide_result} contains '5'
+    message: "divide(20, 4) should return 5"
+
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -4,7 +4,7 @@
 # Suite settings
 suite:
   name: MCP Mesh Integration Tests
-  mode: docker # 'docker' or 'standalone'
+  mode: k8s # 'docker', 'standalone', or 'k8s'
 # Package versions to test
 packages:
   # Mode: "local", "published", or "auto"
@@ -30,9 +30,16 @@ docker:
   network: bridge
   # No mounts needed - packages are baked into the image
   # To test with different packages, rebuild the image via src-tests or lib-tests
+# Kubernetes settings (Beelink cluster)
+k8s:
+  namespace: tsuite
+  nfs_server: 192.168.10.1
+  nfs_path: github/mcp-mesh/tests/integration
+  image: 192.168.10.1:5000/tsuite-mesh:local
+  api_url: http://192.168.10.50:9999
 # Execution settings
 execution:
-  max_workers: 8 # concurrent tests in docker mode
+  max_workers: 48 # concurrent tests in docker mode
   timeout: 300 # seconds per test
 # Legacy defaults (for compatibility)
 defaults:

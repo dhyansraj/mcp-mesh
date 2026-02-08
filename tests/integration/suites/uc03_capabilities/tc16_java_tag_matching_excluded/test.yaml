@@ -1,0 +1,158 @@
+# Test Case: tc16_java_tag_matching_excluded
+# Tests that Java consumer excluding a tag avoids provider with that tag.
+#
+# Scenario: Start fast-provider (tags: ["api", "fast"]) and deprecated-provider
+# (tags: ["api", "deprecated"]), then consumer calls fetchExcludeDeprecated.
+# Expected: JAVA_DEPRECATED is NOT selected; JAVA_FAST is selected instead.
+
+name: "Java Tag Matching - Excluded"
+description: "Verify Java consumer excluding tag avoids matching provider"
+tags:
+  - capabilities
+  - tags
+  - excluded
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-fast-provider /workspace/
+      cp -r /uc-artifacts/java-deprecated-provider /workspace/
+      cp -r /uc-artifacts/java-tag-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for all agents
+  - name: "Install fast-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-fast-provider
+    timeout: 600
+
+  - name: "Install deprecated-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-deprecated-provider
+    timeout: 600
+
+  - name: "Install tag-consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-tag-consumer
+    timeout: 600
+
+  # Start both providers
+  - name: "Start fast-provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Fast provider starting"
+    capture: start_fast
+
+  - name: "Start deprecated-provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-deprecated-provider --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Deprecated provider starting"
+    capture: start_deprecated
+
+  - name: "Wait for both providers to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "java-fast-provider" && echo "$LIST" | grep -q "java-deprecated-provider"; then
+          echo "Both providers registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Providers did not register"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_providers
+    timeout: 120
+
+  # Start consumer
+  - name: "Start tag-consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
+      echo "Consumer starting"
+    capture: start_consumer
+
+  - name: "Wait for consumer to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register"
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "List registered tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call fetchExcludeDeprecated which excludes "-deprecated" tag
+  - name: "Call fetchExcludeDeprecated with excluded tag"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESULT=$(meshctl call fetchExcludeDeprecated '{"query": "test"}' 2>&1)
+      echo "Result: $RESULT"
+      if echo "$RESULT" | grep -q "JAVA_DEPRECATED"; then
+        echo "FAIL: Should have excluded deprecated provider"
+        exit 1
+      fi
+      if echo "$RESULT" | grep -q "JAVA_FAST"; then
+        echo "PASS: Excluded deprecated, matched fast provider"
+      else
+        echo "FAIL: Expected to match fast provider"
+        exit 1
+      fi
+    capture: call_excluded
+    timeout: 60
+
+assertions:
+  - expr: "${captured.list_tools} contains 'fetchExcludeDeprecated'"
+    message: "fetchExcludeDeprecated tool should be registered"
+
+  - expr: "${captured.call_excluded} contains 'PASS'"
+    message: "Should exclude deprecated and match fast provider"
+
+  - expr: "${captured.call_excluded} not contains 'JAVA_DEPRECATED'"
+    message: "Result should NOT contain JAVA_DEPRECATED"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,64 @@
+# Test Case: Scaffold LLM Provider - Claude TypeScript
+# Verifies meshctl scaffold generates Claude provider with correct model version for TypeScript
+
+name: "Scaffold LLM Provider - Claude TS"
+description: "Verify Claude TypeScript provider scaffold uses current model (claude-sonnet-4-5)"
+tags:
+  - scaffolding
+  - meshctl
+  - claude
+  - typescript
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_scaffold
+
+test:
+  # Scaffold Claude LLM provider for TypeScript
+  - name: "Scaffold Claude provider"
+    handler: shell
+    command: "meshctl scaffold --name claude-test-ts --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --lang typescript"
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find claude-test-ts -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check src/index.ts for model version
+  - name: "Check src/index.ts content"
+    handler: shell
+    command: "cat claude-test-ts/src/index.ts"
+    workdir: /workspace
+    capture: index_content
+
+assertions:
+  # Scaffold succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # src/index.ts exists
+  - expr: "${captured.generated_files} contains 'src/index.ts'"
+    message: "src/index.ts should be created"
+
+  # package.json exists
+  - expr: "${captured.generated_files} contains 'package.json'"
+    message: "package.json should be created"
+
+  # src/index.ts has addLlmProvider
+  - expr: "${captured.index_content} contains 'addLlmProvider'"
+    message: "src/index.ts should have addLlmProvider call"
+
+  # Model should be claude-sonnet-4-5
+  - expr: "${captured.index_content} contains 'claude-sonnet-4-5'"
+    message: "Should use claude-sonnet-4-5 model"
+
+  # Should have anthropic in model path
+  - expr: "${captured.index_content} contains 'anthropic/'"
+    message: "Model should have anthropic/ prefix"
+
+post_run:
+  - routine: global.cleanup_workspace

@@ -39,6 +39,7 @@ test:
   # Start the gpt-provider with env file
   - name: "Start gpt-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-gpt-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/java-gpt-provider/.env -d
       echo "GPT provider starting via meshctl"
@@ -47,6 +48,7 @@ test:
   # Wait for provider to register (Java is slow to start)
   - name: "Wait for provider registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for gpt-provider agent..."
       for i in $(seq 1 45); do
@@ -69,18 +71,21 @@ test:
   # Verify provider is running
   - name: "Verify provider is running"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # List available tools
   - name: "List available tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list -t"
     capture: tools_output
 
   # Call llm_generate with a simple question
   - name: "Call llm_generate - capital of France"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl call llm_generate \
         '{"messages": [{"role": "user", "content": "What is the capital of France? Reply with just the city name."}]}'
@@ -89,6 +94,7 @@ test:
   # Stop provider
   - name: "Stop provider"
     handler: shell
+    workdir: /workspace
     command: "meshctl stop"
 
 assertions:
@@ -110,6 +116,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

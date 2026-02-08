@@ -64,14 +64,6 @@ my-agent/
 
 **After scaffolding:** Edit `main.py` to implement your tool logic. The placeholder returns `"Not implemented"`.
 
-## Add Tools to Existing Agent
-
-```bash
-meshctl scaffold --name my-agent --add-tool \
-  --tool-name process_data \
-  --tool-description "Process incoming data"
-```
-
 ## Generate Docker Compose
 
 ```bash

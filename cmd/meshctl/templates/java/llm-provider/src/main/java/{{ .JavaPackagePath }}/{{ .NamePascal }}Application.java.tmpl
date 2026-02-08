@@ -21,7 +21,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     port = {{ .Port }}
 )
 @MeshLlmProvider(
-    model = "{{ .Model }}",
+    model = "{{ default "anthropic/claude-sonnet-4-5" .Model }}",
     capability = "llm",
     tags = {{ "{" }}{{ if .Tags }}{{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ else if contains .Model "anthropic" }}"llm", "claude", "anthropic", "provider"{{ else if contains .Model "openai" }}"llm", "openai", "gpt", "provider"{{ else }}"llm", "provider"{{ end }}{{ "}" }},
     version = "1.0.0"

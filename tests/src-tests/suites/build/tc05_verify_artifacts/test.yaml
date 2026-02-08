@@ -2,7 +2,7 @@
 # Ensures all packages are built and ready for use
 #
 # IMPORTANT: This test runs on the HOST (standalone mode)
-# All artifacts should exist in ${suite_path}/${config.output.base}
+# All artifacts should exist in ${run_path}/${config.output.base}
 
 name: "Verify Build Artifacts"
 description: "Verify all build artifacts are present and valid"
@@ -17,8 +17,8 @@ test:
     handler: shell
     command: |
       echo "=== meshctl binary ==="
-      ls -la "${suite_path}/${config.output.bin}/meshctl"
-      file "${suite_path}/${config.output.bin}/meshctl"
+      ls -la "${run_path}/${config.output.bin}/meshctl"
+      file "${run_path}/${config.output.bin}/meshctl"
     capture: meshctl_check
 
   # Check Python wheels
@@ -26,9 +26,9 @@ test:
     handler: shell
     command: |
       echo "=== Python wheels ==="
-      ls -la "${suite_path}/${config.output.wheels}"/*.whl
+      ls -la "${run_path}/${config.output.wheels}"/*.whl
       echo ""
-      echo "Wheel count: $(ls "${suite_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)"
+      echo "Wheel count: $(ls "${run_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)"
     capture: wheels_check
 
   # Check npm packages
@@ -36,9 +36,9 @@ test:
     handler: shell
     command: |
       echo "=== npm packages ==="
-      ls -la "${suite_path}/${config.output.packages}"/*.tgz
+      ls -la "${run_path}/${config.output.packages}"/*.tgz
       echo ""
-      echo "Package count: $(ls "${suite_path}/${config.output.packages}"/*.tgz 2>/dev/null | wc -l)"
+      echo "Package count: $(ls "${run_path}/${config.output.packages}"/*.tgz 2>/dev/null | wc -l)"
     capture: packages_check
 
   # Check Java JARs (optional)
@@ -46,10 +46,10 @@ test:
     handler: shell
     command: |
       echo "=== Java JARs ==="
-      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
-        ls -la "${suite_path}/${config.output.java_jars}"/*.jar
+      if ls "${run_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
+        ls -la "${run_path}/${config.output.java_jars}"/*.jar
         echo ""
-        echo "JAR count: $(ls "${suite_path}/${config.output.java_jars}"/*.jar 2>/dev/null | wc -l)"
+        echo "JAR count: $(ls "${run_path}/${config.output.java_jars}"/*.jar 2>/dev/null | wc -l)"
       else
         echo "No Java JARs found (optional)"
       fi
@@ -61,8 +61,8 @@ test:
     handler: shell
     command: |
       echo "=== Native libraries ==="
-      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
-        ls -la "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.*
+      if ls "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
+        ls -la "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.*
       else
         echo "No native libraries found (optional)"
       fi
@@ -74,8 +74,8 @@ test:
     handler: shell
     command: |
       echo "=== Maven repository ==="
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
-        ls -la "${suite_path}/${config.output.m2_repo}/mcp-mesh/"
+      if [ -d "${run_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        ls -la "${run_path}/${config.output.m2_repo}/mcp-mesh/"
       else
         echo "No Maven repository found (optional)"
       fi
@@ -90,32 +90,32 @@ test:
       echo "BUILD ARTIFACTS SUMMARY"
       echo "=========================================="
       echo ""
-      echo "Output directory: ${suite_path}/${config.output.base}"
+      echo "Output directory: ${run_path}/${config.output.base}"
       echo ""
       echo "Binary:"
-      if [ -f "${suite_path}/${config.output.bin}/meshctl" ]; then
+      if [ -f "${run_path}/${config.output.bin}/meshctl" ]; then
         echo "  [OK] meshctl"
       else
         echo "  [MISSING] meshctl"
       fi
       echo ""
       echo "Python wheels:"
-      for whl in "${suite_path}/${config.output.wheels}"/*.whl; do
+      for whl in "${run_path}/${config.output.wheels}"/*.whl; do
         if [ -f "$whl" ]; then
           echo "  [OK] $(basename $whl)"
         fi
       done
       echo ""
       echo "npm packages:"
-      for tgz in "${suite_path}/${config.output.packages}"/*.tgz; do
+      for tgz in "${run_path}/${config.output.packages}"/*.tgz; do
         if [ -f "$tgz" ]; then
           echo "  [OK] $(basename $tgz)"
         fi
       done
       echo ""
       echo "Java JARs (optional):"
-      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
-        for jar in "${suite_path}/${config.output.java_jars}"/*.jar; do
+      if ls "${run_path}/${config.output.java_jars}"/*.jar 1> /dev/null 2>&1; then
+        for jar in "${run_path}/${config.output.java_jars}"/*.jar; do
           if [ -f "$jar" ]; then
             echo "  [OK] $(basename $jar)"
           fi
@@ -125,8 +125,8 @@ test:
       fi
       echo ""
       echo "Native libraries (optional):"
-      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
-        for lib in "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.*; do
+      if ls "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1> /dev/null 2>&1; then
+        for lib in "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.*; do
           if [ -f "$lib" ]; then
             echo "  [OK] $(basename $lib)"
           fi
@@ -136,8 +136,8 @@ test:
       fi
       echo ""
       echo "Maven repository (optional):"
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
-        for mod in "${suite_path}/${config.output.m2_repo}"/mcp-mesh/*/; do
+      if [ -d "${run_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        for mod in "${run_path}/${config.output.m2_repo}"/mcp-mesh/*/; do
           if [ -d "$mod" ]; then
             echo "  [OK] $(basename $mod)"
           fi

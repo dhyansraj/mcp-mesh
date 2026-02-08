@@ -52,6 +52,7 @@ test:
   # Start employee service first (provides get_employee capability)
   - name: "Start Java employee service"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-employee-service -d
       echo "Java employee service starting via meshctl"
@@ -60,6 +61,7 @@ test:
   # Wait for employee service to register
   - name: "Wait for employee service registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for employee-service..."
       for i in $(seq 1 30); do
@@ -78,6 +80,7 @@ test:
   # Start greeter agent (depends on get_employee capability)
   - name: "Start Java greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent -d
       echo "Java greeter agent starting via meshctl"
@@ -86,6 +89,7 @@ test:
   # Wait for greeter to register
   - name: "Wait for greeter registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter..."
       for i in $(seq 1 30); do
@@ -104,24 +108,28 @@ test:
   # Verify both agents are registered
   - name: "Verify both agents registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_agents
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call greetEmployee - this calls employee service via mesh
   - name: "Call greetEmployee (Java -> Java)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greetEmployee ''{"employee_id": 1}'''
     capture: call_greet_employee
 
   # Call greetEmployee for another employee
   - name: "Call greetEmployee for Carol"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greetEmployee ''{"employee_id": 3}'''
     capture: call_greet_carol
 
@@ -163,6 +171,7 @@ assertions:
 post_run:
   # Stop all agents
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

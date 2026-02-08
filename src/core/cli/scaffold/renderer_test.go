@@ -35,8 +35,8 @@ func TestTemplateRenderer_RenderString(t *testing.T) {
 		{
 			name:     "multiple variables",
 			template: "Agent: {{ .Name }}, Port: {{ .Port }}",
-			data:     map[string]interface{}{"Name": "my-agent", "Port": 9000},
-			expected: "Agent: my-agent, Port: 9000",
+			data:     map[string]interface{}{"Name": "my-agent", "Port": 8080},
+			expected: "Agent: my-agent, Port: 8080",
 			wantErr:  false,
 		},
 		{
@@ -179,12 +179,12 @@ func TestTemplateRenderer_RenderFile(t *testing.T) {
 
 	data := map[string]interface{}{
 		"Name": "my-agent",
-		"Port": 9000,
+		"Port": 8080,
 	}
 
 	result, err := renderer.RenderFile(templatePath, data)
 	require.NoError(t, err)
-	assert.Equal(t, "Agent: my-agent\nPort: 9000", result)
+	assert.Equal(t, "Agent: my-agent\nPort: 8080", result)
 }
 
 func TestTemplateRenderer_RenderFile_NotFound(t *testing.T) {
@@ -264,7 +264,7 @@ func TestTemplateRenderer_RenderDirectory(t *testing.T) {
 
 	data := map[string]interface{}{
 		"Name":        "my-agent",
-		"Port":        9000,
+		"Port":        8080,
 		"Description": "A test agent",
 	}
 
@@ -274,7 +274,7 @@ func TestTemplateRenderer_RenderDirectory(t *testing.T) {
 	// Verify output files (without .tmpl extension)
 	mainContent, err := os.ReadFile(filepath.Join(outDir, "main.py"))
 	require.NoError(t, err)
-	assert.Equal(t, "# my-agent\nport = 9000", string(mainContent))
+	assert.Equal(t, "# my-agent\nport = 8080", string(mainContent))
 
 	readmeContent, err := os.ReadFile(filepath.Join(outDir, "README.md"))
 	require.NoError(t, err)

@@ -1,0 +1,171 @@
+# Test Case: Scaffold Java LLM Provider
+# Verifies that meshctl can scaffold a Java LLM provider with correct structure
+
+name: "Java LLM Provider Scaffold"
+description: "Test scaffolding a Java LLM provider, verify generated files compile, and agent starts"
+tags:
+  - scaffolding
+  - java
+  - llm-provider
+timeout: 600 # 10 minutes (Java is slow to build + start)
+
+# Pre-run: Setup environment
+pre_run:
+  - routine: global.setup_for_java_agent
+
+# Main test steps
+test:
+  # Scaffold the LLM provider
+  - name: "Scaffold Java LLM provider"
+    handler: shell
+    command: |
+      meshctl scaffold --name test-llm-provider-java --agent-type llm-provider \
+        --lang java --model anthropic/claude-sonnet-4-5 --no-interactive -o /workspace
+    workdir: /workspace
+    capture: scaffold_output
+
+  # List generated files
+  - name: "List generated files"
+    handler: shell
+    command: "find test-llm-provider-java -type f | sort"
+    workdir: /workspace
+    capture: generated_files
+
+  # Check Application.java content
+  - name: "Check Application.java content"
+    handler: shell
+    command: "find test-llm-provider-java -name '*Application.java' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_content
+
+  # Check helm-values.yaml content
+  - name: "Check helm-values.yaml content"
+    handler: shell
+    command: "cat test-llm-provider-java/helm-values.yaml"
+    workdir: /workspace
+    capture: helm_values
+
+  # Check application.yml content
+  - name: "Check application.yml content"
+    handler: shell
+    command: "find test-llm-provider-java -name 'application.yml' -exec cat {} \\;"
+    workdir: /workspace
+    capture: app_yml
+
+  # Compile Java agent with Maven
+  - name: "Compile Java LLM provider"
+    handler: shell
+    command: "cd test-llm-provider-java && mvn compile -q"
+    workdir: /workspace
+    timeout: 300
+    capture: compile_output
+    assertions:
+      - expr: ${last.exit_code} == 0
+        message: "Generated Java LLM provider code should compile without errors"
+
+  # Start the agent
+  - name: "Start Java LLM provider"
+    handler: shell
+    command: "meshctl start test-llm-provider-java -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for Java agent to start (Java/Spring Boot is slow)
+  - name: "Wait for Java agent to start"
+    handler: shell
+    command: |
+      echo "Waiting for Java agent to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "test-llm-provider-java"; then
+          echo "Agent registered after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "Agent did not register within 90s"
+      exit 1
+    workdir: /workspace
+    timeout: 120
+    capture: wait_output
+
+  # Check if agent is running with meshctl list
+  - name: "Check agent is running with meshctl list"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Check agent capabilities
+  - name: "Check agent has llm capability"
+    handler: shell
+    command: "meshctl list -a 2>/dev/null || meshctl list"
+    workdir: /workspace
+    capture: capabilities_output
+
+  # Show agent logs for debugging
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs test-llm-provider-java 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+# Assertions
+assertions:
+  # Scaffold command succeeded
+  - expr: ${last.exit_code} == 0
+    message: "Scaffold command should succeed"
+
+  # pom.xml exists
+  - expr: "${captured.generated_files} contains 'pom.xml'"
+    message: "pom.xml should be created"
+
+  # Application.java exists
+  - expr: "${captured.generated_files} contains 'Application.java'"
+    message: "Application.java should be created"
+
+  # Dockerfile exists
+  - expr: "${captured.generated_files} contains 'Dockerfile'"
+    message: "Dockerfile should be created"
+
+  # helm-values.yaml exists
+  - expr: "${captured.generated_files} contains 'helm-values.yaml'"
+    message: "helm-values.yaml should be created"
+
+  # application.yml exists
+  - expr: "${captured.generated_files} contains 'application.yml'"
+    message: "application.yml should be created"
+
+  # Application.java contains @MeshLlmProvider annotation
+  - expr: "${captured.app_content} contains '@MeshLlmProvider'"
+    message: "Application.java should contain @MeshLlmProvider annotation"
+
+  # Application.java contains @MeshAgent annotation
+  - expr: "${captured.app_content} contains '@MeshAgent'"
+    message: "Application.java should contain @MeshAgent annotation"
+
+  # helm-values contains agent name
+  - expr: "${captured.helm_values} contains 'test-llm-provider-java'"
+    message: "helm-values.yaml should contain agent name"
+
+  # Agent appears in meshctl list
+  - expr: ${captured.list_output} contains 'test-llm-provider-java'
+    message: "Agent should appear in meshctl list"
+
+  # Agent has llm capability
+  - expr: ${captured.capabilities_output} contains 'llm'
+    message: "Agent should have llm capability"
+
+# Post-run: Cleanup
+post_run:
+  # Stop any remaining agents
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - handler: shell
+    command: "pkill -f spring-boot:run 2>/dev/null || true"
+    ignore_errors: true
+  - handler: shell
+    command: "pkill -f 'java.*test-llm-provider-java' 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

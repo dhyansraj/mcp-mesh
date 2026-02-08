@@ -17,8 +17,8 @@ test:
   - name: "Create output directories"
     handler: shell
     command: |
-      mkdir -p "${suite_path}/${config.output.bin}"
-      echo "Output directory ready: ${suite_path}/${config.output.bin}"
+      mkdir -p "${run_path}/${config.output.bin}"
+      echo "Output directory ready: ${run_path}/${config.output.bin}"
     capture: dir_check
 
   # Check source availability on host
@@ -42,7 +42,7 @@ test:
     command: |
       # Get absolute paths for docker volume mounts (relative to suite_path)
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
@@ -70,8 +70,8 @@ test:
   - name: "Verify meshctl binary"
     handler: shell
     command: |
-      ls -la "${suite_path}/${config.output.bin}/meshctl"
-      file "${suite_path}/${config.output.bin}/meshctl"
+      ls -la "${run_path}/${config.output.bin}/meshctl"
+      file "${run_path}/${config.output.bin}/meshctl"
     capture: verify_output
 
   # Test the binary on host (if compatible)
@@ -79,12 +79,12 @@ test:
     handler: shell
     command: |
       # Try to run the binary - may fail if built for different arch
-      if "${suite_path}/${config.output.bin}/meshctl" --version 2>/dev/null; then
+      if "${run_path}/${config.output.bin}/meshctl" --version 2>/dev/null; then
         echo "meshctl runs on host"
-        "${suite_path}/${config.output.bin}/meshctl" --version
+        "${run_path}/${config.output.bin}/meshctl" --version
       else
         echo "meshctl built but may be for different architecture (expected in cross-platform builds)"
-        echo "Binary exists: $(ls "${suite_path}/${config.output.bin}/meshctl")"
+        echo "Binary exists: $(ls "${run_path}/${config.output.bin}/meshctl")"
       fi
     capture: test_output
 

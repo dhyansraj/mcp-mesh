@@ -19,13 +19,13 @@ test:
   - name: "Clean output directory"
     handler: shell
     command: |
-      echo "Cleaning output directory: ${suite_path}/out"
-      rm -rf "${suite_path}/out/bin"/* 2>/dev/null || true
-      rm -rf "${suite_path}/out/wheels"/* 2>/dev/null || true
-      rm -rf "${suite_path}/out/packages"/* 2>/dev/null || true
-      rm -rf "${suite_path}/out/java-jars"/* 2>/dev/null || true
-      rm -rf "${suite_path}/out/native-libs"/* 2>/dev/null || true
-      rm -rf "${suite_path}/out/m2-repo"/* 2>/dev/null || true
+      echo "Cleaning output directory: ${run_path}/out"
+      rm -rf "${run_path}/out/bin"/* 2>/dev/null || true
+      rm -rf "${run_path}/out/wheels"/* 2>/dev/null || true
+      rm -rf "${run_path}/out/packages"/* 2>/dev/null || true
+      rm -rf "${run_path}/out/java-jars"/* 2>/dev/null || true
+      rm -rf "${run_path}/out/native-libs"/* 2>/dev/null || true
+      rm -rf "${run_path}/out/m2-repo"/* 2>/dev/null || true
       echo "Output directory cleaned"
     capture: clean_output
 

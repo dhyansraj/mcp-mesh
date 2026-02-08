@@ -70,14 +70,6 @@ hello/
 
 **After scaffolding:** Edit the `@MeshTool` annotated methods to implement your tool logic. The placeholder returns `"Not implemented"`.
 
-## Add Tools to Existing Agent
-
-```bash
-meshctl scaffold --name hello --add-tool \
-  --tool-name process_data \
-  --tool-description "Process incoming data"
-```
-
 ## Generate Docker Compose
 
 ```bash
