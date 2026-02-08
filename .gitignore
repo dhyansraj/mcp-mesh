@@ -182,6 +182,7 @@ logs/
 capability_store/
 prompts/
 !examples/**/prompts/
+!cmd/meshctl/templates/**/prompts/
 *.db
 *.pid
 

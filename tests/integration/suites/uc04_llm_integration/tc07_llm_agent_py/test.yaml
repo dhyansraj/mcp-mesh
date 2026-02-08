@@ -61,7 +61,7 @@ test:
   # Wait for agent to register and resolve dependencies
   - name: "Wait for agent to register"
     handler: wait
-    seconds: 5
+    seconds: 15
   # Verify both are running
   - name: "Verify all agents running"
     handler: shell

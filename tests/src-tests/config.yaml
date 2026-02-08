@@ -42,5 +42,3 @@ standalone:
 ssh:
   host: beelink1
   runner_dir: /tmp/tsuite
-  local_path: /Users/dhyanraj/workspace
-  mount_path: /mnt/workspace

@@ -25,7 +25,17 @@ docker:
   # Output image name (version will be appended)
   output_image: "tsuite-mesh"
 
+  # Local registry for K8s cluster
+  registry: 192.168.10.1:5000
+
 # Execution defaults
 defaults:
   timeout: 300 # 5 minutes per test (image build takes time)
   parallel: 1 # Sequential execution
+
+standalone:
+  type: remote
+ssh:
+  host: beelink1
+  runner_dir: /tmp/tsuite
+  api_url: http://10.0.0.50:9999

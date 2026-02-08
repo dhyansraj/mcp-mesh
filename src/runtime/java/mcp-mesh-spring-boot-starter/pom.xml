@@ -15,6 +15,13 @@
 
     <name>MCP Mesh Spring Boot Starter</name>
     <description>Spring Boot starter for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration</description>
+    <url>https://github.com/dhyansraj/mcp-mesh</url>
+
+    <scm>
+        <url>https://github.com/dhyansraj/mcp-mesh</url>
+        <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
+    </scm>
 
     <dependencies>
         <dependency>

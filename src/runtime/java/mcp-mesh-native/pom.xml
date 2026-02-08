@@ -15,6 +15,13 @@
 
     <name>MCP Mesh Native</name>
     <description>Native library artifacts for MCP Mesh (platform-specific)</description>
+    <url>https://github.com/dhyansraj/mcp-mesh</url>
+
+    <scm>
+        <url>https://github.com/dhyansraj/mcp-mesh</url>
+        <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
+    </scm>
 
     <!--
     This module bundles the native libraries for all supported platforms.
