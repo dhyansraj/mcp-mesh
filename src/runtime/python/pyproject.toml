@@ -6,12 +6,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-mesh"
-version = "0.9.0b11"
-description = "Kubernetes-native platform for distributed MCP applications"
+version = "0.9.0"
+description = "Python SDK for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "MCP Mesh Contributors", email = "noreply@mcp-mesh.dev" }
+    { name = "MCP Mesh Contributors", email = "noreply@mcp-mesh.ai" }
 ]
 keywords = [
     "mcp",

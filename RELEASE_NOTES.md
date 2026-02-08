@@ -1,10 +1,65 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.1...v0.9.0-beta.1)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.1...v0.9.0)
 
-## v0.9.0-beta.1
+## v0.9.0 (2026-02-07)
 
-_Release in progress -- details to be added._
+### ✨ New Features
+
+- **Java SDK — Full Runtime Support** (#491)
+  - New `mcp-mesh-spring-boot-starter` built on Spring Boot 4.0.2 + Spring AI 2.0.0-M2
+  - Java agents participate as tool agents, LLM consumers, and LLM providers
+  - Full cross-runtime interoperability (Java ↔ Python ↔ TypeScript)
+  - Spring Boot auto-configuration for mesh registration, heartbeat, and discovery
+  - MCP protocol support (tool listing, invocation, prompt handling)
+  - Mesh delegation with `@MeshLlmProvider` and `@MeshRoute`
+  - Distributed tracing support
+  - 6 Maven modules: core, sdk, native, spring-boot-starter, spring-ai, bom
+
+- **Java SDK — Auto-Port Detection** (#518)
+  - Added `mesh_update_port` FFI binding to Rust core, enabling `MCP_MESH_HTTP_PORT=0` for Java agents
+  - Java agents can now auto-detect their assigned port and report it to the registry
+
+- **Java SDK — victools JSON Schema Generation** (#514)
+  - Replaced manual schema building with victools `SchemaGenerator`
+  - Structural parity with Python (Pydantic) and TypeScript (Zod) — produces `$defs`, `anyOf` for nullables, `required` arrays
+
+- **meshctl scaffold — Java Support** (#497)
+  - `meshctl scaffold --lang java` generates Spring Boot agent projects
+  - 3 agent types: basic tool, LLM agent, LLM provider
+  - Full template set: pom.xml, Application.java, application.yml, Dockerfile, helm-values
+
+- **meshctl man — Java Documentation** (#495)
+  - `meshctl man` now includes Java-specific guides: prerequisites, quickstart, deployment, capabilities
+
+- **Java SDK on Maven Central** (#499)
+  - Published under `io.mcp-mesh` namespace
+  - Release pipeline: Rust FFI cross-compilation → fat JAR with native libs → GPG signing → Sonatype Central Portal
+  - `mcpmesh/java-runtime` Docker image published to Docker Hub + GHCR
+
+- **Custom Domain** — Documentation site moved from `dhyansraj.github.io/mcp-mesh` to [mcp-mesh.ai](https://mcp-mesh.ai/)
+
+### 🔧 Improvements
+
+- **LLM Provider Handler Refactoring** (all runtimes, #491)
+  - Claude handler: TEXT + HINT only (removed unreliable STRICT mode)
+  - OpenAI handler: STRICT mode with `response_format` for structured output
+  - New base provider handler abstraction in Python and TypeScript
+
+- **OTLP Tracing Flush Latency** (#514)
+  - Buffer timeout reduced from 3s → 1s, flush ticker from 1s → 500ms
+  - Residual spans now flush within ~1.5s instead of ~4-5s
+
+- **Scaffold Cleanup** (#523)
+  - Removed `--add-tool` feature (Python-only, complex, least-used)
+  - Default port changed from 9000 to 8080
+  - Enhanced basic tool templates with commented dependency injection and parameter examples
+
+### 🐛 Bug Fixes
+
+- **TypeScript SDK — Schema Injection** (#493): Fixed double-injection when provider delegates through mesh
+- **meshctl start — Java Agent Name Detection** (#523): `isAgentFile()` now detects directory-based agents; `extractJavaAgentName()` parses `@MeshAgent` annotation instead of pom.xml artifactId
+- **Java Native Library** (#511): `mcp-mesh-native` added as transitive dependency — users no longer need to manually manage native libs
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.0...v0.8.1)
 

@@ -7,14 +7,14 @@
     <parent>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-parent</artifactId>
-        <version>0.9.0-beta.11-SNAPSHOT</version>
+        <version>0.9.0</version>
     </parent>
 
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
     <packaging>jar</packaging>
 
     <name>MCP Mesh Spring Boot Starter</name>
-    <description>Spring Boot auto-configuration for MCP Mesh</description>
+    <description>Spring Boot starter for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration</description>
 
     <dependencies>
         <dependency>

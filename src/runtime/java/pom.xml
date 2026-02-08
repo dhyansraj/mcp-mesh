@@ -6,11 +6,11 @@
 
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-parent</artifactId>
-    <version>0.9.0-beta.11-SNAPSHOT</version>
+    <version>0.9.0</version>
     <packaging>pom</packaging>
 
     <name>MCP Mesh Java SDK</name>
-    <description>Java SDK for MCP Mesh distributed agent framework</description>
+    <description>Java SDK for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration across Python, Java, and TypeScript</description>
     <url>https://github.com/dhyansraj/mcp-mesh</url>
 
     <licenses>
@@ -23,8 +23,8 @@
 
     <developers>
         <developer>
-            <name>Dhyan Raj</name>
-            <email>dhyanraj@gmail.com</email>
+            <name>MCP Mesh Contributors</name>
+            <email>noreply@mcp-mesh.ai</email>
         </developer>
     </developers>
 
@@ -33,6 +33,11 @@
         <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
         <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
     </scm>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/dhyansraj/mcp-mesh/issues</url>
+    </issueManagement>
 
     <modules>
         <module>mcp-mesh-bom</module>

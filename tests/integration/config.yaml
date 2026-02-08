@@ -25,7 +25,7 @@ docker:
   # Use tsuite-mesh:local (from src-tests) or tsuite-mesh:X.Y.Z (from lib-tests)
   # Both images have meshctl, mesh module, and node pre-installed
   # - tsuite-mesh:local     -> local mode (packages from /wheels, /packages)
-  # - tsuite-mesh:0.9.0-beta.11 -> published mode (packages from PyPI/npm)
+  # - tsuite-mesh:0.9.0 -> published mode (packages from PyPI/npm)
   base_image: tsuite-mesh:local
   network: bridge
   # No mounts needed - packages are baked into the image

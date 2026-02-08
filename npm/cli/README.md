@@ -78,7 +78,7 @@ meshctl list --tools=<tool_name>
 
 ## Links
 
-- [Documentation](https://dhyansraj.github.io/mcp-mesh/)
+- [Documentation](https://mcp-mesh.ai/)
 - [GitHub Repository](https://github.com/dhyansraj/mcp-mesh)
 - [PyPI Package](https://pypi.org/project/mcp-mesh/)
 - [Docker Images](https://hub.docker.com/u/mcpmesh)
