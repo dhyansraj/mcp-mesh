@@ -72,7 +72,7 @@ func TestScaffoldCommand_DefaultPort(t *testing.T) {
 
 	port, err := cmd.Flags().GetInt("port")
 	require.NoError(t, err)
-	assert.Equal(t, 9000, port)
+	assert.Equal(t, 8080, port)
 }
 
 func TestScaffoldCommand_DefaultOutput(t *testing.T) {
