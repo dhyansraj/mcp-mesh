@@ -1,5 +1,24 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.0...v0.9.1)
+
+## v0.9.1 (2026-02-08)
+
+### 🐛 Bug Fixes
+
+- **Release pipeline — PyPI indexing wait** (#526)
+  - Docker builds could fail due to a race condition where `mcp-mesh-core` or `mcp-mesh` packages weren't indexed on PyPI yet when `pip install` ran
+  - Added PyPI indexing wait steps to `publish-rust-core` and `publish-python` jobs, completing registry wait coverage for all 5 published packages (PyPI, npm, Maven Central)
+
+- **meshctl scaffold — missing Java FreeMarker template** (#528)
+  - `meshctl scaffold --lang java --agent-type llm-agent` generated code referencing a `.ftl` prompt template that was never created
+  - Root cause: `.gitignore` blanket `prompts/` rule silently prevented the template from being tracked
+  - Added gitignore exception and committed the missing template
+
+- **Maven Central — incorrect external resource URLs**
+  - Child module POMs inherited the parent `<url>` and Maven appended the `artifactId`, producing broken links on Maven Central
+  - Added explicit `<url>` and `<scm>` to all child modules
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.8.1...v0.9.0)
 
 ## v0.9.0 (2026-02-07)

@@ -108,7 +108,7 @@ const agent = mesh(server, {
 ```bash
 docker run --rm -it \
   -v $(pwd)/suites/uc01_registry/artifacts:/uc-artifacts:ro \
-  tsuite-mesh:0.9.0 bash
+  tsuite-mesh:0.9.1 bash
 ```
 
 ### Common issues:
@@ -123,9 +123,9 @@ Available in test.yaml via `${config.X}`:
 
 | Variable                                 | Example      |
 | ---------------------------------------- | ------------ |
-| `config.packages.cli_version`            | 0.9.0 |
-| `config.packages.sdk_python_version`     | 0.9.0 |
-| `config.packages.sdk_typescript_version` | 0.9.0 |
+| `config.packages.cli_version`            | 0.9.1 |
+| `config.packages.sdk_python_version`     | 0.9.1 |
+| `config.packages.sdk_typescript_version` | 0.9.1 |
 
 ## Issue Reporting Policy
 

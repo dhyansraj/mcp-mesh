@@ -34,7 +34,7 @@ dependencies = [
     # Core MCP Mesh requirements
     # For production: "mcp-mesh>=0.1.0,<0.2.0",
     # For development: install mcp-mesh in editable mode from project root
-    "fastmcp>=0.9.0",
+    "fastmcp>=0.9.1",
     
     # Data processing core
     "pandas>=1.5.0,<3.0.0",
