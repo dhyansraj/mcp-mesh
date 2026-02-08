@@ -1,13 +1,13 @@
 {
   "name": "@mcpmesh/cli",
-  "version": "0.9.0-beta.11",
-  "description": "CLI for MCP Mesh - Enterprise-Grade Distributed Service Mesh for AI Agents",
+  "version": "0.9.0",
+  "description": "CLI for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dhyansraj/mcp-mesh.git"
   },
-  "homepage": "https://dhyansraj.github.io/mcp-mesh/",
+  "homepage": "https://mcp-mesh.ai/",
   "bugs": {
     "url": "https://github.com/dhyansraj/mcp-mesh/issues"
   },
@@ -22,10 +22,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@mcpmesh/cli-linux-x64": "0.9.0-beta.11",
-    "@mcpmesh/cli-linux-arm64": "0.9.0-beta.11",
-    "@mcpmesh/cli-darwin-x64": "0.9.0-beta.11",
-    "@mcpmesh/cli-darwin-arm64": "0.9.0-beta.11"
+    "@mcpmesh/cli-linux-x64": "0.9.0",
+    "@mcpmesh/cli-linux-arm64": "0.9.0",
+    "@mcpmesh/cli-darwin-x64": "0.9.0",
+    "@mcpmesh/cli-darwin-arm64": "0.9.0"
   },
   "keywords": [
     "mcp",
@@ -42,7 +42,7 @@
     "service-mesh",
     "distributed-systems"
   ],
-  "author": "Dhyan Sraj <dhyansraj@gmail.com>",
+  "author": "MCP Mesh Contributors <noreply@mcp-mesh.ai>",
   "publishConfig": {
     "access": "public"
   }

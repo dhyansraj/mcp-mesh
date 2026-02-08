@@ -302,6 +302,6 @@ docker-compose -f ../docker-examples/docker-compose.multi-agent-poc.yml ps inten
 
 ## Learn More
 
-- [MCP Mesh Documentation](https://dhyansraj.github.io/mcp-mesh/)
+- [MCP Mesh Documentation](https://mcp-mesh.ai/)
 - [LLM Provider Pattern](../../MEDIUM-POST-MULTI-AGENT-POC.md)
 - [GitHub Repository](https://github.com/dhyansraj/mcp-mesh)

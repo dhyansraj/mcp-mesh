@@ -12,8 +12,8 @@ Key terms used throughout MCP Mesh documentation:
 
 | Term                             | Definition                                                                                                                                                                                                                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Agent**                        | A Python or TypeScript application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                 |
-| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` (Python) or registered with `agent.addTool()` (TypeScript) that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                        |
+| **Agent**                        | A Python, Java, or TypeScript application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                 |
+| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` (Python), annotated with `@MeshTool` (Java), or registered with `agent.addTool()` (TypeScript) that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                        |
 | **Capability**                   | A unique identifier (string) that describes what a tool provides. Other tools declare dependencies on capabilities, not specific agents. Example: `"redis_store_memory"`, `"analyze_emotion"`.                                                                                             |
 | **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
 | **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
@@ -136,7 +136,7 @@ curl -s -X POST http://localhost:8080/mcp \
 
 ### Component Responsibilities
 
-#### 1. **Agents (Python & TypeScript Runtime)**
+#### 1. **Agents (Python, Java & TypeScript Runtime)**
 
 - **FastMCP Integration**: Native MCP protocol support for direct agent-to-agent communication
 - **Mesh Runtime**: Background dependency injection and proxy creation
@@ -173,11 +173,11 @@ curl -s -X POST http://localhost:8080/mcp \
 
 ## MCP Mesh Agents and Tools
 
-MCP Mesh agents are simple Python or TypeScript applications that define one or more MCP tools. While tools communicate via the MCP protocol, all networking and communication complexity is abstracted away by MCP Mesh.
+MCP Mesh agents are simple Python, Java, or TypeScript applications that define one or more MCP tools. While tools communicate via the MCP protocol, all networking and communication complexity is abstracted away by MCP Mesh.
 
 ### What is an MCP Mesh Agent?
 
-An agent is a Python or TypeScript application that:
+An agent is a Python, Java, or TypeScript application that:
 
 1. Creates a FastMCP server
 2. Wraps it with mesh capabilities
@@ -1026,6 +1026,6 @@ _See `src/runtime/python/_mcp_mesh/` for extension interfaces_
 
 This architecture enables MCP Mesh to provide a seamless, scalable, and developer-friendly service orchestration platform that preserves the simplicity of FastMCP while adding powerful distributed system capabilities.
 
-**For Implementation Details**: See source code in `src/runtime/python/` (Python), `src/runtime/typescript/` (TypeScript), and `cmd/registry/` (Go)
+**For Implementation Details**: See source code in `src/runtime/python/` (Python), `src/runtime/java/` (Java), `src/runtime/typescript/` (TypeScript), and `cmd/registry/` (Go)
 **For Examples**: See `examples/` directory for complete working examples
 **For Configuration**: See [Environment Variables](./environment-variables.md) for all configuration options

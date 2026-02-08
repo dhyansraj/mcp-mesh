@@ -8,6 +8,7 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![PyPI](https://img.shields.io/pypi/v/mcp-mesh?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/mcp-mesh/)
 [![npm](https://img.shields.io/npm/v/@mcpmesh/cli?color=red&logo=npm&logoColor=white)](https://www.npmjs.com/package/@mcpmesh/cli)
+[![Maven Central](https://img.shields.io/maven-central/v/io.mcp-mesh/mcp-mesh-spring-boot-starter?color=orange&logo=apachemaven&logoColor=white)](https://central.sonatype.com/artifact/io.mcp-mesh/mcp-mesh-spring-boot-starter)
 [![Docker](https://img.shields.io/badge/docker-hub-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/u/mcpmesh)
 [![Helm](https://img.shields.io/badge/helm-charts-blue.svg?logo=helm&logoColor=white)](https://github.com/dhyansraj/mcp-mesh/pkgs/container/mcp-mesh%2Fmcp-mesh-core)
 [![Discord](https://img.shields.io/discord/1386739813083779112?color=7289DA&label=Discord&logo=discord&logoColor=white)](https://discord.gg/KDFDREphWn)
@@ -17,8 +18,8 @@
 > **The future of AI is not one large model, but many specialized agents working together.**
 
 <p align="center">
-  <a href="https://dhyansraj.github.io/mcp-mesh/"><strong>📚 Documentation</strong></a> ·
-  <a href="https://dhyansraj.github.io/mcp-mesh/python/getting-started/"><strong>🚀 Quick Start</strong></a> ·
+  <a href="https://mcp-mesh.ai/"><strong>📚 Documentation</strong></a> ·
+  <a href="https://mcp-mesh.ai/python/getting-started/"><strong>🚀 Quick Start</strong></a> ·
   <a href="https://www.youtube.com/@MCPMesh"><strong>🎬 YouTube</strong></a> ·
   <a href="https://discord.gg/KDFDREphWn"><strong>💬 Discord</strong></a>
 </p>
@@ -38,7 +39,7 @@ meshctl --help
 meshctl man
 ```
 
-**[Python Quick Start →](https://dhyansraj.github.io/mcp-mesh/python/getting-started/)** | **[Java Quick Start →](https://dhyansraj.github.io/mcp-mesh/java/getting-started/)** | **[TypeScript Quick Start →](https://dhyansraj.github.io/mcp-mesh/typescript/getting-started/)**
+**[Python Quick Start →](https://mcp-mesh.ai/python/getting-started/)** | **[Java Quick Start →](https://mcp-mesh.ai/java/getting-started/)** | **[TypeScript Quick Start →](https://mcp-mesh.ai/typescript/getting-started/)**
 
 ---
 
@@ -53,9 +54,9 @@ You write the agent logic. The mesh discovers, connects, heals, and traces — a
 **Stop fighting infrastructure. Start building intelligence.**
 
 - **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
-- **Python & TypeScript**: Write MCP servers as simple functions in your preferred language - no manual client/server setup
-- **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python) or Express (TypeScript) APIs seamlessly
-- **LLM as Dependencies**: Inject LLMs just like MCP agents - dynamic prompts with Jinja2 (Python) or Handlebars (TypeScript)
+- **Python, Java & TypeScript**: Write MCP servers as simple functions in your preferred language - no manual client/server setup
+- **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python), Spring Boot (Java), or Express (TypeScript) APIs seamlessly
+- **LLM as Dependencies**: Inject LLMs just like MCP agents - dynamic prompts with Jinja2 (Python), FreeMarker (Java), or Handlebars (TypeScript)
 - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes - same code, zero changes
 - **kubectl-like Management**: `meshctl` - a familiar command-line tool to run, monitor, and manage your entire agent network
 
@@ -137,7 +138,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 - **Complex Apps Made Simple**: Financial services example shows 6+ interconnected agents
 - **Production Ready**: Built-in resilience, distributed observability, and scaling
 
-**The Magic**: Write simple functions in Python or TypeScript, get distributed systems.
+**The Magic**: Write simple functions in Python, Java, or TypeScript, get distributed systems.
 
 ---
 
@@ -192,7 +193,7 @@ async def create_trip(trip_data: dict, plan_trip=None):
 | **Framework Lock-in**                        | High (classes)    | Low (decorators)       |
 | **Lines of Code per Agent**                  | ~50+              | ~10                    |
 
-**[See full comparison →](https://dhyansraj.github.io/mcp-mesh/comparison/)**
+**[See full comparison →](https://mcp-mesh.ai/comparison/)**
 
 ---
 
@@ -235,9 +236,9 @@ This project is open source. License details will be provided in the LICENSE fil
 
 ## 📚 Learn More
 
-1. **[📚 Full Documentation](https://dhyansraj.github.io/mcp-mesh/)** - Complete guides and reference
-2. **[⚡ Quick Tutorial](https://dhyansraj.github.io/mcp-mesh/01-getting-started/)** - Build your first distributed MCP agent
+1. **[📚 Full Documentation](https://mcp-mesh.ai/)** - Complete guides and reference
+2. **[⚡ Quick Tutorial](https://mcp-mesh.ai/01-getting-started/)** - Build your first distributed MCP agent
 3. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
-4. **[🔧 Contribute](https://dhyansraj.github.io/mcp-mesh/contributing/)** - Help build the future of AI orchestration
+4. **[🔧 Contribute](https://mcp-mesh.ai/contributing/)** - Help build the future of AI orchestration
 
 **Star the repo** if MCP Mesh helps you build better AI systems! ⭐

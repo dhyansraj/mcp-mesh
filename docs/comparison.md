@@ -28,7 +28,7 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 | Dynamic Distributed DI           | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Capability-based discovery       | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Tag-based filtering              | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Cross-language support           | :x:              | :x:              | :x:              | :white_check_mark: Python + TypeScript   |
+| Cross-language support           | :x:              | :x:              | :x:              | :white_check_mark: Python + Java + TypeScript |
 | Same code local/Docker/K8s       | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Monolith mode (single process)   | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Distributed mode                 | :warning: DIY    | :warning: DIY    | :warning: DIY    | :white_check_mark: Auto                  |
@@ -132,7 +132,7 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 | Lines of code for agent | ~50+                  | ~50+                  | ~50+                  | **~10**                             |
 | Framework lock-in       | :x: High              | :x: High              | :x: High              | :white_check_mark: Low (decorators) |
 | Learning curve          | Steep                 | Steep                 | Medium                | **Low**                             |
-| Pure Python/TS          | :x: Framework classes | :x: Framework classes | :x: Framework classes | :white_check_mark: Just decorators  |
+| Pure Python/Java/TS     | :x: Framework classes | :x: Framework classes | :x: Framework classes | :white_check_mark: Just decorators  |
 
 ---
 
@@ -155,7 +155,7 @@ MCP Mesh is designed for **production AI systems** where you need:
 - **Dynamic discovery** - Agents find each other automatically
 - **Enterprise operations** - Tracing, failover, and scaling built-in
 - **Standard protocol** - MCP, not proprietary formats
-- **Low lock-in** - Your code stays clean Python/TypeScript
+- **Low lock-in** - Your code stays clean Python/Java/TypeScript
 
 [Get Started](python/getting-started/index.md){ .md-button .md-button--primary }
 [View Architecture](concepts/architecture.md){ .md-button }

@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/core",
-  "version": "0.9.0-beta.11",
+  "version": "0.9.0",
   "description": "MCP Mesh Rust core bindings for Node.js",
   "main": "index.js",
   "types": "index.d.ts",
@@ -33,7 +33,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/mcp-mesh/mcp-mesh"
+    "url": "https://github.com/dhyansraj/mcp-mesh"
   },
   "keywords": [
     "mcp",

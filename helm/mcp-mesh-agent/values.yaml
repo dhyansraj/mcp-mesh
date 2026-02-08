@@ -17,7 +17,7 @@ image:
   repository: mcpmesh/python-runtime
   pullPolicy: IfNotPresent
   # Minor version tag tracks latest patch (0.8 → 0.8.x)
-  tag: "0.8"
+  tag: "0.9"
 
 imagePullSecrets: []
 nameOverride: ""
