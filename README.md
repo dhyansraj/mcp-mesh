@@ -44,7 +44,7 @@ meshctl man
 
 ## 🎯 Why MCP Mesh?
 
-While MCP solved AI tool standardization, scaling MCP applications to production presents unique challenges. MCP Mesh transforms MCP from a development protocol into a distributed system.
+You write the agent logic. The mesh discovers, connects, heals, and traces — across languages, machines, and clouds.
 
 ---
 

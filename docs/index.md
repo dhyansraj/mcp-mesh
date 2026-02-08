@@ -5,7 +5,7 @@ template: home.html
 
 # Distributed Service Mesh for AI Agents
 
-MCP Mesh transforms the Model Context Protocol (MCP) from a development protocol into a distributed system. Build AI agent networks with zero boilerplate.
+You write the logic. The mesh discovers, connects, heals, and traces — across languages, machines, and clouds.
 
 !!! tip "Complete Platform for AI Agents"
 MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
