@@ -15,6 +15,13 @@
 
     <name>MCP Mesh Core</name>
     <description>JNR-FFI bindings to Rust core for MCP Mesh</description>
+    <url>https://github.com/dhyansraj/mcp-mesh</url>
+
+    <scm>
+        <url>https://github.com/dhyansraj/mcp-mesh</url>
+        <connection>scm:git:git://github.com/dhyansraj/mcp-mesh.git</connection>
+        <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
+    </scm>
 
     <dependencies>
         <!-- Native library artifacts (platform-specific .so/.dylib/.dll) -->
