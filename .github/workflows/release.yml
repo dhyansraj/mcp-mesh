@@ -411,6 +411,23 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
+          VERSION=${VERSION#v}  # Remove 'v' prefix
+
+          # PyPI PEP 440 format: 0.8.0-beta.1 → 0.8.0b1
+          VERSION_PYPI=$(echo "$VERSION" | sed 's/-beta\./b/' | sed 's/-rc\./rc/' | sed 's/-alpha\./a/')
+          echo "version_pypi=${VERSION_PYPI}" >> $GITHUB_OUTPUT
+          echo "Publishing Rust core wheels version: ${VERSION} (PyPI: ${VERSION_PYPI})"
+
       - name: Download all wheel artifacts
         uses: actions/download-artifact@v4
         with:
@@ -429,6 +446,27 @@ jobs:
           packages-dir: dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+
+      - name: Wait for PyPI to index mcp-mesh-core
+        run: |
+          VERSION="${{ steps.version.outputs.version_pypi }}"
+          echo "Waiting for PyPI to index mcp-mesh-core==${VERSION}..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking PyPI..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/mcp-mesh-core/${VERSION}/json")
+            echo "  PyPI API: HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ mcp-mesh-core==${VERSION} is now available on PyPI"
+              exit 0
+            fi
+            echo "Not indexed yet, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "❌ ERROR: mcp-mesh-core==${VERSION} not available on PyPI after ${MAX_ATTEMPTS} attempts (5 minutes)"
+          exit 1
 
   # Build Node.js native bindings for @mcpmesh/core using napi-rs
   build-node-bindings:
@@ -943,6 +981,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION=${VERSION#v}
+          VERSION_PYPI=$(echo "$VERSION" | sed 's/-beta\./b/' | sed 's/-rc\./rc/' | sed 's/-alpha\./a/')
+          echo "version_pypi=${VERSION_PYPI}" >> $GITHUB_OUTPUT
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -1018,6 +1068,27 @@ jobs:
         with:
           packages-dir: packaging/pypi/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Wait for PyPI to index mcp-mesh
+        run: |
+          VERSION="${{ steps.version.outputs.version_pypi }}"
+          echo "Waiting for PyPI to index mcp-mesh==${VERSION}..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Checking PyPI..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/mcp-mesh/${VERSION}/json")
+            echo "  PyPI API: HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ mcp-mesh==${VERSION} is now available on PyPI"
+              exit 0
+            fi
+            echo "Not indexed yet, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "❌ ERROR: mcp-mesh==${VERSION} not available on PyPI after ${MAX_ATTEMPTS} attempts (5 minutes)"
+          exit 1
 
   # Build and push Docker images
   build-docker:
