@@ -17,8 +17,8 @@ test:
   - name: "Create output directories"
     handler: shell
     command: |
-      mkdir -p "${suite_path}/${config.output.packages}"
-      echo "Output directory ready: ${suite_path}/${config.output.packages}"
+      mkdir -p "${run_path}/${config.output.packages}"
+      echo "Output directory ready: ${run_path}/${config.output.packages}"
     capture: dir_check
 
   # Check source availability on host
@@ -42,7 +42,7 @@ test:
     command: |
       # Get absolute paths for docker volume mounts (relative to suite_path)
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
@@ -75,14 +75,14 @@ test:
     handler: shell
     command: |
       echo "Built packages:"
-      ls -la "${suite_path}/${config.output.packages}"/*.tgz
+      ls -la "${run_path}/${config.output.packages}"/*.tgz
     capture: package_list
 
   # Verify package contents
   - name: "Verify package contents"
     handler: shell
     command: |
-      cd "${suite_path}/${config.output.packages}"
+      cd "${run_path}/${config.output.packages}"
       SDK_PKG=$(ls mcpmesh-sdk-*.tgz 2>/dev/null | head -1)
       echo "Verifying SDK package: $SDK_PKG"
       echo "Package contents (total files: $(tar -tzf $SDK_PKG | wc -l))"

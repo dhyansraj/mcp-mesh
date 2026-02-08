@@ -42,12 +42,14 @@ test:
     # === First instance ===
 
     handler: shell
+    workdir: /workspace
     command: "meshctl start /workspace/java-greeter-agent -d"
     capture: start_1
 
   # Wait for first instance to register
   - name: "Wait for first registration"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "greeter"; then
@@ -87,12 +89,14 @@ test:
     # === Second instance ===
 
     handler: shell
+    workdir: /workspace
     command: "meshctl start /workspace/java-greeter-agent -d"
     capture: start_2
 
   # Wait for second instance to register
   - name: "Wait for second registration"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "greeter"; then
@@ -165,6 +169,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

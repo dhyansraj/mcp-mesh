@@ -58,6 +58,7 @@ test:
   # ========== Phase A: Required Tag Matching ==========
   - name: "Phase A: Start fast-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
@@ -65,6 +66,7 @@ test:
 
   - name: "Phase A: Wait for fast-provider"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "java-fast-provider"; then
@@ -80,6 +82,7 @@ test:
 
   - name: "Phase A: Start consumer"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
@@ -87,6 +90,7 @@ test:
 
   - name: "Phase A: Wait for consumer"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
@@ -106,11 +110,13 @@ test:
 
   - name: "List registered tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   - name: "Phase A: Call fetchRequired"
     handler: shell
+    workdir: /workspace
     command: |
       RESULT=$(meshctl call fetchRequired '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
@@ -125,6 +131,7 @@ test:
 
   - name: "Phase A: Stop all agents"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true
@@ -134,6 +141,7 @@ test:
   # ========== Phase B: Preferred Tag Matching ==========
   - name: "Phase B: Start fast-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
@@ -141,6 +149,7 @@ test:
 
   - name: "Phase B: Start accurate-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Accurate provider starting"
@@ -148,6 +157,7 @@ test:
 
   - name: "Phase B: Wait for both providers"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         LIST=$(meshctl list 2>/dev/null)
@@ -164,6 +174,7 @@ test:
 
   - name: "Phase B: Start consumer"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
@@ -171,6 +182,7 @@ test:
 
   - name: "Phase B: Wait for consumer"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
@@ -190,11 +202,13 @@ test:
 
   - name: "List registered tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   - name: "Phase B: Call fetchPreferFast"
     handler: shell
+    workdir: /workspace
     command: |
       RESULT=$(meshctl call fetchPreferFast '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
@@ -209,6 +223,7 @@ test:
 
   - name: "Phase B: Stop all agents"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true
@@ -218,6 +233,7 @@ test:
   # ========== Phase C: Excluded Tag Matching ==========
   - name: "Phase C: Start fast-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
@@ -225,6 +241,7 @@ test:
 
   - name: "Phase C: Start deprecated-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-deprecated-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Deprecated provider starting"
@@ -232,6 +249,7 @@ test:
 
   - name: "Phase C: Wait for both providers"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         LIST=$(meshctl list 2>/dev/null)
@@ -248,6 +266,7 @@ test:
 
   - name: "Phase C: Start consumer"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
@@ -255,6 +274,7 @@ test:
 
   - name: "Phase C: Wait for consumer"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
@@ -274,11 +294,13 @@ test:
 
   - name: "List registered tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   - name: "Phase C: Call fetchExcludeDeprecated"
     handler: shell
+    workdir: /workspace
     command: |
       RESULT=$(meshctl call fetchExcludeDeprecated '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
@@ -306,6 +328,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

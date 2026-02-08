@@ -25,6 +25,7 @@ test:
   # Verify meshctl is installed
   - name: "Verify meshctl installation"
     handler: shell
+    workdir: /workspace
     command: |
       if ! command -v meshctl &> /dev/null; then
         echo "ERROR: meshctl not found - rebuild tsuite-mesh image"
@@ -36,6 +37,7 @@ test:
   # Verify meshctl help works
   - name: "Verify meshctl help output"
     handler: shell
+    workdir: /workspace
     command: "meshctl --help"
     capture: meshctl_help
 

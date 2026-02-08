@@ -51,6 +51,7 @@ test:
   # Start both providers
   - name: "Start fast-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-fast-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Fast provider starting"
@@ -58,6 +59,7 @@ test:
 
   - name: "Start accurate-provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-accurate-provider --env MCP_MESH_HTTP_PORT=0 -d
       echo "Accurate provider starting"
@@ -65,6 +67,7 @@ test:
 
   - name: "Wait for both providers to register"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         LIST=$(meshctl list 2>/dev/null)
@@ -83,6 +86,7 @@ test:
   # Start consumer
   - name: "Start tag-consumer"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-tag-consumer --env MCP_MESH_HTTP_PORT=0 -d
       echo "Consumer starting"
@@ -90,6 +94,7 @@ test:
 
   - name: "Wait for consumer to register"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "java-tag-consumer"; then
@@ -110,12 +115,14 @@ test:
   # Verify data_service capability is visible
   - name: "List registered tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call fetchCombined: requires "api", prefers "accurate", excludes "deprecated"
   - name: "Call fetchCombined with combined tag filter"
     handler: shell
+    workdir: /workspace
     command: |
       RESULT=$(meshctl call fetchCombined '{"query": "test"}' 2>&1)
       echo "Result: $RESULT"
@@ -143,6 +150,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

@@ -53,6 +53,7 @@ test:
   # Start java-math-agent first (provides add and multiply capabilities)
   - name: "Start java-math-agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-math-agent -d
       echo "Java math agent starting via meshctl"
@@ -61,6 +62,7 @@ test:
   # Wait for math agent to register
   - name: "Wait for java-math-agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java math agent to start..."
       for i in $(seq 1 45); do
@@ -80,6 +82,7 @@ test:
   # Start java-calculator (depends on add and multiply capabilities)
   - name: "Start java-calculator"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-calculator -d
       echo "Java calculator agent starting via meshctl"
@@ -88,6 +91,7 @@ test:
   # Wait for calculator agent to register
   - name: "Wait for java-calculator registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java calculator to start..."
       for i in $(seq 1 45); do
@@ -107,12 +111,14 @@ test:
   # Verify both agents are registered
   - name: "Verify both agents are registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: tools_output
 
@@ -122,6 +128,7 @@ test:
   #   match: true
   - name: "Test calculate cross-agent call (3 * 4 = 12)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call calculate ''{"a": 3, "b": 4}'''
     capture: calc_result_1
     timeout: 60
@@ -132,6 +139,7 @@ test:
   #   match: true
   - name: "Test calculate cross-agent call (5 * 5 = 25)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call calculate ''{"a": 5, "b": 5}'''
     capture: calc_result_2
     timeout: 60
@@ -142,6 +150,7 @@ test:
   #   match: true
   - name: "Test calculate cross-agent call (7 * 1 = 7)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call calculate ''{"a": 7, "b": 1}'''
     capture: calc_result_3
     timeout: 60
@@ -149,11 +158,13 @@ test:
   # Get logs for debugging
   - name: "Get java-math-agent logs"
     handler: shell
+    workdir: /workspace
     command: "meshctl logs java-math-agent 2>/dev/null | tail -20 || echo 'no math logs'"
     capture: math_logs
 
   - name: "Get java-calculator logs"
     handler: shell
+    workdir: /workspace
     command: "meshctl logs java-calculator 2>/dev/null | tail -20 || echo 'no calc logs'"
     capture: calc_logs
 
@@ -208,6 +219,7 @@ assertions:
 post_run:
   # Stop all agents and kill Java processes
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

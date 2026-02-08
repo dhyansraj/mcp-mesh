@@ -35,6 +35,7 @@ test:
   # Start the weather agent
   - name: "Start Java weather agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-weather-agent -d
       echo "Java weather agent starting"
@@ -43,6 +44,7 @@ test:
   # Wait for agent registration
   - name: "Wait for weather agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java weather agent..."
       for i in $(seq 1 30); do
@@ -61,18 +63,21 @@ test:
   # Verify agent is registered
   - name: "Verify agent registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # List tools to verify all 3 are exposed
   - name: "List tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: tools_output
 
   # Call getWeatherByCity
   - name: "Call getWeatherByCity for London"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getWeatherByCity '{\"city\": \"London\"}'"
     capture: weather_city_result
     timeout: 30
@@ -80,6 +85,7 @@ test:
   # Call getForecast
   - name: "Call getForecast for London"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getForecast '{\"city\": \"London\"}'"
     capture: forecast_result
     timeout: 30
@@ -115,6 +121,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

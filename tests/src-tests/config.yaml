@@ -6,41 +6,41 @@
 # Final image is built with `docker build`.
 
 suite:
-  name: "MCP Mesh Source Build"
+  name: MCP Mesh Source Build
   mode: standalone # Runs on host, uses docker run for builds
-
 # Source code location (host path)
 source:
   # Path to mcp-mesh repository on host (relative to suite directory)
-  path: "../.."
-
+  path: ../..
 # Output directories (host paths, relative to suite directory)
 output:
-  base: "./out"
-  bin: "./out/bin"
-  wheels: "./out/wheels"
-  packages: "./out/packages"
-  java_jars: "./out/java-jars"
-  native_libs: "./out/native-libs"
-  m2_repo: "./out/m2-repo"
-
+  base: ./out
+  bin: ./out/bin
+  wheels: ./out/wheels
+  packages: ./out/packages
+  java_jars: ./out/java-jars
+  native_libs: ./out/native-libs
+  m2_repo: ./out/m2-repo
 # Build image with all necessary tools
 build:
-  image: "src-build:latest"
-
+  image: src-build:latest
 # Docker settings
 docker:
   # Build tools image (Go, Rust, maturin, Node.js)
-  build_image: "src-build:latest"
-
+  build_image: src-build:latest
   # Output image name
-  output_image: "tsuite-mesh:local"
-
+  output_image: tsuite-mesh:local
+  # Local registry for K8s cluster (optional, for pushing images)
+  registry: 192.168.10.1:5000
 defaults:
   timeout: 600 # 10 minutes per test
   parallel: 1 # Build sequentially
 packages:
   mode: local
-  cli_version: __DELETE__
-  sdk_python_version: __DELETE__
-  sdk_typescript_version: __DELETE__
+standalone:
+  type: remote
+ssh:
+  host: beelink1
+  runner_dir: /tmp/tsuite
+  local_path: /Users/dhyanraj/workspace
+  mount_path: /mnt/workspace

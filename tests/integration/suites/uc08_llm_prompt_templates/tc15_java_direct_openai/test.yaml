@@ -43,6 +43,7 @@ test:
   # Start agent - application.properties maps OPENAI_API_KEY to spring.ai.openai.api-key
   - name: "Start openai-chatbot agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-direct-openai --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
       echo "OpenAI chatbot starting"
@@ -51,6 +52,7 @@ test:
   # Wait for agent to register
   - name: "Wait for agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for openai-chatbot..."
       for i in $(seq 1 45); do
@@ -69,18 +71,21 @@ test:
   # Verify agent is registered
   - name: "Verify agent registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # List tools
   - name: "List tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call chat tool
   - name: "Call chat tool (direct OpenAI)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call chat ''{"message": "What is 2+2? Reply with just the number."}'''
     capture: call_chat
     timeout: 90
@@ -104,6 +109,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

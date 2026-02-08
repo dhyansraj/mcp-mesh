@@ -38,6 +38,7 @@ test:
   # Start agent with auto-port (MCP_MESH_HTTP_PORT=0)
   - name: "Start agent with auto-port"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=0 -d
       echo "Java agent starting with auto-port"
@@ -46,6 +47,7 @@ test:
   # Wait for agent to register (Java is slower)
   - name: "Wait for agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java agent to start..."
       for i in $(seq 1 30); do
@@ -65,12 +67,14 @@ test:
   # Get JSON output for detailed port check
   - name: "Get agent JSON"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --json"
     capture: list_json
 
   # Extract port from endpoint
   - name: "Extract endpoint port"
     handler: shell
+    workdir: /workspace
     command: |
       json=$(meshctl list --json)
       endpoint=$(echo "$json" | jq -r '.agents[0].endpoint // empty')
@@ -96,6 +100,7 @@ test:
   # Verify tool still works on auto-assigned port
   - name: "Call greet tool"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greet ''{"name": "AutoPort"}'''
     capture: call_greet
 
@@ -126,6 +131,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

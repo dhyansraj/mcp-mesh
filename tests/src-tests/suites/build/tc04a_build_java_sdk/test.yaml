@@ -17,11 +17,11 @@ test:
   - name: "Create output directories"
     handler: shell
     command: |
-      mkdir -p "${suite_path}/${config.output.java_jars}"
-      mkdir -p "${suite_path}/${config.output.native_libs}"
+      mkdir -p "${run_path}/${config.output.java_jars}"
+      mkdir -p "${run_path}/${config.output.native_libs}"
       echo "Output directories ready:"
-      echo "  Java JARs: ${suite_path}/${config.output.java_jars}"
-      echo "  Native libs: ${suite_path}/${config.output.native_libs}"
+      echo "  Java JARs: ${run_path}/${config.output.java_jars}"
+      echo "  Native libs: ${run_path}/${config.output.native_libs}"
     capture: dir_check
 
   # Check source availability on host
@@ -44,7 +44,7 @@ test:
     handler: shell
     command: |
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Building native FFI library for Java..."
       docker run --rm \
@@ -63,7 +63,7 @@ test:
         "
 
       echo "Native libs built:"
-      ls -la "${suite_path}/${config.output.native_libs}/"
+      ls -la "${run_path}/${config.output.native_libs}/"
     capture: native_build
     timeout: 300
 
@@ -72,7 +72,7 @@ test:
     handler: shell
     command: |
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Building Java SDK inside container..."
       docker run --rm \
@@ -96,10 +96,10 @@ test:
         "
 
       echo "Java JARs built:"
-      ls -la "${suite_path}/${config.output.java_jars}/"
+      ls -la "${run_path}/${config.output.java_jars}/"
       echo ""
       echo "Maven repo structure:"
-      ls -la "${suite_path}/${config.output.m2_repo}/" 2>/dev/null || echo "(empty)"
+      ls -la "${run_path}/${config.output.m2_repo}/" 2>/dev/null || echo "(empty)"
     capture: java_build
     timeout: 300
 
@@ -108,14 +108,14 @@ test:
     handler: shell
     command: |
       echo "=== Native Libraries ==="
-      ls -la "${suite_path}/${config.output.native_libs}/"
+      ls -la "${run_path}/${config.output.native_libs}/"
 
       echo ""
       echo "=== Java JARs ==="
-      ls -la "${suite_path}/${config.output.java_jars}/"
+      ls -la "${run_path}/${config.output.java_jars}/"
 
       # Check for required JARs
-      JARS_DIR="${suite_path}/${config.output.java_jars}"
+      JARS_DIR="${run_path}/${config.output.java_jars}"
       if ls "$JARS_DIR"/mcp-mesh-spring-boot-starter-*.jar 1> /dev/null 2>&1; then
         echo "Found: mcp-mesh-spring-boot-starter JAR"
       else

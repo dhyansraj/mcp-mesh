@@ -39,12 +39,14 @@ test:
   # Start agent
   - name: "Start greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent -d
     capture: start_agent
 
   - name: "Wait for registration"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 30); do
         if meshctl list 2>/dev/null | grep -q "greeter"; then
@@ -60,12 +62,14 @@ test:
   # Get agent info
   - name: "Get agent info"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getInfo '{}'"
     capture: agent_info
 
   # Make multiple calls to test stability
   - name: "Multiple greet calls"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Making 5 sequential calls..."
       for i in 1 2 3 4 5; do
@@ -83,18 +87,21 @@ test:
   # Get info again to verify agent still healthy
   - name: "Get agent info after calls"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getInfo '{}'"
     capture: agent_info_after
 
   # Check meshctl list still shows agent
   - name: "Verify agent still registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_after
 
   # Test with special characters in input
   - name: "Test special characters"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greet ''{"name": "Test User!"}'''
     capture: special_chars
 
@@ -127,6 +134,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

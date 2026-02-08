@@ -51,6 +51,7 @@ test:
   # Start math agent first (provider of add and multiply)
   - name: "Start Java math agent (provider)"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-math-agent -d
       echo "Java math agent starting via meshctl"
@@ -59,6 +60,7 @@ test:
   # Wait for math agent to register
   - name: "Wait for math agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for java-math-agent..."
       for i in $(seq 1 30); do
@@ -77,18 +79,21 @@ test:
   # Verify math agent is registered
   - name: "Verify math agent registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_after_math
 
   # List tools from math agent
   - name: "List math tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: math_tools
 
   # Start calculator agent (consumer with add + multiply dependencies)
   - name: "Start Java calculator agent (consumer)"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-calculator -d
       echo "Java calculator agent starting via meshctl"
@@ -97,6 +102,7 @@ test:
   # Wait for calculator agent to register and wire
   - name: "Wait for calculator registration and wiring"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for java-calculator..."
       for i in $(seq 1 30); do
@@ -115,12 +121,14 @@ test:
   # Verify both agents are registered
   - name: "List all agents"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # List all tools to verify calculate is available
   - name: "List all tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list -t"
     capture: tools_output
 
@@ -128,6 +136,7 @@ test:
   # Expected: repeated_addition = 3+3+3+3 = 12, direct_multiply = 3*4 = 12, match = true
   - name: "Test calculate with a=3 b=4"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call calculate ''{"a": 3, "b": 4}'''
     capture: test_calculate
     timeout: 60
@@ -171,6 +180,7 @@ assertions:
 post_run:
   # Stop all agents
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

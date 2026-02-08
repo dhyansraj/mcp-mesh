@@ -44,6 +44,7 @@ test:
   # Start the chatbot agent with env file
   - name: "Start chatbot agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-chatbot-agent --env-file /workspace/java-chatbot-agent/.env -d
       echo "Chatbot agent starting via meshctl"
@@ -52,6 +53,7 @@ test:
   # Wait for agent to register
   - name: "Wait for chatbot registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for chatbot agent..."
       for i in $(seq 1 45); do
@@ -74,18 +76,21 @@ test:
   # Verify agent is registered
   - name: "Verify chatbot registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call chat tool with simple prompt
   - name: "Call chat tool"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call chat ''{"message": "What is 2+2? Reply with just the number."}'''
     capture: call_chat
     timeout: 60
@@ -93,6 +98,7 @@ test:
   # Call explainCode tool
   - name: "Call explainCode tool"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call explainCode ''{"code": "print(\"hello\")", "language": "python"}'''
     capture: call_explain
     timeout: 60
@@ -119,6 +125,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

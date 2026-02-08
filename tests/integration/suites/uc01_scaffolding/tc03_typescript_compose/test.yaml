@@ -22,54 +22,63 @@ test:
   # Scaffold a TypeScript agent
   - name: "Scaffold TypeScript agent"
     handler: shell
+    workdir: /workspace
     command: "meshctl scaffold --name test-ts-agent --agent-type tool --lang typescript"
     capture: scaffold_output
 
   # Generate docker-compose.yml
   - name: "Generate docker-compose.yml"
     handler: shell
+    workdir: /workspace
     command: "meshctl scaffold --compose --project-name test-compose"
     capture: compose_output
 
   # Check docker-compose.yml exists
   - name: "Check docker-compose.yml exists"
     handler: shell
+    workdir: /workspace
     command: "cat docker-compose.yml"
     capture: compose_content
 
   # Check TypeScript volume mount (should NOT have :ro)
   - name: "Check TypeScript volume mount line"
     handler: shell
+    workdir: /workspace
     command: "grep -A1 'volumes:' docker-compose.yml | grep 'test-ts-agent:/app' | head -1"
     capture: volume_mount
 
   # Check startup command has home directory creation
   - name: "Check home directory creation in command"
     handler: shell
+    workdir: /workspace
     command: "grep 'mkdir -p /home/mcp-mesh' docker-compose.yml || echo 'NOT_FOUND'"
     capture: home_dir_cmd
 
   # Check package.json for SDK reference
   - name: "Check package.json SDK reference"
     handler: shell
+    workdir: /workspace
     command: "cat test-ts-agent/package.json"
     capture: package_json
 
   # Negative check: volume should NOT be read-only
   - name: "Check volume is NOT read-only"
     handler: shell
+    workdir: /workspace
     command: "grep 'test-ts-agent:/app:ro' docker-compose.yml && echo 'FOUND_RO' || echo 'NO_RO'"
     capture: ro_check
 
   # Negative check: package.json should NOT have file: reference
   - name: "Check no file: SDK reference"
     handler: shell
+    workdir: /workspace
     command: "grep 'file:' test-ts-agent/package.json && echo 'FOUND_FILE_REF' || echo 'NO_FILE_REF'"
     capture: file_ref_check
 
   # Install dependencies
   - name: "Install dependencies"
     handler: shell
+    workdir: /workspace
     command: "cd test-ts-agent && npm install"
     timeout: 120
     assertions:
@@ -79,6 +88,7 @@ test:
   # Verify TypeScript compiles
   - name: "Verify TypeScript compiles"
     handler: shell
+    workdir: /workspace
     command: "cd test-ts-agent && npx tsc --noEmit"
     timeout: 60
     assertions:

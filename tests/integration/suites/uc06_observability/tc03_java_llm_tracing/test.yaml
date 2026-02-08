@@ -34,8 +34,8 @@ test:
   - name: "Copy artifacts to workspace"
     handler: shell
     command: |
-      cp -r /uc-artifacts/llm-provider-agent /workspace/
-      cp -r /uc-artifacts/llm-mesh-agent /workspace/
+      cp -rL /uc-artifacts/llm-provider-agent /workspace/
+      cp -rL /uc-artifacts/llm-mesh-agent /workspace/
       echo "Artifacts copied"
       ls -la /workspace/
     capture: copy_output
@@ -68,6 +68,7 @@ test:
   # Wait for provider to register
   - name: "Wait for provider registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for claude-provider to start and register..."
       for i in $(seq 1 30); do
@@ -94,6 +95,7 @@ test:
   # Wait for analyst to register and resolve LLM provider dependency
   - name: "Wait for analyst registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for analyst agent to start and resolve LLM dependency..."
       for i in $(seq 1 45); do

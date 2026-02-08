@@ -73,12 +73,14 @@ test:
   # Start all agents
   - name: "Start LLM provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-claude-provider --env-file /workspace/java-claude-provider/.env -d
     capture: start_provider
 
   - name: "Wait for provider"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 45); do
         if meshctl list 2>/dev/null | grep -q "claude-provider"; then
@@ -93,12 +95,14 @@ test:
 
   - name: "Start employee service"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-employee-service -d
     capture: start_employee
 
   - name: "Wait for employee service"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 45); do
         if meshctl list 2>/dev/null | grep -q "employee-service"; then
@@ -113,12 +117,14 @@ test:
 
   - name: "Start analyst agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
     capture: start_analyst
 
   - name: "Wait for analyst"
     handler: shell
+    workdir: /workspace
     command: |
       for i in $(seq 1 45); do
         if meshctl list 2>/dev/null | grep -q "analyst"; then
@@ -139,18 +145,21 @@ test:
   # Verify all agents running
   - name: "Verify all agents"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_all
 
   # List all tools
   - name: "List all tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call analyze with a query about employees
   - name: "Call analyze (agentic loop)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call analyze ''{"query": "How many employees are in the Engineering department?"}'''
     capture: call_analyze
     timeout: 120
@@ -183,6 +192,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

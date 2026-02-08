@@ -21,30 +21,35 @@ test:
   # Scaffold the agent
   - name: "Scaffold Python agent"
     handler: shell
+    workdir: /workspace
     command: "meshctl scaffold --name test-python-agent --agent-type tool --lang python"
     capture: scaffold_output
 
   # List generated files
   - name: "List generated files"
     handler: shell
+    workdir: /workspace
     command: "find test-python-agent -type f | sort"
     capture: generated_files
 
   # Check main.py content
   - name: "Check main.py content"
     handler: shell
+    workdir: /workspace
     command: "cat test-python-agent/main.py"
     capture: main_content
 
   # Check helm-values.yaml content
   - name: "Check helm-values.yaml content"
     handler: shell
+    workdir: /workspace
     command: "cat test-python-agent/helm-values.yaml"
     capture: helm_values
 
   # Verify generated Python code compiles
   - name: "Verify Python code compiles"
     handler: shell
+    workdir: /workspace
     command: "python3 -m py_compile test-python-agent/main.py"
     assertions:
       - expr: ${last.exit_code} == 0

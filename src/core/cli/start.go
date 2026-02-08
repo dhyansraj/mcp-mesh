@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -29,15 +30,27 @@ const (
 	langJava       = "java"
 )
 
-// isAgentFile returns true if the file is a valid agent file (.py, .ts, .js, .yaml, .yml, .jar, .java)
+// isAgentFile returns true if the path is a valid agent file (.py, .ts, .js, .yaml, .yml, .jar, .java)
+// or a directory containing known language markers (pom.xml, main.py, package.json, etc.)
 func isAgentFile(path string) bool {
 	ext := filepath.Ext(path)
 	switch ext {
 	case ".py", ".ts", ".js", ".yaml", ".yml", ".jar", ".java":
 		return true
-	default:
-		return false
 	}
+
+	info, err := os.Stat(path)
+	if err == nil && info.IsDir() {
+		for _, markers := range handlers.LanguageMarkers {
+			for _, marker := range markers {
+				if _, err := os.Stat(filepath.Join(path, marker)); err == nil {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // resolveAllAgentPaths resolves folder paths to entry point files.
@@ -2380,6 +2393,33 @@ func extractJavaAgentName(projectPath string) string {
 	projectDir := projectPath
 	if info, err := os.Stat(projectPath); err == nil && !info.IsDir() {
 		projectDir = filepath.Dir(projectPath)
+	}
+
+	// Try to extract from @MeshAgent(name = "...") annotation in .java files
+	meshAgentRe := regexp.MustCompile(`@MeshAgent\s*\([\s\S]*?name\s*=\s*"([^"]+)"`)
+	srcDir := filepath.Join(projectDir, "src")
+	if _, err := os.Stat(srcDir); err == nil {
+		var foundName string
+		filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || foundName != "" {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".java") {
+				return nil
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			if matches := meshAgentRe.FindSubmatch(content); len(matches) > 1 {
+				foundName = string(matches[1])
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if foundName != "" {
+			return foundName
+		}
 	}
 
 	// Try to extract from pom.xml artifactId

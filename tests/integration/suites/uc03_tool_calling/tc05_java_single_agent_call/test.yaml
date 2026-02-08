@@ -35,6 +35,7 @@ test:
   # Start the Java math agent with meshctl
   - name: "Start java-math-agent with meshctl"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-math-agent -d
       echo "Java math agent starting via meshctl"
@@ -43,6 +44,7 @@ test:
   # Wait for agent to register (Java/Spring Boot is slow to start)
   - name: "Wait for agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java math agent to start..."
       for i in $(seq 1 45); do
@@ -62,42 +64,49 @@ test:
   # Verify agent is registered
   - name: "Verify agent is registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: tools_output
 
   # Test add tool: 5 + 3 = 8
   - name: "Test add tool (5 + 3 = 8)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call add ''{"a": 5, "b": 3}'''
     capture: add_result
 
   # Test multiply tool: 7 * 6 = 42
   - name: "Test multiply tool (7 * 6 = 42)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call multiply ''{"a": 7, "b": 6}'''
     capture: multiply_result
 
   # Test add tool with negative numbers: -3 + 10 = 7
   - name: "Test add with negative numbers (-3 + 10 = 7)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call add ''{"a": -3, "b": 10}'''
     capture: add_neg_result
 
   # Test multiply with zero: 42 * 0 = 0
   - name: "Test multiply with zero (42 * 0 = 0)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call multiply ''{"a": 42, "b": 0}'''
     capture: multiply_zero_result
 
   # Get agent logs for debugging
   - name: "Get agent logs for debugging"
     handler: shell
+    workdir: /workspace
     command: "meshctl logs java-math-agent 2>/dev/null | tail -30 || echo 'no logs'"
     capture: agent_logs
 
@@ -132,6 +141,7 @@ assertions:
 post_run:
   # Stop all agents and kill Java processes
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

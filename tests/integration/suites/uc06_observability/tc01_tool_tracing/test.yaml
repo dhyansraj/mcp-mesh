@@ -35,9 +35,9 @@ test:
   - name: "Copy artifacts to workspace"
     handler: shell
     command: |
-      cp -r /uc-artifacts/py-math-agent /workspace/
-      cp -r /uc-artifacts/ts-math-agent /workspace/
-      cp -r /uc-artifacts/py-calculator /workspace/
+      cp -rL /uc-artifacts/py-math-agent /workspace/
+      cp -rL /uc-artifacts/ts-math-agent /workspace/
+      cp -rL /uc-artifacts/py-calculator /workspace/
       echo "Artifacts copied"
       ls -la /workspace/
     capture: copy_output

@@ -63,6 +63,7 @@ test:
   # Start provider first
   - name: "Start LLM provider"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-claude-provider --env-file /workspace/java-claude-provider/.env -d
       echo "LLM provider starting"
@@ -71,6 +72,7 @@ test:
   # Wait for provider to register
   - name: "Wait for provider registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for claude-provider..."
       for i in $(seq 1 45); do
@@ -88,6 +90,7 @@ test:
   # Start analyst agent
   - name: "Start analyst agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
       echo "Analyst agent starting"
@@ -96,6 +99,7 @@ test:
   # Wait for analyst to register
   - name: "Wait for analyst registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for analyst agent..."
       for i in $(seq 1 45); do
@@ -118,18 +122,21 @@ test:
   # Verify both agents running
   - name: "Verify both agents running"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_both
 
   # List all tools
   - name: "List all tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call analyst's chat tool (delegates to provider)
   - name: "Call analyst chat (mesh delegation)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call chat ''{"message": "What is the capital of France? Reply in one word."}'''
     capture: call_chat
     timeout: 90
@@ -156,6 +163,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

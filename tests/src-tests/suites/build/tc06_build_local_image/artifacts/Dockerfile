@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     git \
+    jq \
     build-essential \
     redis-server \
     tini \
@@ -61,6 +62,11 @@ COPY packages/*.tgz /packages/
 COPY bin/meshctl /usr/local/bin/meshctl
 COPY bin/mcp-mesh-registry /usr/local/bin/mcp-mesh-registry
 
+# Copy tsuite runner binaries for Docker/K8s test execution
+COPY bin/tsuite-runner-linux-amd64 /usr/local/bin/tsuite-runner-linux-amd64
+COPY bin/tsuite-runner-linux-arm64 /usr/local/bin/tsuite-runner-linux-arm64
+COPY bin/select-runner /usr/local/bin/select-runner
+
 # Copy Java JARs and native FFI library (optional - may not exist)
 COPY java-jars/ /java-jars/
 COPY native-libs/ /native-libs/
@@ -70,6 +76,7 @@ COPY m2-repo/ /root/.m2/repository/io/
 
 # Make binaries executable
 RUN chmod +x /usr/local/bin/meshctl /usr/local/bin/mcp-mesh-registry
+RUN chmod +x /usr/local/bin/select-runner /usr/local/bin/tsuite-runner-linux-* 2>/dev/null || true
 
 # Install Python packages from local wheels (direct path to ensure local version is used)
 RUN pip install --no-cache-dir /wheels/mcp_mesh_core-*.whl /wheels/mcp_mesh-*.whl

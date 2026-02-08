@@ -38,6 +38,7 @@ test:
   # Start the Java agent
   - name: "Start Java greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent -d
       echo "Java greeter agent starting via meshctl"
@@ -46,6 +47,7 @@ test:
   # Wait for agent to register
   - name: "Wait for greeter registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter..."
       for i in $(seq 1 30); do
@@ -64,42 +66,49 @@ test:
   # Verify agent is registered
   - name: "Verify greeter registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_agents
 
   # List all tools with full details
   - name: "List all tools"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Get schema for greet tool
   - name: "Get greet tool schema"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools=greet"
     capture: tool_greet_schema
 
   # Get schema for getInfo tool
   - name: "Get getInfo tool schema"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools=getInfo"
     capture: tool_info_schema
 
   # Call greet tool
   - name: "Call greet tool"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call greet ''{"name": "MultiToolTest"}'''
     capture: call_greet
 
   # Call getInfo tool (no parameters needed)
   - name: "Call getInfo tool"
     handler: shell
+    workdir: /workspace
     command: "meshctl call getInfo '{}'"
     capture: call_info
 
   # Verify tool count
   - name: "Count registered tools"
     handler: shell
+    workdir: /workspace
     command: |
       TOOL_COUNT=$(meshctl list --tools 2>/dev/null | grep -c "greeter" || echo "0")
       echo "Tools from greeter: $TOOL_COUNT"
@@ -156,6 +165,7 @@ assertions:
 post_run:
   # Stop all agents
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

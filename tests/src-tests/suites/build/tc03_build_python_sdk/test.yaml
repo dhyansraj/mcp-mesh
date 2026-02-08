@@ -17,8 +17,8 @@ test:
   - name: "Create output directories"
     handler: shell
     command: |
-      mkdir -p "${suite_path}/${config.output.wheels}"
-      echo "Output directory ready: ${suite_path}/${config.output.wheels}"
+      mkdir -p "${run_path}/${config.output.wheels}"
+      echo "Output directory ready: ${run_path}/${config.output.wheels}"
     capture: dir_check
 
   # Check source availability on host
@@ -42,7 +42,7 @@ test:
     command: |
       # Get absolute paths for docker volume mounts (relative to suite_path)
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Source: $SOURCE_ABS"
       echo "Output: $OUTPUT_ABS"
@@ -72,15 +72,15 @@ test:
     handler: shell
     command: |
       echo "Built wheels:"
-      ls -la "${suite_path}/${config.output.wheels}"/mcp_mesh*.whl 2>/dev/null || echo "Looking for any wheels..."
-      ls -la "${suite_path}/${config.output.wheels}"/*.whl
+      ls -la "${run_path}/${config.output.wheels}"/mcp_mesh*.whl 2>/dev/null || echo "Looking for any wheels..."
+      ls -la "${run_path}/${config.output.wheels}"/*.whl
     capture: wheel_list
 
   # Verify wheel can be installed (needs mcp-mesh-core first)
   - name: "Verify wheel installation"
     handler: shell
     command: |
-      OUTPUT_ABS=$(cd "${suite_path}/${config.output.base}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
 
       echo "Testing wheel installation inside container..."
       docker run --rm \

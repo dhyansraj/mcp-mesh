@@ -29,31 +29,31 @@ test:
       echo "Checking build artifacts..."
 
       # Check meshctl binary
-      if [ ! -f "${suite_path}/${config.output.bin}/meshctl" ]; then
-        echo "ERROR: meshctl binary not found at ${suite_path}/${config.output.bin}/meshctl"
+      if [ ! -f "${run_path}/${config.output.bin}/meshctl" ]; then
+        echo "ERROR: meshctl binary not found at ${run_path}/${config.output.bin}/meshctl"
         exit 1
       fi
       echo "  meshctl: OK"
 
       # Check mcp-mesh-registry binary
-      if [ ! -f "${suite_path}/${config.output.bin}/mcp-mesh-registry" ]; then
-        echo "ERROR: mcp-mesh-registry binary not found at ${suite_path}/${config.output.bin}/mcp-mesh-registry"
+      if [ ! -f "${run_path}/${config.output.bin}/mcp-mesh-registry" ]; then
+        echo "ERROR: mcp-mesh-registry binary not found at ${run_path}/${config.output.bin}/mcp-mesh-registry"
         exit 1
       fi
       echo "  mcp-mesh-registry: OK"
 
       # Check Python wheels
-      WHEEL_COUNT=$(ls "${suite_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)
+      WHEEL_COUNT=$(ls "${run_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)
       if [ "$WHEEL_COUNT" -lt 2 ]; then
         echo "ERROR: Expected at least 2 wheels, found $WHEEL_COUNT"
-        ls -la "${suite_path}/${config.output.wheels}/"
+        ls -la "${run_path}/${config.output.wheels}/"
         exit 1
       fi
       echo "  wheels: $WHEEL_COUNT found"
 
       # Check npm packages
-      if ! ls "${suite_path}/${config.output.packages}"/*.tgz 1>/dev/null 2>&1; then
-        echo "ERROR: No npm tarballs found in ${suite_path}/${config.output.packages}"
+      if ! ls "${run_path}/${config.output.packages}"/*.tgz 1>/dev/null 2>&1; then
+        echo "ERROR: No npm tarballs found in ${run_path}/${config.output.packages}"
         exit 1
       fi
       echo "  packages: OK"
@@ -80,26 +80,26 @@ test:
 
       # Copy artifacts
       mkdir -p $BUILD_DIR/bin $BUILD_DIR/wheels $BUILD_DIR/packages
-      cp "${suite_path}/${config.output.bin}/meshctl" $BUILD_DIR/bin/
-      cp "${suite_path}/${config.output.bin}/mcp-mesh-registry" $BUILD_DIR/bin/
-      cp "${suite_path}/${config.output.wheels}"/*.whl $BUILD_DIR/wheels/
-      cp "${suite_path}/${config.output.packages}"/*.tgz $BUILD_DIR/packages/
+      cp "${run_path}/${config.output.bin}/meshctl" $BUILD_DIR/bin/
+      cp "${run_path}/${config.output.bin}/mcp-mesh-registry" $BUILD_DIR/bin/
+      cp "${run_path}/${config.output.wheels}"/*.whl $BUILD_DIR/wheels/
+      cp "${run_path}/${config.output.packages}"/*.tgz $BUILD_DIR/packages/
 
       # Create java-jars and native-libs directories (required by Dockerfile COPY)
       # These may be empty if Java SDK wasn't built
       mkdir -p $BUILD_DIR/java-jars $BUILD_DIR/native-libs
 
       # Copy Java JARs if they exist
-      if ls "${suite_path}/${config.output.java_jars}"/*.jar 1>/dev/null 2>&1; then
-        cp "${suite_path}/${config.output.java_jars}"/*.jar $BUILD_DIR/java-jars/
+      if ls "${run_path}/${config.output.java_jars}"/*.jar 1>/dev/null 2>&1; then
+        cp "${run_path}/${config.output.java_jars}"/*.jar $BUILD_DIR/java-jars/
         echo "Java JARs copied"
       else
         echo "No Java JARs found (optional)"
       fi
 
       # Copy native libs if they exist
-      if ls "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1>/dev/null 2>&1; then
-        cp "${suite_path}/${config.output.native_libs}"/libmcp_mesh_core.* $BUILD_DIR/native-libs/
+      if ls "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.* 1>/dev/null 2>&1; then
+        cp "${run_path}/${config.output.native_libs}"/libmcp_mesh_core.* $BUILD_DIR/native-libs/
         echo "Native libs copied"
       else
         echo "No native libs found (optional)"
@@ -107,8 +107,8 @@ test:
 
       # Copy Maven repository structure if it exists
       mkdir -p $BUILD_DIR/m2-repo
-      if [ -d "${suite_path}/${config.output.m2_repo}/mcp-mesh" ]; then
-        cp -r "${suite_path}/${config.output.m2_repo}/mcp-mesh" $BUILD_DIR/m2-repo/
+      if [ -d "${run_path}/${config.output.m2_repo}/mcp-mesh" ]; then
+        cp -r "${run_path}/${config.output.m2_repo}/mcp-mesh" $BUILD_DIR/m2-repo/
         echo "Maven repo structure copied"
       else
         echo "No Maven repo found (optional)"
@@ -121,6 +121,56 @@ test:
       ls -la $BUILD_DIR/java-jars/ 2>/dev/null || echo "java-jars: empty"
       ls -la $BUILD_DIR/native-libs/ 2>/dev/null || echo "native-libs: empty"
     capture: build_context
+
+  # Extract runner binaries for embedding in image
+  - name: "Extract runner binaries to build context"
+    handler: shell
+    command: |
+      BUILD_DIR=$(echo "${captured.build_context}" | grep "BUILD_DIR=" | cut -d= -f2)
+      API_URL="${TSUITE_API:-http://localhost:9999}"
+
+      echo "Fetching runner binaries from $API_URL..."
+
+      RUNNERS_JSON=$(curl -sf "$API_URL/api/runners" 2>/dev/null)
+      if [ $? -ne 0 ] || [ -z "$RUNNERS_JSON" ]; then
+        echo "No runner binaries available (API returned no runners)"
+        echo "To embed runners, build tsuite with: make build-with-runners"
+
+        # Create empty placeholders so Dockerfile COPY doesn't fail
+        for name in tsuite-runner-linux-amd64 tsuite-runner-linux-arm64 select-runner; do
+          touch "$BUILD_DIR/bin/$name"
+        done
+
+        exit 0
+      fi
+
+      EXTRACTED=0
+      for name in tsuite-runner-linux-amd64 tsuite-runner-linux-arm64 select-runner; do
+        if curl -sf -o "$BUILD_DIR/bin/$name" "$API_URL/api/runners/$name"; then
+          chmod +x "$BUILD_DIR/bin/$name"
+          SIZE=$(wc -c < "$BUILD_DIR/bin/$name" | tr -d ' ')
+          echo "  $name: OK ($SIZE bytes)"
+          EXTRACTED=$((EXTRACTED + 1))
+        else
+          echo "  $name: not available"
+        fi
+      done
+
+      # Create empty placeholders for missing runners (so Dockerfile COPY doesn't fail)
+      for name in tsuite-runner-linux-amd64 tsuite-runner-linux-arm64 select-runner; do
+        if [ ! -f "$BUILD_DIR/bin/$name" ]; then
+          touch "$BUILD_DIR/bin/$name"
+        fi
+      done
+
+      echo ""
+      if [ $EXTRACTED -gt 0 ]; then
+        echo "Extracted $EXTRACTED runner binaries"
+      else
+        echo "No runner binaries extracted (image will work but won't support Docker/K8s test execution)"
+      fi
+    capture: runner_extract
+    ignore_errors: true
 
   # Build the image
   - name: "Build tsuite-mesh:local image"
@@ -228,6 +278,30 @@ test:
       echo "and install from local builds."
       echo "=========================================="
     capture: summary
+
+  # Push image to local registry (for K8s cluster access)
+  - name: "Push image to local registry"
+    handler: shell
+    command: |
+      IMAGE_NAME="${config.docker.output_image}"
+      REGISTRY="${config.docker.registry}"
+
+      if [ -z "$REGISTRY" ]; then
+        echo "No registry configured (docker.registry not set)"
+        echo "Skipping push - image only available locally"
+        exit 0
+      fi
+
+      REMOTE_IMAGE="${REGISTRY}/${IMAGE_NAME}"
+      echo "Pushing $IMAGE_NAME to $REMOTE_IMAGE..."
+
+      docker tag "$IMAGE_NAME" "$REMOTE_IMAGE"
+      docker push "$REMOTE_IMAGE"
+
+      echo "REMOTE_IMAGE=$REMOTE_IMAGE"
+      echo "Push complete"
+    capture: registry_push
+    ignore_errors: true
 
 assertions:
   # Docker should be available

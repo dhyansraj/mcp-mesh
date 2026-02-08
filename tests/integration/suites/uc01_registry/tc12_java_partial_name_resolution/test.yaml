@@ -45,6 +45,7 @@ test:
   # Start Java agent in detached mode
   - name: "Start Java greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
       echo "Java greeter agent starting"
@@ -53,6 +54,7 @@ test:
   # Wait for registration (Java is slow to start)
   - name: "Wait for Java agent to register"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter agent to register..."
       for i in $(seq 1 45); do
@@ -75,12 +77,14 @@ test:
   # Verify agent is registered
   - name: "Verify agent is registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_output
 
   # === TEST 1: Partial name "greeter" should resolve ===
   - name: "Test partial name greeter resolves"
     handler: shell
+    workdir: /workspace
     command: |
       if meshctl status greeter 2>&1; then
         echo "PASS: greeter resolved correctly"
@@ -93,6 +97,7 @@ test:
   # === TEST 2: Shorter partial "greet" should also resolve ===
   - name: "Test shorter partial name greet resolves"
     handler: shell
+    workdir: /workspace
     command: |
       if meshctl status greet 2>&1; then
         echo "PASS: greet resolved correctly"
@@ -105,6 +110,7 @@ test:
   # === TEST 3: Non-existent partial should fail ===
   - name: "Test non-existent partial name is rejected"
     handler: shell
+    workdir: /workspace
     command: |
       if meshctl status nonexistent 2>&1; then
         echo "FAIL: Non-existent name should not resolve"
@@ -132,6 +138,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

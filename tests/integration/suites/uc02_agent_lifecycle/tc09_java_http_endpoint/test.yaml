@@ -39,6 +39,7 @@ test:
   # Wait for Java agent registration (Java is slow to start)
   - name: "Wait for agent registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java agent to start..."
       for i in $(seq 1 45); do
@@ -101,6 +102,7 @@ assertions:
 post_run:
   # Stop any remaining agents (including Java-specific cleanup)
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

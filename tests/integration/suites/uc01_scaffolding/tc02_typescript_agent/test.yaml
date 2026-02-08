@@ -21,36 +21,42 @@ test:
   # Scaffold the agent
   - name: "Scaffold TypeScript agent"
     handler: shell
+    workdir: /workspace
     command: "meshctl scaffold --name test-ts-agent --agent-type tool --lang typescript"
     capture: scaffold_output
 
   # List generated files
   - name: "List generated files"
     handler: shell
+    workdir: /workspace
     command: "find test-ts-agent -type f | sort"
     capture: generated_files
 
   # Check index.ts content
   - name: "Check index.ts content"
     handler: shell
+    workdir: /workspace
     command: "cat test-ts-agent/src/index.ts"
     capture: index_content
 
   # Check package.json content
   - name: "Check package.json content"
     handler: shell
+    workdir: /workspace
     command: "cat test-ts-agent/package.json"
     capture: package_json
 
   # Check helm-values.yaml content
   - name: "Check helm-values.yaml content"
     handler: shell
+    workdir: /workspace
     command: "cat test-ts-agent/helm-values.yaml"
     capture: helm_values
 
   # Install dependencies
   - name: "Install dependencies"
     handler: shell
+    workdir: /workspace
     command: "cd test-ts-agent && npm install"
     timeout: 120
     assertions:
@@ -60,6 +66,7 @@ test:
   # Verify TypeScript compiles
   - name: "Verify TypeScript compiles"
     handler: shell
+    workdir: /workspace
     command: "cd test-ts-agent && npx tsc --noEmit"
     timeout: 60
     assertions:

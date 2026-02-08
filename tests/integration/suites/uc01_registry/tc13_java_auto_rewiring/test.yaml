@@ -49,6 +49,7 @@ test:
   # Start agent (registry auto-starts)
   - name: "Start Java agent with auto-starting registry"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent --env MCP_MESH_HTTP_PORT=9001 -d
       echo "Java greeter agent starting"
@@ -57,6 +58,7 @@ test:
   # Wait for registration (Java is slow to start)
   - name: "Wait for Java agent to register"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for greeter agent to register..."
       for i in $(seq 1 45); do
@@ -79,12 +81,14 @@ test:
   # Verify agent is registered
   - name: "Verify agent is registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_before
 
   # Get agent port from --wide output for later direct curl
   - name: "Get agent port from meshctl list --wide"
     handler: shell
+    workdir: /workspace
     command: |
       WIDE_OUTPUT=$(meshctl list --wide 2>/dev/null)
       echo "$WIDE_OUTPUT"
@@ -95,6 +99,7 @@ test:
   # Test meshctl call works (via registry)
   - name: "Test meshctl call via registry"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Attempting meshctl call..."
       timeout 10 meshctl call greet '{"name": "ViaRegistry"}' 2>&1 || echo "Call timed out or failed"
@@ -104,6 +109,7 @@ test:
   # Stop the registry process (but keep agent running)
   - name: "Stop registry process"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Stopping registry..."
       meshctl stop registry
@@ -118,6 +124,7 @@ test:
   # Verify meshctl list fails (registry is down)
   - name: "Verify meshctl list fails without registry"
     handler: shell
+    workdir: /workspace
     command: |
       if timeout 5 meshctl list 2>&1; then
         echo "UNEXPECTED: meshctl list worked without registry"
@@ -201,6 +208,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true

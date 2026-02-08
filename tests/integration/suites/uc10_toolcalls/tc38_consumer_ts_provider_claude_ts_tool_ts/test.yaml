@@ -52,6 +52,7 @@ test:
   # 3. Start tool agent (port 9001)
   - name: "Start tool agent"
     handler: shell
+    workdir: /workspace
     command: |
       cd /workspace
       meshctl start weather-tool-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9001 -d
@@ -65,6 +66,7 @@ test:
   # 4. Start provider agent (port 9002)
   - name: "Start provider agent"
     handler: shell
+    workdir: /workspace
     command: |
       cd /workspace
       meshctl start claude-provider-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
@@ -78,6 +80,7 @@ test:
   # 5. Start consumer agent (port 9003)
   - name: "Start consumer agent"
     handler: shell
+    workdir: /workspace
     command: |
       cd /workspace
       meshctl start analyst-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9003 -d
@@ -91,6 +94,7 @@ test:
   # 6. Verify all agents registered
   - name: "Verify agents registered"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl list
     capture: agent_list
@@ -98,6 +102,7 @@ test:
   # 7. Non-tool query (capital of France)
   - name: "Non-tool query"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl call analyze '{"ctx": {"query": "What is the capital of France?"}}'
     capture: non_tool_response
@@ -106,6 +111,7 @@ test:
   # 8. Tool query (weather in Boston)
   - name: "Tool query"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl call analyze '{"ctx": {"query": "What is the weather in Boston?"}}'
     capture: tool_response
@@ -125,6 +131,7 @@ assertions:
 
 post_run:
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
 

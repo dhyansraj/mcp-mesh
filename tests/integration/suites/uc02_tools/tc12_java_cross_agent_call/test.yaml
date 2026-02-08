@@ -58,6 +58,7 @@ test:
   # Start TypeScript calculator first (provides "add" capability)
   - name: "Start TypeScript calculator"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/ts-calculator/index.ts -d
       echo "TypeScript calculator starting via meshctl"
@@ -66,6 +67,7 @@ test:
   # Wait for TypeScript agent to register
   - name: "Wait for TypeScript calculator registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for TypeScript calculator..."
       for i in $(seq 1 20); do
@@ -83,6 +85,7 @@ test:
   # Start Java greeter agent (depends on "add" capability)
   - name: "Start Java greeter agent"
     handler: shell
+    workdir: /workspace
     command: |
       meshctl start /workspace/java-greeter-agent -d
       echo "Java greeter agent starting via meshctl"
@@ -91,6 +94,7 @@ test:
   # Wait for Java agent to register
   - name: "Wait for Java greeter registration"
     handler: shell
+    workdir: /workspace
     command: |
       echo "Waiting for Java greeter..."
       for i in $(seq 1 30); do
@@ -109,18 +113,21 @@ test:
   # Verify both agents are registered
   - name: "Verify both agents registered"
     handler: shell
+    workdir: /workspace
     command: "meshctl list"
     capture: list_agents
 
   # Verify tools are listed
   - name: "Verify tools are listed"
     handler: shell
+    workdir: /workspace
     command: "meshctl list --tools"
     capture: list_tools
 
   # Call addViaMesh - this should call TypeScript calculator via mesh
   - name: "Call addViaMesh (Java -> TypeScript)"
     handler: shell
+    workdir: /workspace
     command: 'meshctl call addViaMesh ''{"a": 5, "b": 3}'''
     capture: call_cross_agent
 
@@ -152,6 +159,7 @@ assertions:
 post_run:
   # Stop all agents
   - handler: shell
+    workdir: /workspace
     command: |
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true
