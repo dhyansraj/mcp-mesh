@@ -11,7 +11,7 @@ packages:
   # - local: Use /wheels and /packages from SDK image
   # - published: Pull from PyPI/npm
   # - auto: Auto-detect based on presence of /wheels, /packages
-  mode: local
+  mode: published
   # Published versions (used when mode=published or as fallback)
   local:
     wheels_dir: /wheels
@@ -26,7 +26,7 @@ docker:
   # Both images have meshctl, mesh module, and node pre-installed
   # - tsuite-mesh:local     -> local mode (packages from /wheels, /packages)
   # - tsuite-mesh:0.9.0 -> published mode (packages from PyPI/npm)
-  base_image: tsuite-mesh:local
+  base_image: tsuite-mesh:0.9.0
   network: bridge
   # No mounts needed - packages are baked into the image
   # To test with different packages, rebuild the image via src-tests or lib-tests
@@ -34,8 +34,7 @@ docker:
 k8s:
   namespace: tsuite
   nfs_server: 192.168.10.1
-  nfs_path: github/mcp-mesh/tests/integration
-  image: 192.168.10.1:5000/tsuite-mesh:local
+  image: 192.168.10.1:5000/tsuite-mesh:0.9.0
   api_url: http://192.168.10.50:9999
 # Execution settings
 execution:

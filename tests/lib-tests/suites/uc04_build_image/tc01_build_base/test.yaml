@@ -34,11 +34,50 @@ test:
       echo "DOCKERFILE_DIR=$DOCKERFILE_DIR"
     capture: dockerfile_path
 
+  # Prepare build context in /tmp to avoid mutagen/NFS sync issues
+  - name: "Prepare build context"
+    handler: shell
+    command: |
+      DOCKERFILE_DIR=$(echo "${captured.dockerfile_path}" | grep "DOCKERFILE_DIR=" | cut -d= -f2)
+      BUILD_DIR="${run_path}/out"
+      rm -rf "$BUILD_DIR"
+      cp -r "$DOCKERFILE_DIR" "$BUILD_DIR"
+      mkdir -p "$BUILD_DIR/bin"
+
+      API_URL="${config.ssh.api_url}"
+      if [ -z "$API_URL" ]; then
+        API_URL="${config.k8s.api_url}"
+      fi
+      if [ -z "$API_URL" ]; then
+        echo "WARNING: No API URL configured, skipping runner download"
+        for name in tsuite-runner-linux-amd64 tsuite-runner-linux-arm64 select-runner; do
+          touch "$BUILD_DIR/bin/$name"
+        done
+      else
+        echo "Downloading runner binaries from $API_URL..."
+        DOWNLOADED=0
+        for name in tsuite-runner-linux-amd64 tsuite-runner-linux-arm64 select-runner; do
+          if curl -sf -o "$BUILD_DIR/bin/$name" "$API_URL/api/runners/$name"; then
+            chmod +x "$BUILD_DIR/bin/$name"
+            SIZE=$(stat -c%s "$BUILD_DIR/bin/$name" 2>/dev/null || stat -f%z "$BUILD_DIR/bin/$name" 2>/dev/null)
+            echo "  $name: ${SIZE} bytes"
+            DOWNLOADED=$((DOWNLOADED + 1))
+          else
+            echo "  $name: not available (creating placeholder)"
+            touch "$BUILD_DIR/bin/$name"
+          fi
+        done
+        echo "Downloaded $DOWNLOADED runner binaries"
+      fi
+      echo "BUILD_DIR=$BUILD_DIR"
+    capture: build_context
+
   # Build the image
   - handler: shell
     timeout: 600
     command: |
-      DOCKERFILE_DIR=$(echo "${captured.dockerfile_path}" | grep "DOCKERFILE_DIR=" | cut -d= -f2)
+      set -e
+      BUILD_DIR=$(echo "${captured.build_context}" | grep "BUILD_DIR=" | cut -d= -f2)
       VERSION="${config.packages.cli_version}"
       PIP_VERSION="${config.packages.sdk_python_version}"
       IMAGE_NAME="${config.docker.output_image}:${VERSION}"
@@ -46,58 +85,59 @@ test:
       echo "Building image: $IMAGE_NAME"
       echo "  VERSION=$VERSION"
       echo "  PIP_VERSION=$PIP_VERSION"
-      echo "  Dockerfile: $DOCKERFILE_DIR/Dockerfile"
+      echo "  Build context: $BUILD_DIR"
 
       docker build \
         --no-cache \
         --build-arg VERSION=$VERSION \
         --build-arg PIP_VERSION=$PIP_VERSION \
         -t $IMAGE_NAME \
-        -f $DOCKERFILE_DIR/Dockerfile \
-        $DOCKERFILE_DIR
+        -f $BUILD_DIR/Dockerfile \
+        $BUILD_DIR
 
       echo "IMAGE_NAME=$IMAGE_NAME"
+      echo "$IMAGE_NAME" > "${run_path}/image_name"
     capture: build_output
 
   # Verify image was created
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker images $IMAGE_NAME --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
     capture: image_info
 
   # Test the image - verify meshctl
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME meshctl --version
     capture: meshctl_version
 
   # Test the image - verify mesh module
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME python -c "import mesh; print('mesh OK')"
     capture: mesh_check
 
   # Test the image - verify Java
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME java -version 2>&1
     capture: java_version
 
   # Test the image - verify Maven
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME mvn --version 2>&1 | head -1
     capture: maven_version
 
   # Test the image - verify Java SDK in m2 repo
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME bash -c "
         echo 'Maven repository contents:'
         ls /root/.m2/repository/io/mcp-mesh/
@@ -110,14 +150,14 @@ test:
   # Test the image - verify node
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       docker run --rm $IMAGE_NAME node --version
     capture: node_version
 
   # Print summary
   - handler: shell
     command: |
-      IMAGE_NAME=$(echo "${captured.build_output}" | grep "IMAGE_NAME=" | cut -d= -f2)
+      IMAGE_NAME=$(cat "${run_path}/image_name")
       echo ""
       echo "=========================================="
       echo "tsuite-mesh image built successfully!"
@@ -136,6 +176,30 @@ test:
       echo "    base_image: \"$IMAGE_NAME\""
       echo ""
     capture: summary
+
+  # Push image to local registry (for K8s cluster access)
+  - name: "Push image to local registry"
+    handler: shell
+    command: |
+      IMAGE_NAME=$(cat "${run_path}/image_name")
+      REGISTRY="${config.docker.registry}"
+
+      if [ -z "$REGISTRY" ]; then
+        echo "No registry configured (docker.registry not set)"
+        echo "Skipping push - image only available locally"
+        exit 0
+      fi
+
+      REMOTE_IMAGE="${REGISTRY}/${IMAGE_NAME}"
+      echo "Pushing $IMAGE_NAME to $REMOTE_IMAGE..."
+
+      docker tag "$IMAGE_NAME" "$REMOTE_IMAGE"
+      docker push "$REMOTE_IMAGE"
+
+      echo "REMOTE_IMAGE=$REMOTE_IMAGE"
+      echo "Push complete"
+    capture: registry_push
+    ignore_errors: true
 
 assertions:
   # Docker should be available

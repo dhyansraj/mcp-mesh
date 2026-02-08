@@ -17,6 +17,7 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
 # Install system dependencies, tini (init), and Node.js 22
 RUN apt-get update && apt-get install -y \
     curl \
+    jq \
     wget \
     git \
     build-essential \
@@ -112,6 +113,12 @@ RUN mkdir -p /workspace && chown mcp-mesh:mcp-mesh /workspace
 
 # Set working directory
 WORKDIR /workspace
+
+# Copy tsuite runner binaries for Docker/K8s test execution
+COPY bin/tsuite-runner-linux-amd64 /usr/local/bin/tsuite-runner-linux-amd64
+COPY bin/tsuite-runner-linux-arm64 /usr/local/bin/tsuite-runner-linux-arm64
+COPY bin/select-runner /usr/local/bin/select-runner
+RUN chmod +x /usr/local/bin/select-runner /usr/local/bin/tsuite-runner-linux-* 2>/dev/null || true
 
 # Labels for identification
 LABEL org.opencontainers.image.title="tsuite-mesh"
