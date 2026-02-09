@@ -4,6 +4,7 @@ import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -222,6 +223,7 @@ public class MeshRouteRegistry {
         private final String[] tags;
         private final String version;
         private final String parameterName;
+        private Type returnType;  // Set by BeanPostProcessor after construction
 
         public DependencySpec(String capability, String[] tags, String version, String parameterName) {
             this.capability = capability;
@@ -273,6 +275,10 @@ public class MeshRouteRegistry {
         public String getParameterName() {
             return parameterName;
         }
+
+        public Type getReturnType() { return returnType; }
+
+        public void setReturnType(Type returnType) { this.returnType = returnType; }
 
         public boolean hasTags() {
             return tags != null && tags.length > 0;

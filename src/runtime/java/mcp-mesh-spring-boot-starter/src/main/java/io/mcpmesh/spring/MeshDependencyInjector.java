@@ -47,7 +47,7 @@ public class MeshDependencyInjector {
      */
     public void updateToolDependency(String capability, String endpoint, String functionName) {
         McpMeshToolProxy proxy = toolProxies.computeIfAbsent(capability,
-            cap -> new McpMeshToolProxy(cap));
+            cap -> new McpMeshToolProxy(cap, mcpClient));
 
         if (endpoint != null) {
             log.info("Dependency available: {} at {}", capability, endpoint);
@@ -81,6 +81,29 @@ public class MeshDependencyInjector {
     public McpMeshTool getToolProxy(String capability) {
         return toolProxies.computeIfAbsent(capability,
             cap -> new McpMeshToolProxy(cap, mcpClient));
+    }
+
+    /**
+     * Get or create a tool proxy with a specific return type for dependency injection.
+     *
+     * <p>Used by {@code @MeshRoute} path when the generic type is known from
+     * the method parameter declaration (e.g., {@code McpMeshTool<GreetResponse>}).
+     *
+     * <p>If a proxy was already created without a return type (e.g., by
+     * {@link #updateToolDependency}), this method updates it with the type info.
+     *
+     * @param capability The capability name
+     * @param returnType The expected return type for deserialization
+     * @return The proxy (may not be connected yet)
+     */
+    public McpMeshTool getToolProxy(String capability, java.lang.reflect.Type returnType) {
+        McpMeshToolProxy proxy = toolProxies.computeIfAbsent(capability,
+            cap -> new McpMeshToolProxy(cap, mcpClient, returnType));
+        // If proxy was already cached without a return type, update it
+        if (returnType != null) {
+            proxy.setReturnType(returnType);
+        }
+        return proxy;
     }
 
     /**

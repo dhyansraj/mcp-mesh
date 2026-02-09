@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class MeshHandle implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(MeshHandle.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final ObjectMapper objectMapper = MeshObjectMappers.create();
 
     private final MeshCore core;
     private final Pointer handle;

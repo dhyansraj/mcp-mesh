@@ -4,6 +4,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlm;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.Selector;
 import io.mcpmesh.ai.handlers.LlmProviderHandler;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
@@ -144,7 +145,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
      */
     public MeshLlmAgentImpl(String functionId, SpringAiLlmProvider llmProvider,
                             String provider, String systemPrompt, int maxIterations) {
-        this(functionId, llmProvider, provider, systemPrompt, maxIterations, 4096, 0.7, new ObjectMapper());
+        this(functionId, llmProvider, provider, systemPrompt, maxIterations, 4096, 0.7, MeshObjectMappers.create());
     }
 
     private OkHttpClient createHttpClient() {

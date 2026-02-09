@@ -3,6 +3,7 @@ package io.mcpmesh.ai;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlmProvider;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.ai.handlers.LlmProviderHandler;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
@@ -61,7 +62,7 @@ import java.util.*;
 public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmProviderProcessor.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final ObjectMapper objectMapper = MeshObjectMappers.create();
 
     /** Default tool name for LLM provider (matches Python/TypeScript SDKs). */
     public static final String LLM_TOOL_NAME = "llm_generate";

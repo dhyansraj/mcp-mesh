@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshToolCallException;
 import io.mcpmesh.types.MeshToolUnavailableException;
@@ -29,11 +30,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     private static final Logger log = LoggerFactory.getLogger(McpMeshToolProxy.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = MeshObjectMappers.create();
 
     private final String capability;
     private final McpHttpClient mcpClient;
-    private final Type returnType;
+    private volatile Type returnType;
     private final AtomicReference<EndpointInfo> endpointRef = new AtomicReference<>();
 
     public McpMeshToolProxy(String capability) {
@@ -63,6 +64,10 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         if (current != null) {
             endpointRef.set(new EndpointInfo(current.endpoint(), current.functionName(), false));
         }
+    }
+
+    void setReturnType(Type returnType) {
+        this.returnType = returnType;
     }
 
     @Override

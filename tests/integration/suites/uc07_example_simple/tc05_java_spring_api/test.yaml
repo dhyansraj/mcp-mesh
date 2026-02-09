@@ -1,16 +1,18 @@
 # Test Case: tc05_java_spring_api
-# Tests Java Spring Boot REST API with @MeshRoute dependency injection
-# Dependency chain: REST API (rest-api-consumer) -> greeter agent (basic-tool-agent)
+# Tests Java Spring Boot REST API in consumer-only mode (no @MeshAgent)
+# Dependency chain: REST API consumer (api type) -> greeter agent (basic-tool-agent)
 
-name: "Java Spring Boot REST API"
-description: "Test Java Spring Boot REST API with @MeshRoute for mesh dependency injection"
+name: "Java Spring Boot REST API (Consumer-Only)"
+description: "Test Java Spring Boot REST API in consumer-only mode with @MeshRoute for mesh dependency injection"
 tags:
   - java
   - spring
   - rest
   - mesh-route
   - dependency-injection
-timeout: 480
+  - consumer-only
+  - typed-deserialization
+timeout: 600
 
 pre_run:
   - routine: global.setup_for_java_agent
@@ -24,6 +26,7 @@ test:
     command: |
       cp -r /uc-artifacts/java-greeter /workspace/
       cp -r /uc-artifacts/java-rest-api /workspace/
+      cp -r /uc-artifacts/java-employee-service /workspace/
       ls -la /workspace/
     capture: copy_output
 
@@ -37,6 +40,12 @@ test:
   - name: "Install REST API dependencies"
     handler: maven-install
     path: /workspace/java-rest-api
+    timeout: 600
+
+  # Install Maven dependencies for employee service
+  - name: "Install employee service dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
     timeout: 600
 
   # Start Java greeter agent (provides greeting + agent_info capabilities)
@@ -67,6 +76,34 @@ test:
     capture: wait_greeter
     timeout: 120
 
+  # Start Java employee service (provides get_employee + employee_count capabilities)
+  - name: "Start Java employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting"
+    capture: start_employee
+
+  # Wait for employee service to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java employee service..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_employee
+    timeout: 120
+
   # Start REST API consumer
   - name: "Start REST API consumer"
     handler: shell
@@ -76,21 +113,21 @@ test:
       echo "REST API consumer starting"
     capture: start_rest_api
 
-  # Wait for REST API to register
+  # Wait for REST API to register as API type
   - name: "Wait for REST API registration"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for REST API consumer..."
+      echo "Waiting for REST API consumer (API type)..."
       for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep -q "rest-api-consumer"; then
-          echo "REST API registered after $((i*3))s"
+        if meshctl list 2>/dev/null | grep -q "API"; then
+          echo "REST API registered as API type after $((i*3))s"
           exit 0
         fi
         sleep 3
       done
-      echo "ERROR: REST API did not register within 90s"
-      meshctl logs rest-api-consumer 2>/dev/null | tail -30 || true
+      echo "ERROR: REST API consumer did not register as API type within 90s"
+      meshctl logs 2>/dev/null | tail -30 || true
       exit 1
     capture: wait_rest_api
     timeout: 120
@@ -112,6 +149,13 @@ test:
     capture: wait_http
     timeout: 90
 
+  # Get agent list as JSON for jq assertions
+  - name: "Get agent list JSON"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --json"
+    capture: list_json
+
   # Verify both agents registered
   - name: "Verify agents registered"
     handler: shell
@@ -131,19 +175,40 @@ test:
     command: "curl -s --max-time 10 'http://localhost:8080/api/greet?name=TestUser'"
     capture: greet_result
 
-  # Test optional-greet endpoint (optional dependency with fallback)
-  - name: "Test optional-greet endpoint"
+  # Test greet-fallback endpoint (optional dependency with fallback)
+  - name: "Test greet-fallback endpoint"
     handler: shell
-    command: "curl -s --max-time 10 'http://localhost:8080/api/optional-greet?name=World'"
-    capture: optional_greet_result
+    command: "curl -s --max-time 10 'http://localhost:8080/api/greet-fallback?name=World'"
+    capture: fallback_result
+
+  # Test typed employee endpoint (uses McpMeshTool<Employee> generic type)
+  - name: "Test typed employee endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/employee?id=1'"
+    capture: employee_result
+
+  # Test typed department stats endpoint (uses McpMeshTool<DepartmentStats> generic type)
+  - name: "Test typed department stats endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/department-stats?department=Engineering'"
+    capture: dept_stats_result
 
 assertions:
-  # Both agents registered
+  # Greeter agent registered
   - expr: "${captured.list_output} contains 'greeter'"
     message: "Greeter agent should be registered"
 
-  - expr: "${captured.list_output} contains 'rest-api-consumer'"
-    message: "REST API consumer should be registered"
+  # Consumer registered as API type (not as regular agent)
+  - expr: "${captured.list_output} contains 'API'"
+    message: "REST API consumer should be registered as API type"
+
+  # Verify agent_type is "api" via JSON (tsuite jq)
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "api")] | length} > 0'
+    message: "Consumer should register with agent_type=api"
+
+  # Verify greeter is mcp_agent type
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "mcp_agent")] | length} > 0'
+    message: "Greeter should register with agent_type=mcp_agent"
 
   # Health endpoint works
   - expr: "${captured.health_result} contains 'healthy'"
@@ -156,9 +221,35 @@ assertions:
   - expr: "${captured.greet_result} contains 'mesh-agent'"
     message: "Greet endpoint should use mesh-agent source"
 
-  # Optional greet works (with mesh agent available)
-  - expr: "${captured.optional_greet_result} contains 'mesh-agent'"
-    message: "Optional greet should use mesh-agent when available"
+  # Fallback greet works (with mesh agent available)
+  - expr: "${captured.fallback_result} contains 'mesh-agent'"
+    message: "Fallback greet should use mesh-agent when available"
+
+  # Typed Employee endpoint — McpMeshTool<Employee> deserialized correctly
+  - expr: "${jq:captured.employee_result:.type} == 'Employee'"
+    message: "Employee endpoint should deserialize to Employee record (not LinkedHashMap)"
+
+  - expr: "${jq:captured.employee_result:.source} == 'mesh-agent-typed'"
+    message: "Employee endpoint should use mesh-agent-typed source"
+
+  - expr: "${jq:captured.employee_result:.result.firstName} == 'Alice'"
+    message: "Employee result should contain firstName field from typed record"
+
+  - expr: ${jq:captured.employee_result:.result.salary} == 120000.0
+    message: "Employee result should contain salary field from typed record"
+
+  # Typed DepartmentStats endpoint — McpMeshTool<DepartmentStats> deserialized correctly
+  - expr: "${jq:captured.dept_stats_result:.type} == 'DepartmentStats'"
+    message: "DepartmentStats endpoint should deserialize to DepartmentStats record (not LinkedHashMap)"
+
+  - expr: "${jq:captured.dept_stats_result:.source} == 'mesh-agent-typed'"
+    message: "DepartmentStats endpoint should use mesh-agent-typed source"
+
+  - expr: "${jq:captured.dept_stats_result:.result.department} == 'Engineering'"
+    message: "DepartmentStats result should contain department field from typed record"
+
+  - expr: ${jq:captured.dept_stats_result:.result.employeeCount} == 3
+    message: "DepartmentStats result should contain employeeCount field from typed record"
 
 post_run:
   - handler: shell
@@ -168,5 +259,6 @@ post_run:
       pkill -f "spring-boot:run" 2>/dev/null || true
       pkill -f "java.*greeter" 2>/dev/null || true
       pkill -f "java.*rest-api" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace

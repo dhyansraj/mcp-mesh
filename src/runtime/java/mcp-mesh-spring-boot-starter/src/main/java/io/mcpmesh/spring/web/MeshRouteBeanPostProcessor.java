@@ -1,5 +1,6 @@
 package io.mcpmesh.spring.web;
 
+import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
@@ -69,6 +70,9 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
             List<MeshRouteRegistry.DependencySpec> deps =
                 MeshRouteRegistry.DependencySpec.fromAnnotation(meshRoute);
 
+            // Enrich dependency specs with generic return type info from method parameters
+            enrichDependencyReturnTypes(method, deps);
+
             // Register each HTTP method/path combination
             String handlerMethodId = targetClass.getName() + "." + method.getName();
             MeshRouteRegistry.RouteMetadata metadata = new MeshRouteRegistry.RouteMetadata(
@@ -85,6 +89,60 @@ public class MeshRouteBeanPostProcessor implements BeanPostProcessor {
         }
 
         return bean;
+    }
+
+    /**
+     * Extract generic type arguments from McpMeshTool parameters and set them
+     * on matching DependencySpec entries.
+     *
+     * <p>For a parameter like {@code @MeshInject("greeting") McpMeshTool<GreetResponse> tool},
+     * this extracts {@code GreetResponse.class} and sets it on the dependency spec
+     * with capability "greeting".
+     */
+    private void enrichDependencyReturnTypes(Method method, List<MeshRouteRegistry.DependencySpec> deps) {
+        java.lang.reflect.Type[] genericTypes = method.getGenericParameterTypes();
+        java.lang.reflect.Parameter[] params = method.getParameters();
+
+        for (int i = 0; i < params.length; i++) {
+            if (!McpMeshTool.class.isAssignableFrom(params[i].getType())) {
+                continue;
+            }
+
+            // Extract generic type argument (e.g., GreetResponse from McpMeshTool<GreetResponse>)
+            java.lang.reflect.Type returnType = null;
+            if (genericTypes[i] instanceof java.lang.reflect.ParameterizedType pt) {
+                java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
+                if (typeArgs.length > 0) {
+                    returnType = typeArgs[0];
+                }
+            }
+
+            if (returnType == null) {
+                continue;
+            }
+
+            // Match to a DependencySpec by @MeshInject annotation or parameter name
+            MeshInject meshInject = params[i].getAnnotation(MeshInject.class);
+            String matchKey;
+            if (meshInject != null && !meshInject.value().isEmpty()) {
+                matchKey = meshInject.value();
+            } else {
+                matchKey = params[i].getName();
+            }
+            // Find matching dep by capability or parameterName
+            boolean matched = false;
+            for (MeshRouteRegistry.DependencySpec dep : deps) {
+                if (dep.getCapability().equals(matchKey) || matchKey.equals(dep.getParameterName())) {
+                    dep.setReturnType(returnType);
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                log.warn("No matching dependency spec for McpMeshTool parameter '{}' in method {}",
+                    matchKey, method.getName());
+            }
+        }
     }
 
     /**

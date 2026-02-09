@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
@@ -49,7 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class MeshLlmAgentProxy implements MeshLlmAgent {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmAgentProxy.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final ObjectMapper objectMapper = MeshObjectMappers.create();
 
     private final String functionId;
     private final List<ToolInfo> availableTools = new CopyOnWriteArrayList<>();

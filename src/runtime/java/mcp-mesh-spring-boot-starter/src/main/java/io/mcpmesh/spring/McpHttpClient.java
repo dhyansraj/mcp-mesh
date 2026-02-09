@@ -3,6 +3,7 @@ package io.mcpmesh.spring;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.spring.tracing.TraceInfo;
 import io.mcpmesh.types.MeshToolCallException;
@@ -31,12 +32,16 @@ public class McpHttpClient {
     private final ObjectMapper objectMapper;
 
     public McpHttpClient() {
+        this(MeshObjectMappers.create());
+    }
+
+    public McpHttpClient(ObjectMapper objectMapper) {
         this.httpClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build();
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -281,8 +286,14 @@ public class McpHttpClient {
                 return objectMapper.treeToValue(resultNode, (Class<T>) Object.class);
             }
         } catch (Exception e) {
-            log.warn("Failed to deserialize result to {}: {}", returnType, e.getMessage());
-            // Fallback to string if text content available
+            if (returnType != null) {
+                // When returnType is explicitly provided, propagate the error
+                // rather than silently returning the wrong type
+                throw new RuntimeException(
+                    "Failed to deserialize result to " + returnType + ": " + e.getMessage(), e);
+            }
+            log.warn("Failed to deserialize result: {}", e.getMessage());
+            // Fallback to string only when no type was specified
             if (textContent != null) {
                 return (T) textContent;
             }

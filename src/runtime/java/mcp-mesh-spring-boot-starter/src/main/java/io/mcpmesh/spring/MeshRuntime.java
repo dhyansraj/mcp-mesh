@@ -1,6 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.core.AgentSpec;
 import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.core.MeshEvent;
@@ -33,8 +34,12 @@ public class MeshRuntime implements SmartLifecycle {
     private volatile int pendingPort = -1;
 
     public MeshRuntime(AgentSpec agentSpec) {
+        this(agentSpec, MeshObjectMappers.create());
+    }
+
+    public MeshRuntime(AgentSpec agentSpec, ObjectMapper objectMapper) {
         this.agentSpec = agentSpec;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     @Override
