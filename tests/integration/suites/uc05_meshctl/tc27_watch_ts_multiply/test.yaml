@@ -1,0 +1,86 @@
+# Test Case: tc27_watch_ts_multiply
+# Tests watch mode hot reload for ts-math-agent multiply tool
+# Verifies that modifying the multiply function triggers a reload with updated result
+
+name: "Watch Mode: TypeScript Math Agent Multiply Tool"
+description: "Test meshctl start -w watch mode with ts-math-agent - verify hot reload updates multiply tool result"
+tags:
+  - meshctl
+  - typescript
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy ts-math-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+    capture: copy_output
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Start ts-math-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-math-agent/src/index.ts -d -w"
+    capture: start_output
+
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Verify ts-math-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call multiply before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:multiply ''{"a": 4, "b": 5}'''
+    capture: multiply_before
+
+  - name: "Modify ts-math-agent multiply function with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a \* b;/return a * b + 5000;/g' ts-math-agent/src/index.ts
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 10
+
+  - name: "Call multiply after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:multiply ''{"a": 4, "b": 5}'''
+    capture: multiply_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.multiply_before} contains '20'"
+    message: "Multiply before modification should return 20 (4*5)"
+
+  - expr: "${captured.multiply_before} not contains '5020'"
+    message: "Multiply before modification should NOT return 5020"
+
+  - expr: "${captured.multiply_after} contains '5020'"
+    message: "Multiply after modification should return 5020 (4*5+5000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

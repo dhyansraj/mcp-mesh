@@ -1,0 +1,83 @@
+# Test Case: tc22_watch_py_calc
+# Tests watch mode hot reload for py-calculator-agent
+# Verifies that modifying the calc_add function triggers a reload with updated result
+
+name: "Watch Mode: Python Calculator Agent"
+description: "Test meshctl start -w watch mode with py-calculator-agent - verify hot reload updates calc_add tool result"
+tags:
+  - meshctl
+  - python
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy py-calculator-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-calculator-agent /workspace/
+    capture: copy_output
+
+  - name: "Start py-calculator-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-calculator-agent/main.py -d -w"
+    capture: start_output
+
+  - name: "Wait for py-calculator-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify py-calculator-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call calc_add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-calculator-agent:calc_add ''{"a": 5, "b": 7}'''
+    capture: calc_add_before
+
+  - name: "Modify py-calculator-agent calc_add function with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b/return a + b + 2000/g' py-calculator-agent/main.py
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 8
+
+  - name: "Call calc_add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-calculator-agent:calc_add ''{"a": 5, "b": 7}'''
+    capture: calc_add_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'py-calculator-agent'"
+    message: "py-calculator-agent should be registered"
+
+  - expr: "${captured.calc_add_before} contains '12'"
+    message: "calc_add before modification should return 12 (5+7)"
+
+  - expr: "${captured.calc_add_before} not contains '2012'"
+    message: "calc_add before modification should NOT return 2012"
+
+  - expr: "${captured.calc_add_after} contains '2012'"
+    message: "calc_add after modification should return 2012 (5+7+2000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

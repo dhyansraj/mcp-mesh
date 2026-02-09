@@ -1,0 +1,132 @@
+# Test Case: tc25_watch_java_multi_tool
+# Tests watch mode hot reload for Java greeter agent with multiple tools
+# Verifies that greet changes after modification AND getInfo still works
+
+name: "Watch Mode: Java Greeter Multiple Tools After Reload"
+description: "Test meshctl start -w watch mode with Java greeter agent - verify both greet and getInfo work after hot reload"
+tags:
+  - meshctl
+  - java
+  - watch
+  - hot-reload
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy java-greeter-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  - name: "Start java-greeter-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/java-greeter-agent -d -w"
+    capture: start_output
+
+  - name: "Wait for greeter registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java greeter to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  - name: "Call greet before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call greet ''{"name": "WatchTest"}'''
+    capture: greet_before
+
+  - name: "Call getInfo before modification"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call getInfo '{}'"
+    capture: info_before
+
+  - name: "Modify greeting message with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/Hello, %s! Welcome to MCP Mesh./WATCH_RELOAD: Hello, %s!/g' java-greeter-agent/src/main/java/com/example/greeter/GreeterAgentApplication.java
+
+  - name: "Wait for Java watch to recompile and reload"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java agent to reload after source change..."
+      sleep 10
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter re-registered after $((i*2 + 10))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not re-register within 70s after modification"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_reload
+    timeout: 120
+
+  - name: "Call greet after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call greet ''{"name": "WatchTest"}'''
+    capture: greet_after
+
+  - name: "Call getInfo after modification"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call getInfo '{}'"
+    capture: info_after
+
+assertions:
+  # Greet before modification
+  - expr: "${captured.greet_before} contains 'Hello, WatchTest'"
+    message: "Greet before modification should contain Hello, WatchTest"
+
+  - expr: "${captured.greet_before} not contains 'WATCH_RELOAD'"
+    message: "Greet before modification should NOT contain WATCH_RELOAD"
+
+  # getInfo before modification
+  - expr: "${jq:captured.info_before:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "getInfo before modification should return agent name greeter"
+
+  # Greet after modification
+  - expr: "${captured.greet_after} contains 'WATCH_RELOAD'"
+    message: "Greet after modification should contain WATCH_RELOAD (hot reload worked)"
+
+  # getInfo still works after reload
+  - expr: "${jq:captured.info_after:.content[0].text | fromjson | .name} == 'greeter'"
+    message: "getInfo after modification should still return agent name greeter"
+
+  - expr: "${jq:captured.info_after:.content[0].text | fromjson | .runtime} contains 'Java'"
+    message: "getInfo after modification should still report Java runtime"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

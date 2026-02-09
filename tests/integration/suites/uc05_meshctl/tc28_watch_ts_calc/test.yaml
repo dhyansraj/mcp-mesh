@@ -1,0 +1,86 @@
+# Test Case: tc28_watch_ts_calc
+# Tests watch mode hot reload for ts-calculator-agent calc_add tool
+# Verifies that modifying the calc_add function triggers a reload with updated result
+
+name: "Watch Mode: TypeScript Calculator Agent"
+description: "Test meshctl start -w watch mode with ts-calculator-agent - verify hot reload updates calc_add tool result"
+tags:
+  - meshctl
+  - typescript
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy ts-calculator-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-calculator-agent /workspace/
+    capture: copy_output
+
+  - name: "Install ts-calculator-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-calculator-agent
+
+  - name: "Start ts-calculator-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-calculator-agent/src/index.ts -d -w"
+    capture: start_output
+
+  - name: "Wait for ts-calculator-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Verify ts-calculator-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call calc_add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-calculator-agent:calc_add ''{"a": 6, "b": 9}'''
+    capture: calc_add_before
+
+  - name: "Modify ts-calculator-agent calc_add function with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b;/return a + b + 3000;/g' ts-calculator-agent/src/index.ts
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 10
+
+  - name: "Call calc_add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-calculator-agent:calc_add ''{"a": 6, "b": 9}'''
+    capture: calc_add_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'ts-calculator-agent'"
+    message: "ts-calculator-agent should be registered"
+
+  - expr: "${captured.calc_add_before} contains '15'"
+    message: "calc_add before modification should return 15 (6+9)"
+
+  - expr: "${captured.calc_add_before} not contains '3015'"
+    message: "calc_add before modification should NOT return 3015"
+
+  - expr: "${captured.calc_add_after} contains '3015'"
+    message: "calc_add after modification should return 3015 (6+9+3000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

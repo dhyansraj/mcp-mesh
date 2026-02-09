@@ -1,0 +1,83 @@
+# Test Case: tc20_watch_py_simple
+# Tests watch mode hot reload for py-simple-agent
+# Verifies that modifying the greeting message triggers a reload
+
+name: "Watch Mode: Python Simple Agent"
+description: "Test meshctl start -w watch mode with py-simple-agent - verify hot reload updates greeting message"
+tags:
+  - meshctl
+  - python
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy py-simple-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-simple-agent /workspace/
+    capture: copy_output
+
+  - name: "Start py-simple-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-simple-agent/main.py -d -w"
+    capture: start_output
+
+  - name: "Wait for py-simple-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify py-simple-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call greet before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-simple-agent:greet ''{"name": "WatchTest"}'''
+    capture: greet_before
+
+  - name: "Modify py-simple-agent source with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/Hello, {name}!/WATCH_RELOAD: Hello, {name}!/g' py-simple-agent/main.py
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 8
+
+  - name: "Call greet after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-simple-agent:greet ''{"name": "WatchTest"}'''
+    capture: greet_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'py-simple-agent'"
+    message: "py-simple-agent should be registered"
+
+  - expr: "${captured.greet_before} contains 'Hello, WatchTest!'"
+    message: "Greet before modification should return original greeting"
+
+  - expr: "${captured.greet_before} not contains 'WATCH_RELOAD'"
+    message: "Greet before modification should NOT contain WATCH_RELOAD"
+
+  - expr: "${captured.greet_after} contains 'WATCH_RELOAD'"
+    message: "Greet after modification should contain WATCH_RELOAD (hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

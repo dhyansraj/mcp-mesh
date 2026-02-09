@@ -1,0 +1,86 @@
+# Test Case: tc26_watch_ts_add
+# Tests watch mode hot reload for ts-math-agent add tool
+# Verifies that modifying the add function triggers a reload with updated result
+
+name: "Watch Mode: TypeScript Math Agent Add Tool"
+description: "Test meshctl start -w watch mode with ts-math-agent - verify hot reload updates add tool result"
+tags:
+  - meshctl
+  - typescript
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy ts-math-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+    capture: copy_output
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Start ts-math-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-math-agent/src/index.ts -d -w"
+    capture: start_output
+
+  - name: "Wait for ts-math-agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Verify ts-math-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    capture: add_before
+
+  - name: "Modify ts-math-agent add function with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b;/return a + b + 1000;/g' ts-math-agent/src/index.ts
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 10
+
+  - name: "Call add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    capture: add_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.add_before} contains '8'"
+    message: "Add before modification should return 8 (5+3)"
+
+  - expr: "${captured.add_before} not contains '1008'"
+    message: "Add before modification should NOT return 1008"
+
+  - expr: "${captured.add_after} contains '1008'"
+    message: "Add after modification should return 1008 (5+3+1000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
