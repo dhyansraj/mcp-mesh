@@ -1,0 +1,83 @@
+# Test Case: tc21_watch_py_math
+# Tests watch mode hot reload for py-math-agent
+# Verifies that modifying the add function triggers a reload with updated result
+
+name: "Watch Mode: Python Math Agent"
+description: "Test meshctl start -w watch mode with py-math-agent - verify hot reload updates add tool result"
+tags:
+  - meshctl
+  - python
+  - watch
+  - hot-reload
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy py-math-agent to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-math-agent /workspace/
+    capture: copy_output
+
+  - name: "Start py-math-agent with watch flag"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-math-agent/main.py -d -w"
+    capture: start_output
+
+  - name: "Wait for py-math-agent to register"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify py-math-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-math-agent:add ''{"a": 10, "b": 20}'''
+    capture: add_before
+
+  - name: "Modify py-math-agent add function with sed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b/return a + b + 1000/g' py-math-agent/main.py
+
+  - name: "Wait for watch to detect change and reload"
+    handler: wait
+    seconds: 8
+
+  - name: "Call add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-math-agent:add ''{"a": 10, "b": 20}'''
+    capture: add_after
+
+assertions:
+  - expr: "${captured.agent_list} contains 'py-math-agent'"
+    message: "py-math-agent should be registered"
+
+  - expr: "${captured.add_before} contains '30'"
+    message: "Add before modification should return 30 (10+20)"
+
+  - expr: "${captured.add_before} not contains '1030'"
+    message: "Add before modification should NOT return 1030"
+
+  - expr: "${captured.add_after} contains '1030'"
+    message: "Add after modification should return 1030 (10+20+1000, hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

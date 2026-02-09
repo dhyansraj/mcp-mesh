@@ -53,6 +53,158 @@ func isAgentFile(path string) bool {
 	return false
 }
 
+// isJavaProject checks if the given path is a Java agent (JAR file or Maven project)
+func isJavaProject(agentPath string) bool {
+	if strings.HasSuffix(strings.ToLower(agentPath), ".jar") {
+		return true
+	}
+	info, err := os.Stat(agentPath)
+	if err != nil {
+		return false
+	}
+	dir := agentPath
+	if !info.IsDir() {
+		dir = filepath.Dir(agentPath)
+	}
+	// Check for pom.xml in the directory or parent directories
+	javaHandler := &handlers.JavaHandler{}
+	_, err = javaHandler.FindProjectRoot(dir)
+	return err == nil
+}
+
+// isPythonProject checks if the given path is a Python agent
+func isPythonProject(agentPath string) bool {
+	lowerPath := strings.ToLower(agentPath)
+	if strings.HasSuffix(lowerPath, ".py") || strings.HasSuffix(lowerPath, ".yaml") || strings.HasSuffix(lowerPath, ".yml") {
+		// Check if it's detected as Python by the language handler
+		handler := handlers.DetectLanguage(agentPath)
+		return handler.Language() == langPython
+	}
+	info, err := os.Stat(agentPath)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		handler := handlers.DetectLanguage(agentPath)
+		return handler.Language() == langPython
+	}
+	return false
+}
+
+// createJavaWatcher creates an AgentWatcher for a Java Maven project
+func createJavaWatcher(agentPath string, env []string, workingDir, user, group string, quiet bool) (*AgentWatcher, error) {
+	// Resolve project root
+	projectDir := agentPath
+	if info, err := os.Stat(agentPath); err == nil && !info.IsDir() {
+		projectDir = filepath.Dir(agentPath)
+	}
+	absProjectDir, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for %s: %w", projectDir, err)
+	}
+	javaHandler := &handlers.JavaHandler{}
+	projectRoot, err := javaHandler.FindProjectRoot(absProjectDir)
+	if err != nil {
+		return nil, fmt.Errorf("cannot find Maven project: %w", err)
+	}
+
+	finalWorkingDir := projectRoot
+	if workingDir != "" {
+		absWorkingDir, err := AbsolutePath(workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid working directory: %w", err)
+		}
+		finalWorkingDir = absWorkingDir
+	}
+
+	// Add Java-specific environment variables
+	javaEnv := []string{
+		"SPRING_MAIN_BANNER_MODE=off",
+	}
+	fullEnv := append(env, javaEnv...)
+
+	// Build command factory - creates a fresh cmd each restart
+	cmdFactory := func() *exec.Cmd {
+		cmd := exec.Command("mvn", "spring-boot:run", "-q")
+		cmd.Env = fullEnv
+		cmd.Dir = finalWorkingDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// Set user/group if specified
+		if user != "" || group != "" {
+			_ = setProcessCredentials(cmd, user, group)
+		}
+		return cmd
+	}
+
+	watchDir := filepath.Join(projectRoot, "src")
+	// If src directory doesn't exist, watch the project root
+	if _, err := os.Stat(watchDir); os.IsNotExist(err) {
+		watchDir = projectRoot
+	}
+
+	config := WatchConfig{
+		ProjectRoot:   projectRoot,
+		WatchDir:      watchDir,
+		Extensions:    []string{".java", ".yml", ".yaml", ".properties", ".xml"},
+		ExcludeDirs:   []string{"target", ".git", ".idea", "node_modules", ".mvn"},
+		DebounceDelay: getWatchDebounceDelay(),
+		PortDelay:     getWatchPortDelay(),
+		StopTimeout:   3 * time.Second,
+		AgentName:     filepath.Base(projectRoot),
+	}
+
+	return NewAgentWatcher(config, cmdFactory, quiet), nil
+}
+
+// createPythonWatcher creates an AgentWatcher for a Python agent
+func createPythonWatcher(agentPath string, env []string, workingDir, user, group string, quiet bool) (*AgentWatcher, error) {
+	// Create the non-watch command to get all the resolved paths and env
+	// We pass watch=false to get the plain python command
+	templateCmd, err := createPythonAgentCommand(agentPath, env, workingDir, user, group, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract the resolved values from the template command
+	resolvedEnv := templateCmd.Env
+	resolvedDir := templateCmd.Dir
+	resolvedArgs := templateCmd.Args // e.g., ["/path/to/python", "/path/to/script.py"]
+
+	// Build command factory
+	cmdFactory := func() *exec.Cmd {
+		cmd := exec.Command(resolvedArgs[0], resolvedArgs[1:]...)
+		cmd.Env = resolvedEnv
+		cmd.Dir = resolvedDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if user != "" || group != "" {
+			_ = setProcessCredentials(cmd, user, group)
+		}
+		return cmd
+	}
+
+	// Watch the script's parent directory (same as Python reload.py does)
+	watchDir := resolvedDir
+
+	config := WatchConfig{
+		ProjectRoot:   resolvedDir,
+		WatchDir:      watchDir,
+		Extensions:    []string{".py", ".jinja2", ".j2", ".yaml", ".yml"},
+		ExcludeDirs:   []string{"__pycache__", ".git", ".venv", "venv", ".pytest_cache", ".mypy_cache", "node_modules", ".eggs", ".egg-info"},
+		DebounceDelay: getWatchDebounceDelay(),
+		PortDelay:     getWatchPortDelay(),
+		StopTimeout:   3 * time.Second,
+		AgentName:     extractAgentName(agentPath),
+	}
+
+	return NewAgentWatcher(config, cmdFactory, quiet), nil
+}
+
 // resolveAllAgentPaths resolves folder paths to entry point files.
 // Supports both folder names (auto-detect entry point) and full file paths.
 // Returns resolved file paths or error if any path cannot be resolved.
@@ -1442,6 +1594,7 @@ func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLICo
 // Start agents with environment
 func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig) error {
 	var agentCmds []*exec.Cmd
+	var watchers []*AgentWatcher
 	workingDir, _ := cmd.Flags().GetString("working-dir")
 	user, _ := cmd.Flags().GetString("user")
 	group, _ := cmd.Flags().GetString("group")
@@ -1476,6 +1629,28 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 
 		if !quiet {
 			fmt.Printf("Starting agent: %s\n", absPath)
+		}
+
+		// For Java agents with watch mode, use AgentWatcher instead of bash wrapper
+		if watch && isJavaProject(absPath) {
+			watcher, err := createJavaWatcher(absPath, env, workingDir, user, group, quiet)
+			if err != nil {
+				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
+			}
+
+			watchers = append(watchers, watcher)
+			continue
+		}
+
+		// For Python agents with watch mode, use AgentWatcher instead of reload_runner
+		if watch && isPythonProject(absPath) {
+			watcher, err := createPythonWatcher(absPath, env, workingDir, user, group, quiet)
+			if err != nil {
+				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
+			}
+
+			watchers = append(watchers, watcher)
+			continue
 		}
 
 		// Create agent command with enhanced environment
@@ -1540,15 +1715,16 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 	}
 
-	if detach || isBackgroundMode {
+	if (detach || isBackgroundMode) && len(watchers) == 0 {
 		// In detach or background mode, agents are already started with their own log files
 		// Just return (the parent forkToBackground will handle user messages)
+		// But if we have watchers, fall through to runAgentsInForeground to keep process alive
 		return nil
 	}
 
 	// If running in foreground, start agents and wait
-	if len(agentCmds) > 0 {
-		return runAgentsInForeground(agentCmds, cmd, config)
+	if len(agentCmds) > 0 || len(watchers) > 0 {
+		return runAgentsInForeground(agentCmds, watchers, cmd, config)
 	}
 
 	return nil
@@ -1713,15 +1889,9 @@ func createPythonAgentCommand(agentPath string, env []string, workingDir, user, 
 	}
 
 	// Create command to run the Python script
-	// When watch mode is enabled, use the reload runner for auto-restart on file changes
-	var cmd *exec.Cmd
-	if watch {
-		// Use reload runner: python -m _mcp_mesh.reload_runner <script>
-		cmd = exec.Command(pythonExec, "-m", "_mcp_mesh.reload_runner", scriptPath)
-	} else {
-		// The mcp_mesh_runtime will be auto-imported via site-packages
-		cmd = exec.Command(pythonExec, scriptPath)
-	}
+	// The mcp_mesh_runtime will be auto-imported via site-packages
+	// Watch mode is handled by AgentWatcher at the caller level
+	cmd := exec.Command(pythonExec, scriptPath)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1802,62 +1972,7 @@ func createJavaAgentCommand(agentPath string, env []string, workingDir, user, gr
 		}
 
 		// Use mvn spring-boot:run
-		if watch {
-			// For watch mode, use a shell script that polls for file changes
-			// and restarts the Maven process when Java files change
-			watchScript := fmt.Sprintf(`
-get_checksum() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        find "%s/src" -name "*.java" -type f -exec stat -f "%%m %%N" {} \; 2>/dev/null | sort | md5
-    else
-        find "%s/src" -name "*.java" -type f -exec stat -c "%%Y %%n" {} \; 2>/dev/null | sort | md5sum
-    fi
-}
-cleanup() {
-    if [ -n "$PID" ]; then
-        kill $PID 2>/dev/null
-        wait $PID 2>/dev/null
-    fi
-    exit 0
-}
-trap cleanup SIGINT SIGTERM
-echo "🔄 Starting Java agent with file watching enabled"
-echo "📁 Watching: %s/src"
-echo "📝 File types: .java"
-echo "🔃 Agent will restart automatically when files change"
-LAST=$(get_checksum)
-cd "%s"
-mvn spring-boot:run -q &
-PID=$!
-echo "✅ Agent started (PID: $PID)"
-while true; do
-    sleep 2
-    CURRENT=$(get_checksum)
-    if [ "$CURRENT" != "$LAST" ]; then
-        echo "🔄 Detected file changes, restarting agent..."
-        kill $PID 2>/dev/null
-        wait $PID 2>/dev/null
-        sleep 1
-        mvn spring-boot:run -q &
-        PID=$!
-        echo "✅ Agent restarted (PID: $PID)"
-        LAST=$CURRENT
-    fi
-    # Check if process crashed
-    if ! kill -0 $PID 2>/dev/null; then
-        echo "⚠️ Agent process exited, restarting..."
-        sleep 1
-        mvn spring-boot:run -q &
-        PID=$!
-        echo "✅ Agent restarted (PID: $PID)"
-        LAST=$(get_checksum)
-    fi
-done
-`, projectRoot, projectRoot, projectRoot, projectRoot)
-			cmd = exec.Command("bash", "-c", watchScript)
-		} else {
-			cmd = exec.Command("mvn", "spring-boot:run", "-q")
-		}
+		cmd = exec.Command("mvn", "spring-boot:run", "-q")
 	}
 
 	// Add Java-specific environment variables
@@ -1969,7 +2084,7 @@ func setProcessCredentials(cmd *exec.Cmd, username, groupname string) error {
 	return nil
 }
 
-func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CLIConfig) error {
+func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig) error {
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -2036,10 +2151,60 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, cmd *cobra.Command, config *CL
 		}(agentCmd, agentName)
 	}
 
+	// Start all watchers (each blocks in its own goroutine)
+	for _, w := range watchers {
+		go func(watcher *AgentWatcher) {
+			if err := watcher.Start(); err != nil && !quiet {
+				fmt.Printf("Watcher error: %v\n", err)
+			}
+		}(w)
+	}
+
+	// Write PID files for watcher-managed agents
+	// Use meshctl's own PID — when meshctl stop sends SIGTERM, signal handler cleans up watchers
+	for _, w := range watchers {
+		agentName := w.config.AgentName
+		agentNames = append(agentNames, agentName)
+
+		if pmErr == nil {
+			if err := pm.WritePID(agentName, os.Getpid()); err != nil && !quiet {
+				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+			}
+		}
+
+		// Record the process for tracking
+		agentProc := ProcessInfo{
+			PID:       os.Getpid(),
+			Name:      agentName,
+			Type:      "agent",
+			Command:   "watcher:" + agentName,
+			StartTime: time.Now(),
+			Status:    "running",
+		}
+		if err := AddRunningProcess(agentProc); err != nil && !quiet {
+			fmt.Printf("Warning: failed to record watcher process: %v\n", err)
+		}
+	}
+
 	// Wait for signal
 	<-sigChan
 	if !quiet {
 		fmt.Println("\nShutting down all services...")
+	}
+
+	// Stop all watchers
+	for _, w := range watchers {
+		w.Stop()
+	}
+	for _, w := range watchers {
+		w.Wait()
+	}
+
+	// Clean up watcher PID files
+	if pmErr == nil {
+		for _, w := range watchers {
+			pm.RemovePID(w.config.AgentName)
+		}
 	}
 
 	// Stop all processes - agents first, registry last (issue #442)

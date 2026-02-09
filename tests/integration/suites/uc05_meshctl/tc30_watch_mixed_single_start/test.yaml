@@ -1,0 +1,215 @@
+# Test Case: tc30_watch_mixed_single_start
+# Tests watch mode hot reload with all 3 languages started via a single meshctl start command
+# Python (py-math-agent:9010), TypeScript (ts-math-agent:9011), Java (java-greeter-agent:9000)
+# All agents started together: meshctl start <py> <ts> <java> -d -w
+
+name: "Watch Mode: Mixed Languages Single Start Command"
+description: "Test meshctl start -w with multiple agents in a single command - verify hot reload works for all 3 languages"
+tags:
+  - meshctl
+  - python
+  - typescript
+  - java
+  - watch
+  - hot-reload
+  - mixed
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # ========== COPY ALL ARTIFACTS ==========
+
+  - name: "Copy all agents to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-math-agent /workspace/
+      cp -r /uc-artifacts/ts-math-agent /workspace/
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+    capture: copy_output
+
+  # ========== INSTALL DEPENDENCIES ==========
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install java-greeter-agent Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # ========== START ALL AGENTS WITH SINGLE COMMAND ==========
+
+  - name: "Start all agents with single meshctl start command"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-math-agent/main.py ts-math-agent/src/index.ts /workspace/java-greeter-agent -d -w"
+    capture: start_output
+
+  # ========== WAIT FOR REGISTRATION ==========
+
+  - name: "Wait for Python and TypeScript agents"
+    handler: wait
+    seconds: 10
+
+  - name: "Wait for Java greeter registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java greeter to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java
+    timeout: 120
+
+  - name: "Verify all agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  # ========== CALL TOOLS BEFORE MODIFICATION ==========
+
+  - name: "Call Python add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-math-agent:add ''{"a": 10, "b": 20}'''
+    capture: py_add_before
+
+  - name: "Call TypeScript add before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    capture: ts_add_before
+
+  - name: "Call Java greet before modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call greet ''{"name": "WatchTest"}'''
+    capture: java_greet_before
+
+  # ========== MODIFY ALL SOURCES ==========
+
+  - name: "Modify Python source"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b/return a + b + 1000/g' py-math-agent/main.py
+
+  - name: "Modify TypeScript source"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/return a + b;/return a + b + 1000;/g' ts-math-agent/src/index.ts
+
+  - name: "Modify Java source"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/Hello, %s! Welcome to MCP Mesh./WATCH_RELOAD: Hello, %s!/g' java-greeter-agent/src/main/java/com/example/greeter/GreeterAgentApplication.java
+
+  # ========== WAIT FOR RELOADS ==========
+
+  - name: "Wait for Python and TypeScript reload"
+    handler: wait
+    seconds: 10
+
+  - name: "Wait for Java watch to recompile and reload"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java agent to reload after source change..."
+      sleep 10
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter re-registered after $((i*2 + 10))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not re-register within 70s after modification"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java_reload
+    timeout: 120
+
+  # ========== CALL TOOLS AFTER MODIFICATION ==========
+
+  - name: "Call Python add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call py-math-agent:add ''{"a": 10, "b": 20}'''
+    capture: py_add_after
+
+  - name: "Call TypeScript add after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call ts-math-agent:add ''{"a": 5, "b": 3}'''
+    capture: ts_add_after
+
+  - name: "Call Java greet after modification"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call greet ''{"name": "WatchTest"}'''
+    capture: java_greet_after
+
+assertions:
+  # All agents registered
+  - expr: "${captured.agent_list} contains 'py-math-agent'"
+    message: "py-math-agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.agent_list} contains 'greeter'"
+    message: "Java greeter should be registered"
+
+  # Python before/after
+  - expr: "${captured.py_add_before} contains '30'"
+    message: "Python add before modification should return 30 (10+20)"
+
+  - expr: "${captured.py_add_after} contains '1030'"
+    message: "Python add after modification should return 1030 (10+20+1000, hot reload worked)"
+
+  # TypeScript before/after
+  - expr: "${captured.ts_add_before} contains '8'"
+    message: "TypeScript add before modification should return 8 (5+3)"
+
+  - expr: "${captured.ts_add_after} contains '1008'"
+    message: "TypeScript add after modification should return 1008 (5+3+1000, hot reload worked)"
+
+  # Java before/after
+  - expr: "${captured.java_greet_before} contains 'Hello, WatchTest'"
+    message: "Java greet before modification should contain Hello, WatchTest"
+
+  - expr: "${captured.java_greet_before} not contains 'WATCH_RELOAD'"
+    message: "Java greet before modification should NOT contain WATCH_RELOAD"
+
+  - expr: "${captured.java_greet_after} contains 'WATCH_RELOAD'"
+    message: "Java greet after modification should contain WATCH_RELOAD (hot reload worked)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop --agents 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
