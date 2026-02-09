@@ -194,15 +194,27 @@ public class MeshAutoConfiguration {
 
         AgentSpec spec = new AgentSpec();
 
-        // Resolve name (required) - use new API with correct Rust key names
+        // Resolve name - either from annotation, properties, or env
         String annotationName = agentAnnotation != null ? agentAnnotation.name() : null;
         String propertiesName = properties.getAgent().getName();
         String paramName = (annotationName != null && !annotationName.isBlank()) ? annotationName : propertiesName;
         String name = configResolver.resolve("agent_name", paramName);
+
         if (name == null || name.isBlank()) {
+            // No agent name configured — check if this is consumer-only mode.
+            // Force RestController beans to be created first so MeshRouteBeanPostProcessor
+            // populates MeshRouteRegistry before we check it.
+            applicationContext.getBeansWithAnnotation(
+                org.springframework.web.bind.annotation.RestController.class);
+            MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+            if (routeRegistry != null && routeRegistry.hasRoutes()) {
+                log.info("No @MeshAgent found, but @MeshRoute dependencies detected — starting in consumer-only mode");
+                return buildConsumerAgentSpec(properties, configResolver, routeRegistryProvider);
+            }
             throw new IllegalStateException(
                 "Agent name is required. Set MCP_MESH_AGENT_NAME, mesh.agent.name, or @MeshAgent(name=...)");
         }
+
         // Append UUID suffix like Python/TypeScript SDKs: {name}-{8char_uuid}
         String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String agentId = name + "-" + uuidSuffix;
@@ -219,7 +231,7 @@ public class MeshAutoConfiguration {
         int annotationPort = agentAnnotation != null ? agentAnnotation.port() : 0;
         int propertiesPort = properties.getAgent().getPort();
         int paramPort = annotationPort > 0 ? annotationPort : propertiesPort;
-        spec.setHttpPort(configResolver.resolveInt("http_port", paramPort > 0 ? paramPort : -1));
+        spec.setHttpPort(configResolver.resolveInt("http_port", paramPort > 0 ? paramPort : 0));
 
         // Resolve host (Rust auto-detects IP if null/empty)
         String annotationHost = agentAnnotation != null ? agentAnnotation.host() : null;
@@ -257,6 +269,63 @@ public class MeshAutoConfiguration {
         addRouteDependencies(allTools, routeRegistryProvider);
 
         spec.setTools(allTools);
+
+        return spec;
+    }
+
+    /**
+     * Build a consumer-only AgentSpec for apps that use @MeshRoute without @MeshAgent.
+     *
+     * <p>Consumer-only mode creates a lightweight mesh client that resolves dependencies
+     * from the registry without registering as a full MCP agent. The agent type is set
+     * to "api" which tells the Rust core this is a consumer-only client.
+     *
+     * @param properties            Mesh configuration properties
+     * @param configResolver        Environment variable resolver
+     * @param routeRegistryProvider Provider for MeshRouteRegistry
+     * @return AgentSpec configured for consumer-only mode
+     */
+    private AgentSpec buildConsumerAgentSpec(
+            MeshProperties properties,
+            MeshConfigResolver configResolver,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
+
+        AgentSpec spec = new AgentSpec();
+
+        // Auto-generated name: api-{8char_uuid} (matches Python's pattern)
+        String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        spec.setName("api-" + uuidSuffix);
+
+        // Consumer-only agent type
+        spec.setAgentType("api");
+
+        // Port 0 — updated by meshPortUpdater when Tomcat starts
+        spec.setHttpPort(0);
+
+        // Host — auto-detected via Rust core, or from property/env
+        String propertiesHost = properties.getAgent().getHost();
+        spec.setHttpHost(configResolver.resolve("http_host", propertiesHost));
+
+        // Namespace
+        String propertiesNamespace = properties.getAgent().getNamespace();
+        spec.setNamespace(configResolver.resolve("namespace", propertiesNamespace));
+
+        // Heartbeat interval
+        int propertiesHeartbeat = properties.getAgent().getHeartbeatInterval();
+        int heartbeat = configResolver.resolveInt("health_interval", propertiesHeartbeat > 0 ? propertiesHeartbeat : -1);
+        spec.setHeartbeatInterval(heartbeat > 0 ? heartbeat : 5);
+
+        // Registry URL
+        String propertiesRegistryUrl = properties.getRegistry().getUrl();
+        spec.setRegistryUrl(configResolver.resolve("registry_url", propertiesRegistryUrl));
+
+        // No tools or LLM agents — only route dependencies
+        List<AgentSpec.ToolSpec> tools = new ArrayList<>();
+        addRouteDependencies(tools, routeRegistryProvider);
+        spec.setTools(tools);
+
+        log.info("Consumer-only AgentSpec: name='{}', agentType='api', dependencies={}",
+            spec.getName(), tools.size());
 
         return spec;
     }

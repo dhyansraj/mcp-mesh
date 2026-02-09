@@ -48,6 +48,12 @@ test:
     workdir: /workspace
     capture: agent_list
 
+  - name: "Get initial agent list JSON"
+    handler: shell
+    command: "meshctl list --json"
+    workdir: /workspace
+    capture: initial_list_json
+
   # Start FastAPI app (simple_fastapi_router.py) in background
   - name: "Start simple_fastapi_router app"
     handler: shell
@@ -89,6 +95,12 @@ test:
     workdir: /workspace
     capture: both_result
 
+  - name: "Get agent list JSON"
+    handler: shell
+    command: "meshctl list --json"
+    workdir: /workspace
+    capture: list_json
+
 assertions:
   - expr: "${captured.agent_list} contains 'system-agent'"
     message: "system-agent should be registered"
@@ -110,6 +122,14 @@ assertions:
 
   - expr: "${captured.both_result} contains 'dependencies_available'"
     message: "Both endpoint should return dependency info"
+
+  # Verify FastAPI consumer registers as API type
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "api")] | length} > 0'
+    message: "FastAPI consumer should register with agent_type=api"
+
+  # Verify MCP agents register as mcp_agent type
+  - expr: '${jq:captured.initial_list_json:[.agents[] | select(.agent_type == "mcp_agent")] | length} > 0'
+    message: "MCP provider agents should register with agent_type=mcp_agent"
 
 post_run:
   # Stop FastAPI app (kill uvicorn)

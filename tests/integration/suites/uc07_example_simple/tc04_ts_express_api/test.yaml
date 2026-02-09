@@ -68,6 +68,12 @@ test:
     workdir: /workspace
     capture: agent_list
 
+  - name: "Get agent list JSON"
+    handler: shell
+    command: "meshctl list --json"
+    workdir: /workspace
+    capture: list_json
+
   # Test Express API endpoints with curl
   - name: "Test root endpoint"
     handler: shell
@@ -137,6 +143,14 @@ assertions:
 
   - expr: "${captured.greet_age_result} contains 'years old'"
     message: "Greet/age endpoint should return age calculation"
+
+  # Verify Express API consumer registers as API type
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "api")] | length} > 0'
+    message: "Express API consumer should register with agent_type=api"
+
+  # Verify MCP agents register as mcp_agent type
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "mcp_agent")] | length} > 0'
+    message: "MCP provider agents should register with agent_type=mcp_agent"
 
 post_run:
   # Stop all agents (including Express API)

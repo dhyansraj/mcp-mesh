@@ -1,15 +1,16 @@
 # Test Case: tc05_java_spring_api
-# Tests Java Spring Boot REST API with @MeshRoute dependency injection
-# Dependency chain: REST API (rest-api-consumer) -> greeter agent (basic-tool-agent)
+# Tests Java Spring Boot REST API in consumer-only mode (no @MeshAgent)
+# Dependency chain: REST API consumer (api type) -> greeter agent (basic-tool-agent)
 
-name: "Java Spring Boot REST API"
-description: "Test Java Spring Boot REST API with @MeshRoute for mesh dependency injection"
+name: "Java Spring Boot REST API (Consumer-Only)"
+description: "Test Java Spring Boot REST API in consumer-only mode with @MeshRoute for mesh dependency injection"
 tags:
   - java
   - spring
   - rest
   - mesh-route
   - dependency-injection
+  - consumer-only
 timeout: 480
 
 pre_run:
@@ -76,21 +77,21 @@ test:
       echo "REST API consumer starting"
     capture: start_rest_api
 
-  # Wait for REST API to register
+  # Wait for REST API to register as API type
   - name: "Wait for REST API registration"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for REST API consumer..."
+      echo "Waiting for REST API consumer (API type)..."
       for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep -q "rest-api-consumer"; then
-          echo "REST API registered after $((i*3))s"
+        if meshctl list 2>/dev/null | grep -q "API"; then
+          echo "REST API registered as API type after $((i*3))s"
           exit 0
         fi
         sleep 3
       done
-      echo "ERROR: REST API did not register within 90s"
-      meshctl logs rest-api-consumer 2>/dev/null | tail -30 || true
+      echo "ERROR: REST API consumer did not register as API type within 90s"
+      meshctl logs 2>/dev/null | tail -30 || true
       exit 1
     capture: wait_rest_api
     timeout: 120
@@ -112,6 +113,13 @@ test:
     capture: wait_http
     timeout: 90
 
+  # Get agent list as JSON for jq assertions
+  - name: "Get agent list JSON"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --json"
+    capture: list_json
+
   # Verify both agents registered
   - name: "Verify agents registered"
     handler: shell
@@ -131,19 +139,28 @@ test:
     command: "curl -s --max-time 10 'http://localhost:8080/api/greet?name=TestUser'"
     capture: greet_result
 
-  # Test optional-greet endpoint (optional dependency with fallback)
-  - name: "Test optional-greet endpoint"
+  # Test greet-fallback endpoint (optional dependency with fallback)
+  - name: "Test greet-fallback endpoint"
     handler: shell
-    command: "curl -s --max-time 10 'http://localhost:8080/api/optional-greet?name=World'"
-    capture: optional_greet_result
+    command: "curl -s --max-time 10 'http://localhost:8080/api/greet-fallback?name=World'"
+    capture: fallback_result
 
 assertions:
-  # Both agents registered
+  # Greeter agent registered
   - expr: "${captured.list_output} contains 'greeter'"
     message: "Greeter agent should be registered"
 
-  - expr: "${captured.list_output} contains 'rest-api-consumer'"
-    message: "REST API consumer should be registered"
+  # Consumer registered as API type (not as regular agent)
+  - expr: "${captured.list_output} contains 'API'"
+    message: "REST API consumer should be registered as API type"
+
+  # Verify agent_type is "api" via JSON (tsuite jq)
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "api")] | length} > 0'
+    message: "Consumer should register with agent_type=api"
+
+  # Verify greeter is mcp_agent type
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "mcp_agent")] | length} > 0'
+    message: "Greeter should register with agent_type=mcp_agent"
 
   # Health endpoint works
   - expr: "${captured.health_result} contains 'healthy'"
@@ -156,9 +173,9 @@ assertions:
   - expr: "${captured.greet_result} contains 'mesh-agent'"
     message: "Greet endpoint should use mesh-agent source"
 
-  # Optional greet works (with mesh agent available)
-  - expr: "${captured.optional_greet_result} contains 'mesh-agent'"
-    message: "Optional greet should use mesh-agent when available"
+  # Fallback greet works (with mesh agent available)
+  - expr: "${captured.fallback_result} contains 'mesh-agent'"
+    message: "Fallback greet should use mesh-agent when available"
 
 post_run:
   - handler: shell

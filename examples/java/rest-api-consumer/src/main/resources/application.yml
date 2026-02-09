@@ -5,12 +5,10 @@ spring:
   application:
     name: rest-api-consumer
 
-# MCP Mesh configuration
+# Only the registry URL is needed — no agent name, port, or version.
+# The app starts in consumer-only mode automatically when @MeshRoute
+# is used without @MeshAgent.
 mesh:
-  agent:
-    name: rest-api-consumer
-    version: "1.0.0"
-    port: 9010
   registry:
     url: http://localhost:8000
 
