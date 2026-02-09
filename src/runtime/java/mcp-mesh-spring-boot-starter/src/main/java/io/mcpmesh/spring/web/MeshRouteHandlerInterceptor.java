@@ -134,7 +134,12 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         }
 
         // Get proxy from injector (populated by DEPENDENCY_AVAILABLE events)
-        McpMeshTool proxy = injector.getToolProxy(dep.getCapability());
+        McpMeshTool proxy;
+        if (dep.getReturnType() != null) {
+            proxy = injector.getToolProxy(dep.getCapability(), dep.getReturnType());
+        } else {
+            proxy = injector.getToolProxy(dep.getCapability());
+        }
 
         if (proxy == null) {
             return null;

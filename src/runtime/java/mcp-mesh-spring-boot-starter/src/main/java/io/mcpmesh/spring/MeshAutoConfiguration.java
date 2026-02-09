@@ -1,6 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
@@ -80,7 +81,7 @@ public class MeshAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public static ObjectMapper meshObjectMapper() {
-        return new ObjectMapper();
+        return MeshObjectMappers.create();
     }
 
     @Bean
@@ -140,7 +141,7 @@ public class MeshAutoConfiguration {
         log.info("Creating MeshRuntime for agent '{}' with {} tools",
             spec.getName(), spec.getTools().size());
 
-        return new MeshRuntime(spec);
+        return new MeshRuntime(spec, objectMapper);
     }
 
     @Bean
@@ -159,8 +160,8 @@ public class MeshAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public McpHttpClient mcpHttpClient() {
-        return new McpHttpClient();
+    public McpHttpClient mcpHttpClient(ObjectMapper objectMapper) {
+        return new McpHttpClient(objectMapper);
     }
 
     @Bean

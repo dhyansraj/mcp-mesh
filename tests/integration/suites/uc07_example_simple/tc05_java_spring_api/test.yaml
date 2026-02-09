@@ -11,7 +11,8 @@ tags:
   - mesh-route
   - dependency-injection
   - consumer-only
-timeout: 480
+  - typed-deserialization
+timeout: 600
 
 pre_run:
   - routine: global.setup_for_java_agent
@@ -25,6 +26,7 @@ test:
     command: |
       cp -r /uc-artifacts/java-greeter /workspace/
       cp -r /uc-artifacts/java-rest-api /workspace/
+      cp -r /uc-artifacts/java-employee-service /workspace/
       ls -la /workspace/
     capture: copy_output
 
@@ -38,6 +40,12 @@ test:
   - name: "Install REST API dependencies"
     handler: maven-install
     path: /workspace/java-rest-api
+    timeout: 600
+
+  # Install Maven dependencies for employee service
+  - name: "Install employee service dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
     timeout: 600
 
   # Start Java greeter agent (provides greeting + agent_info capabilities)
@@ -66,6 +74,34 @@ test:
       meshctl logs greeter 2>/dev/null | tail -30 || true
       exit 1
     capture: wait_greeter
+    timeout: 120
+
+  # Start Java employee service (provides get_employee + employee_count capabilities)
+  - name: "Start Java employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting"
+    capture: start_employee
+
+  # Wait for employee service to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java employee service..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_employee
     timeout: 120
 
   # Start REST API consumer
@@ -145,6 +181,18 @@ test:
     command: "curl -s --max-time 10 'http://localhost:8080/api/greet-fallback?name=World'"
     capture: fallback_result
 
+  # Test typed employee endpoint (uses McpMeshTool<Employee> generic type)
+  - name: "Test typed employee endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/employee?id=1'"
+    capture: employee_result
+
+  # Test typed department stats endpoint (uses McpMeshTool<DepartmentStats> generic type)
+  - name: "Test typed department stats endpoint"
+    handler: shell
+    command: "curl -s --max-time 10 'http://localhost:8080/api/department-stats?department=Engineering'"
+    capture: dept_stats_result
+
 assertions:
   # Greeter agent registered
   - expr: "${captured.list_output} contains 'greeter'"
@@ -177,6 +225,32 @@ assertions:
   - expr: "${captured.fallback_result} contains 'mesh-agent'"
     message: "Fallback greet should use mesh-agent when available"
 
+  # Typed Employee endpoint — McpMeshTool<Employee> deserialized correctly
+  - expr: "${jq:captured.employee_result:.type} == 'Employee'"
+    message: "Employee endpoint should deserialize to Employee record (not LinkedHashMap)"
+
+  - expr: "${jq:captured.employee_result:.source} == 'mesh-agent-typed'"
+    message: "Employee endpoint should use mesh-agent-typed source"
+
+  - expr: "${jq:captured.employee_result:.result.firstName} == 'Alice'"
+    message: "Employee result should contain firstName field from typed record"
+
+  - expr: ${jq:captured.employee_result:.result.salary} == 120000.0
+    message: "Employee result should contain salary field from typed record"
+
+  # Typed DepartmentStats endpoint — McpMeshTool<DepartmentStats> deserialized correctly
+  - expr: "${jq:captured.dept_stats_result:.type} == 'DepartmentStats'"
+    message: "DepartmentStats endpoint should deserialize to DepartmentStats record (not LinkedHashMap)"
+
+  - expr: "${jq:captured.dept_stats_result:.source} == 'mesh-agent-typed'"
+    message: "DepartmentStats endpoint should use mesh-agent-typed source"
+
+  - expr: "${jq:captured.dept_stats_result:.result.department} == 'Engineering'"
+    message: "DepartmentStats result should contain department field from typed record"
+
+  - expr: ${jq:captured.dept_stats_result:.result.employeeCount} == 3
+    message: "DepartmentStats result should contain employeeCount field from typed record"
+
 post_run:
   - handler: shell
     workdir: /workspace
@@ -185,5 +259,6 @@ post_run:
       pkill -f "spring-boot:run" 2>/dev/null || true
       pkill -f "java.*greeter" 2>/dev/null || true
       pkill -f "java.*rest-api" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace

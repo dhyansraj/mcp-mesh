@@ -1,6 +1,7 @@
 package com.example.api;
 
 import io.mcpmesh.spring.web.MeshDependency;
+import io.mcpmesh.spring.web.MeshInject;
 import io.mcpmesh.spring.web.MeshRoute;
 import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
@@ -47,6 +48,20 @@ public class RestApiConsumerApplication {
         SpringApplication.run(RestApiConsumerApplication.class, args);
     }
 }
+
+record Employee(
+    int id,
+    String firstName,
+    String lastName,
+    String department,
+    double salary
+) {}
+
+record DepartmentStats(
+    String department,
+    int employeeCount,
+    double averageSalary
+) {}
 
 @RestController
 @RequestMapping("/api")
@@ -100,6 +115,52 @@ class ApiController {
             response.put("source", "local-fallback");
             response.put("result", Map.of("message", "Hello, " + name + "! (from fallback)"));
         }
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get an employee by ID via a mesh agent, with typed deserialization.
+     *
+     * <p>The McpMeshTool&lt;Employee&gt; generic type ensures the response from
+     * the remote agent is deserialized directly into an Employee record.
+     */
+    @GetMapping("/employee")
+    @MeshRoute(dependencies = @MeshDependency(capability = "get_employee"))
+    public ResponseEntity<Map<String, Object>> getEmployee(
+            @RequestParam int id,
+            @MeshInject("get_employee") McpMeshTool<Employee> employeeTool) {
+
+        log.info("Getting employee {} via mesh agent (typed)", id);
+        Employee employee = employeeTool.call(Map.of("id", id));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("source", "mesh-agent-typed");
+        response.put("result", employee);
+        response.put("type", employee.getClass().getSimpleName());
+        response.put("timestamp", LocalDateTime.now().toString());
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get department statistics via a mesh agent, with typed deserialization.
+     *
+     * <p>Demonstrates McpMeshTool&lt;DepartmentStats&gt; returning a different
+     * typed record from a different capability on the same remote agent.
+     */
+    @GetMapping("/department-stats")
+    @MeshRoute(dependencies = @MeshDependency(capability = "employee_count"))
+    public ResponseEntity<Map<String, Object>> getDepartmentStats(
+            @RequestParam String department,
+            @MeshInject("employee_count") McpMeshTool<DepartmentStats> statsTool) {
+
+        log.info("Getting department stats for {} via mesh agent (typed)", department);
+        DepartmentStats stats = statsTool.call(Map.of("department", department));
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("source", "mesh-agent-typed");
+        response.put("result", stats);
+        response.put("type", stats.getClass().getSimpleName());
+        response.put("timestamp", LocalDateTime.now().toString());
         return ResponseEntity.ok(response);
     }
 
