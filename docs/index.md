@@ -17,7 +17,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 === "Python"
 
     ```bash
-    pip install "mcp-mesh>=0.8,<0.9"
+    pip install "mcp-mesh>=0.9,<1.0"
     ```
 
     ```python
@@ -42,7 +42,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>0.9.1</version>
+        <version>0.9.2</version>
     </dependency>
     ```
 
@@ -146,28 +146,34 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
     **Stop fighting infrastructure. Start building intelligence.**
 
-    - Zero boilerplate networking code
-    - Pure Python simplicity with FastMCP integration
-    - End-to-end FastAPI integration with `@mesh.route()`
-    - Same code runs locally, in Docker, and Kubernetes
+    - **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
+    - **Python, Java & TypeScript**: Write MCP servers as simple functions in your preferred language — no manual client/server setup
+    - **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python), Spring Boot (Java), or Express (TypeScript) APIs seamlessly
+    - **LLM as Dependencies**: Inject LLMs just like MCP agents — dynamic prompts with Jinja2 (Python), FreeMarker (Java), or Handlebars (TypeScript)
+    - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes — same code, zero changes
+    - **kubectl-like Management**: `meshctl` — a familiar command-line tool to run, monitor, and manage your entire agent network
 
 === "For Solution Architects"
 
     **Design intelligent systems, not complex integrations.**
 
-    - Agent-centric architecture with clear capabilities
-    - Dynamic intelligence - agents get smarter automatically
-    - Domain-driven design with focused, composable agents
-    - Mix and match agents to create new capabilities
+    - **Agent-Centric Architecture**: Design specialized agents with clear capabilities and dependencies, not monolithic systems
+    - **Dynamic Intelligence**: Agents get smarter automatically when new capabilities come online — no reconfiguration needed
+    - **Domain-Driven Design**: Solve business problems with ecosystems of focused agents that can be designed and developed independently
+    - **Composable Solutions**: Mix and match agents to create new business capabilities without custom integration code
+
+    **Example**: Deploy a financial analysis agent that automatically discovers and uses risk assessment, market data, and compliance agents as they become available.
 
 === "For DevOps Teams"
 
     **AI infrastructure out of the box.**
 
-    - Kubernetes-native with Helm charts
-    - Enterprise observability with Grafana, Tempo, and Redis
-    - Zero-touch operations with auto-discovery
-    - Scale from 2 agents to 200+ with same complexity
+    - **Kubernetes-Native**: Deploy with Helm charts — horizontal scaling, health checks, and service discovery included
+    - **Enterprise Observability**: Built-in Grafana dashboards, distributed tracing, and centralized logging for complete system visibility
+    - **Zero-Touch Operations**: Agents self-register, auto-discover dependencies, and gracefully handle failures without network restarts
+    - **Standards-Based**: Leverage existing Kubernetes patterns — RBAC, network policies, service mesh integration, and security policies
+
+    **Scale from 2 agents to 200+ with the same operational complexity.**
 
 === "For Support & Operations"
 
@@ -238,7 +244,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 === "Python Runtime"
 
     ```bash
-    pip install "mcp-mesh>=0.8,<0.9"
+    pip install "mcp-mesh>=0.9,<1.0"
     ```
 
     Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
@@ -250,7 +256,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>0.9.1</version>
+        <version>0.9.2</version>
     </dependency>
     ```
 
@@ -298,7 +304,7 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 
 ## :star: Project Status
 
-- **Latest Release**: v0.9.1 (February 2026)
+- **Latest Release**: v0.9.2 (February 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

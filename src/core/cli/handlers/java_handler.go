@@ -300,7 +300,7 @@ const javaPomTemplate = `<?xml version="1.0" encoding="UTF-8"?>
         <dependency>
             <groupId>io.mcp-mesh</groupId>
             <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-            <version>0.9.1</version>
+            <version>0.9.2</version>
         </dependency>
     </dependencies>
 

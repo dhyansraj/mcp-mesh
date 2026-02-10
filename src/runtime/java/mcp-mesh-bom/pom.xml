@@ -6,7 +6,7 @@
 
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-bom</artifactId>
-    <version>0.9.1</version>
+    <version>0.9.2</version>
     <packaging>pom</packaging>
 
     <name>MCP Mesh BOM</name>
