@@ -111,17 +111,13 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
-	"fastapi": {
-		Name:        "fastapi",
-		Aliases:     []string{"backend"},
-		Title:       "FastAPI Integration",
-		Description: "@mesh.route for FastAPI backends consuming mesh capabilities",
-	},
-	"express": {
-		Name:        "express",
-		Aliases:     []string{"route", "routes"},
-		Title:       "Express Integration",
-		Description: "mesh.route() for Express backends consuming mesh capabilities",
+	"api": {
+		Name:                 "api",
+		Aliases:              []string{"api-integration", "fastapi", "express", "backend", "route", "routes"},
+		Title:                "API Integration",
+		Description:          "Add mesh capabilities to existing web frameworks (FastAPI, Express, Spring Boot)",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"scaffold": {
 		Name:        "scaffold",
@@ -247,7 +243,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
-		"proxies", "fastapi", "express", "environment", "deployment", "observability",
+		"proxies", "api", "environment", "deployment", "observability",
 		"testing", "scaffold", "cli",
 	}
 	for _, name := range order {
