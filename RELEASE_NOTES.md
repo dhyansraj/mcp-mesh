@@ -1,5 +1,25 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.1...v0.9.2)
+
+## v0.9.2 (2026-02-09)
+
+### 🐛 Bug Fixes
+
+- **meshctl start -w — Go fsnotify watch mode** (#533)
+  - Replaced buggy bash-based watch mode with Go-native `AgentWatcher` using fsnotify, eliminating infinite restart cycles for Java agents and removing `watchfiles` pip dependency for Python
+  - Event-driven file watching with debounce, process group termination, and automatic subdirectory watching — compiled into meshctl with zero runtime dependencies
+  - TypeScript unchanged (`tsx --watch` works natively)
+
+- **Java SDK — @MeshRoute generic type, consumer-only mode, and ObjectMapper centralization** (#532, #535, #536, #537)
+  - `@MeshRoute` consumer-only mode: Spring Boot apps with `@MeshRoute` but no `@MeshAgent` now auto-start in consumer-only mode, registering as `agent_type=api`
+  - `McpMeshTool<T>` generic type propagation: the full chain (BeanPostProcessor → DependencySpec → Interceptor → Proxy) now extracts and propagates the generic type, enabling typed deserialization instead of raw String
+  - ObjectMapper centralization: replaced 8 bare `new ObjectMapper()` instances with `MeshObjectMappers.create()` factory; fixed silent deserialization fallback in `McpHttpClient`
+
+### 🔧 Improvements
+
+- **Version bump automation** — new `scripts/bump_version.py` handles 19 categories of version references across ~120 files with PEP 440 beta support and third-party dependency safety
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.0...v0.9.1)
 
 ## v0.9.1 (2026-02-08)
