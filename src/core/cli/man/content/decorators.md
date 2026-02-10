@@ -2,8 +2,6 @@
 
 > Core decorators for building distributed agent systems
 
-**Note:** This page shows Python examples. See `meshctl man decorators --typescript` for TypeScript or `meshctl man decorators --java` for Java/Spring Boot examples.
-
 ## Overview
 
 MCP Mesh provides decorators (Python), annotations (Java), and function wrappers (TypeScript) that transform regular functions into mesh-aware distributed services. These APIs handle registration, dependency injection, and communication automatically.

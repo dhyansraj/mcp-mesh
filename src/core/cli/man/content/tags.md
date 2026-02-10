@@ -2,8 +2,6 @@
 
 > Smart service selection using tags with +/- operators
 
-**Note:** This page shows Python examples. See `meshctl man tags --typescript` for TypeScript or `meshctl man tags --java` for Java/Spring Boot examples.
-
 ## Overview
 
 Tags are metadata labels attached to capabilities that enable intelligent service selection. MCP Mesh supports "smart matching" with operators that express preferences and exclusions.

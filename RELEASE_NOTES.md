@@ -1,5 +1,20 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.2...v0.9.3)
+
+## v0.9.3 (2026-02-10)
+
+### 🐛 Bug Fixes
+
+- **Java SDK — JavaTimeModule and isError guard in McpHttpClient** (#544)
+  - `MeshMcpServerConfiguration` lacked `JavaTimeModule` — `@MeshTool` methods returning `java.time` types (`LocalDate`, `LocalTime`, `LocalDateTime`) threw `InvalidDefinitionException`; registered `JavaTimeModule` with `WRITE_DATES_AS_TIMESTAMPS=false` so java.time types serialize as ISO-8601 strings
+  - `McpHttpClient.deserializeResult()` didn't check the MCP `isError` flag before attempting typed deserialization — upstream tool errors (returned as error text) caused `StreamReadException` instead of a proper `MeshToolCallException`; added `isError` check before `deserializeResult()` to convert upstream errors into `MeshToolCallException`
+
+### 🔧 Improvements
+
+- **meshctl man — cross-language links at top of pages**
+  - Language variant links ("Also available: --typescript | --java") now appear near the top of man pages instead of at the bottom, making it easier to discover language-specific documentation
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.1...v0.9.2)
 
 ## v0.9.2 (2026-02-09)

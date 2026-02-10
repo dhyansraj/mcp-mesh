@@ -23,7 +23,7 @@ MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot RES
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>0.9.2</version>
+        <version>0.9.3</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -34,10 +34,10 @@ MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot RES
 
 ## Two Architectures
 
-| Pattern               | Annotation                     | Use Case                              |
-| --------------------- | ------------------------------ | ------------------------------------- |
-| MCP Agent             | `@MeshTool` + `@MeshAgent`    | Service that _provides_ capabilities  |
-| Spring Boot REST API  | `@MeshRoute`                   | REST API that _consumes_ capabilities |
+| Pattern              | Annotation                 | Use Case                              |
+| -------------------- | -------------------------- | ------------------------------------- |
+| MCP Agent            | `@MeshTool` + `@MeshAgent` | Service that _provides_ capabilities  |
+| Spring Boot REST API | `@MeshRoute`               | REST API that _consumes_ capabilities |
 
 ```
 [Frontend] -> [Spring Boot REST API] -> [MCP Mesh] -> [Agents]
@@ -229,14 +229,14 @@ The REST API will:
 
 ## Key Differences from @MeshTool
 
-| Aspect                | @MeshTool           | @MeshRoute                            |
-| --------------------- | ------------------- | ------------------------------------- |
-| Registers with mesh   | Yes                 | Yes (as Type API)                     |
-| Provides capabilities | Yes                 | No                                    |
-| Consumes capabilities | Yes                 | Yes                                   |
-| Has heartbeat         | Yes                 | Yes (for dependency resolution)       |
-| Protocol              | MCP JSON-RPC        | REST/HTTP                             |
-| Use case              | Microservice        | API Gateway/Backend                   |
+| Aspect                | @MeshTool    | @MeshRoute                      |
+| --------------------- | ------------ | ------------------------------- |
+| Registers with mesh   | Yes          | Yes (as Type API)               |
+| Provides capabilities | Yes          | No                              |
+| Consumes capabilities | Yes          | Yes                             |
+| Has heartbeat         | Yes          | Yes (for dependency resolution) |
+| Protocol              | MCP JSON-RPC | REST/HTTP                       |
+| Use case              | Microservice | API Gateway/Backend             |
 
 ## When to Use @MeshRoute
 

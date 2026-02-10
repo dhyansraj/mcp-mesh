@@ -175,7 +175,7 @@ func GetGuide(name string) (*Guide, string, error) {
 
 // GetGuideWithVariant retrieves a guide with optional language variant.
 // variant can be "" (default/Python), "typescript", or "java".
-// For default pages with variants, appends cross-language footer notes.
+// For pages with variants, inserts cross-language "Also available" links near the top.
 func GetGuideWithVariant(name string, variant string) (*Guide, string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 
@@ -210,26 +210,47 @@ func GetGuideWithVariant(name string, variant string) (*Guide, string, error) {
 
 	contentStr := string(content)
 
-	// Append cross-language "See also" footer
+	// If variant was requested but doesn't exist, we loaded default — treat as default
+	if variant == "typescript" && !guide.HasTypeScriptVariant {
+		variant = ""
+	} else if variant == "java" && !guide.HasJavaVariant {
+		variant = ""
+	}
+
+	// Build cross-language "Also available" header
+	var langHeader string
 	switch variant {
 	case "": // Default (Python) page
-		var seeAlso []string
+		var alts []string
 		if guide.HasTypeScriptVariant {
-			seeAlso = append(seeAlso, fmt.Sprintf("`meshctl man %s --typescript` for TypeScript examples", canonicalName))
+			alts = append(alts, "`--typescript`")
 		}
 		if guide.HasJavaVariant {
-			seeAlso = append(seeAlso, fmt.Sprintf("`meshctl man %s --java` for Java/Spring Boot examples", canonicalName))
+			alts = append(alts, "`--java`")
 		}
-		if len(seeAlso) > 0 {
-			contentStr += "\n\n---\n\n**See also:** " + strings.Join(seeAlso, " | ") + "\n"
+		if len(alts) > 0 {
+			langHeader = "\n\n**Also available:** " + strings.Join(alts, " | ")
 		}
 	case "typescript":
+		var alts []string
+		alts = append(alts, fmt.Sprintf("`meshctl man %s` (default)", canonicalName))
 		if guide.HasJavaVariant {
-			contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --java` for Java/Spring Boot examples.\n", canonicalName)
+			alts = append(alts, "`--java`")
 		}
+		langHeader = "\n\n**Also available:** " + strings.Join(alts, " | ")
 	case "java":
+		var alts []string
+		alts = append(alts, fmt.Sprintf("`meshctl man %s` (default)", canonicalName))
 		if guide.HasTypeScriptVariant {
-			contentStr += fmt.Sprintf("\n\n---\n\n**See also:** `meshctl man %s --typescript` for TypeScript examples.\n", canonicalName)
+			alts = append(alts, "`--typescript`")
+		}
+		langHeader = "\n\n**Also available:** " + strings.Join(alts, " | ")
+	}
+
+	// Insert after the blockquote description, before the first ## section
+	if langHeader != "" {
+		if idx := strings.Index(contentStr, "\n\n## "); idx != -1 {
+			contentStr = contentStr[:idx] + langHeader + contentStr[idx:]
 		}
 	}
 

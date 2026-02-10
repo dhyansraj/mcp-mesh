@@ -1,6 +1,6 @@
 # Helm values for deploying claude-provider with mcp-mesh-agent chart
 # Usage: helm install claude-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-#        --version 0.9.2 -f helm-values.yaml
+#        --version 0.9.3 -f helm-values.yaml
 
 image:
   repository: your-registry/claude-provider

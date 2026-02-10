@@ -52,7 +52,7 @@ Add the Spring Boot starter to your `pom.xml`:
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>0.9.2</version>
+        <version>0.9.3</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -120,14 +120,14 @@ helm version
 
 ## Version Compatibility
 
-| Component  | Minimum | Recommended |
-| ---------- | ------- | ----------- |
-| Java       | 17      | 21          |
-| Maven      | 3.8     | 3.9+        |
-| Spring Boot| 3.2     | 4.0+        |
-| Docker     | 20.10   | Latest      |
-| Kubernetes | 1.25    | 1.28+       |
-| Helm       | 3.10    | 3.14+       |
+| Component   | Minimum | Recommended |
+| ----------- | ------- | ----------- |
+| Java        | 17      | 21          |
+| Maven       | 3.8     | 3.9+        |
+| Spring Boot | 3.2     | 4.0+        |
+| Docker      | 20.10   | Latest      |
+| Kubernetes  | 1.25    | 1.28+       |
+| Helm        | 3.10    | 3.14+       |
 
 ## See Also
 
