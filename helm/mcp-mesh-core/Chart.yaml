@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-core
 description: MCP Mesh Core Infrastructure - Registry, PostgreSQL, Redis, and Observability
 type: application
-version: 0.9.2
-appVersion: "0.9.2"
+version: 0.9.3
+appVersion: "0.9.3"
 keywords:
   - mcp
   - mesh
@@ -28,22 +28,22 @@ annotations:
   "artifacthub.io/containsSecurityUpdates": "false"
 dependencies:
   - name: mcp-mesh-postgres
-    version: "0.9.2"
+    version: "0.9.3"
     repository: "file://../mcp-mesh-postgres"
     condition: postgres.enabled
   - name: mcp-mesh-redis
-    version: "0.9.2"
+    version: "0.9.3"
     repository: "file://../mcp-mesh-redis"
     condition: redis.enabled
   - name: mcp-mesh-registry
-    version: "0.9.2"
+    version: "0.9.3"
     repository: "file://../mcp-mesh-registry"
     condition: registry.enabled
   - name: mcp-mesh-grafana
-    version: "0.9.2"
+    version: "0.9.3"
     repository: "file://../mcp-mesh-grafana"
     condition: grafana.enabled
   - name: mcp-mesh-tempo
-    version: "0.9.2"
+    version: "0.9.3"
     repository: "file://../mcp-mesh-tempo"
     condition: tempo.enabled

@@ -2,8 +2,6 @@
 
 > Named services that agents provide for discovery and dependency injection
 
-**Note:** This page shows Python examples. See `meshctl man capabilities --typescript` for TypeScript or `meshctl man capabilities --java` for Java/Spring Boot examples.
-
 ## Overview
 
 Capabilities are named services that agents register with the mesh. When an agent declares a capability, other agents can discover and use it through dependency injection. Multiple agents can provide the same capability with different implementations.
@@ -14,11 +12,11 @@ MCP Mesh uses a unified syntax for selecting capabilities throughout the framewo
 
 ### Selector Fields
 
-| Field        | Required | Description                                   |
-| ------------ | -------- | --------------------------------------------- |
-| `capability` | Yes\*    | Capability name to match                      |
+| Field        | Required | Description                                                      |
+| ------------ | -------- | ---------------------------------------------------------------- |
+| `capability` | Yes\*    | Capability name to match                                         |
 | `tags`       | No       | Tag filters. Optional `+` (preferred) / `-` (excluded) operators |
-| `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`) |
+| `version`    | No       | Semantic version constraint (e.g., `>=2.0.0`)                    |
 
 \*When filtering by tags only (e.g., LLM tool filter), `capability` can be omitted.
 

@@ -2,7 +2,7 @@ apiVersion: v2
 name: mcp-mesh-tempo
 description: Tempo distributed tracing component for MCP Mesh
 type: application
-version: 0.9.2
+version: 0.9.3
 appVersion: "2.9.0"
 keywords:
   - tempo

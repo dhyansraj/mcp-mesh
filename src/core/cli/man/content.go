@@ -210,6 +210,13 @@ func GetGuideWithVariant(name string, variant string) (*Guide, string, error) {
 
 	contentStr := string(content)
 
+	// If variant was requested but doesn't exist, we loaded default — treat as default
+	if variant == "typescript" && !guide.HasTypeScriptVariant {
+		variant = ""
+	} else if variant == "java" && !guide.HasJavaVariant {
+		variant = ""
+	}
+
 	// Build cross-language "Also available" header
 	var langHeader string
 	switch variant {

@@ -2,8 +2,6 @@
 
 > Building LLM-powered agents with @mesh.llm decorator
 
-**Note:** This page shows Python examples. See `meshctl man llm --typescript` for TypeScript or `meshctl man llm --java` for Java/Spring Boot examples.
-
 ## Overview
 
 MCP Mesh provides first-class support for LLM-powered agents through the `@mesh.llm` decorator (Python) or `mesh.llm()` wrapper (TypeScript). This enables agentic loops where LLMs can discover and use mesh tools automatically.

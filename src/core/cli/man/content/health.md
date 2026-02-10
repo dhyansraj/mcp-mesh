@@ -2,8 +2,6 @@
 
 > Fast heartbeat system and automatic topology updates
 
-**Note:** This page shows Python examples. See `meshctl man health --typescript` for TypeScript or `meshctl man health --java` for Java/Spring Boot examples.
-
 ## Overview
 
 MCP Mesh uses a dual-heartbeat system for fast failure detection and automatic topology updates. Agents maintain connectivity with the registry, and the mesh automatically rewires dependencies when agents join or leave.
