@@ -128,8 +128,8 @@ def bump_typescript_dependencies(old: str, new: str, dry_run: bool) -> list[str]
     ]
     for f in files:
         # Match "@mcpmesh/anything": "OLD" or "@mcpmesh/anything": "^OLD"
-        pattern = rf'("@mcpmesh/[^"]+?":\s*")\^?{re.escape(old)}(")'
-        replacement = rf"\g<1>{new}\2"
+        pattern = rf'("@mcpmesh/[^"]+?":\s*")(\^?){re.escape(old)}(")'
+        replacement = rf"\g<1>\g<2>{new}\3"
         if replace_in_file(f, pattern, replacement, dry_run):
             changed.append(str(f.relative_to(PROJECT_ROOT)))
     return changed
@@ -333,11 +333,6 @@ def _bump_version_in_md(
     if replace_in_file(md_file, p2, rf"\g<1>{new}\2", dry_run):
         file_changed = True
 
-    # (vOLD -> (vNEW  and standalone vOLD references
-    p3 = rf"(\(v){re.escape(old)}"
-    if replace_in_file(md_file, p3, rf"\g<1>{new}", dry_run):
-        file_changed = True
-
     # vOLD in version strings (word boundary, not preceded by / to avoid URLs)
     p4 = rf"(?<!/)v{re.escape(old)}(?=[\s,\)\]\"']|$)"
     if replace_in_file(md_file, p4, f"v{new}", dry_run, flags=re.MULTILINE):
@@ -453,8 +448,8 @@ def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[s
 
     for pkg in sorted(suites_dir.rglob("*/package.json")):
         # Match "@mcpmesh/sdk": "OLD" or "@mcpmesh/sdk": "^OLD"
-        pattern = rf'("@mcpmesh/[^"]+?":\s*")\^?{re.escape(old)}(")'
-        replacement = rf"\g<1>{new}\2"
+        pattern = rf'("@mcpmesh/[^"]+?":\s*")(\^?){re.escape(old)}(")'
+        replacement = rf"\g<1>\g<2>{new}\3"
         if replace_in_file(pkg, pattern, replacement, dry_run):
             changed.append(str(pkg.relative_to(PROJECT_ROOT)))
     return changed
