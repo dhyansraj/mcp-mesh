@@ -1,14 +1,14 @@
 # Test Case: tc06_java_weather_agent
-# Tests Java Spring Boot weather agent with external REST API integration (wttr.in)
+# Tests Java Spring Boot weather agent with mock weather data
 # Standalone agent with 3 tools: getWeatherByCity, getWeatherByZip, getForecast
 
-name: "Java Weather Agent (wttr.in)"
-description: "Test Java Spring Boot weather agent with external REST API calls to wttr.in"
+name: "Java Weather Agent (mock)"
+description: "Test Java Spring Boot weather agent with mock weather data"
 tags:
   - java
   - spring
   - weather
-  - external-api
+  - mock-data
   - example
 timeout: 300
 
@@ -78,7 +78,7 @@ test:
   - name: "Call getWeatherByCity for London"
     handler: shell
     workdir: /workspace
-    command: "meshctl call getWeatherByCity '{\"city\": \"London\"}'"
+    command: 'meshctl call getWeatherByCity ''{"city": "London"}'''
     capture: weather_city_result
     timeout: 30
 
@@ -86,7 +86,7 @@ test:
   - name: "Call getForecast for London"
     handler: shell
     workdir: /workspace
-    command: "meshctl call getForecast '{\"city\": \"London\"}'"
+    command: 'meshctl call getForecast ''{"city": "London"}'''
     capture: forecast_result
     timeout: 30
 
@@ -105,19 +105,25 @@ assertions:
   - expr: "${captured.tools_output} contains 'getForecast'"
     message: "getForecast tool should be listed"
 
-  # Weather response structure validation
-  - expr: "${captured.weather_city_result} icontains 'london'"
-    message: "Weather response should contain London (city name or location)"
+  # Weather response structure validation (mock data)
+  - expr: "${jq:captured.weather_city_result:.content[0].text | fromjson | .location} == 'London'"
+    message: "Weather response location should be 'London'"
 
-  - expr: "${captured.weather_city_result} contains 'wttr.in'"
-    message: "Weather response should contain wttr.in source"
+  - expr: "${jq:captured.weather_city_result:.content[0].text | fromjson | .source} == 'mock'"
+    message: "Weather response source should be 'mock'"
 
-  - expr: "${captured.weather_city_result} icontains 'temperature'"
-    message: "Weather response should contain temperature data"
+  - expr: ${jq:captured.weather_city_result:.content[0].text | fromjson | .temperature_f} == 72
+    message: "Weather response temperature_f should be 72"
 
-  # Forecast response structure validation
-  - expr: "${captured.forecast_result} icontains 'forecast'"
-    message: "Forecast response should contain forecast data"
+  - expr: ${jq:captured.weather_city_result:.content[0].text | fromjson | .humidity} == 65
+    message: "Weather response humidity should be 65"
+
+  # Forecast response structure validation (mock data)
+  - expr: ${jq:captured.forecast_result:.content[0].text | fromjson | .forecast | length} == 3
+    message: "Forecast should contain 3 days"
+
+  - expr: "${jq:captured.forecast_result:.content[0].text | fromjson | .forecast[0].conditions} == 'Sunny'"
+    message: "Today's forecast should be 'Sunny'"
 
 post_run:
   - handler: shell

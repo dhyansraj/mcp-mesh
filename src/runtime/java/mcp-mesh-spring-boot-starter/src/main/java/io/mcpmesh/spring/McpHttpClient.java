@@ -168,6 +168,12 @@ public class McpHttpClient {
                         }
                     }
 
+                    // Check if the tool call returned an error
+                    if (result.has("isError") && result.get("isError").asBoolean()) {
+                        String errorText = textContent != null ? textContent : "Unknown tool error";
+                        throw new MeshToolCallException(functionName, functionName, errorText);
+                    }
+
                     // Deserialize based on return type
                     return deserializeResult(textContent, result, returnType);
                 }
