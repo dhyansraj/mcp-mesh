@@ -1,0 +1,28 @@
+# MCP Mesh Booking Consumer Configuration
+#
+# These settings can be overridden by environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: booking-consumer
+
+# Server configuration
+server:
+  port: ${MCP_MESH_HTTP_PORT:9051}
+
+# MCP Mesh configuration
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:booking}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+# Logging
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

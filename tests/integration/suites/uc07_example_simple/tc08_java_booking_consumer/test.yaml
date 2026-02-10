@@ -1,0 +1,195 @@
+# Test Case: tc08_java_booking_consumer
+# Tests cross-agent typed deserialization — booking consumer calls schedule agent's tools
+# via McpMeshTool<T> and deserializes java.time responses (LocalDate, LocalTime, LocalDateTime)
+
+name: "Java Booking Consumer (Cross-Agent Typed Deserialization)"
+description: "Test booking consumer calling schedule agent tools with java.time type round-tripping via McpMeshTool<T>"
+tags:
+  - java
+  - spring
+  - java-time
+  - booking
+  - cross-agent
+  - typed-deserialization
+  - example
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy both artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-schedule-agent /workspace/
+      cp -r /uc-artifacts/java-booking-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for schedule agent
+  - name: "Install schedule agent dependencies"
+    handler: maven-install
+    path: /workspace/java-schedule-agent
+    timeout: 600
+
+  # Install Maven dependencies for booking consumer
+  - name: "Install booking consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-booking-consumer
+    timeout: 600
+
+  # Start schedule agent first (provides getSchedule + nextClass)
+  - name: "Start Java schedule agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-schedule-agent -d
+      echo "Java schedule agent starting"
+    capture: start_schedule
+
+  # Wait for schedule agent registration
+  - name: "Wait for schedule agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java schedule agent..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "schedule"; then
+          echo "Schedule agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Schedule agent did not register within 90s"
+      meshctl logs schedule 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_schedule
+    timeout: 120
+
+  # Start booking consumer
+  - name: "Start Java booking consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-booking-consumer -d
+      echo "Java booking consumer starting"
+    capture: start_booking
+
+  # Wait for booking consumer registration
+  - name: "Wait for booking consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java booking consumer..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "booking"; then
+          echo "Booking consumer registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Booking consumer did not register within 90s"
+      meshctl logs booking 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_booking
+    timeout: 120
+
+  # Wait for booking consumer's dependencies to resolve
+  - name: "Wait for booking deps to resolve"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for booking consumer deps (2/2)..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep "booking" | grep -q "2/2"; then
+          echo "Booking deps resolved after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "WARNING: Booking deps may not be fully resolved, proceeding anyway"
+      meshctl list 2>/dev/null || true
+    capture: wait_deps
+    timeout: 120
+
+  # Verify both agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: tools_output
+
+  # Call bookClass via booking consumer
+  - name: "Call bookClass"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call bookClass ''{"date": "2025-03-15", "className": "Yoga Basics"}'''
+    capture: book_result
+    timeout: 30
+
+  # Call checkAvailability via booking consumer
+  - name: "Call checkAvailability"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call checkAvailability '{}'"
+    capture: availability_result
+    timeout: 30
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_output} contains 'schedule'"
+    message: "Schedule agent should be registered in mesh"
+
+  - expr: "${captured.list_output} contains 'booking'"
+    message: "Booking consumer should be registered in mesh"
+
+  # Tools are listed
+  - expr: "${captured.tools_output} contains 'bookClass'"
+    message: "bookClass tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'checkAvailability'"
+    message: "checkAvailability tool should be listed"
+
+  # bookClass — verify typed deserialization with java.time round-trip
+  - expr: "${jq:captured.book_result:.content[0].text | fromjson | .status} == 'Confirmed'"
+    message: "bookClass status should be 'Confirmed'"
+
+  - expr: "${jq:captured.book_result:.content[0].text | fromjson | .className} == 'Yoga Basics'"
+    message: "bookClass className should be 'Yoga Basics'"
+
+  - expr: "${jq:captured.book_result:.content[0].text | fromjson | .date} == '2025-03-15'"
+    message: "bookClass date should round-trip as ISO-8601 LocalDate '2025-03-15'"
+
+  - expr: '${jq:captured.book_result:.content[0].text | fromjson | .confirmedAt} matches "^[0-9]+-[0-9]+-[0-9]+T[0-9]+:[0-9]+"'
+    message: "bookClass confirmedAt should match ISO-8601 LocalDateTime pattern"
+
+  # checkAvailability — verify cross-agent java.time deserialization
+  - expr: "${jq:captured.availability_result:.content[0].text | fromjson | .status} == 'Available'"
+    message: "checkAvailability status should be 'Available'"
+
+  - expr: "${jq:captured.availability_result:.content[0].text | fromjson | .className} == 'Evening Yoga'"
+    message: "checkAvailability className should be 'Evening Yoga'"
+
+  - expr: ${jq:captured.availability_result:.content[0].text | fromjson | .spotsAvailable} == 8
+    message: "checkAvailability spotsAvailable should be 8"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*schedule" 2>/dev/null || true
+      pkill -f "java.*booking" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

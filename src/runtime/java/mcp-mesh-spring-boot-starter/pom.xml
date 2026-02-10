@@ -60,6 +60,12 @@
             <artifactId>okhttp</artifactId>
         </dependency>
 
+        <!-- Jackson JSR310 for java.time support (MCP SDK uses Jackson 2) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
         <!-- Freemarker for templates -->
         <dependency>
             <groupId>org.freemarker</groupId>

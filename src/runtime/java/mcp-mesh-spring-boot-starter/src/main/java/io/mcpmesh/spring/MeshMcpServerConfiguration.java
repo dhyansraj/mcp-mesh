@@ -57,7 +57,11 @@ public class MeshMcpServerConfiguration {
 
     public MeshMcpServerConfiguration() {
         // Create Jackson 2 ObjectMapper for MCP SDK compatibility
+        // Register JavaTimeModule for java.time serialization (LocalDate, LocalDateTime, etc.)
         this.mcpObjectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        this.mcpObjectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        this.mcpObjectMapper.configure(
+            com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
     }
 
     /**
