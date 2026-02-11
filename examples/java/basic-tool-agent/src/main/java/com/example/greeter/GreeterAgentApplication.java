@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 /**
  * Basic MCP Mesh agent example with a simple greeting tool.
@@ -194,6 +195,39 @@ public class GreeterAgentApplication {
         );
     }
 
+    /**
+     * Send a team roster for analysis via the remote employee service.
+     * Demonstrates cross-agent calls with List of complex types.
+     *
+     * <p>This reproduces issue #548 from the consumer side: the {@code members}
+     * parameter arrives as {@code List<LinkedHashMap>} instead of
+     * {@code List<TeamMember>}, and the provider side throws a
+     * {@code ClassCastException} when accessing record fields.
+     *
+     * @param members List of team members to analyze
+     * @param analyzeTeamTool Injected analyze_team tool from mesh
+     * @return Analysis of the team roster
+     */
+    @MeshTool(
+        capability = "analyze_my_team",
+        description = "Send a team roster for analysis via mesh",
+        dependencies = @Selector(capability = "analyze_team")
+    )
+    public TeamAnalysis analyzeMyTeam(
+        @Param(value = "members", description = "List of team members")
+        List<TeamMember> members,
+        McpMeshTool<TeamAnalysis> analyzeTeamTool
+    ) {
+        log.info("analyzeMyTeam called with {} members via {}", members.size(), analyzeTeamTool.getCapability());
+
+        TeamAnalysis analysis = analyzeTeamTool.call("members", members);
+
+        log.info("Remote analyze_team response: teamSize={}, avgSalary={}",
+            analysis.teamSize(), analysis.averageSalary());
+
+        return analysis;
+    }
+
     // =========================================================================
     // Data Types
     // =========================================================================
@@ -240,6 +274,16 @@ public class GreeterAgentApplication {
         String department,
         double salary
     ) {}
+
+    /**
+     * Team member record - mirrors the structure in employee-service.
+     */
+    public record TeamMember(String name, String department, double salary) {}
+
+    /**
+     * Team analysis result record - mirrors the response from employee-service.
+     */
+    public record TeamAnalysis(int teamSize, double totalSalary, double averageSalary, String topDepartment) {}
 
     /**
      * Employee greeting response with full employee data.

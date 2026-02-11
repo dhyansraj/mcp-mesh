@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Employee Service MCP Mesh agent.
@@ -139,6 +140,45 @@ public class EmployeeServiceApplication {
         return new DepartmentStats(department, (int) count, avgSalary);
     }
 
+    /**
+     * Analyze a team of members and return statistics.
+     * NOTE: This method is intentionally added to reproduce issue #548 —
+     * List<Record> @Param types deserialize as List<LinkedHashMap> due to type erasure.
+     * At runtime, calling TeamMember::salary on a LinkedHashMap will throw ClassCastException.
+     *
+     * @param members List of team members to analyze
+     * @return Team analysis statistics
+     */
+    @MeshTool(
+        capability = "analyze_team",
+        description = "Analyze a team of members and return statistics",
+        tags = {"employee", "analysis"}
+    )
+    public TeamAnalysis analyzeTeam(
+        @Param(value = "members", description = "List of team members to analyze")
+        List<TeamMember> members
+    ) {
+        log.info("Analyzing team with {} members", members.size());
+
+        double totalSalary = members.stream()
+            .mapToDouble(TeamMember::salary)
+            .sum();
+
+        String topDepartment = members.stream()
+            .collect(Collectors.groupingBy(TeamMember::department, Collectors.counting()))
+            .entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse("unknown");
+
+        return new TeamAnalysis(
+            members.size(),
+            totalSalary,
+            totalSalary / members.size(),
+            topDepartment
+        );
+    }
+
     // =========================================================================
     // Data Types
     // =========================================================================
@@ -162,4 +202,14 @@ public class EmployeeServiceApplication {
         int employeeCount,
         double averageSalary
     ) {}
+
+    /**
+     * A team member for team analysis input.
+     */
+    public record TeamMember(String name, String department, double salary) {}
+
+    /**
+     * Team analysis result.
+     */
+    public record TeamAnalysis(int teamSize, double totalSalary, double averageSalary, String topDepartment) {}
 }
