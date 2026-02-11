@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/sdk",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "TypeScript SDK for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
