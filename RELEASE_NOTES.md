@@ -1,5 +1,14 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.3...v0.9.4)
+
+## v0.9.4 (2026-02-10)
+
+### 🐛 Bug Fixes
+
+- **Java SDK — `List<Record>` @Param deserialization** (#548)
+  - `@MeshTool` methods accepting `List<Record>` parameters (e.g., `List<TeamMember>`) received `List<LinkedHashMap>` at runtime due to Java type erasure — `MeshToolWrapper.ParamInfo` stored erased `Class<?>` instead of the full generic `Type` from `Method.getGenericParameterTypes()`; switched to `Type` and used Jackson `TypeFactory.constructType()` for proper parameterized type deserialization
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.2...v0.9.3)
 
 ## v0.9.3 (2026-02-10)
