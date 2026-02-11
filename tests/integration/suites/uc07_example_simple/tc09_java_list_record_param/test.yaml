@@ -1,0 +1,185 @@
+# Test Case: tc09_java_list_record_param
+# Tests List<Record> @Param deserialization in Java (issue #548)
+# Validates that @MeshTool methods accepting List<Record> parameters correctly
+# deserialize JSON arrays into typed Java records instead of List<LinkedHashMap>.
+
+name: "Java List<Record> @Param Deserialization (#548)"
+description: >
+  Tests that @MeshTool methods accepting List<Record> parameters correctly
+  deserialize JSON arrays into typed Java records instead of List<LinkedHashMap>.
+  Validates fix for issue #548 across direct calls, cross-agent mesh calls,
+  and REST API calls.
+tags:
+  - java
+  - spring
+  - typed-deserialization
+  - example
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      cp -r /uc-artifacts/java-greeter /workspace/
+      cp -r /uc-artifacts/java-rest-api /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for employee service
+  - name: "Install employee service dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Install Maven dependencies for greeter
+  - name: "Install greeter dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  # Install Maven dependencies for REST API
+  - name: "Install REST API dependencies"
+    handler: maven-install
+    path: /workspace/java-rest-api
+    timeout: 600
+
+  # Start all 3 agents
+  - name: "Start all agents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      meshctl start /workspace/java-greeter -d
+      meshctl start /workspace/java-rest-api -d
+      echo "All agents starting"
+    capture: start_output
+
+  # Wait for all agents to register and dependencies to resolve
+  - name: "Wait for agents and dependency resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for all 3 agents to register..."
+      for i in $(seq 1 45); do
+        LIST=$(meshctl list 2>/dev/null || true)
+        HAS_EMPLOYEE=$(echo "$LIST" | grep -c "employee" || true)
+        HAS_GREETER=$(echo "$LIST" | grep -c "greeter" || true)
+        HAS_API=$(echo "$LIST" | grep -c "api" || true)
+        if [ "$HAS_EMPLOYEE" -gt 0 ] && [ "$HAS_GREETER" -gt 0 ] && [ "$HAS_API" -gt 0 ]; then
+          echo "All agents registered after $((i*2))s"
+          break
+        fi
+        sleep 2
+      done
+      echo "Waiting for dependency resolution..."
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null || true)
+        GREETER_LINE=$(echo "$LIST" | grep "greeter" || true)
+        if echo "$GREETER_LINE" | grep -qE "[2-3]/3"; then
+          echo "Dependencies resolved after additional $((i*2))s"
+          echo "$LIST"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "WARNING: Dependencies not fully resolved, proceeding anyway"
+      meshctl list 2>/dev/null || true
+      exit 0
+    capture: wait_agents
+    timeout: 180
+
+  # Wait for REST API HTTP server ready
+  - name: "Wait for HTTP server ready"
+    handler: shell
+    command: |
+      echo "Waiting for Spring Boot HTTP..."
+      for i in $(seq 1 20); do
+        if curl -s --max-time 3 http://localhost:8080/api/health 2>/dev/null | grep -q "healthy"; then
+          echo "HTTP server ready after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: HTTP server not ready within 60s"
+      exit 1
+    capture: wait_http
+    timeout: 90
+
+  # Phase A: Direct provider call — analyzeTeam on employee-service
+  - name: "Direct call analyzeTeam with 3 team members"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call analyzeTeam ''{"members": [{"name":"Alice","department":"Engineering","salary":95000},{"name":"Bob","department":"Sales","salary":85000},{"name":"Carol","department":"Engineering","salary":105000}]}'''
+    capture: direct_result
+    timeout: 30
+
+  # Phase B: Consumer mesh call — analyzeMyTeam on greeter -> employee-service
+  - name: "Consumer call analyzeMyTeam via mesh"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call analyzeMyTeam ''{"members": [{"name":"Dave","department":"Marketing","salary":75000},{"name":"Eve","department":"Marketing","salary":82000}]}'''
+    capture: consumer_result
+    timeout: 30
+
+  # Phase C: REST API call — POST /api/analyze-team
+  - name: "REST API call analyze-team"
+    handler: shell
+    command: 'curl -s -X POST http://localhost:8080/api/analyze-team -H "Content-Type: application/json" -d ''[{"name":"Frank","department":"QA","salary":88000},{"name":"Grace","department":"Engineering","salary":97000},{"name":"Hank","department":"QA","salary":91000}]'''
+    capture: api_result
+    timeout: 30
+
+assertions:
+  # Phase A: Direct provider call assertions
+  - expr: ${jq:captured.direct_result:.content[0].text | fromjson | .teamSize} == 3
+    message: "Direct call teamSize should be 3"
+
+  - expr: ${jq:captured.direct_result:.content[0].text | fromjson | .totalSalary} == 285000.0
+    message: "Direct call totalSalary should be 285000.0"
+
+  - expr: ${jq:captured.direct_result:.content[0].text | fromjson | .averageSalary} == 95000.0
+    message: "Direct call averageSalary should be 95000.0"
+
+  - expr: "${jq:captured.direct_result:.content[0].text | fromjson | .topDepartment} == 'Engineering'"
+    message: "Direct call topDepartment should be 'Engineering'"
+
+  # Phase B: Consumer mesh call assertions
+  - expr: ${jq:captured.consumer_result:.content[0].text | fromjson | .teamSize} == 2
+    message: "Consumer call teamSize should be 2"
+
+  - expr: ${jq:captured.consumer_result:.content[0].text | fromjson | .totalSalary} == 157000.0
+    message: "Consumer call totalSalary should be 157000.0"
+
+  - expr: "${jq:captured.consumer_result:.content[0].text | fromjson | .topDepartment} == 'Marketing'"
+    message: "Consumer call topDepartment should be 'Marketing'"
+
+  # Phase C: REST API call assertions
+  - expr: "${jq:captured.api_result:.source} == 'mesh'"
+    message: "API call source should be 'mesh'"
+
+  - expr: ${jq:captured.api_result:.analysis.teamSize} == 3
+    message: "API call teamSize should be 3"
+
+  - expr: ${jq:captured.api_result:.analysis.totalSalary} == 276000.0
+    message: "API call totalSalary should be 276000.0"
+
+  - expr: "${jq:captured.api_result:.analysis.topDepartment} == 'QA'"
+    message: "API call topDepartment should be 'QA'"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+      pkill -f "java.*rest-api" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

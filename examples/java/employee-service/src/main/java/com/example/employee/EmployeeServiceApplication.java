@@ -174,7 +174,7 @@ public class EmployeeServiceApplication {
         return new TeamAnalysis(
             members.size(),
             totalSalary,
-            totalSalary / members.size(),
+            members.isEmpty() ? 0.0 : totalSalary / members.size(),
             topDepartment
         );
     }
