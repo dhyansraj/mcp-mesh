@@ -206,7 +206,7 @@ public class MeshToolWrapper implements McpToolHandler {
                         paramAnn.value(),
                         paramAnn.description(),
                         paramAnn.required(),
-                        type
+                        genericTypes[i]
                     ));
                 } else {
                     // No @Param annotation on non-injectable parameter
@@ -542,19 +542,29 @@ public class MeshToolWrapper implements McpToolHandler {
      * Convert an MCP argument value to the target parameter type.
      */
     @SuppressWarnings("unchecked")
-    private Object convertValue(Object value, Class<?> targetType) {
-        if (value == null) {
-            return getDefaultValue(targetType);
+    private Object convertValue(Object value, Type targetType) {
+        Class<?> rawType;
+        if (targetType instanceof Class<?> c) {
+            rawType = c;
+        } else if (targetType instanceof ParameterizedType pt) {
+            rawType = (Class<?>) pt.getRawType();
+        } else {
+            rawType = Object.class;
         }
 
-        // Already correct type
-        if (targetType.isInstance(value)) {
+        if (value == null) {
+            return getDefaultValue(rawType);
+        }
+
+        // Already correct type (skip for parameterized types so Jackson deserializes elements)
+        if (!(targetType instanceof ParameterizedType) && rawType.isInstance(value)) {
             return value;
         }
 
-        // Use Jackson for complex conversions
+        // Use Jackson for complex conversions (with full generic type info)
         try {
-            return objectMapper.convertValue(value, targetType);
+            tools.jackson.databind.JavaType javaType = objectMapper.getTypeFactory().constructType(targetType);
+            return objectMapper.convertValue(value, javaType);
         } catch (Exception e) {
             log.warn("Failed to convert {} to {}: {}", value, targetType, e.getMessage());
             return value;
@@ -683,6 +693,12 @@ public class MeshToolWrapper implements McpToolHandler {
         String name,
         String description,
         boolean required,
-        Class<?> type
-    ) {}
+        Type type
+    ) {
+        Class<?> rawType() {
+            if (type instanceof Class<?> c) return c;
+            if (type instanceof ParameterizedType pt) return (Class<?>) pt.getRawType();
+            return Object.class;
+        }
+    }
 }
