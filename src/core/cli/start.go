@@ -156,6 +156,22 @@ func createJavaWatcher(agentPath string, env []string, workingDir, user, group s
 		AgentName:     filepath.Base(projectRoot),
 	}
 
+	// Pre-restart compile check: validate code compiles before killing agent
+	if getWatchPrecheckEnabled() {
+		compileProjectRoot := projectRoot
+		compileEnv := fullEnv
+		config.PreRestartCheck = func() error {
+			cmd := exec.Command("mvn", "compile", "-q", "-o") // -q quiet, -o offline (deps already fetched)
+			cmd.Dir = compileProjectRoot
+			cmd.Env = compileEnv
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("maven compile failed:\n%s", string(output))
+			}
+			return nil
+		}
+	}
+
 	return NewAgentWatcher(config, cmdFactory, quiet), nil
 }
 
@@ -200,6 +216,39 @@ func createPythonWatcher(agentPath string, env []string, workingDir, user, group
 		PortDelay:     getWatchPortDelay(),
 		StopTimeout:   3 * time.Second,
 		AgentName:     extractAgentName(agentPath),
+	}
+
+	// Pre-restart syntax check: validate Python files have no syntax errors before killing agent
+	if getWatchPrecheckEnabled() {
+		pythonCmd := resolvedArgs[0] // python executable path
+		checkDir := resolvedDir
+		excludeDirs := config.ExcludeDirs
+		config.PreRestartCheck = func() error {
+			var errors []string
+			filepath.WalkDir(checkDir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return nil
+				}
+				if filepath.Ext(path) != ".py" {
+					return nil
+				}
+				// Skip excluded directories
+				for _, excl := range excludeDirs {
+					if strings.Contains(path, string(os.PathSeparator)+excl+string(os.PathSeparator)) {
+						return nil
+					}
+				}
+				cmd := exec.Command(pythonCmd, "-m", "py_compile", path)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					errors = append(errors, fmt.Sprintf("%s: %s", path, string(output)))
+				}
+				return nil
+			})
+			if len(errors) > 0 {
+				return fmt.Errorf("python syntax errors:\n%s", strings.Join(errors, "\n"))
+			}
+			return nil
+		}
 	}
 
 	return NewAgentWatcher(config, cmdFactory, quiet), nil

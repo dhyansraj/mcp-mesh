@@ -27,7 +27,8 @@ type WatchConfig struct {
 	DebounceDelay time.Duration // default 500ms, configurable via MCP_MESH_RELOAD_DEBOUNCE env var
 	PortDelay     time.Duration // delay after kill for port release, default 500ms, configurable via MCP_MESH_RELOAD_PORT_DELAY
 	StopTimeout   time.Duration // SIGTERM -> SIGKILL timeout, default 3s
-	AgentName     string        // for logging
+	AgentName       string        // for logging
+	PreRestartCheck func() error  // optional: validate before killing agent (e.g., compile check)
 }
 
 // AgentWatcher provides event-driven file watching with process restart capability.
@@ -280,6 +281,19 @@ func (aw *AgentWatcher) terminateAgent() {
 
 // restartAgent terminates the current agent and starts a new one.
 func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
+	// Pre-restart validation (compile check)
+	if aw.config.PreRestartCheck != nil {
+		if !aw.quiet {
+			fmt.Printf("[watch] Running pre-restart check for %s...\n", aw.config.AgentName)
+		}
+		if err := aw.config.PreRestartCheck(); err != nil {
+			if !aw.quiet {
+				fmt.Printf("[watch] Pre-restart check failed, keeping current agent running:\n%v\n", err)
+			}
+			return // Don't kill the agent — wait for next file change
+		}
+	}
+
 	if !aw.quiet {
 		fmt.Println("Restarting agent...")
 	}
@@ -366,4 +380,14 @@ func getWatchPortDelay() time.Duration {
 		return 500 * time.Millisecond
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+// getWatchPrecheckEnabled reads the MCP_MESH_RELOAD_PRECHECK env var and returns whether pre-restart checks are enabled.
+// Defaults to true (enabled) if not set.
+func getWatchPrecheckEnabled() bool {
+	val := os.Getenv("MCP_MESH_RELOAD_PRECHECK")
+	if val == "" {
+		return true // enabled by default
+	}
+	return parseBoolEnv(val) // parseBoolEnv is in config.go (same package)
 }
