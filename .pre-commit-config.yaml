@@ -46,14 +46,14 @@ repos:
         additional_dependencies:
           - mcp>=1.9.0
         args: [--ignore-missing-imports]
-        exclude: ^(src/runtime/python/_mcp_mesh/generated/|tests/integration/suites/.*/artifacts/)
+        exclude: ^(src/runtime/python/_mcp_mesh/generated/|tests/integration/suites/.*/artifacts/|examples/)
 
   - repo: https://github.com/pycqa/bandit
     rev: 1.8.0
     hooks:
       - id: bandit
         args: [-r, src/]
-        exclude: tests/
+        exclude: (tests/|examples/)
 
   - repo: https://github.com/hadolint/hadolint
     rev: v2.13.1-beta

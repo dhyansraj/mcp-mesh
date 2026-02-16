@@ -122,15 +122,8 @@ meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claud
 ## Observability
 
 ```bash
-# Telemetry
-export MCP_MESH_TELEMETRY_ENABLED=true
-
-# Distributed tracing
-export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=false
-
-# Redis trace publishing
-export MCP_MESH_REDIS_TRACE_PUBLISHING=true
-export REDIS_URL=redis://localhost:6379
+# Distributed tracing (enable with single flag — all other defaults work)
+export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
 ```
 
 ## Registry Configuration

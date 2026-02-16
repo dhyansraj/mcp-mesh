@@ -1,0 +1,240 @@
+# Test Case: Cross-Language Tracing
+# Verifies distributed tracing across agents written in different languages
+#
+# Agent Setup:
+#   - py-math-agent (Python, port 9000): Tool agent providing "add"
+#   - llm-provider-agent (Java, port 9110): LLM provider exposing capability="llm"
+#   - ts-llm-consumer (TypeScript, port 9034): LLM consumer with mesh delegation
+#
+# Flow: analyze (TS) -> LLM provider (Java) -> add tool (Python) -> result
+# Tests trace propagation across Python, Java, and TypeScript boundaries
+
+name: "Cross-Language Distributed Tracing"
+description: "Verify distributed tracing works across Python, Java, and TypeScript agents"
+tags:
+  - observability
+  - tracing
+  - cross-language
+  - python
+  - typescript
+  - java
+  - llm
+timeout: 360
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/py-math-agent /workspace/
+      cp -rL /uc-artifacts/llm-provider-agent /workspace/
+      cp -rL /uc-artifacts/ts-llm-consumer /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
+
+  # Install Maven dependencies for Java LLM provider
+  - name: "Install Maven dependencies for llm-provider-agent"
+    handler: maven-install
+    path: /workspace/llm-provider-agent
+    timeout: 600
+
+  # Install npm dependencies for TS consumer
+  - name: "Install ts-llm-consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-llm-consumer
+
+  # Start py-math-agent (Python tool provider)
+  - name: "Start py-math-agent"
+    handler: shell
+    command: "meshctl start py-math-agent/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_py_math
+
+  # Start Java LLM provider
+  - name: "Start llm-provider-agent"
+    handler: shell
+    command: "meshctl start /workspace/llm-provider-agent --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider
+
+  # Wait for Java provider to register (slow startup)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for claude-provider (Java) to start and register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "claude-provider"; then
+          echo "claude-provider registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: claude-provider did not register within 60s"
+      meshctl list 2>/dev/null || true
+      meshctl logs claude-provider 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_provider
+    timeout: 90
+
+  # Wait for py-math-agent too
+  - name: "Wait for py-math-agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for py-math-agent..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "py-math-agent"; then
+          echo "py-math-agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: py-math-agent did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_py_math
+    timeout: 60
+
+  # Start TS LLM consumer (depends on py-math-agent + Java provider)
+  - name: "Start ts-llm-consumer"
+    handler: shell
+    command: "meshctl start ts-llm-consumer/src/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  # Wait for TS consumer to register
+  - name: "Wait for ts-llm-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for ts-llm-consumer to register and resolve deps..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "ts-llm-consumer"; then
+          echo "ts-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-llm-consumer did not register within 60s"
+      meshctl list 2>/dev/null || true
+      meshctl logs ts-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
+
+  # Verify all agents are running
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify capabilities
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # === Cross-Language LLM Trace ===
+  - name: "Call analyze with tracing (cross-language)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"question": "What is 5 plus 3? Use the add tool."}' --trace 2>&1
+    workdir: /workspace
+    capture: llm_call_output
+    timeout: 120
+
+  - name: "Extract trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.llm_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract trace ID"
+        echo "Output was: ${captured.llm_call_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: trace_id_output
+
+  - name: "Query trace (with retry)"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.trace_id_output}" | grep "TRACE_ID=" | cut -d= -f2)
+      meshctl trace $TRACE_ID --json --retries 6 --retry-delay 5
+    workdir: /workspace
+    capture: trace_output
+    timeout: 60
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # All 3 agents registered across 3 languages
+  - expr: "${captured.list_output} contains 'py-math-agent'"
+    message: "py-math-agent (Python) should be registered"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider (Java) should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-llm-consumer'"
+    message: "ts-llm-consumer (TypeScript) should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'analyze'"
+    message: "analyze tool should be listed"
+
+  # Trace assertions
+  - expr: "${captured.trace_id_output} contains 'TRACE_ID='"
+    message: "Trace ID should be extracted"
+
+  - expr: ${jq:captured.trace_output:.SpanCount} >= 2
+    message: "Cross-language trace should have at least 2 spans"
+
+  - expr: ${jq:captured.trace_output:.AgentCount} >= 2
+    message: "Cross-language trace should involve at least 2 agents"
+
+  - expr: ${jq:captured.trace_output:.Success} == true
+    message: "Cross-language trace should show successful execution"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*provider" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

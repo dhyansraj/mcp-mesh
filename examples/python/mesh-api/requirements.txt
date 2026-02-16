@@ -1,0 +1,4 @@
+# py-mesh-api dependencies
+# Note: mcp-mesh is provided by the runtime environment
+fastapi
+uvicorn

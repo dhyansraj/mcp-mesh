@@ -27,7 +27,8 @@ type WatchConfig struct {
 	DebounceDelay time.Duration // default 500ms, configurable via MCP_MESH_RELOAD_DEBOUNCE env var
 	PortDelay     time.Duration // delay after kill for port release, default 500ms, configurable via MCP_MESH_RELOAD_PORT_DELAY
 	StopTimeout   time.Duration // SIGTERM -> SIGKILL timeout, default 3s
-	AgentName     string        // for logging
+	AgentName       string        // for logging
+	PreRestartCheck func() error  // optional: validate before killing agent (e.g., compile check)
 }
 
 // AgentWatcher provides event-driven file watching with process restart capability.
@@ -101,6 +102,10 @@ func (aw *AgentWatcher) Start() error {
 	// Start initial process
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
+	// Use port 0 in watch mode — the OS assigns a random available port and the
+	// agent registers it with the mesh registry. Callers resolve via the registry
+	// (meshctl call, cross-agent calls, @MeshRoute), so the actual port is irrelevant.
+	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		aw.watcher.Close()
@@ -280,17 +285,28 @@ func (aw *AgentWatcher) terminateAgent() {
 
 // restartAgent terminates the current agent and starts a new one.
 func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
+	// Pre-restart validation (compile check)
+	if aw.config.PreRestartCheck != nil {
+		if !aw.quiet {
+			fmt.Printf("[watch] Running pre-restart check for %s...\n", aw.config.AgentName)
+		}
+		if err := aw.config.PreRestartCheck(); err != nil {
+			if !aw.quiet {
+				fmt.Printf("[watch] Pre-restart check failed, keeping current agent running:\n%v\n", err)
+			}
+			return // Don't kill the agent — wait for next file change
+		}
+	}
+
 	if !aw.quiet {
 		fmt.Println("Restarting agent...")
 	}
 
 	aw.terminateAgent()
 
-	// Let port free up
-	time.Sleep(aw.config.PortDelay)
-
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
+	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		if !aw.quiet {
@@ -366,4 +382,27 @@ func getWatchPortDelay() time.Duration {
 		return 500 * time.Millisecond
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+// getWatchPrecheckEnabled reads the MCP_MESH_RELOAD_PRECHECK env var and returns whether pre-restart checks are enabled.
+// Defaults to true (enabled) if not set.
+func getWatchPrecheckEnabled() bool {
+	val := os.Getenv("MCP_MESH_RELOAD_PRECHECK")
+	if val == "" {
+		return true // enabled by default
+	}
+	return parseBoolEnv(val) // parseBoolEnv is in config.go (same package)
+}
+
+// setOrReplaceEnv sets or replaces an environment variable in a slice.
+// If the key already exists, its value is replaced; otherwise the entry is appended.
+func setOrReplaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }

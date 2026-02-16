@@ -93,13 +93,13 @@ Default credentials: `admin` / `admin`
 
 ## Environment Variables
 
-| Variable                               | Description     | Default             |
-| -------------------------------------- | --------------- | ------------------- |
-| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | Enable tracing  | `false`             |
-| `TRACE_EXPORTER_TYPE`                  | Exporter type   | `otlp`              |
-| `TELEMETRY_ENDPOINT`                   | Tempo endpoint  | `tempo:4317`        |
-| `TELEMETRY_PROTOCOL`                   | Protocol        | `grpc`              |
-| `TEMPO_URL`                            | Tempo query URL | `http://tempo:3200` |
+| Variable                               | Description     | Default                 |
+| -------------------------------------- | --------------- | ----------------------- |
+| `MCP_MESH_DISTRIBUTED_TRACING_ENABLED` | Enable tracing  | `false`                 |
+| `TRACE_EXPORTER_TYPE`                  | Exporter type   | `otlp`                  |
+| `TELEMETRY_ENDPOINT`                   | OTLP endpoint   | `localhost:4317`        |
+| `TELEMETRY_PROTOCOL`                   | Protocol        | `grpc`                  |
+| `TEMPO_URL`                            | Tempo query URL | `http://localhost:3200` |
 
 ## Troubleshooting
 
