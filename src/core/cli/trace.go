@@ -115,7 +115,13 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 
 	// Get retry flags
 	retries, _ := cmd.Flags().GetInt("retries")
+	if retries < 0 {
+		retries = 0
+	}
 	retryDelay, _ := cmd.Flags().GetInt("retry-delay")
+	if retryDelay < 0 {
+		retryDelay = 0
+	}
 
 	// Query trace from registry with retries
 	var trace *CompletedTraceResponse

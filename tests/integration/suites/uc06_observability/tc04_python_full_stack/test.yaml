@@ -166,7 +166,7 @@ test:
     handler: shell
     command: |
       TRACE_ID=$(echo "${captured.tool_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
-      meshctl trace $TRACE_ID --json 2>&1
+      meshctl trace $TRACE_ID --json
     workdir: /workspace
     capture: tool_trace_output
     timeout: 30

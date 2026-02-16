@@ -1131,7 +1131,11 @@ export function createLlmToolProxy(
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Tool call failed: ${response.status}`);
+        const errorBody = await response.text();
+        throw new ToolExecutionError(
+          toolInfo.functionName,
+          new Error(`Tool call failed: ${response.status} ${errorBody}`)
+        );
       }
 
       // Handle SSE response from FastMCP stateless HTTP stream

@@ -226,17 +226,20 @@ func createPythonWatcher(agentPath string, env []string, workingDir, user, group
 		config.PreRestartCheck = func() error {
 			var errors []string
 			filepath.WalkDir(checkDir, func(path string, d fs.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
+				if err != nil {
+					return nil
+				}
+				if d.IsDir() {
+					basename := filepath.Base(path)
+					for _, excl := range excludeDirs {
+						if basename == excl {
+							return filepath.SkipDir
+						}
+					}
 					return nil
 				}
 				if filepath.Ext(path) != ".py" {
 					return nil
-				}
-				// Skip excluded directories
-				for _, excl := range excludeDirs {
-					if strings.Contains(path, string(os.PathSeparator)+excl+string(os.PathSeparator)) {
-						return nil
-					}
 				}
 				cmd := exec.Command(pythonCmd, "-m", "py_compile", path)
 				if output, err := cmd.CombinedOutput(); err != nil {
