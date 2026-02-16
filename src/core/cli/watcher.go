@@ -102,6 +102,10 @@ func (aw *AgentWatcher) Start() error {
 	// Start initial process
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
+	// Use port 0 in watch mode — the OS assigns a random available port and the
+	// agent registers it with the mesh registry. Callers resolve via the registry
+	// (meshctl call, cross-agent calls, @MeshRoute), so the actual port is irrelevant.
+	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		aw.watcher.Close()
@@ -300,11 +304,9 @@ func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 
 	aw.terminateAgent()
 
-	// Let port free up
-	time.Sleep(aw.config.PortDelay)
-
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
+	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		if !aw.quiet {
@@ -390,4 +392,17 @@ func getWatchPrecheckEnabled() bool {
 		return true // enabled by default
 	}
 	return parseBoolEnv(val) // parseBoolEnv is in config.go (same package)
+}
+
+// setOrReplaceEnv sets or replaces an environment variable in a slice.
+// If the key already exists, its value is replaced; otherwise the entry is appended.
+func setOrReplaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
