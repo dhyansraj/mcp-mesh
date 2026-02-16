@@ -81,6 +81,10 @@ Examples:
 	cmd.Flags().Bool("json", false, "Output as JSON")
 	cmd.Flags().Bool("show-internal", false, "Show internal wrapper spans (proxy_call_wrapper, etc.)")
 
+	// Retry options
+	cmd.Flags().Int("retries", 3, "Number of retries when trace is not yet available")
+	cmd.Flags().Int("retry-delay", 2, "Delay in seconds between retries")
+
 	return cmd
 }
 
@@ -109,19 +113,37 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 	// Create HTTP client
 	httpClient := createHTTPClient(timeout, insecure)
 
-	// Query trace from registry
-	trace, err := queryTrace(httpClient, finalRegistryURL, traceID)
-	if err != nil {
-		return fmt.Errorf("failed to query trace: %w", err)
-	}
+	// Get retry flags
+	retries, _ := cmd.Flags().GetInt("retries")
+	retryDelay, _ := cmd.Flags().GetInt("retry-delay")
 
-	if trace == nil {
-		return fmt.Errorf("trace '%s' not found\n\n"+
-			"Possible reasons:\n"+
-			"  - Trace ID may be incorrect or expired\n"+
-			"  - Distributed tracing may not be enabled\n"+
-			"  - Observability stack (Tempo) may not be deployed\n\n"+
-			"Run 'meshctl man observability' for setup instructions.", traceID)
+	// Query trace from registry with retries
+	var trace *CompletedTraceResponse
+	maxAttempts := 1 + retries
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		trace, err = queryTrace(httpClient, finalRegistryURL, traceID)
+		if err != nil {
+			if attempt < maxAttempts {
+				fmt.Fprintf(os.Stderr, "Error querying trace: %v, retrying (%d/%d)...\n", err, attempt, retries)
+				time.Sleep(time.Duration(retryDelay) * time.Second)
+				continue
+			}
+			return fmt.Errorf("failed to query trace: %w", err)
+		}
+		if trace == nil {
+			if attempt < maxAttempts {
+				fmt.Fprintf(os.Stderr, "Trace not yet available, retrying (%d/%d)...\n", attempt, retries)
+				time.Sleep(time.Duration(retryDelay) * time.Second)
+				continue
+			}
+			return fmt.Errorf("trace '%s' not found\n\n"+
+				"Possible reasons:\n"+
+				"  - Trace ID may be incorrect or expired\n"+
+				"  - Distributed tracing may not be enabled\n"+
+				"  - Observability stack (Tempo) may not be deployed\n\n"+
+				"Run 'meshctl man observability' for setup instructions.", traceID)
+		}
+		break
 	}
 
 	// Output result

@@ -208,19 +208,7 @@ test:
     handler: shell
     command: |
       TRACE_ID=$(echo "${captured.llm_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
-      echo "Querying LLM trace $TRACE_ID (with retries)..." >&2
-      for i in $(seq 1 6); do
-        RESULT=$(meshctl trace $TRACE_ID --json 2>&1)
-        if echo "$RESULT" | grep -q '"SpanCount"'; then
-          echo "$RESULT"
-          exit 0
-        fi
-        echo "Attempt $i: trace not yet available, waiting 5s..." >&2
-        sleep 5
-      done
-      echo "ERROR: LLM trace not found after 30s"
-      echo "Last result: $RESULT"
-      exit 1
+      meshctl trace $TRACE_ID --json --retries 6 --retry-delay 5
     workdir: /workspace
     capture: llm_trace_output
     timeout: 60
