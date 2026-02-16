@@ -369,7 +369,7 @@ func DefaultTracingConfig() *TracingConfig {
 
 	exporterType := os.Getenv("TRACE_EXPORTER_TYPE")
 	if exporterType == "" {
-		exporterType = "console"
+		exporterType = "otlp"
 	}
 
 	prettyOutput := strings.ToLower(os.Getenv("TRACE_PRETTY_OUTPUT")) != "false"

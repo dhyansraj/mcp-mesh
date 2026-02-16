@@ -31,6 +31,9 @@ import type {
   LlmToolCallRequest,
 } from "./types.js";
 import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/index.js";
+import { generateTraceId, generateSpanId, publishTraceSpan } from "./tracing.js";
+import type { TraceContext } from "./tracing.js";
+import { runWithTraceContext } from "./proxy.js";
 
 const debug = createDebug("llm-provider");
 
@@ -307,7 +310,7 @@ type MeshLlmRequestInput = z.infer<typeof MeshLlmRequestSchema>;
 export function llmProvider(config: LlmProviderConfig): {
   name: string;
   description: string;
-  parameters: typeof MeshLlmRequestSchema;
+  parameters: ReturnType<typeof MeshLlmRequestSchema.passthrough>;
   execute: (args: MeshLlmRequestInput) => Promise<string>;
   // Mesh metadata attached to the tool definition
   _meshMeta?: {
@@ -342,7 +345,33 @@ export function llmProvider(config: LlmProviderConfig): {
    * Process a chat request using Vercel AI SDK.
    */
   const execute = async (args: MeshLlmRequestInput): Promise<string> => {
+    // Extract trace context from arguments (injected by upstream consumer)
+    let incomingTraceId: string | null = null;
+    let incomingParentSpan: string | null = null;
+
+    if (args && typeof args === "object") {
+      const argsObj = args as Record<string, unknown>;
+      if (typeof argsObj._trace_id === "string") {
+        incomingTraceId = argsObj._trace_id;
+      }
+      if (typeof argsObj._parent_span === "string") {
+        incomingParentSpan = argsObj._parent_span;
+      }
+    }
+
+    // Set up trace context
+    const traceId = incomingTraceId ?? generateTraceId();
+    const spanId = generateSpanId();
+    const parentSpanId = incomingParentSpan ?? null;
+    const traceContext: TraceContext = { traceId, parentSpanId: spanId };
+
+    const traceStartTime = Date.now() / 1000;
+    let traceSuccess = true;
+    let traceError: string | null = null;
+
     try {
+      return await runWithTraceContext(traceContext, async () => {
+        try {
     const { request } = args;
     const startTime = Date.now();
 
@@ -694,12 +723,39 @@ export function llmProvider(config: LlmProviderConfig): {
     // a JSON string that it can parse to get the MeshLlmResponse object.
     // FastMCP wraps this in { content: [{ type: "text", text: <return_value> }] }
     return JSON.stringify(response);
+        } catch (err) {
+          console.error("[llm-provider] execute error:", err);
+          if (err instanceof Error) {
+            console.error("[llm-provider] stack:", err.stack);
+          }
+          throw err;
+        }
+      });
     } catch (err) {
-      console.error("[llm-provider] execute error:", err);
-      if (err instanceof Error) {
-        console.error("[llm-provider] stack:", err.stack);
-      }
+      traceSuccess = false;
+      traceError = err instanceof Error ? err.message : String(err);
       throw err;
+    } finally {
+      const traceEndTime = Date.now() / 1000;
+      const traceDurationMs = (traceEndTime - traceStartTime) * 1000;
+
+      publishTraceSpan({
+        traceId,
+        spanId,
+        parentSpan: parentSpanId,
+        functionName: name,
+        startTime: traceStartTime,
+        endTime: traceEndTime,
+        durationMs: traceDurationMs,
+        success: traceSuccess,
+        error: traceError,
+        resultType: "string",
+        argsCount: 0,
+        kwargsCount: typeof args === "object" ? Object.keys(args as object).length : 0,
+        dependencies: [],
+        injectedDependencies: 0,
+        meshPositions: [],
+      }).catch(() => {});
     }
   };
 
@@ -707,7 +763,9 @@ export function llmProvider(config: LlmProviderConfig): {
   const toolDef = {
     name,
     description,
-    parameters: MeshLlmRequestSchema,
+    // Use passthrough() to allow trace context fields (_trace_id, _parent_span)
+    // to pass through Zod validation without being stripped
+    parameters: MeshLlmRequestSchema.passthrough(),
     execute,
     // Attach mesh metadata for registration
     _meshMeta: {

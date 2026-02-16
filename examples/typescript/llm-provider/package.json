@@ -1,0 +1,20 @@
+{
+  "name": "ts-llm-provider",
+  "version": "1.0.0",
+  "description": "MCP Mesh LLM Provider agent for observability testing",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^0.9.4",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

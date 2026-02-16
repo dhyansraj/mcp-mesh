@@ -107,7 +107,8 @@ func GetTempoURLFromEnv() string {
 		return fmt.Sprintf("http://%s:3200", host)
 	}
 
-	return ""
+	// Default to localhost when no explicit endpoint configured
+	return "http://localhost:3200"
 }
 
 // GetTrace retrieves a trace by ID from Tempo

@@ -1,0 +1,293 @@
+# Test Case: Python Full-Stack Tracing
+# Verifies tool, API, LLM provider, and LLM consumer tracing for Python agents
+#
+# Agent Setup:
+#   - py-math-agent (port 9000): Tool agent providing "add" capability
+#   - py-mesh-api (port 9032): API agent with @mesh.route depending on "add"
+#   - py-llm-provider (port 9030): LLM provider exposing capability="llm"
+#   - py-llm-consumer (port 9031): LLM consumer with mesh delegation
+#
+# Flow: Tool trace (add), API call (curl), LLM trace (analyze -> provider -> add)
+
+name: "Python Full-Stack Tracing"
+description: "Verify tracing across tool, API route, LLM provider, and LLM consumer in Python"
+tags:
+  - observability
+  - tracing
+  - python
+  - llm
+  - api
+  - full-stack
+timeout: 240
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/py-math-agent /workspace/
+      cp -rL /uc-artifacts/py-llm-provider /workspace/
+      cp -rL /uc-artifacts/py-llm-consumer /workspace/
+      cp -rL /uc-artifacts/py-mesh-api /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
+
+  # Start py-math-agent (tool provider)
+  - name: "Start py-math-agent"
+    handler: shell
+    command: "meshctl start py-math-agent/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_py_math
+
+  # Start py-llm-provider
+  - name: "Start py-llm-provider"
+    handler: shell
+    command: "meshctl start py-llm-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider
+
+  # Start py-mesh-api
+  - name: "Start py-mesh-api"
+    handler: shell
+    command: "meshctl start py-mesh-api/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_api
+
+  # Wait for initial agents to register
+  - name: "Wait for tool and API agents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for py-math-agent, py-llm-provider, and API agent..."
+      for i in $(seq 1 15); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "py-math-agent" && echo "$AGENTS" | grep -q "py-llm-provider" && echo "$AGENTS" | grep -q "API"; then
+          echo "Tool, provider, and API agents registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agents did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_tools
+    timeout: 60
+
+  # Start py-llm-consumer (depends on py-math-agent + py-llm-provider)
+  - name: "Start py-llm-consumer"
+    handler: shell
+    command: "meshctl start py-llm-consumer/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for py-llm-consumer to register and resolve deps..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "py-llm-consumer"; then
+          echo "py-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: py-llm-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs py-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # Verify all agents are running
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify capabilities
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Get JSON agent list for type assertions
+  - name: "Get agent list JSON"
+    handler: shell
+    command: "meshctl list --json"
+    workdir: /workspace
+    capture: list_json
+
+  # === Tool Trace ===
+  - name: "Call add with tracing"
+    handler: shell
+    command: |
+      meshctl call add '{"a": 5, "b": 3}' --trace 2>&1
+    workdir: /workspace
+    capture: tool_call_output
+    timeout: 60
+
+  - name: "Extract tool trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.tool_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract trace ID"
+        echo "Output was: ${captured.tool_call_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: tool_trace_id
+
+  - name: "Wait for tool trace flush"
+    handler: wait
+    seconds: 5
+
+  - name: "Query tool trace"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.tool_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      meshctl trace $TRACE_ID --json 2>&1
+    workdir: /workspace
+    capture: tool_trace_output
+    timeout: 30
+
+  # === API Functional Test ===
+  - name: "Call API add endpoint"
+    handler: shell
+    command: |
+      curl -s -X POST http://localhost:8080/api/add \
+        -H 'Content-Type: application/json' \
+        -d '{"a": 5, "b": 3}' 2>&1
+    workdir: /workspace
+    capture: api_output
+    timeout: 30
+
+  # === LLM Trace ===
+  - name: "Call analyze with tracing"
+    handler: shell
+    command: |
+      meshctl call analyze '{"question": "What is 5 plus 3? Use the add tool."}' --trace 2>&1
+    workdir: /workspace
+    capture: llm_call_output
+    timeout: 120
+
+  - name: "Extract LLM trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.llm_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract trace ID"
+        echo "Output was: ${captured.llm_call_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: llm_trace_id
+
+  - name: "Query LLM trace (with retry)"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.llm_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      echo "Querying LLM trace $TRACE_ID (with retries)..." >&2
+      for i in $(seq 1 6); do
+        RESULT=$(meshctl trace $TRACE_ID --json 2>&1)
+        if echo "$RESULT" | grep -q '"SpanCount"'; then
+          echo "$RESULT"
+          exit 0
+        fi
+        echo "Attempt $i: trace not yet available, waiting 5s..." >&2
+        sleep 5
+      done
+      echo "ERROR: LLM trace not found after 30s"
+      echo "Last result: $RESULT"
+      exit 1
+    workdir: /workspace
+    capture: llm_trace_output
+    timeout: 60
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # All 4 agents registered
+  - expr: "${captured.list_output} contains 'py-math-agent'"
+    message: "py-math-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'py-llm-provider'"
+    message: "py-llm-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'py-llm-consumer'"
+    message: "py-llm-consumer should be registered"
+
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API agent should be registered with API type"
+
+  - expr: '${jq:captured.list_json:[.agents[] | select(.agent_type == "api")] | length} > 0'
+    message: "Mesh API should register with agent_type=api"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'analyze'"
+    message: "analyze tool should be listed"
+
+  # Tool trace assertions
+  - expr: "${captured.tool_trace_id} contains 'TRACE_ID='"
+    message: "Tool trace ID should be extracted"
+
+  - expr: ${jq:captured.tool_trace_output:.SpanCount} >= 1
+    message: "Tool trace should have at least 1 span"
+
+  - expr: ${jq:captured.tool_trace_output:.Success} == true
+    message: "Tool trace should show successful execution"
+
+  # API functional assertion
+  - expr: "${captured.api_output} contains 'result'"
+    message: "API should return a result field"
+
+  # LLM trace assertions
+  - expr: "${captured.llm_trace_id} contains 'TRACE_ID='"
+    message: "LLM trace ID should be extracted"
+
+  - expr: ${jq:captured.llm_trace_output:.SpanCount} >= 2
+    message: "LLM trace should have at least 2 spans (consumer + provider)"
+
+  - expr: ${jq:captured.llm_trace_output:.AgentCount} >= 2
+    message: "LLM trace should involve at least 2 agents"
+
+  - expr: ${jq:captured.llm_trace_output:.Success} == true
+    message: "LLM trace should show successful execution"
+
+post_run:
+  - handler: shell
+    command: |
+      pkill -f 'uvicorn' 2>/dev/null || true
+      meshctl stop 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

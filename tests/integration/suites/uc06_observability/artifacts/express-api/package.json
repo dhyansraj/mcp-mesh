@@ -1,0 +1,17 @@
+{
+  "name": "express-api-example",
+  "version": "1.0.0",
+  "description": "Express API that consumes MCP Mesh capabilities",
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^0.9.4",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "tsx": "^4.19.2"
+  }
+}

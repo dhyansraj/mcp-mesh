@@ -45,6 +45,9 @@ import type {
 } from "./types.js";
 import { MeshLlmAgent, createLlmToolProxy } from "./llm-agent.js";
 import { debug } from "./debug.js";
+import { generateTraceId, generateSpanId, publishTraceSpan } from "./tracing.js";
+import type { TraceContext } from "./tracing.js";
+import { runWithTraceContext } from "./proxy.js";
 
 /**
  * Registry for LLM tools - stores configuration and resolved dependencies.
@@ -260,57 +263,129 @@ export function llm<
 
   // Create the execute wrapper
   const wrappedExecute = async (args: z.infer<TParams>): Promise<string> => {
+    // Extract trace context from arguments (injected by upstream proxy)
+    let incomingTraceId: string | null = null;
+    let incomingParentSpan: string | null = null;
+    let cleanArgs = args;
+
+    if (args && typeof args === "object") {
+      const argsObj = args as Record<string, unknown>;
+      if (typeof argsObj._trace_id === "string") {
+        incomingTraceId = argsObj._trace_id;
+      }
+      if (typeof argsObj._parent_span === "string") {
+        incomingParentSpan = argsObj._parent_span;
+      }
+      // Remove trace context from args before passing to tool
+      if (incomingTraceId || incomingParentSpan) {
+        const { _trace_id, _parent_span, ...rest } = argsObj;
+        cleanArgs = rest as z.infer<TParams>;
+      }
+    }
+
+    // Use incoming trace context or generate new one
+    const traceId = incomingTraceId ?? generateTraceId();
+    const spanId = generateSpanId();
+    const parentSpanId = incomingParentSpan ?? null;
+    const traceContext: TraceContext = { traceId, parentSpanId: spanId };
+
+    const startTime = Date.now() / 1000;
+    let success = true;
+    let error: string | null = null;
+    let resultType = "string";
+
     try {
-      debug.llm(`Executing ${functionId} with args:`, JSON.stringify(args));
+      // Run within trace context for propagation to downstream calls
+      return await runWithTraceContext(traceContext, async () => {
+        try {
+          debug.llm(`Executing ${functionId} with args:`, JSON.stringify(cleanArgs));
 
-      // Get resolved tools and provider
-      const tools = registry.getResolvedTools(functionId);
-      const meshProvider = registry.getResolvedProvider(functionId);
-      debug.llm(`Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : "none");
+          // Get resolved tools and provider
+          const tools = registry.getResolvedTools(functionId);
+          const meshProvider = registry.getResolvedProvider(functionId);
+          debug.llm(`Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : "none");
 
-      // Extract template context from args if contextParam is specified
-      let templateContext: Record<string, unknown> = {};
-      if (llmConfig.contextParam && args && typeof args === "object") {
-        const argsObj = args as Record<string, unknown>;
-        if (argsObj[llmConfig.contextParam]) {
-          templateContext = argsObj[llmConfig.contextParam] as Record<string, unknown>;
-        }
-      }
-
-      // Create callable LLM agent
-      const llmCallable = agent.createCallable({
-        tools,
-        meshProvider: meshProvider
-          ? {
-              endpoint: meshProvider.endpoint,
-              functionName: meshProvider.functionName,
-              model: meshProvider.model,
+          // Extract template context from args if contextParam is specified
+          let templateContext: Record<string, unknown> = {};
+          if (llmConfig.contextParam && cleanArgs && typeof cleanArgs === "object") {
+            const argsObj = cleanArgs as Record<string, unknown>;
+            if (argsObj[llmConfig.contextParam]) {
+              templateContext = argsObj[llmConfig.contextParam] as Record<string, unknown>;
             }
-          : undefined,
-        templateContext,
+          }
+
+          // Create callable LLM agent
+          const llmCallable = agent.createCallable({
+            tools,
+            meshProvider: meshProvider
+              ? {
+                  endpoint: meshProvider.endpoint,
+                  functionName: meshProvider.functionName,
+                  model: meshProvider.model,
+                }
+              : undefined,
+            templateContext,
+          });
+
+          // Call user's execute handler
+          debug.llm(`Calling user execute handler`);
+          const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
+          debug.llm(`Execute completed successfully`);
+
+          // Convert result to string for MCP
+          if (typeof result === "string") {
+            return result;
+          }
+          return JSON.stringify(result);
+        } catch (innerError) {
+          debug.llm(`Error in ${functionId}:`, innerError);
+          throw innerError;
+        }
       });
+    } catch (err) {
+      success = false;
+      error = err instanceof Error ? err.message : String(err);
+      throw err;
+    } finally {
+      // Publish span (fire and forget)
+      const endTime = Date.now() / 1000;
+      const durationMs = (endTime - startTime) * 1000;
 
-      // Call user's execute handler
-      debug.llm(`Calling user execute handler`);
-      const result = await llmConfig.execute(args, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
-      debug.llm(`Execute completed successfully`);
-
-      // Convert result to string for MCP
-      if (typeof result === "string") {
-        return result;
-      }
-      return JSON.stringify(result);
-    } catch (error) {
-      debug.llm(`Error in ${functionId}:`, error);
-      throw error;
+      publishTraceSpan({
+        traceId,
+        spanId,
+        parentSpan: parentSpanId,
+        functionName: functionId,
+        startTime,
+        endTime,
+        durationMs,
+        success,
+        error,
+        resultType,
+        argsCount: 0,
+        kwargsCount: typeof cleanArgs === "object" ? Object.keys(cleanArgs as object).length : 0,
+        dependencies: [],
+        injectedDependencies: 0,
+        meshPositions: [],
+      }).catch(() => {
+        // Silently ignore publish errors
+      });
     }
   };
+
+  // Use passthrough() to allow trace context fields (_trace_id, _parent_span)
+  // to pass through Zod validation without being stripped
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const schema = config.parameters as any;
+  const parametersWithPassthrough = typeof schema.passthrough === "function"
+    ? schema.passthrough()
+    : config.parameters;
 
   // Return fastmcp-compatible tool definition with mesh metadata
   return {
     name: config.name,
     description: config.description,
-    parameters: config.parameters,
+    parameters: parametersWithPassthrough,
     execute: wrappedExecute,
     _meshLlmConfig: llmConfig,
   };

@@ -1,0 +1,2 @@
+# py-llm-consumer dependencies
+# Note: mcp-mesh is provided by the runtime environment

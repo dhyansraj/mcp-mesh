@@ -61,6 +61,12 @@ import {
   extractModelName,
 } from "./llm-provider.js";
 import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
+import { getCurrentTraceContext } from "./proxy.js";
+import {
+  generateSpanId,
+  publishTraceSpan,
+  createTraceHeaders,
+} from "./tracing.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -468,121 +474,164 @@ export class MeshDelegatedProvider implements LlmProvider {
     }
 
     // Wrap in "request" parameter as expected by Python claude_provider
-    const args = { request };
+    const args: Record<string, unknown> = { request };
 
     // Set up timeout with AbortController (default 300s to match Python SDK's stream_timeout)
     const timeoutMs = parseInt(process.env.MESH_PROVIDER_TIMEOUT_MS || "300000", 10);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Call the mesh provider via MCP
-    let response: Response;
+    // Tracing: propagate context to downstream provider
+    const traceCtx = getCurrentTraceContext();
+    const traceSpanId = traceCtx ? generateSpanId() : null;
+    const traceStartTime = Date.now() / 1000;
+
+    // Inject trace context into args for fastmcp fallback
+    if (traceCtx && traceSpanId) {
+      args._trace_id = traceCtx.traceId;
+      args._parent_span = traceSpanId;
+    }
+
+    let traceSuccess = true;
+    let traceError: string | null = null;
+
     try {
-      response = await fetch(`${this.endpoint}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Date.now(),
-          method: "tools/call",
-          params: {
-            name: this.functionName,
-            arguments: args,
+      // Call the mesh provider via MCP
+      let response: Response;
+      try {
+        response = await fetch(`${this.endpoint}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            ...(traceCtx && traceSpanId ? createTraceHeaders(traceCtx.traceId, traceSpanId) : {}),
           },
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new LLMAPIError(408, `Request timed out after ${timeoutMs}ms`, `mesh:${this.endpoint}`);
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method: "tools/call",
+            params: {
+              name: this.functionName,
+              arguments: args,
+            },
+          }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new LLMAPIError(408, `Request timed out after ${timeoutMs}ms`, `mesh:${this.endpoint}`);
+        }
+        throw new LLMAPIError(0, `Fetch failed: ${error instanceof Error ? error.message : String(error)}`, `mesh:${this.endpoint}`);
       }
-      throw new LLMAPIError(0, `Fetch failed: ${error instanceof Error ? error.message : String(error)}`, `mesh:${this.endpoint}`);
-    }
-    clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new LLMAPIError(response.status, error, `mesh:${this.endpoint}`);
-    }
+      if (!response.ok) {
+        const error = await response.text();
+        throw new LLMAPIError(response.status, error, `mesh:${this.endpoint}`);
+      }
 
-    // Handle SSE response from FastMCP stateless HTTP stream
-    const responseText = await response.text();
+      // Handle SSE response from FastMCP stateless HTTP stream
+      const responseText = await response.text();
 
-    const result = parseSSEResponse<{
-      error?: { message: string };
-      result?: { content?: Array<{ type: string; text: string }> };
-    }>(responseText);
+      const result = parseSSEResponse<{
+        error?: { message: string };
+        result?: { content?: Array<{ type: string; text: string }> };
+      }>(responseText);
 
-    if (result.error) {
-      throw new Error(`Mesh provider RPC error: ${result.error.message}`);
-    }
+      if (result.error) {
+        throw new Error(`Mesh provider RPC error: ${result.error.message}`);
+      }
 
-    // Parse the MCP result content
-    const content = result.result?.content?.[0];
-    if (!content || content.type !== "text") {
-      throw new Error("Invalid response from mesh provider");
-    }
+      // Parse the MCP result content
+      const content = result.result?.content?.[0];
+      if (!content || content.type !== "text") {
+        throw new Error("Invalid response from mesh provider");
+      }
 
-    // Check for MCP tool execution error (isError flag in result)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((result.result as any)?.isError) {
-      throw new Error(`Mesh provider tool error: ${content.text}`);
-    }
+      // Check for MCP tool execution error (isError flag in result)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((result.result as any)?.isError) {
+        throw new Error(`Mesh provider tool error: ${content.text}`);
+      }
 
-    // Parse the LLM provider response
-    // Format: { role, content, tool_calls?, _mesh_usage? }
-    const meshResponse = JSON.parse(content.text) as {
-      role: string;
-      content: string;
-      tool_calls?: Array<{
-        id: string;
-        type: "function";
-        function: { name: string; arguments: string };
-      }>;
-      _mesh_usage?: { prompt_tokens: number; completion_tokens: number };
-    };
+      // Parse the LLM provider response
+      // Format: { role, content, tool_calls?, _mesh_usage? }
+      const meshResponse = JSON.parse(content.text) as {
+        role: string;
+        content: string;
+        tool_calls?: Array<{
+          id: string;
+          type: "function";
+          function: { name: string; arguments: string };
+        }>;
+        _mesh_usage?: { prompt_tokens: number; completion_tokens: number };
+      };
 
-    // Validate role - LLM responses should always be "assistant"
-    let validatedRole: "assistant" = "assistant";
-    if (meshResponse.role !== "assistant") {
-      console.warn(
-        `[mesh.llm] Unexpected role "${meshResponse.role}" from mesh provider, defaulting to "assistant"`
-      );
-    }
+      // Validate role - LLM responses should always be "assistant"
+      let validatedRole: "assistant" = "assistant";
+      if (meshResponse.role !== "assistant") {
+        console.warn(
+          `[mesh.llm] Unexpected role "${meshResponse.role}" from mesh provider, defaulting to "assistant"`
+        );
+      }
 
-    // Convert to OpenAI format expected by MeshLlmAgent
-    const openAiResponse: LlmCompletionResponse = {
-      id: `mesh-${Date.now()}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: "mesh-delegated",
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: validatedRole,
-            content: meshResponse.content,
-            tool_calls: meshResponse.tool_calls,
+      // Convert to OpenAI format expected by MeshLlmAgent
+      const openAiResponse: LlmCompletionResponse = {
+        id: `mesh-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: "mesh-delegated",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: validatedRole,
+              content: meshResponse.content,
+              tool_calls: meshResponse.tool_calls,
+            },
+            finish_reason: meshResponse.tool_calls ? "tool_calls" : "stop",
           },
-          finish_reason: meshResponse.tool_calls ? "tool_calls" : "stop",
-        },
-      ],
-      usage: meshResponse._mesh_usage
-        ? {
-            prompt_tokens: meshResponse._mesh_usage.prompt_tokens,
-            completion_tokens: meshResponse._mesh_usage.completion_tokens,
-            total_tokens:
-              meshResponse._mesh_usage.prompt_tokens +
-              meshResponse._mesh_usage.completion_tokens,
-          }
-        : undefined,
-    };
+        ],
+        usage: meshResponse._mesh_usage
+          ? {
+              prompt_tokens: meshResponse._mesh_usage.prompt_tokens,
+              completion_tokens: meshResponse._mesh_usage.completion_tokens,
+              total_tokens:
+                meshResponse._mesh_usage.prompt_tokens +
+                meshResponse._mesh_usage.completion_tokens,
+            }
+          : undefined,
+      };
 
-    return openAiResponse;
+      return openAiResponse;
+    } catch (err) {
+      traceSuccess = false;
+      traceError = err instanceof Error ? err.message : String(err);
+      throw err;
+    } finally {
+      if (traceCtx && traceSpanId) {
+        const traceEndTime = Date.now() / 1000;
+        const traceDurationMs = (traceEndTime - traceStartTime) * 1000;
+        publishTraceSpan({
+          traceId: traceCtx.traceId,
+          spanId: traceSpanId,
+          parentSpan: traceCtx.parentSpanId,
+          functionName: "proxy_call_wrapper",
+          startTime: traceStartTime,
+          endTime: traceEndTime,
+          durationMs: traceDurationMs,
+          success: traceSuccess,
+          error: traceError,
+          resultType: traceSuccess ? "object" : "error",
+          argsCount: 0,
+          kwargsCount: 0,
+          dependencies: [this.endpoint],
+          injectedDependencies: 0,
+          meshPositions: [],
+        }).catch(() => {});
+      }
+    }
   }
 }
 
@@ -1032,73 +1081,119 @@ export function createLlmToolProxy(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Make MCP call to the tool
-    let response: Response;
+    // Tracing: propagate context to downstream tool
+    const traceCtx = getCurrentTraceContext();
+    const traceSpanId = traceCtx ? generateSpanId() : null;
+    const traceStartTime = Date.now() / 1000;
+
+    let traceSuccess = true;
+    let traceError: string | null = null;
+    let resultType = "unknown";
+
     try {
-      response = await fetch(`${toolInfo.endpoint}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Date.now(),
-          method: "tools/call",
-          params: {
-            name: toolInfo.functionName,
-            arguments: args,
+      // Make MCP call to the tool
+      let response: Response;
+      try {
+        response = await fetch(`${toolInfo.endpoint}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            ...(traceCtx && traceSpanId ? createTraceHeaders(traceCtx.traceId, traceSpanId) : {}),
           },
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === "AbortError") {
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method: "tools/call",
+            params: {
+              name: toolInfo.functionName,
+              arguments: {
+                ...args,
+                ...(traceCtx && traceSpanId ? { _trace_id: traceCtx.traceId, _parent_span: traceSpanId } : {}),
+              },
+            },
+          }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new ToolExecutionError(
+            toolInfo.functionName,
+            new Error(`Tool call timed out after ${timeoutMs}ms (endpoint: ${toolInfo.endpoint})`)
+          );
+        }
         throw new ToolExecutionError(
           toolInfo.functionName,
-          new Error(`Tool call timed out after ${timeoutMs}ms (endpoint: ${toolInfo.endpoint})`)
+          error instanceof Error ? error : new Error(String(error))
         );
       }
-      throw new ToolExecutionError(
-        toolInfo.functionName,
-        error instanceof Error ? error : new Error(String(error))
-      );
-    }
-    clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      throw new Error(`Tool call failed: ${response.status}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Tool call failed: ${response.status}`);
+      }
 
-    // Handle SSE response from FastMCP stateless HTTP stream
-    const responseText = await response.text();
+      // Handle SSE response from FastMCP stateless HTTP stream
+      const responseText = await response.text();
 
-    const result = parseSSEResponse<{
-      error?: { message: string };
-      result?: { content?: Array<{ type: string; text?: string }> };
-    }>(responseText);
+      const result = parseSSEResponse<{
+        error?: { message: string };
+        result?: { content?: Array<{ type: string; text?: string }> };
+      }>(responseText);
 
-    if (result.error) {
-      throw new Error(`Tool error: ${result.error.message}`);
-    }
+      if (result.error) {
+        throw new Error(`Tool error: ${result.error.message}`);
+      }
 
-    // Parse result content
-    const content = result.result?.content?.[0];
-    if (!content) {
-      return null;
-    }
+      // Parse result content
+      const content = result.result?.content?.[0];
+      if (!content) {
+        resultType = "null";
+        return null;
+      }
 
-    if (content.type === "text" && content.text) {
-      // Try to parse as JSON
-      try {
-        return JSON.parse(content.text);
-      } catch {
-        return content.text;
+      if (content.type === "text" && content.text) {
+        // Try to parse as JSON
+        try {
+          const parsed = JSON.parse(content.text);
+          resultType = typeof parsed;
+          return parsed;
+        } catch {
+          resultType = "string";
+          return content.text;
+        }
+      }
+
+      resultType = typeof content;
+      return content;
+    } catch (err) {
+      traceSuccess = false;
+      traceError = err instanceof Error ? err.message : String(err);
+      throw err;
+    } finally {
+      if (traceCtx && traceSpanId) {
+        const traceEndTime = Date.now() / 1000;
+        const traceDurationMs = (traceEndTime - traceStartTime) * 1000;
+        publishTraceSpan({
+          traceId: traceCtx.traceId,
+          spanId: traceSpanId,
+          parentSpan: traceCtx.parentSpanId,
+          functionName: "proxy_call_wrapper",
+          startTime: traceStartTime,
+          endTime: traceEndTime,
+          durationMs: traceDurationMs,
+          success: traceSuccess,
+          error: traceError,
+          resultType: traceSuccess ? resultType : "error",
+          argsCount: 0,
+          kwargsCount: 0,
+          dependencies: [toolInfo.endpoint],
+          injectedDependencies: 0,
+          meshPositions: [],
+        }).catch(() => {});
       }
     }
-
-    return content;
   };
 
   // Safely parse inputSchema - don't let malformed JSON break proxy creation

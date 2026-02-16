@@ -96,10 +96,7 @@ docker compose up -d
 
 # 2. Create .env file for local agents
 cat > .env << 'EOF'
-MCP_MESH_REGISTRY_URL=http://localhost:8000
 MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
-TRACE_EXPORTER_TYPE=otlp
-TELEMETRY_ENDPOINT=localhost:4317
 EOF
 
 # 3. Run agents locally with file watching
