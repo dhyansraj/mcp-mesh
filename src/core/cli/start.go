@@ -278,8 +278,6 @@ Examples:
 	cmd.Flags().MarkDeprecated("pid-file", "PID files are now managed per-agent in ~/.mcp-mesh/pids/")
 
 	// Advanced configuration flags
-	cmd.Flags().String("config-file", "", "Custom configuration file path")
-	cmd.Flags().Bool("reset-config", false, "Reset configuration to defaults")
 	cmd.Flags().StringSlice("env", []string{}, "Additional environment variables (KEY=VALUE)")
 	cmd.Flags().String("env-file", "", "Environment file to load (.env format)")
 
@@ -303,30 +301,10 @@ Examples:
 }
 
 func runStartCommand(cmd *cobra.Command, args []string) error {
-	// Handle reset-config flag first
-	resetConfig, _ := cmd.Flags().GetBool("reset-config")
-	if resetConfig {
-		if err := ResetConfig(); err != nil {
-			return fmt.Errorf("failed to reset configuration: %w", err)
-		}
-		fmt.Println("Configuration reset to defaults")
-	}
-
-	// Load configuration from file if specified
-	configFile, _ := cmd.Flags().GetString("config-file")
-	var config *CLIConfig
-	var err error
-
-	if configFile != "" {
-		config, err = LoadConfigFromFile(configFile)
-		if err != nil {
-			return fmt.Errorf("failed to load config from %s: %w", configFile, err)
-		}
-	} else {
-		config, err = LoadConfig()
-		if err != nil {
-			return fmt.Errorf("failed to load configuration: %w", err)
-		}
+	// Load configuration
+	config, err := LoadConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	// Load environment file if specified

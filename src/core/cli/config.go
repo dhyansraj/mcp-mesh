@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,8 +77,7 @@ func DefaultConfig() *CLIConfig {
 	}
 }
 
-// LoadConfig loads configuration with proper precedence: CLI args > Config file > Environment vars > Defaults
-// MUST match Python configuration loading behavior exactly
+// LoadConfig loads configuration with proper precedence: CLI flags > Environment vars > Defaults
 func LoadConfig() (*CLIConfig, error) {
 	// Start with default values
 	config := DefaultConfig()
@@ -88,11 +85,10 @@ func LoadConfig() (*CLIConfig, error) {
 	// 1. Load from environment variables (MCP_MESH_ prefix)
 	loadFromEnvironment(config)
 
-	// 2. Load from configuration file (~/.mcp_mesh/cli_config.json)
-	if err := loadFromConfigFile(config); err != nil {
-		// Config file errors are not fatal, just log and continue
-		// This matches Python behavior
-		fmt.Printf("Warning: Failed to load config file: %v\n", err)
+	// 2. Check for stale config file and warn
+	configPath := getConfigFilePath()
+	if _, err := os.Stat(configPath); err == nil {
+		fmt.Fprintf(os.Stderr, "Warning: Config file %s is no longer loaded. Use environment variables or CLI flags instead.\n", configPath)
 	}
 
 	// 3. Validate configuration
@@ -183,102 +179,6 @@ func parseBoolEnv(val string) bool {
 	}
 }
 
-// loadFromConfigFile loads configuration from ~/.mcp_mesh/cli_config.json
-// MUST match Python config file handling exactly
-func loadFromConfigFile(config *CLIConfig) error {
-	configPath := getConfigFilePath()
-
-	// Check if config file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Config file doesn't exist, use current values (from defaults + env)
-		return nil
-	}
-
-	// Create backup before loading
-	if err := createConfigBackup(configPath); err != nil {
-		// Backup creation failure is not fatal, just log warning
-		fmt.Printf("Warning: Failed to create config backup: %v\n", err)
-	}
-
-	// Read config file with retry and recovery
-	retry := 3
-	for i := 0; i < retry; i++ {
-		data, err := ioutil.ReadFile(configPath)
-		if err != nil {
-			if i == retry-1 {
-				return fmt.Errorf("failed to read config file %s after %d attempts: %w", configPath, retry, err)
-			}
-			continue
-		}
-
-		// Parse JSON
-		var fileConfig CLIConfig
-		if err := json.Unmarshal(data, &fileConfig); err != nil {
-			if i == retry-1 {
-				// Try to recover from backup
-				if recoverErr := recoverFromBackup(configPath); recoverErr != nil {
-					return fmt.Errorf("failed to parse config file %s and backup recovery failed: parse_error=%w, recovery_error=%v", configPath, err, recoverErr)
-				}
-				// Try parsing backup
-				if backupData, readErr := ioutil.ReadFile(configPath + ".backup"); readErr == nil {
-					if backupErr := json.Unmarshal(backupData, &fileConfig); backupErr == nil {
-						fmt.Println("Successfully recovered from config backup")
-						break
-					}
-				}
-				return fmt.Errorf("failed to parse config file %s: %w", configPath, err)
-			}
-			continue
-		}
-
-		// Successful parsing
-		config.mu.Lock()
-		mergeConfigurations(config, &fileConfig)
-		config.mu.Unlock()
-		break
-	}
-
-	return nil
-}
-
-// mergeConfigurations merges file config with current config (env vars + defaults)
-// MUST match Python configuration merging behavior
-func mergeConfigurations(target *CLIConfig, source *CLIConfig) {
-	// Only override non-zero/non-empty values from file config
-	if source.RegistryPort != 0 {
-		target.RegistryPort = source.RegistryPort
-	}
-	if source.RegistryHost != "" {
-		target.RegistryHost = source.RegistryHost
-	}
-	if source.DBPath != "" {
-		target.DBPath = source.DBPath
-	}
-	if source.LogLevel != "" {
-		target.LogLevel = source.LogLevel
-	}
-	if source.HealthCheckInterval != 0 {
-		target.HealthCheckInterval = source.HealthCheckInterval
-	}
-	// Boolean fields need special handling since false is a valid value
-	// We check if the source has been explicitly set (different from default)
-	target.DebugMode = source.DebugMode
-	target.EnableBackground = source.EnableBackground
-
-	if source.StartupTimeout != 0 {
-		target.StartupTimeout = source.StartupTimeout
-	}
-	if source.ShutdownTimeout != 0 {
-		target.ShutdownTimeout = source.ShutdownTimeout
-	}
-	if source.PIDFile != "" {
-		target.PIDFile = source.PIDFile
-	}
-
-	// Update metadata
-	target.LastModified = time.Now()
-}
-
 // getConfigFilePath returns the configuration file path with cross-platform support
 // MUST match Python config file path handling exactly
 func getConfigFilePath() string {
@@ -325,79 +225,6 @@ func getConfigFilePath() string {
 	return filepath.Join(configDir, "cli_config.json")
 }
 
-// SaveConfig saves the configuration with atomic write and backup
-// MUST match Python config saving behavior
-func SaveConfig(config *CLIConfig) error {
-	config.mu.Lock()
-	defer config.mu.Unlock()
-
-	configPath := getConfigFilePath()
-
-	// Ensure directory exists
-	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory %s: %w", dir, err)
-	}
-
-	// Update metadata before saving
-	config.Version = ConfigVersion
-	config.LastModified = time.Now()
-
-	// Marshal configuration to JSON
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal configuration: %w", err)
-	}
-
-	// Atomic write: write to temporary file first, then rename
-	tempPath := configPath + ".tmp"
-	if err := ioutil.WriteFile(tempPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temporary config file %s: %w", tempPath, err)
-	}
-
-	// Create backup of existing config
-	if _, err := os.Stat(configPath); err == nil {
-		if err := createConfigBackup(configPath); err != nil {
-			// Backup failure is not fatal, just log warning
-			fmt.Printf("Warning: Failed to create config backup: %v\n", err)
-		}
-	}
-
-	// Atomic rename
-	if err := os.Rename(tempPath, configPath); err != nil {
-		// Cleanup temp file on failure
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to save config file %s: %w", configPath, err)
-	}
-
-	return nil
-}
-
-// createConfigBackup creates a backup of the configuration file
-func createConfigBackup(configPath string) error {
-	backupPath := configPath + ".backup"
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return err
-	}
-	return ioutil.WriteFile(backupPath, data, 0644)
-}
-
-// recoverFromBackup recovers configuration from backup
-func recoverFromBackup(configPath string) error {
-	backupPath := configPath + ".backup"
-	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
-		return fmt.Errorf("backup file does not exist")
-	}
-
-	data, err := ioutil.ReadFile(backupPath)
-	if err != nil {
-		return fmt.Errorf("failed to read backup: %w", err)
-	}
-
-	return ioutil.WriteFile(configPath, data, 0644)
-}
-
 // IsValidConfigPath checks if a configuration path is valid and accessible
 func IsValidConfigPath(path string) error {
 	// Check if path is absolute or relative
@@ -418,7 +245,7 @@ func IsValidConfigPath(path string) error {
 
 	// Check write permissions by creating a temporary file
 	tempFile := filepath.Join(dir, ".config_test_"+fmt.Sprintf("%d", time.Now().UnixNano()))
-	if err := ioutil.WriteFile(tempFile, []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(tempFile, []byte("test"), 0644); err != nil {
 		return fmt.Errorf("no write permission in configuration directory %s: %w", dir, err)
 	}
 	os.Remove(tempFile) // Cleanup
@@ -775,63 +602,6 @@ func (c *CLIConfig) GetRegistryEnvironmentVariables() []string {
 		fmt.Sprintf("MCP_MESH_DEBUG_MODE=%t", c.DebugMode),
 		fmt.Sprintf("HEALTH_CHECK_INTERVAL=%d", c.HealthCheckInterval),
 	}
-}
-
-// LoadConfigFromFile loads configuration from a specific file path
-func LoadConfigFromFile(configPath string) (*CLIConfig, error) {
-	// Start with default configuration
-	config := DefaultConfig()
-
-	// Load environment variables first
-	loadFromEnvironment(config)
-
-	// Load from specified config file
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("configuration file does not exist: %s", configPath)
-	}
-
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %s: %w", configPath, err)
-	}
-
-	if err := json.Unmarshal(data, config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file %s: %w", configPath, err)
-	}
-
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("configuration validation failed: %w", err)
-	}
-
-	// Migrate configuration if needed
-	if err := config.Migrate(); err != nil {
-		return nil, fmt.Errorf("configuration migration failed: %w", err)
-	}
-
-	return config, nil
-}
-
-// ResetConfig resets configuration to defaults
-func ResetConfig() error {
-	configPath := getConfigFilePath()
-
-	// Create backup if config exists
-	if _, err := os.Stat(configPath); err == nil {
-		if err := createConfigBackup(configPath); err != nil {
-			fmt.Printf("Warning: Failed to create config backup: %v\n", err)
-		}
-	}
-
-	// Create new default configuration
-	config := DefaultConfig()
-
-	// Save to file
-	if err := SaveConfig(config); err != nil {
-		return fmt.Errorf("failed to save reset configuration: %w", err)
-	}
-
-	return nil
 }
 
 // Global configuration instance
