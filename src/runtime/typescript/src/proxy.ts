@@ -21,6 +21,28 @@ import {
 const traceContextStorage = new AsyncLocalStorage<TraceContext>();
 
 /**
+ * AsyncLocalStorage for propagated headers - provides async-safe header propagation.
+ */
+const propagatedHeadersStorage = new AsyncLocalStorage<Record<string, string>>();
+
+/**
+ * Run a function with propagated headers context.
+ */
+export function runWithPropagatedHeaders<T>(
+  headers: Record<string, string>,
+  fn: () => T | Promise<T>
+): T | Promise<T> {
+  return propagatedHeadersStorage.run(headers, fn);
+}
+
+/**
+ * Get the current propagated headers.
+ */
+export function getCurrentPropagatedHeaders(): Record<string, string> {
+  return propagatedHeadersStorage.getStore() ?? {};
+}
+
+/**
  * Run a function with trace context.
  * The context is automatically propagated to all async operations within the callback.
  * This is the preferred way to set trace context for tool execution.
@@ -139,6 +161,11 @@ async function callMcpTool(
     argsWithTrace._trace_id = traceCtx.traceId;
     argsWithTrace._parent_span = spanId;
   }
+  // Inject propagated headers into args for downstream agents
+  const propagatedHeaders = getCurrentPropagatedHeaders();
+  if (Object.keys(propagatedHeaders).length > 0) {
+    argsWithTrace._mesh_headers = { ...propagatedHeaders };
+  }
 
   const payload = {
     jsonrpc: "2.0",
@@ -166,6 +193,11 @@ async function callMcpTool(
       // Propagate trace context to downstream agent
       if (traceCtx && spanId) {
         Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
+      }
+      // Inject propagated headers as HTTP headers
+      const propHeaders = getCurrentPropagatedHeaders();
+      for (const [key, value] of Object.entries(propHeaders)) {
+        headers[key] = value;
       }
 
       const response = await fetch(mcpEndpoint, {

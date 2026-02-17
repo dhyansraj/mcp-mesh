@@ -330,12 +330,12 @@ Examples:
 	cmd.Flags().MarkDeprecated("pid-file", "PID files are now managed per-agent in ~/.mcp-mesh/pids/")
 
 	// Advanced configuration flags
-	cmd.Flags().StringSlice("env", []string{}, "Additional environment variables (KEY=VALUE)")
+	cmd.Flags().StringArray("env", []string{}, "Additional environment variables (KEY=VALUE)")
 	cmd.Flags().String("env-file", "", "Environment file to load (.env format)")
 
 	// Agent-specific flags
 	cmd.Flags().String("agent-name", "", "Override agent name")
-	cmd.Flags().StringSlice("capabilities", []string{}, "Override agent capabilities")
+	cmd.Flags().StringArray("capabilities", []string{}, "Override agent capabilities")
 	cmd.Flags().String("agent-version", "", "Override agent version")
 	cmd.Flags().String("working-dir", "", "Working directory for agent processes")
 
@@ -368,7 +368,7 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Apply additional environment variables
-	envVars, _ := cmd.Flags().GetStringSlice("env")
+	envVars, _ := cmd.Flags().GetStringArray("env")
 	for _, envVar := range envVars {
 		if err := setEnvironmentVariable(envVar); err != nil {
 			return fmt.Errorf("invalid environment variable %s: %w", envVar, err)
@@ -1601,7 +1601,7 @@ func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLICo
 	}
 
 	// Add custom environment variables from --env flag
-	customEnv, _ := cmd.Flags().GetStringSlice("env")
+	customEnv, _ := cmd.Flags().GetStringArray("env")
 	env = append(env, customEnv...)
 
 	// Add agent-specific overrides
@@ -1613,7 +1613,7 @@ func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLICo
 		env = append(env, fmt.Sprintf("MCP_MESH_AGENT_VERSION=%s", agentVersion))
 	}
 
-	capabilities, _ := cmd.Flags().GetStringSlice("capabilities")
+	capabilities, _ := cmd.Flags().GetStringArray("capabilities")
 	if len(capabilities) > 0 {
 		env = append(env, fmt.Sprintf("MCP_MESH_AGENT_CAPABILITIES=%s", strings.Join(capabilities, ",")))
 	}

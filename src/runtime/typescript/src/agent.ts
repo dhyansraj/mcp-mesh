@@ -31,12 +31,13 @@ import type {
   LlmProviderConfig,
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
-import { createProxy, normalizeDependency, runWithTraceContext } from "./proxy.js";
+import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
 import {
   initTracing,
   generateTraceId,
   generateSpanId,
   publishTraceSpan,
+  PROPAGATE_HEADERS,
   type TraceContext,
   type AgentMetadata,
 } from "./tracing.js";
@@ -149,6 +150,9 @@ export class MeshAgent {
       let incomingParentSpan: string | null = null;
       let cleanArgs = args;
 
+      // Extract _mesh_headers from args for header propagation
+      let propagatedHeaders: Record<string, string> = {};
+
       if (args && typeof args === "object") {
         const argsObj = args as Record<string, unknown>;
         if (typeof argsObj._trace_id === "string") {
@@ -157,9 +161,18 @@ export class MeshAgent {
         if (typeof argsObj._parent_span === "string") {
           incomingParentSpan = argsObj._parent_span;
         }
-        // Remove trace context from args before passing to tool
-        if (incomingTraceId || incomingParentSpan) {
-          const { _trace_id, _parent_span, ...rest } = argsObj;
+        if (argsObj._mesh_headers && typeof argsObj._mesh_headers === "object") {
+          const meshHeaders = argsObj._mesh_headers as Record<string, unknown>;
+          // Filter against allowlist
+          for (const [key, value] of Object.entries(meshHeaders)) {
+            if (typeof value === "string" && PROPAGATE_HEADERS.includes(key.toLowerCase())) {
+              propagatedHeaders[key.toLowerCase()] = value;
+            }
+          }
+        }
+        // Remove trace context and mesh headers from args before passing to tool
+        if (incomingTraceId || incomingParentSpan || Object.keys(propagatedHeaders).length > 0) {
+          const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
           cleanArgs = rest as z.infer<T>;
         }
       }
@@ -180,7 +193,9 @@ export class MeshAgent {
         // This ensures trace context is properly propagated to all async operations
         // and isolated between concurrent requests
         const result = await runWithTraceContext(traceContext, async () => {
-          return await execute(cleanArgs, ...depsArray);
+          return await runWithPropagatedHeaders(propagatedHeaders, async () => {
+            return await execute(cleanArgs, ...depsArray);
+          });
         });
 
         // Auto-serialize non-string results (like Python SDK does)

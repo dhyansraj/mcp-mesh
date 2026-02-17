@@ -1,0 +1,11 @@
+server:
+  port: ${MCP_MESH_HTTP_PORT:9051}
+
+spring:
+  application:
+    name: header-relay-java
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

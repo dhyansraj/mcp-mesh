@@ -90,6 +90,13 @@ public class McpHttpClient {
                     traceInfo.getSpanId().substring(0, 8));
             }
 
+            // Inject propagated headers into arguments for TypeScript agents
+            Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
+            if (!propagatedHeaders.isEmpty()) {
+                argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(propagatedHeaders));
+                log.trace("Injecting {} propagated headers into args", propagatedHeaders.size());
+            }
+
             Map<String, Object> request = Map.of(
                 "jsonrpc", "2.0",
                 "id", System.currentTimeMillis(),
@@ -117,6 +124,12 @@ public class McpHttpClient {
                 log.trace("Injecting trace headers: X-Trace-ID={}, X-Parent-Span={}",
                     traceInfo.getTraceId().substring(0, 8),
                     traceInfo.getSpanId().substring(0, 8));
+            }
+
+            // Inject propagated headers as HTTP headers
+            Map<String, String> propagated = TraceContext.getPropagatedHeaders();
+            for (Map.Entry<String, String> entry : propagated.entrySet()) {
+                requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
             Request httpRequest = requestBuilder.build();

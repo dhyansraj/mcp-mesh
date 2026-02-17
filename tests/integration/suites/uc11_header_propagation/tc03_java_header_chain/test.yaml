@@ -1,0 +1,174 @@
+# Test Case: Java Header Propagation Chain
+# Verifies that custom HTTP headers are propagated through a chain of Java agents.
+#
+# Scenario:
+#   - header-echo-java provides echo_headers tool that returns propagated headers
+#   - header-relay-java has a dependency on echo_headers and forwards the call
+#   - curl sends custom headers (X-Custom-Auth, X-Tenant-Id) to header-relay-java
+#   - header-relay-java calls header-echo-java, which returns the propagated headers
+#   - Assert the response contains the original header values
+
+name: "Java Header Propagation Chain"
+description: "Test custom HTTP header propagation through Java agent chain"
+tags:
+  - header_propagation
+  - java
+  - multi_agent
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Install Maven dependencies for both agents
+  - name: "Install header-echo-java Maven dependencies"
+    handler: maven-install
+    path: /workspace/header-echo-java
+    timeout: 600
+
+  - name: "Install header-relay-java Maven dependencies"
+    handler: maven-install
+    path: /workspace/header-relay-java
+    timeout: 600
+
+  # Start echo agent (provider)
+  - name: "Start header-echo-java agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/header-echo-java --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register (Java is slow to start)
+  - name: "Wait for header-echo-java registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "header-echo"; then
+          echo "header-echo-java registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-java did not register within 90s"
+      meshctl logs header-echo 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_echo
+    timeout: 120
+
+  # Start relay agent (consumer)
+  - name: "Start header-relay-java agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/header-relay-java --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_relay
+
+  # Wait for relay agent to register
+  - name: "Wait for header-relay-java registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "header-relay"; then
+          echo "header-relay-java registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay-java did not register within 90s"
+      meshctl logs header-relay 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_relay
+    timeout: 120
+
+  # Wait for dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are running
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Send curl request with custom headers to relay agent (port 9051)
+  - name: "Call relayHeaders via curl with custom headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9051/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -H "X-Custom-Auth: test-token-123" \
+        -H "X-Tenant-Id: tenant-abc" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relayHeaders","arguments":{}}}'
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show agent logs
+  - name: "Get header-echo-java logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo 2>/dev/null | tail -30 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay-java logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay 2>/dev/null | tail -30 || echo 'no relay logs'"
+    capture: relay_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'header-echo'"
+    message: "header-echo-java agent should be registered"
+
+  - expr: "${captured.list_agents} contains 'header-relay'"
+    message: "header-relay-java agent should be registered"
+
+  # Tools available (Java tool names = method names)
+  - expr: "${captured.list_tools} contains 'echoHeaders'"
+    message: "echoHeaders tool should be available"
+
+  - expr: "${captured.list_tools} contains 'relayHeaders'"
+    message: "relayHeaders tool should be available"
+
+  # Header values propagated through the chain
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*header-echo" 2>/dev/null || true
+      pkill -f "java.*header-relay" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

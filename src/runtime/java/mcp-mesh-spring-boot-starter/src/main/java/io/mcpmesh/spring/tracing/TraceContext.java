@@ -1,5 +1,10 @@
 package io.mcpmesh.spring.tracing;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
 /**
@@ -27,6 +32,32 @@ import java.util.concurrent.Callable;
  * </pre>
  */
 public class TraceContext {
+
+    static final List<String> PROPAGATE_HEADERS;
+
+    static {
+        String envVal = System.getenv("MCP_MESH_PROPAGATE_HEADERS");
+        if (envVal != null && !envVal.trim().isEmpty()) {
+            List<String> names = new ArrayList<>();
+            for (String name : envVal.split(",")) {
+                String trimmed = name.trim();
+                if (!trimmed.isEmpty()) {
+                    names.add(trimmed.toLowerCase());
+                }
+            }
+            PROPAGATE_HEADERS = Collections.unmodifiableList(names);
+        } else {
+            PROPAGATE_HEADERS = Collections.emptyList();
+        }
+    }
+
+    static final InheritableThreadLocal<Map<String, String>> PROPAGATED_HEADERS =
+        new InheritableThreadLocal<>() {
+            @Override
+            protected Map<String, String> initialValue() {
+                return Collections.emptyMap();
+            }
+        };
 
     /**
      * Thread-local storage for trace context.
@@ -91,6 +122,22 @@ public class TraceContext {
         return CONTEXT.get() != null;
     }
 
+    public static List<String> getPropagateHeaderNames() {
+        return PROPAGATE_HEADERS;
+    }
+
+    public static Map<String, String> getPropagatedHeaders() {
+        return PROPAGATED_HEADERS.get();
+    }
+
+    public static void setPropagatedHeaders(Map<String, String> headers) {
+        PROPAGATED_HEADERS.set(headers);
+    }
+
+    public static void clearPropagatedHeaders() {
+        PROPAGATED_HEADERS.set(Collections.emptyMap());
+    }
+
     /**
      * Wrap a Runnable to propagate trace context to another thread.
      *
@@ -102,11 +149,16 @@ public class TraceContext {
      */
     public static Runnable wrap(Runnable task) {
         TraceInfo current = get();
+        Map<String, String> currentHeaders = getPropagatedHeaders();
         return () -> {
             TraceInfo previous = get();
+            Map<String, String> previousHeaders = getPropagatedHeaders();
             try {
                 if (current != null) {
                     set(current);
+                }
+                if (!currentHeaders.isEmpty()) {
+                    setPropagatedHeaders(currentHeaders);
                 }
                 task.run();
             } finally {
@@ -114,6 +166,11 @@ public class TraceContext {
                     set(previous);
                 } else {
                     clear();
+                }
+                if (!previousHeaders.isEmpty()) {
+                    setPropagatedHeaders(previousHeaders);
+                } else {
+                    clearPropagatedHeaders();
                 }
             }
         };
@@ -131,11 +188,16 @@ public class TraceContext {
      */
     public static <T> Callable<T> wrap(Callable<T> task) {
         TraceInfo current = get();
+        Map<String, String> currentHeaders = getPropagatedHeaders();
         return () -> {
             TraceInfo previous = get();
+            Map<String, String> previousHeaders = getPropagatedHeaders();
             try {
                 if (current != null) {
                     set(current);
+                }
+                if (!currentHeaders.isEmpty()) {
+                    setPropagatedHeaders(currentHeaders);
                 }
                 return task.call();
             } finally {
@@ -143,6 +205,11 @@ public class TraceContext {
                     set(previous);
                 } else {
                     clear();
+                }
+                if (!previousHeaders.isEmpty()) {
+                    setPropagatedHeaders(previousHeaders);
+                } else {
+                    clearPropagatedHeaders();
                 }
             }
         };

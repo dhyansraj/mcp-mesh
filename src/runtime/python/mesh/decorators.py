@@ -102,11 +102,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             import json as json_module
 
             class TraceArgumentStripperMiddleware:
-                """Pure ASGI middleware to strip trace arguments from tool calls.
+                """Pure ASGI middleware to strip trace and mesh arguments from tool calls.
 
-                This middleware ALWAYS runs to strip _trace_id and _parent_span from
-                MCP tool arguments, preventing Pydantic validation errors when
-                meshctl --trace is used with agents that don't have tracing enabled.
+                This middleware ALWAYS runs to strip _trace_id, _parent_span, and
+                _mesh_headers from MCP tool arguments, preventing Pydantic validation
+                errors. Also captures _mesh_headers into propagated headers context.
                 """
 
                 def __init__(self, app):
@@ -128,6 +128,8 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                         arguments = payload.get("params", {}).get(
                                             "arguments", {}
                                         )
+                                        modified = False
+
                                         # Strip trace context fields from arguments
                                         if (
                                             "_trace_id" in arguments
@@ -135,11 +137,50 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                         ):
                                             arguments.pop("_trace_id", None)
                                             arguments.pop("_parent_span", None)
+                                            modified = True
+
+                                        # Strip and capture _mesh_headers from arguments
+                                        mesh_headers = arguments.pop(
+                                            "_mesh_headers", None
+                                        )
+                                        if mesh_headers is not None:
+                                            modified = True
+                                            if isinstance(mesh_headers, dict):
+                                                try:
+                                                    from _mcp_mesh.tracing.context import (
+                                                        PROPAGATE_HEADERS,
+                                                        TraceContext,
+                                                    )
+
+                                                    if PROPAGATE_HEADERS:
+                                                        filtered = {
+                                                            k.lower(): v
+                                                            for k, v in mesh_headers.items()
+                                                            if isinstance(v, str)
+                                                            and k.lower()
+                                                            in PROPAGATE_HEADERS
+                                                        }
+                                                        if filtered:
+                                                            # Merge with HTTP-captured headers (HTTP takes precedence)
+                                                            existing = (
+                                                                TraceContext.get_propagated_headers()
+                                                            )
+                                                            if existing:
+                                                                merged = dict(filtered)
+                                                                merged.update(existing)
+                                                                filtered = merged
+                                                            TraceContext.set_propagated_headers(
+                                                                filtered
+                                                            )
+                                                except Exception:
+                                                    pass
+
+                                        if modified:
                                             modified_body = json_module.dumps(
                                                 payload
                                             ).encode("utf-8")
                                             logger.debug(
-                                                "[TRACE] Stripped trace fields from arguments"
+                                                "[TRACE] Stripped trace/mesh fields from arguments"
                                             )
                                             return {
                                                 **message,
@@ -162,171 +203,175 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 f"⚠️ IMMEDIATE UVICORN: Failed to add trace argument stripper middleware: {e}"
             )
 
-        # Add trace context middleware for distributed tracing (optional)
-        # This handles trace propagation and header injection when tracing is enabled
+        # Add trace context middleware for header propagation (always-on)
+        # Handles trace context setup, propagated header capture, and _mesh_headers processing
         try:
-            import os
+            # Use pure ASGI middleware for proper SSE header injection (Issue #310)
+            class TraceContextMiddleware:
+                """Pure ASGI middleware for trace context and header injection.
 
-            tracing_enabled = os.getenv(
-                "MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false"
-            ).lower() in ("true", "1", "yes")
-            if tracing_enabled:
-                # Use pure ASGI middleware for proper SSE header injection (Issue #310)
-                class TraceContextMiddleware:
-                    """Pure ASGI middleware for trace context and header injection.
+                This middleware:
+                1. Extracts trace context from incoming request headers AND arguments
+                2. Captures configured propagation headers from HTTP headers
+                3. Sets up trace context for the request lifecycle
+                4. Injects trace headers into the response (works with SSE)
+                """
 
-                    This middleware:
-                    1. Extracts trace context from incoming request headers AND arguments
-                    2. Strips trace fields (_trace_id, _parent_span) from arguments to avoid validation errors
-                    3. Sets up trace context for the request lifecycle
-                    4. Injects trace headers into the response (works with SSE)
-                    """
+                def __init__(self, app):
+                    self.app = app
 
-                    def __init__(self, app):
-                        self.app = app
+                async def __call__(self, scope, receive, send):
+                    if scope["type"] != "http":
+                        await self.app(scope, receive, send)
+                        return
 
-                    async def __call__(self, scope, receive, send):
-                        if scope["type"] != "http":
-                            await self.app(scope, receive, send)
-                            return
+                    path = scope.get("path", "")
+                    logger.debug(f"[TRACE] Processing request {path}")
 
-                        path = scope.get("path", "")
-                        logger.debug(f"[TRACE] Processing request {path}")
+                    # Extract and set trace context from request headers
+                    trace_id = None
+                    span_id = None
+                    parent_span = None
 
-                        # Extract and set trace context from request headers
-                        trace_id = None
-                        span_id = None
-                        parent_span = None
-
-                        try:
-                            from _mcp_mesh.tracing.context import TraceContext
-                            from _mcp_mesh.tracing.trace_context_helper import (
-                                TraceContextHelper,
-                                get_header_case_insensitive,
-                            )
-
-                            # Extract trace headers from request (case-insensitive)
-                            headers_list = scope.get("headers", [])
-                            incoming_trace_id = get_header_case_insensitive(
-                                headers_list, "x-trace-id"
-                            )
-                            incoming_parent_span = get_header_case_insensitive(
-                                headers_list, "x-parent-span"
-                            )
-
-                            # Setup trace context from headers
-                            trace_context = {
-                                "trace_id": (
-                                    incoming_trace_id if incoming_trace_id else None
-                                ),
-                                "parent_span": (
-                                    incoming_parent_span
-                                    if incoming_parent_span
-                                    else None
-                                ),
-                            }
-                            TraceContextHelper.setup_request_trace_context(
-                                trace_context, logger
-                            )
-
-                            # Get trace IDs to inject into response
-                            current_trace = TraceContext.get_current()
-                            if current_trace:
-                                trace_id = current_trace.trace_id
-                                span_id = current_trace.span_id
-                                parent_span = current_trace.parent_span
-                        except Exception as e:
-                            logger.warning(f"Failed to set trace context: {e}")
-
-                        # Create receive wrapper to extract trace context from arguments
-                        # Note: Argument stripping is handled by TraceArgumentStripperMiddleware
-                        import json as json_module
-
-                        async def receive_with_trace_extraction():
-                            message = await receive()
-                            if message["type"] == "http.request":
-                                body = message.get("body", b"")
-                                if body:
-                                    try:
-                                        payload = json_module.loads(
-                                            body.decode("utf-8")
-                                        )
-                                        if payload.get("method") == "tools/call":
-                                            arguments = payload.get("params", {}).get(
-                                                "arguments", {}
-                                            )
-
-                                            # Extract trace context from arguments if not in headers
-                                            nonlocal trace_id, span_id, parent_span
-                                            if not trace_id and arguments.get(
-                                                "_trace_id"
-                                            ):
-                                                try:
-                                                    from _mcp_mesh.tracing.context import (
-                                                        TraceContext,
-                                                    )
-                                                    from _mcp_mesh.tracing.trace_context_helper import (
-                                                        TraceContextHelper,
-                                                    )
-
-                                                    arg_trace_id = arguments.get(
-                                                        "_trace_id"
-                                                    )
-                                                    arg_parent_span = arguments.get(
-                                                        "_parent_span"
-                                                    )
-                                                    trace_context = {
-                                                        "trace_id": arg_trace_id,
-                                                        "parent_span": arg_parent_span,
-                                                    }
-                                                    TraceContextHelper.setup_request_trace_context(
-                                                        trace_context, logger
-                                                    )
-                                                    current_trace = (
-                                                        TraceContext.get_current()
-                                                    )
-                                                    if current_trace:
-                                                        trace_id = (
-                                                            current_trace.trace_id
-                                                        )
-                                                        span_id = current_trace.span_id
-                                                        parent_span = (
-                                                            current_trace.parent_span
-                                                        )
-                                                    logger.debug(
-                                                        f"[TRACE] Extracted trace context from arguments: trace_id={arg_trace_id}"
-                                                    )
-                                                except Exception:
-                                                    pass
-                                    except Exception as e:
-                                        logger.debug(
-                                            f"[TRACE] Failed to process body for extraction: {e}"
-                                        )
-                            return message
-
-                        # Wrap send to inject headers before response starts
-                        async def send_with_trace_headers(message):
-                            if message["type"] == "http.response.start" and trace_id:
-                                # Add trace headers to the response
-                                headers = list(message.get("headers", []))
-                                headers.append((b"x-trace-id", trace_id.encode()))
-                                if span_id:
-                                    headers.append((b"x-span-id", span_id.encode()))
-                                if parent_span:
-                                    headers.append(
-                                        (b"x-parent-span-id", parent_span.encode())
-                                    )
-                                message = {**message, "headers": headers}
-                            await send(message)
-
-                        await self.app(
-                            scope, receive_with_trace_extraction, send_with_trace_headers
+                    try:
+                        from _mcp_mesh.tracing.context import (
+                            PROPAGATE_HEADERS,
+                            TraceContext,
+                        )
+                        from _mcp_mesh.tracing.trace_context_helper import (
+                            TraceContextHelper,
+                            get_header_case_insensitive,
                         )
 
-                app.add_middleware(TraceContextMiddleware)
-                logger.debug(
-                    "📦 IMMEDIATE UVICORN: Added trace context middleware for distributed tracing"
-                )
+                        # Extract trace headers from request (case-insensitive)
+                        headers_list = scope.get("headers", [])
+                        incoming_trace_id = get_header_case_insensitive(
+                            headers_list, "x-trace-id"
+                        )
+                        incoming_parent_span = get_header_case_insensitive(
+                            headers_list, "x-parent-span"
+                        )
+
+                        # Setup trace context from headers
+                        trace_context = {
+                            "trace_id": (
+                                incoming_trace_id if incoming_trace_id else None
+                            ),
+                            "parent_span": (
+                                incoming_parent_span if incoming_parent_span else None
+                            ),
+                        }
+                        TraceContextHelper.setup_request_trace_context(
+                            trace_context, logger
+                        )
+
+                        # Get trace IDs to inject into response
+                        current_trace = TraceContext.get_current()
+                        if current_trace:
+                            trace_id = current_trace.trace_id
+                            span_id = current_trace.span_id
+                            parent_span = current_trace.parent_span
+
+                        # Capture configured propagation headers from HTTP headers (always-on)
+                        if PROPAGATE_HEADERS:
+                            captured = {}
+                            for header_name in PROPAGATE_HEADERS:
+                                value = get_header_case_insensitive(
+                                    headers_list, header_name
+                                )
+                                if value:
+                                    captured[header_name] = value
+                            if captured:
+                                TraceContext.set_propagated_headers(captured)
+                                logger.debug(
+                                    f"[TRACE] Captured {len(captured)} propagated headers"
+                                )
+                    except Exception as e:
+                        logger.warning(f"Failed to set trace context: {e}")
+
+                    # Create receive wrapper to extract trace context from arguments
+                    # Note: Argument stripping is handled by TraceArgumentStripperMiddleware
+                    import json as json_module
+
+                    async def receive_with_trace_extraction():
+                        message = await receive()
+                        if message["type"] == "http.request":
+                            body = message.get("body", b"")
+                            if body:
+                                try:
+                                    payload = json_module.loads(body.decode("utf-8"))
+                                    if payload.get("method") == "tools/call":
+                                        arguments = payload.get("params", {}).get(
+                                            "arguments", {}
+                                        )
+
+                                        # Extract trace context from arguments if not in headers
+                                        nonlocal trace_id, span_id, parent_span
+                                        if not trace_id and arguments.get("_trace_id"):
+                                            try:
+                                                from _mcp_mesh.tracing.context import (
+                                                    TraceContext,
+                                                )
+                                                from _mcp_mesh.tracing.trace_context_helper import (
+                                                    TraceContextHelper,
+                                                )
+
+                                                arg_trace_id = arguments.get(
+                                                    "_trace_id"
+                                                )
+                                                arg_parent_span = arguments.get(
+                                                    "_parent_span"
+                                                )
+                                                trace_context = {
+                                                    "trace_id": arg_trace_id,
+                                                    "parent_span": arg_parent_span,
+                                                }
+                                                TraceContextHelper.setup_request_trace_context(
+                                                    trace_context, logger
+                                                )
+                                                current_trace = (
+                                                    TraceContext.get_current()
+                                                )
+                                                if current_trace:
+                                                    trace_id = current_trace.trace_id
+                                                    span_id = current_trace.span_id
+                                                    parent_span = (
+                                                        current_trace.parent_span
+                                                    )
+                                                logger.debug(
+                                                    f"[TRACE] Extracted trace context from arguments: trace_id={arg_trace_id}"
+                                                )
+                                            except Exception:
+                                                pass
+                                except Exception as e:
+                                    logger.debug(
+                                        f"[TRACE] Failed to process body for extraction: {e}"
+                                    )
+                        return message
+
+                    # Wrap send to inject headers before response starts
+                    async def send_with_trace_headers(message):
+                        if message["type"] == "http.response.start" and trace_id:
+                            # Add trace headers to the response
+                            headers = list(message.get("headers", []))
+                            headers.append((b"x-trace-id", trace_id.encode()))
+                            if span_id:
+                                headers.append((b"x-span-id", span_id.encode()))
+                            if parent_span:
+                                headers.append(
+                                    (b"x-parent-span-id", parent_span.encode())
+                                )
+                            message = {**message, "headers": headers}
+                        await send(message)
+
+                    await self.app(
+                        scope, receive_with_trace_extraction, send_with_trace_headers
+                    )
+
+            app.add_middleware(TraceContextMiddleware)
+            logger.debug(
+                "📦 IMMEDIATE UVICORN: Added trace context middleware for header propagation"
+            )
         except Exception as e:
             logger.warning(
                 f"⚠️ IMMEDIATE UVICORN: Failed to add trace context middleware: {e}"

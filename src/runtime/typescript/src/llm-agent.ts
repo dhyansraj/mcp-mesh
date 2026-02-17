@@ -61,7 +61,7 @@ import {
   extractModelName,
 } from "./llm-provider.js";
 import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
-import { getCurrentTraceContext } from "./proxy.js";
+import { getCurrentTraceContext, getCurrentPropagatedHeaders } from "./proxy.js";
 import {
   generateSpanId,
   publishTraceSpan,
@@ -491,6 +491,11 @@ export class MeshDelegatedProvider implements LlmProvider {
       args._trace_id = traceCtx.traceId;
       args._parent_span = traceSpanId;
     }
+    // Inject propagated headers
+    const delegatedPropHeaders = getCurrentPropagatedHeaders();
+    if (Object.keys(delegatedPropHeaders).length > 0) {
+      args._mesh_headers = { ...delegatedPropHeaders };
+    }
 
     let traceSuccess = true;
     let traceError: string | null = null;
@@ -505,6 +510,7 @@ export class MeshDelegatedProvider implements LlmProvider {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             ...(traceCtx && traceSpanId ? createTraceHeaders(traceCtx.traceId, traceSpanId) : {}),
+            ...getCurrentPropagatedHeaders(),
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
@@ -1100,6 +1106,7 @@ export function createLlmToolProxy(
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             ...(traceCtx && traceSpanId ? createTraceHeaders(traceCtx.traceId, traceSpanId) : {}),
+            ...getCurrentPropagatedHeaders(),
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
@@ -1110,6 +1117,7 @@ export function createLlmToolProxy(
               arguments: {
                 ...args,
                 ...(traceCtx && traceSpanId ? { _trace_id: traceCtx.traceId, _parent_span: traceSpanId } : {}),
+                ...(Object.keys(getCurrentPropagatedHeaders()).length > 0 ? { _mesh_headers: getCurrentPropagatedHeaders() } : {}),
               },
             },
           }),

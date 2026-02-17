@@ -1,0 +1,179 @@
+# Test Case: Mixed Language Header Propagation (Python relay -> TypeScript echo)
+# Verifies cross-runtime header propagation -- the most important case since
+# Python->TS uses the _mesh_headers arg tunneling mechanism.
+#
+# Scenario:
+#   - header-echo-ts (TypeScript) provides echo_headers tool
+#   - header-relay-py (Python) has a dependency on echo_headers and forwards the call
+#   - curl sends custom headers to header-relay-py
+#   - Python relay calls TypeScript echo via mesh (using _mesh_headers tunneling)
+#   - Assert the response contains the original header values
+
+name: "Mixed Language Header Propagation (Python -> TypeScript)"
+description: "Test cross-runtime header propagation from Python relay to TypeScript echo"
+tags:
+  - header_propagation
+  - python
+  - typescript
+  - mixed_language
+  - cross_runtime
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/* /workspace/"
+
+  # Install npm dependencies for TypeScript echo agent
+  - name: "Install header-echo-ts npm dependencies"
+    handler: npm-install
+    path: /workspace/header-echo-ts
+
+  # Start TypeScript echo agent (provider)
+  - name: "Start header-echo-ts agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3024 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register
+  - name: "Wait for header-echo-ts registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo-ts"; then
+          echo "header-echo-ts registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-ts did not register within 40s"
+      meshctl logs header-echo-ts 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  # Start Python relay agent (consumer)
+  - name: "Start header-relay-py agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3025 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_relay
+
+  # Wait for relay agent to register
+  - name: "Wait for header-relay-py registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-relay"; then
+          echo "header-relay registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay did not register within 40s"
+      meshctl logs header-relay 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_relay
+    timeout: 60
+
+  # Wait for dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are running
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get relay agent port
+  - name: "Get relay agent port"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl list --json 2>/dev/null | python -c "import sys,json; data=json.load(sys.stdin); ports=[a[''endpoint''].split('':'')[-1] for a in data.get(''agents'',[]) if ''header-relay'' in a.get(''name'','''')]; print(ports[0] if ports else ''3025'')"'
+    capture: relay_port
+
+  # Send curl request with custom headers to Python relay agent
+  - name: "Call relay_headers via curl with custom headers (Python -> TypeScript)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=${captured.relay_port}
+      curl -s -X POST http://localhost:${PORT}/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -H "X-Custom-Auth: test-token-123" \
+        -H "X-Tenant-Id: tenant-abc" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relay_headers","arguments":{}}}'
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show agent logs
+  - name: "Get header-echo-ts logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo-ts 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay-py logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay 2>/dev/null | tail -20 || echo 'no relay logs'"
+    capture: relay_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'header-echo-ts'"
+    message: "header-echo-ts agent should be registered"
+
+  - expr: "${captured.list_agents} contains 'header-relay'"
+    message: "header-relay-py agent should be registered"
+
+  # Tools available
+  - expr: "${captured.list_tools} contains 'echo_headers'"
+    message: "echo_headers tool should be available"
+
+  - expr: "${captured.list_tools} contains 'relay_headers'"
+    message: "relay_headers tool should be available"
+
+  # Header values propagated through cross-runtime chain (Python -> TypeScript)
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value (propagated Python -> TypeScript)"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value (propagated Python -> TypeScript)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

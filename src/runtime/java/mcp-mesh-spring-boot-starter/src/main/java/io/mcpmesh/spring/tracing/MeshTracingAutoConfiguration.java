@@ -11,10 +11,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -145,16 +143,6 @@ public class MeshTracingAutoConfiguration {
                 log.warn("Failed to wire tracer to handler {}: {}", handler.getFuncId(), e.getMessage());
             }
         }
-    }
-
-    @Bean
-    public FilterRegistrationBean<TracingFilter> tracingFilterRegistration() {
-        FilterRegistrationBean<TracingFilter> registration = new FilterRegistrationBean<>();
-        registration.setFilter(new TracingFilter());
-        registration.addUrlPatterns("/*");
-        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
-        registration.setName("meshTracingFilter");
-        return registration;
     }
 
     @PreDestroy

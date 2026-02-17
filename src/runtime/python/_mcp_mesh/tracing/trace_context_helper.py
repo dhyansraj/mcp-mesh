@@ -39,14 +39,7 @@ class TraceContextHelper:
         Setup trace context for incoming HTTP request.
 
         Handles both existing distributed traces and new root traces with proper logging.
-        If tracing is disabled, this function returns immediately without setting up trace context.
         """
-        # If tracing is disabled, skip all trace context setup
-        from .utils import is_tracing_enabled
-
-        if not is_tracing_enabled():
-            return
-
         try:
             from .context import TraceContext
 
@@ -76,7 +69,7 @@ class TraceContextHelper:
             raise  # Re-raise to maintain error handling behavior
 
     @staticmethod
-    def extract_trace_headers(headers: dict[str, str]) -> dict[str, Optional[str]]:
+    def extract_trace_headers(headers: dict[str, str]) -> dict[str, str | None]:
         """
         Extract trace headers from HTTP request headers.
 
@@ -125,7 +118,7 @@ class TraceContextHelper:
         }
 
     @staticmethod
-    def propagate_trace_headers(trace_context: Optional[Any] = None) -> dict[str, str]:
+    def propagate_trace_headers(trace_context: Any | None = None) -> dict[str, str]:
         """
         Generate trace headers for outgoing HTTP requests.
 
@@ -157,21 +150,20 @@ class TraceContextHelper:
         Inject trace headers into outgoing HTTP request headers.
 
         Handles trace context propagation for distributed tracing with proper logging.
-        If tracing is disabled, this function returns immediately without modifying headers.
         """
-        # If tracing is disabled, skip all trace header injection
-        from .utils import is_tracing_enabled
-
-        if not is_tracing_enabled():
-            return
-
         try:
             from .context import TraceContext
 
+            # Inject trace headers when trace context exists (always propagate)
             trace_context = TraceContext.get_current()
             if trace_context:
                 headers["X-Trace-ID"] = trace_context.trace_id
                 headers["X-Parent-Span"] = trace_context.span_id
+
+            # Inject propagated headers (independent of tracing)
+            propagated = TraceContext.get_propagated_headers()
+            for key, value in propagated.items():
+                headers[key] = value
         except Exception as e:
             # Tracing injection should never break MCP calls
             pass

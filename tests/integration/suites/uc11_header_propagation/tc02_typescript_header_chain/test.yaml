@@ -1,0 +1,177 @@
+# Test Case: TypeScript Header Propagation Chain
+# Verifies that custom headers are propagated through a chain of TypeScript agents
+# using _mesh_headers argument tunneling (TS SDK doesn't have HTTP middleware).
+#
+# Scenario:
+#   - header-echo-ts provides echo_headers tool that returns propagated headers
+#   - header-relay-ts has a dependency on echo_headers and forwards the call
+#   - curl injects custom headers via _mesh_headers in JSON-RPC arguments
+#   - header-relay-ts calls header-echo-ts, which returns the propagated headers
+#   - Assert the response contains the original header values
+
+name: "TypeScript Header Propagation Chain"
+description: "Test custom HTTP header propagation through TypeScript agent chain"
+tags:
+  - header_propagation
+  - typescript
+  - multi_agent
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Install npm dependencies for both agents
+  - name: "Install header-echo-ts npm dependencies"
+    handler: npm-install
+    path: /workspace/header-echo-ts
+
+  - name: "Install header-relay-ts npm dependencies"
+    handler: npm-install
+    path: /workspace/header-relay-ts
+
+  # Start echo agent (provider)
+  - name: "Start header-echo-ts agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3022 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register
+  - name: "Wait for header-echo-ts registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo-ts"; then
+          echo "header-echo-ts registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-ts did not register within 40s"
+      meshctl logs header-echo-ts 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  # Start relay agent (consumer)
+  - name: "Start header-relay-ts agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-relay-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3023 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_relay
+
+  # Wait for relay agent to register
+  - name: "Wait for header-relay-ts registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-relay-ts"; then
+          echo "header-relay-ts registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay-ts did not register within 40s"
+      meshctl logs header-relay-ts 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_relay
+    timeout: 60
+
+  # Wait for dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are running
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get relay agent port
+  - name: "Get relay agent port"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl list --json 2>/dev/null | node -e "const d=require(''fs'').readFileSync(''/dev/stdin'',''utf8'');const data=JSON.parse(d);const agent=(data.agents||[]).find(a=>a.name&&a.name.includes(''header-relay-ts''));console.log(agent?agent.endpoint.split('':'').pop():''3023'')"'
+    capture: relay_port
+
+  # Send curl request with custom headers via _mesh_headers tunneling
+  # TypeScript SDK extracts headers from _mesh_headers in args (no HTTP middleware)
+  - name: "Call relay_headers via curl with custom headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=${captured.relay_port}
+      curl -s -X POST http://localhost:${PORT}/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relay_headers","arguments":{"_mesh_headers":{"x-custom-auth":"test-token-123","x-tenant-id":"tenant-abc"}}}}'
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show agent logs
+  - name: "Get header-echo-ts logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo-ts 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay-ts logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay-ts 2>/dev/null | tail -20 || echo 'no relay logs'"
+    capture: relay_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'header-echo-ts'"
+    message: "header-echo-ts agent should be registered"
+
+  - expr: "${captured.list_agents} contains 'header-relay-ts'"
+    message: "header-relay-ts agent should be registered"
+
+  # Tools available
+  - expr: "${captured.list_tools} contains 'echo_headers'"
+    message: "echo_headers tool should be available"
+
+  - expr: "${captured.list_tools} contains 'relay_headers'"
+    message: "relay_headers tool should be available"
+
+  # Header values propagated through the chain
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

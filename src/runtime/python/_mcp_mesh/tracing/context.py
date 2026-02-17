@@ -10,6 +10,10 @@ import os
 import uuid
 from typing import Optional
 
+# Parse MCP_MESH_PROPAGATE_HEADERS env var once at import time
+_raw = os.environ.get("MCP_MESH_PROPAGATE_HEADERS", "")
+PROPAGATE_HEADERS: list[str] = [h.strip().lower() for h in _raw.split(",") if h.strip()]
+
 
 class TraceInfo:
     """Container for trace context information"""
@@ -18,7 +22,7 @@ class TraceInfo:
         self,
         trace_id: str,
         span_id: str,
-        parent_span: Optional[str] = None,
+        parent_span: str | None = None,
     ):
         self.trace_id = trace_id
         self.span_id = span_id
@@ -28,8 +32,11 @@ class TraceInfo:
 class TraceContext:
     """Async-safe trace context using contextvars for proper async request correlation"""
 
-    _current_trace: contextvars.ContextVar[Optional[TraceInfo]] = (
-        contextvars.ContextVar("current_trace", default=None)
+    _current_trace: contextvars.ContextVar[TraceInfo | None] = contextvars.ContextVar(
+        "current_trace", default=None
+    )
+    _propagated_headers: contextvars.ContextVar[dict[str, str] | None] = (
+        contextvars.ContextVar("propagated_headers", default=None)
     )
 
     @classmethod
@@ -37,14 +44,14 @@ class TraceContext:
         cls,
         trace_id: str,
         span_id: str,
-        parent_span: Optional[str] = None,
+        parent_span: str | None = None,
     ):
         """Set current trace context for this async context"""
         trace_info = TraceInfo(trace_id, span_id, parent_span)
         cls._current_trace.set(trace_info)
 
     @classmethod
-    def get_current(cls) -> Optional[TraceInfo]:
+    def get_current(cls) -> TraceInfo | None:
         """Get current trace context for this async context"""
         return cls._current_trace.get()
 
@@ -52,6 +59,21 @@ class TraceContext:
     def clear_current(cls):
         """Clear current trace context"""
         cls._current_trace.set(None)
+
+    @classmethod
+    def get_propagated_headers(cls) -> dict[str, str]:
+        """Get current propagated headers for this async context"""
+        return cls._propagated_headers.get() or {}
+
+    @classmethod
+    def set_propagated_headers(cls, headers: dict[str, str]):
+        """Set propagated headers for this async context"""
+        cls._propagated_headers.set(headers)
+
+    @classmethod
+    def clear_propagated_headers(cls):
+        """Clear propagated headers"""
+        cls._propagated_headers.set({})
 
     @classmethod
     def generate_new(cls) -> TraceInfo:
@@ -63,9 +85,7 @@ class TraceContext:
         return TraceInfo(trace_id, span_id)
 
     @classmethod
-    def from_headers(
-        cls, trace_id: str, parent_span: Optional[str] = None
-    ) -> TraceInfo:
+    def from_headers(cls, trace_id: str, parent_span: str | None = None) -> TraceInfo:
         """Create trace context from incoming request headers"""
         from .utils import generate_span_id
 
@@ -73,7 +93,7 @@ class TraceContext:
         return TraceInfo(trace_id, span_id, parent_span)
 
     @classmethod
-    def set_from_headers(cls, trace_id: str, parent_span: Optional[str] = None):
+    def set_from_headers(cls, trace_id: str, parent_span: str | None = None):
         """Set current trace context from incoming request headers"""
         if trace_id:
             # Generate new span ID for this service, but keep the trace ID and parent span

@@ -13,6 +13,20 @@ import {
   isTracePublisherAvailable,
 } from "@mcpmesh/core";
 
+/**
+ * Parse MCP_MESH_PROPAGATE_HEADERS env var into lowercase header name array.
+ * Parsed once at module load. Empty array means no propagation (backward compatible).
+ */
+function parsePropagateHeaders(): string[] {
+  const raw = process.env.MCP_MESH_PROPAGATE_HEADERS ?? "";
+  return raw
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h.length > 0);
+}
+
+export const PROPAGATE_HEADERS: string[] = parsePropagateHeaders();
+
 // Trace context passed between agents via headers
 export interface TraceContext {
   traceId: string;

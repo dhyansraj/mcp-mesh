@@ -424,10 +424,41 @@ class HttpMcpWrapper:
                                 if not parent_span and arguments.get("_parent_span"):
                                     parent_span = arguments.get("_parent_span")
 
+                                # Extract _mesh_headers from arguments
+                                mesh_headers_raw = arguments.pop("_mesh_headers", None)
+                                if mesh_headers_raw and isinstance(
+                                    mesh_headers_raw, dict
+                                ):
+                                    from ..tracing.context import (
+                                        PROPAGATE_HEADERS as _PH,
+                                    )
+                                    from ..tracing.context import TraceContext as _TC2
+
+                                    if _PH:
+                                        filtered = {
+                                            k.lower(): v
+                                            for k, v in mesh_headers_raw.items()
+                                            if isinstance(v, str) and k.lower() in _PH
+                                        }
+                                        if filtered:
+                                            # Merge with HTTP-captured headers (HTTP takes precedence)
+                                            existing = _TC2.get_propagated_headers()
+                                            if existing:
+                                                merged = dict(filtered)
+                                                merged.update(
+                                                    existing
+                                                )  # HTTP headers override arg headers
+                                                filtered = merged
+                                            _TC2.set_propagated_headers(filtered)
+                                            self.logger.debug(
+                                                f"Set {len(filtered)} propagated headers from _mesh_headers args"
+                                            )
+
                                 # Strip trace context fields from arguments before passing to FastMCP
                                 if (
                                     "_trace_id" in arguments
                                     or "_parent_span" in arguments
+                                    or mesh_headers_raw is not None
                                 ):
                                     arguments.pop("_trace_id", None)
                                     arguments.pop("_parent_span", None)
@@ -451,6 +482,22 @@ class HttpMcpWrapper:
                         TraceContextHelper.setup_request_trace_context(
                             trace_context, self.logger
                         )
+
+                    # Capture configured propagation headers from incoming request
+                    from ..tracing.context import PROPAGATE_HEADERS
+                    from ..tracing.context import TraceContext as _TC
+
+                    if PROPAGATE_HEADERS:
+                        captured = {}
+                        for header_name in PROPAGATE_HEADERS:
+                            value = request.headers.get(header_name)
+                            if value:
+                                captured[header_name] = value
+                        if captured:
+                            _TC.set_propagated_headers(captured)
+                            self.logger.debug(
+                                f"Captured {len(captured)} propagation headers"
+                            )
                 except Exception as e:
                     # Never fail request due to tracing issues
                     self.logger.warning(f"Failed to set trace context: {e}")

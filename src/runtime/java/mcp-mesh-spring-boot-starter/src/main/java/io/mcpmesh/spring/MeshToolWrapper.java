@@ -399,6 +399,37 @@ public class MeshToolWrapper implements McpToolHandler {
                 parentSpan != null ? parentSpan.substring(0, Math.min(8, parentSpan.length())) : "null");
         }
 
+        // Extract _mesh_headers from arguments and set propagated headers context
+        Object meshHeadersObj = cleanArgs.remove("_mesh_headers");
+        if (meshHeadersObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> meshHeaders = (Map<String, Object>) meshHeadersObj;
+            List<String> allowedHeaders = TraceContext.getPropagateHeaderNames();
+            if (!allowedHeaders.isEmpty()) {
+                Map<String, String> filtered = new HashMap<>();
+                for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
+                    if (entry.getValue() instanceof String
+                        && allowedHeaders.contains(entry.getKey().toLowerCase())) {
+                        filtered.put(entry.getKey().toLowerCase(), (String) entry.getValue());
+                    }
+                }
+                if (!filtered.isEmpty()) {
+                    // Merge with any headers already captured by TracingFilter
+                    Map<String, String> existing = TraceContext.getPropagatedHeaders();
+                    if (!existing.isEmpty()) {
+                        Map<String, String> merged = new HashMap<>(existing);
+                        // Args headers fill in gaps but don't override HTTP headers
+                        for (Map.Entry<String, String> e : filtered.entrySet()) {
+                            merged.putIfAbsent(e.getKey(), e.getValue());
+                        }
+                        filtered = merged;
+                    }
+                    TraceContext.setPropagatedHeaders(filtered);
+                    log.trace("Set {} propagated headers from _mesh_headers args", filtered.size());
+                }
+            }
+        }
+
         return cleanArgs;
     }
 

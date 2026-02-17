@@ -14,10 +14,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.core.Ordered;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import io.mcpmesh.spring.tracing.TracingFilter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -156,6 +160,17 @@ public class MeshAutoConfiguration {
                 runtime.updatePort(actualPort);
             }
         };
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "meshTracingFilter")
+    public FilterRegistrationBean<TracingFilter> tracingFilterRegistration() {
+        FilterRegistrationBean<TracingFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new TracingFilter());
+        registration.addUrlPatterns("/*");
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        registration.setName("meshTracingFilter");
+        return registration;
     }
 
     @Bean
