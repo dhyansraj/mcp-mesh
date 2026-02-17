@@ -179,6 +179,67 @@ public class EmployeeServiceApplication {
         );
     }
 
+    /**
+     * Search employees with optional filter criteria.
+     * Tests Record deserialization with missing fields (#557):
+     * When called with partial JSON like {"filter": {"department": "Engineering"}},
+     * the minSalary (Double) and lastName (String) fields are missing.
+     * Before the fix, convertValue(LinkedHashMap, EmployeeFilter.class) fails on Records.
+     *
+     * @param filter Filter criteria (all fields optional)
+     * @return List of matching employees
+     */
+    @MeshTool(
+        capability = "search_employees",
+        description = "Search employees with optional filter criteria",
+        tags = {"employee", "search", "java"}
+    )
+    public List<Employee> searchEmployees(
+        @Param(value = "filter", description = "Filter criteria (all fields optional)") EmployeeFilter filter
+    ) {
+        log.info("Searching employees with filter: department={}, minSalary={}, lastName={}",
+            filter.department(), filter.minSalary(), filter.lastName());
+
+        return employees.values().stream()
+            .filter(e -> filter.department() == null || e.department().equalsIgnoreCase(filter.department()))
+            .filter(e -> filter.minSalary() == null || e.salary() >= filter.minSalary())
+            .filter(e -> filter.lastName() == null || e.lastName().equalsIgnoreCase(filter.lastName()))
+            .toList();
+    }
+
+    /**
+     * Get the full organization structure with nested teams and employees.
+     * Tests deeply nested Record deserialization: Organization contains List&lt;Team&gt;,
+     * each Team contains List&lt;Employee&gt;. This exercises recursive Jackson readValue
+     * across multiple nesting levels.
+     *
+     * @return Organization with nested teams and employees
+     */
+    @MeshTool(
+        capability = "get_organization",
+        description = "Get the full organization structure with nested teams and employees",
+        tags = {"employee", "organization", "nested-types", "java"}
+    )
+    public Organization getOrganization() {
+        log.info("Getting organization structure");
+
+        // Group employees by department to build teams
+        Map<String, List<Employee>> byDept = employees.values().stream()
+            .collect(Collectors.groupingBy(Employee::department));
+
+        List<Team> teams = byDept.entrySet().stream()
+            .map(entry -> {
+                double budget = entry.getValue().stream().mapToDouble(Employee::salary).sum();
+                return new Team(entry.getKey() + " Team", entry.getKey(), entry.getValue(), budget);
+            })
+            .toList();
+
+        int totalHeadcount = employees.size();
+        double totalBudget = employees.values().stream().mapToDouble(Employee::salary).sum();
+
+        return new Organization("Acme Corp", teams, totalHeadcount, totalBudget);
+    }
+
     // =========================================================================
     // Data Types
     // =========================================================================
@@ -212,4 +273,22 @@ public class EmployeeServiceApplication {
      * Team analysis result.
      */
     public record TeamAnalysis(int teamSize, double totalSalary, double averageSalary, String topDepartment) {}
+
+    /**
+     * Filter criteria for searching employees.
+     * All fields are optional (nullable) — tests Record deserialization with missing JSON fields (#557).
+     */
+    public record EmployeeFilter(String department, Double minSalary, String lastName) {}
+
+    /**
+     * A team within a department, containing a list of employees.
+     * Used for nested complex type testing: Organization → List<Team> → List<Employee>.
+     */
+    public record Team(String teamName, String department, List<Employee> members, double totalBudget) {}
+
+    /**
+     * An organization with nested teams, each containing employees.
+     * Tests deeply nested Record deserialization: Organization → List<Team> → List<Employee>.
+     */
+    public record Organization(String name, List<Team> teams, int totalHeadcount, double totalBudget) {}
 }

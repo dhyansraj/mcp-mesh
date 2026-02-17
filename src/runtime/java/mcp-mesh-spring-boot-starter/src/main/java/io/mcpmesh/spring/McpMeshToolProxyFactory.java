@@ -67,12 +67,19 @@ public class McpMeshToolProxyFactory {
     public <T> McpMeshTool<T> getOrCreateProxy(String endpoint, String functionName, Type returnType) {
         String cacheKey = buildCacheKey(endpoint, functionName);
 
-        return proxyCache.computeIfAbsent(cacheKey, key -> {
+        McpMeshToolProxy proxy = proxyCache.computeIfAbsent(cacheKey, key -> {
             log.debug("Creating new proxy for {}:{} with returnType={}", endpoint, functionName, returnType);
-            McpMeshToolProxy proxy = new McpMeshToolProxy(functionName, mcpClient, returnType);
-            proxy.updateEndpoint(endpoint, functionName);
-            return proxy;
+            McpMeshToolProxy newProxy = new McpMeshToolProxy(functionName, mcpClient, returnType);
+            newProxy.updateEndpoint(endpoint, functionName);
+            return newProxy;
         });
+
+        // Update returnType if the cached proxy was created without one (e.g., from untyped path)
+        if (returnType != null && proxy.getReturnType() == null) {
+            proxy.setReturnType(returnType);
+        }
+
+        return (McpMeshTool<T>) proxy;
     }
 
     /**

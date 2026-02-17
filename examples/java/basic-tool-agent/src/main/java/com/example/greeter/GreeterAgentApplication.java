@@ -228,6 +228,45 @@ public class GreeterAgentApplication {
         return analysis;
     }
 
+    /**
+     * List employees by department via mesh and return a summary roster.
+     * Tests McpMeshTool&lt;List&lt;Employee&gt;&gt; generic type deserialization (#562):
+     * The proxy must correctly resolve the ParameterizedType to deserialize
+     * the response as List&lt;Employee&gt; instead of List&lt;LinkedHashMap&gt;.
+     *
+     * @param department Department to list (optional, null for all)
+     * @param employeeList Injected list_employees tool typed as List&lt;Employee&gt;
+     * @return TeamRoster with summary statistics
+     */
+    @MeshTool(
+        capability = "list_team_members",
+        description = "List employees by department via mesh and return a roster summary",
+        tags = {"roster", "cross-agent", "java"},
+        dependencies = @Selector(capability = "list_employees")
+    )
+    public TeamRoster listTeamMembers(
+        @Param(value = "department", description = "Department to list (optional)", required = false) String department,
+        McpMeshTool<List<Employee>> employeeList
+    ) {
+        log.info("listTeamMembers called for department: {} via {}", department, employeeList.getCapability());
+
+        List<Employee> employees = (department != null && !department.isEmpty())
+            ? employeeList.call("department", department)
+            : employeeList.call();
+
+        log.info("Got {} employees from remote service", employees.size());
+
+        double totalSalary = employees.stream().mapToDouble(Employee::salary).sum();
+        String firstEmployee = employees.isEmpty() ? "none" : employees.get(0).firstName();
+
+        return new TeamRoster(
+            department != null ? department : "all",
+            employees.size(),
+            totalSalary,
+            firstEmployee
+        );
+    }
+
     // =========================================================================
     // Data Types
     // =========================================================================
@@ -295,4 +334,10 @@ public class GreeterAgentApplication {
         String callPath,
         String remoteEndpoint
     ) {}
+
+    /**
+     * Team roster summary — returned by listTeamMembers.
+     * Tests McpMeshTool<List<Employee>> deserialization (#562).
+     */
+    public record TeamRoster(String department, int count, double totalSalary, String firstEmployeeName) {}
 }

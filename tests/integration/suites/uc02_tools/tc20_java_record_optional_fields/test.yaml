@@ -1,0 +1,143 @@
+# Test Case: Java Record Optional Fields (#557)
+# Tests that Record types with missing JSON fields deserialize correctly.
+# Before the fix, convertValue(LinkedHashMap, Record.class) failed because
+# Records require constructor-based deserialization for nullable fields.
+#
+# Scenario:
+#   - employee-service provides searchEmployees with EmployeeFilter record
+#   - EmployeeFilter has: department (String), minSalary (Double), lastName (String)
+#   - Test with partial JSON to exercise missing-field paths
+
+name: "UC02: Java Record Optional Fields (#557)"
+description: "Verify Record types with missing JSON fields deserialize correctly"
+tags:
+  - tools
+  - java
+  - record-deserialization
+  - regression
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java employee service artifact to workspace
+  - name: "Copy Java employee service to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      ls -la /workspace/java-employee-service/
+    capture: copy_java
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Start Java employee service
+  - name: "Start Java employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting via meshctl"
+    capture: start_java
+
+  # Wait for agent to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for employee-service..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee-service 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java
+    timeout: 120
+
+  # Verify searchEmployees tool is listed
+  - name: "Verify searchEmployees tool is listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Scenario 1: Partial filter — department only (minSalary and lastName missing)
+  - name: "Search with department only (partial filter)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call searchEmployees ''{"filter": {"department": "Engineering"}}'''
+    capture: search_dept_only
+    timeout: 30
+
+  # Scenario 2: Partial filter — minSalary only (department and lastName missing)
+  - name: "Search with minSalary only (partial filter)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call searchEmployees ''{"filter": {"minSalary": 120000}}'''
+    capture: search_salary_only
+    timeout: 30
+
+  # Scenario 3: Empty filter — all fields missing
+  - name: "Search with empty filter (all fields missing)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call searchEmployees ''{"filter": {}}'''
+    capture: search_empty
+    timeout: 30
+
+assertions:
+  # Tool is registered
+  - expr: "${captured.list_tools} contains 'searchEmployees'"
+    message: "searchEmployees tool should be listed"
+
+  # Scenario 1: Department=Engineering → Alice, Bob, Eve (3 employees)
+  - expr: "${jq:captured.search_dept_only:.content[0].text | fromjson | length} == 3"
+    message: "Department filter should return 3 Engineering employees"
+
+  - expr: "${jq:captured.search_dept_only:.content[0].text | fromjson} contains 'Alice'"
+    message: "Engineering filter should include Alice"
+
+  - expr: "${jq:captured.search_dept_only:.content[0].text | fromjson} contains 'Bob'"
+    message: "Engineering filter should include Bob"
+
+  - expr: "${jq:captured.search_dept_only:.content[0].text | fromjson} contains 'Eve'"
+    message: "Engineering filter should include Eve"
+
+  # Scenario 2: minSalary=120000 → Alice (120k), Carol (130k), Eve (125k)
+  - expr: "${jq:captured.search_salary_only:.content[0].text | fromjson | length} == 3"
+    message: "Salary filter should return 3 employees with salary >= 120000"
+
+  - expr: "${jq:captured.search_salary_only:.content[0].text | fromjson} contains 'Alice'"
+    message: "Salary filter should include Alice (120000)"
+
+  - expr: "${jq:captured.search_salary_only:.content[0].text | fromjson} contains 'Carol'"
+    message: "Salary filter should include Carol (130000)"
+
+  - expr: "${jq:captured.search_salary_only:.content[0].text | fromjson} contains 'Eve'"
+    message: "Salary filter should include Eve (125000)"
+
+  # Scenario 3: Empty filter → all 5 employees
+  - expr: "${jq:captured.search_empty:.content[0].text | fromjson | length} == 5"
+    message: "Empty filter should return all 5 employees"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

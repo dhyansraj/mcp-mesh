@@ -1,0 +1,145 @@
+# Test Case: Java Nested Complex Types
+# Tests deeply nested Record type deserialization:
+# Organization → List<Team> → List<Employee>
+# This exercises recursive Jackson readValue across multiple nesting levels.
+#
+# Scenario:
+#   - employee-service provides getOrganization tool
+#   - Returns Organization with nested List<Team>, each Team has List<Employee>
+#   - Verify all nesting levels deserialize correctly
+
+name: "UC02: Java Nested Complex Types (Organization → List<Team> → List<Employee>)"
+description: "Verify deeply nested Record types deserialize correctly across multiple nesting levels"
+tags:
+  - tools
+  - java
+  - nested-types
+  - complex-types
+  - regression
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java employee service artifact to workspace
+  - name: "Copy Java employee service to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      ls -la /workspace/java-employee-service/
+    capture: copy_java
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Start Java employee service
+  - name: "Start Java employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting via meshctl"
+    capture: start_java
+
+  # Wait for agent to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for employee-service..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee-service 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_java
+    timeout: 120
+
+  # Verify getOrganization tool is listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call getOrganization — returns deeply nested structure
+  - name: "Get organization structure"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call getOrganization '{}'"
+    capture: org_result
+    timeout: 30
+
+assertions:
+  # Tool is registered
+  - expr: "${captured.list_tools} contains 'getOrganization'"
+    message: "getOrganization tool should be listed"
+
+  # Top-level Organization fields
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .name} == 'Acme Corp'"
+    message: "Organization name should be 'Acme Corp'"
+
+  - expr: ${jq:captured.org_result:.content[0].text | fromjson | .totalHeadcount} == 5
+    message: "Organization totalHeadcount should be 5"
+
+  - expr: ${jq:captured.org_result:.content[0].text | fromjson | .totalBudget} > 0
+    message: "Organization totalBudget should be positive"
+
+  # Nested teams — 3 departments: Engineering, Product, Sales
+  - expr: ${jq:captured.org_result:.content[0].text | fromjson | .teams | length} == 3
+    message: "Organization should have 3 teams (Engineering, Product, Sales)"
+
+  # Verify team-level fields exist and are correct types
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[0]} contains 'teamName'"
+    message: "First team should have teamName field (Record deserialized correctly)"
+
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[0]} contains 'members'"
+    message: "First team should have members field (nested List<Employee>)"
+
+  # Verify deeply nested Employee records inside teams
+  # Find the Engineering team and check its members
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Engineering\") | .members | length} == 3"
+    message: "Engineering team should have 3 members"
+
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Engineering\") | .members} contains 'Alice'"
+    message: "Engineering team members should include Alice"
+
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Engineering\") | .totalBudget} == 360000.0"
+    message: "Engineering team budget should be 360000 (120k+115k+125k)"
+
+  # Product team
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Product\") | .members | length} == 1"
+    message: "Product team should have 1 member"
+
+  # Sales team
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Sales\") | .members | length} == 1"
+    message: "Sales team should have 1 member"
+
+  # Verify deepest nesting: Employee record fields inside team members
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Engineering\") | .members[0]} contains 'firstName'"
+    message: "Nested Employee should have firstName field (deep Record deserialized correctly)"
+
+  - expr: "${jq:captured.org_result:.content[0].text | fromjson | .teams[] | select(.department == \"Engineering\") | .members[0]} contains 'salary'"
+    message: "Nested Employee should have salary field (deep Record deserialized correctly)"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
