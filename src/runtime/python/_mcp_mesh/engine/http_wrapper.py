@@ -494,7 +494,12 @@ class HttpMcpWrapper:
                             if value:
                                 captured[header_name] = value
                         if captured:
-                            _TC.set_propagated_headers(captured)
+                            existing = _TC.get_propagated_headers()
+                            if existing:
+                                merged = {**existing, **captured}
+                            else:
+                                merged = captured
+                            _TC.set_propagated_headers(merged)
                             self.logger.debug(
                                 f"Captured {len(captured)} propagation headers"
                             )
