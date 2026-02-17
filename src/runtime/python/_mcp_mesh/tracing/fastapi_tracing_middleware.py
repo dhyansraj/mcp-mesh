@@ -24,7 +24,7 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
     - Distributed tracing context setup
     - Redis trace publishing
     - Route name extraction
-    - Zero overhead when tracing disabled
+    - Header propagation always active (production feature)
     """
 
     def __init__(self, app, logger_instance: logging.Logger = None):
@@ -34,7 +34,30 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process FastAPI request with comprehensive tracing."""
 
-        # If tracing is disabled, process request directly with zero overhead
+        # ALWAYS: Setup distributed tracing context from request headers
+        try:
+            from .trace_context_helper import TraceContextHelper
+
+            trace_context = await TraceContextHelper.extract_trace_context_from_request(
+                request
+            )
+            TraceContextHelper.setup_request_trace_context(trace_context, self.logger)
+
+            from .context import PROPAGATE_HEADERS
+            from .context import TraceContext as _TC
+
+            if PROPAGATE_HEADERS:
+                captured = {}
+                for header_name in PROPAGATE_HEADERS:
+                    value = request.headers.get(header_name)
+                    if value:
+                        captured[header_name] = value
+                if captured:
+                    _TC.set_propagated_headers(captured)
+        except Exception as e:
+            pass
+
+        # If tracing is disabled, process request directly (skip perf monitoring + Redis)
         from .utils import is_tracing_enabled
 
         if not is_tracing_enabled():
@@ -43,22 +66,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
         self.logger.debug(
             f"[TRACE] Processing request {request.method} {request.url.path}"
         )
-
-        # Setup distributed tracing context from request headers
-        try:
-            from .trace_context_helper import TraceContextHelper
-
-            # Extract trace context from request headers
-            trace_context = await TraceContextHelper.extract_trace_context_from_request(
-                request
-            )
-
-            # Setup trace context for this request lifecycle
-            TraceContextHelper.setup_request_trace_context(trace_context, self.logger)
-
-        except Exception as e:
-            # Never fail request due to tracing issues
-            pass
 
         # Extract route information for tracing
         route_name = self._extract_route_name(request)

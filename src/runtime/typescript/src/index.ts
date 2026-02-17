@@ -117,7 +117,7 @@ export {
 } from "./route.js";
 
 // Proxy utilities (for advanced use)
-export { createProxy, normalizeDependency } from "./proxy.js";
+export { createProxy, normalizeDependency, getCurrentPropagatedHeaders } from "./proxy.js";
 
 // Tracing utilities (for advanced use)
 export {

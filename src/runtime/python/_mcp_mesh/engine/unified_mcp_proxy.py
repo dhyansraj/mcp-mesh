@@ -124,11 +124,8 @@ class UnifiedMCPProxy:
                     """
                     try:
                         from ..tracing.context import TraceContext
-                        from ..tracing.utils import is_tracing_enabled
 
-                        if not is_tracing_enabled():
-                            return
-
+                        # Inject trace headers when trace context exists (always propagate)
                         trace_context = TraceContext.get_current()
                         if trace_context:
                             request.headers["X-Trace-ID"] = trace_context.trace_id
@@ -138,6 +135,11 @@ class UnifiedMCPProxy:
                                 f"trace_id={trace_context.trace_id[:8]}... "
                                 f"parent_span={trace_context.span_id[:8]}..."
                             )
+
+                        # Inject propagated headers (independent of tracing)
+                        propagated = TraceContext.get_propagated_headers()
+                        for key, value in propagated.items():
+                            request.headers[key] = value
                     except Exception as e:
                         # Never fail HTTP requests due to tracing issues
                         proxy_instance.logger.trace(
@@ -416,6 +418,11 @@ class UnifiedMCPProxy:
             self.logger.debug(
                 f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
             )
+
+        # Inject propagated headers into args for TypeScript agents
+        propagated = TraceContext.get_propagated_headers()
+        if propagated:
+            args_with_trace["_mesh_headers"] = dict(propagated)
 
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []

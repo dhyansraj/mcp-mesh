@@ -1,0 +1,168 @@
+# Test Case: Python Header Propagation Chain
+# Verifies that custom HTTP headers are propagated through a chain of Python agents.
+#
+# Scenario:
+#   - header-echo agent provides echo_headers tool that returns propagated headers
+#   - header-relay agent has a dependency on echo_headers and forwards the call
+#   - curl sends custom headers (X-Custom-Auth, X-Tenant-Id) to header-relay
+#   - header-relay calls header-echo, which returns the propagated headers
+#   - Assert the response contains the original header values
+
+name: "Python Header Propagation Chain"
+description: "Test custom HTTP header propagation through Python agent chain"
+tags:
+  - header_propagation
+  - python
+  - multi_agent
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Start echo agent (provider)
+  - name: "Start header-echo agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-py/main.py --env MCP_MESH_HTTP_PORT=3020 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register
+  - name: "Wait for header-echo registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo"; then
+          echo "header-echo registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo did not register within 40s"
+      meshctl logs header-echo 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  # Start relay agent (consumer)
+  - name: "Start header-relay agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3021 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_relay
+
+  # Wait for relay agent to register
+  - name: "Wait for header-relay registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-relay"; then
+          echo "header-relay registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay did not register within 40s"
+      meshctl logs header-relay 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_relay
+    timeout: 60
+
+  # Wait for dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 5
+
+  # Verify both agents are running
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get relay agent port
+  - name: "Get relay agent port"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl list --json 2>/dev/null | python -c "import sys,json; data=json.load(sys.stdin); ports=[a[''endpoint''].split('':'')[-1] for a in data.get(''agents'',[]) if ''header-relay'' in a.get(''name'','''')]; print(ports[0] if ports else ''3021'')"'
+    capture: relay_port
+
+  # Send curl request with custom headers to relay agent
+  - name: "Call relay_headers via curl with custom headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=${captured.relay_port}
+      curl -s -X POST http://localhost:${PORT}/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -H "X-Custom-Auth: test-token-123" \
+        -H "X-Tenant-Id: tenant-abc" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relay_headers","arguments":{}}}'
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show agent logs
+  - name: "Get header-echo logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay 2>/dev/null | tail -20 || echo 'no relay logs'"
+    capture: relay_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'header-echo'"
+    message: "header-echo agent should be registered"
+
+  - expr: "${captured.list_agents} contains 'header-relay'"
+    message: "header-relay agent should be registered"
+
+  # Tools available
+  - expr: "${captured.list_tools} contains 'echo_headers'"
+    message: "echo_headers tool should be available"
+
+  - expr: "${captured.list_tools} contains 'relay_headers'"
+    message: "relay_headers tool should be available"
+
+  # Header values propagated through the chain
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

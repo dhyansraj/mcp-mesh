@@ -13,6 +13,9 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Spring Filter for extracting and propagating trace context.
@@ -55,12 +58,6 @@ public class TracingFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response,
                          FilterChain chain) throws IOException, ServletException {
-        // Skip if tracing disabled
-        if (!enabled) {
-            chain.doFilter(request, response);
-            return;
-        }
-
         HttpServletRequest httpRequest = (HttpServletRequest) request;
         HttpServletResponse httpResponse = (HttpServletResponse) response;
 
@@ -68,6 +65,7 @@ public class TracingFilter implements Filter {
             // CRITICAL: Clear any inherited context from previous requests
             // InheritableThreadLocal can leak context when thread pools reuse threads
             TraceContext.clear();
+            TraceContext.clearPropagatedHeaders();
 
             // Extract trace context from headers
             String traceId = httpRequest.getHeader(TRACE_ID_HEADER);
@@ -83,13 +81,31 @@ public class TracingFilter implements Filter {
                     traceId.substring(0, Math.min(8, traceId.length())),
                     parentSpan != null ? parentSpan.substring(0, Math.min(8, parentSpan.length())) : "null");
 
-                // Add trace headers to response for debugging
-                httpResponse.setHeader(TRACE_ID_HEADER, traceInfo.getTraceId());
-                httpResponse.setHeader(PARENT_SPAN_HEADER, traceInfo.getSpanId());
+                // Add trace headers to response for debugging (only when tracing enabled)
+                if (enabled) {
+                    httpResponse.setHeader(TRACE_ID_HEADER, traceInfo.getTraceId());
+                    httpResponse.setHeader(PARENT_SPAN_HEADER, traceInfo.getSpanId());
+                }
             } else {
                 // No trace headers - don't create root trace here
                 // MeshToolWrapper will handle creating root trace or extracting from arguments
                 log.trace("No trace headers found, deferring context creation to MeshToolWrapper");
+            }
+
+            // Capture configured propagation headers from incoming request
+            List<String> propagateNames = TraceContext.getPropagateHeaderNames();
+            if (!propagateNames.isEmpty()) {
+                Map<String, String> captured = new HashMap<>();
+                for (String headerName : propagateNames) {
+                    String value = httpRequest.getHeader(headerName);
+                    if (value != null && !value.isEmpty()) {
+                        captured.put(headerName.toLowerCase(), value);
+                    }
+                }
+                if (!captured.isEmpty()) {
+                    TraceContext.setPropagatedHeaders(captured);
+                    log.trace("Captured {} propagation headers", captured.size());
+                }
             }
 
             chain.doFilter(request, response);
@@ -97,6 +113,7 @@ public class TracingFilter implements Filter {
         } finally {
             // Always clear context after request completes
             TraceContext.clear();
+            TraceContext.clearPropagatedHeaders();
         }
     }
 }
