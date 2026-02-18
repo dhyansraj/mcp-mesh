@@ -1,5 +1,29 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.4...v0.9.5)
+
+## v0.9.5 (2026-02-17)
+
+### ✨ New Features
+
+- **Java SDK — `/health` endpoint** (#561): Added `GET` and `HEAD` `/health` endpoint to Java SDK for parity with Python and TypeScript runtimes
+
+### 🔧 Improvements
+
+- **Header propagation decoupled from distributed tracing** (#564): `MCP_MESH_PROPAGATE_HEADERS` now works across all SDKs (Python, Java, TypeScript) even when tracing is disabled — previously gated behind `MCP_MESH_DISTRIBUTED_TRACING_ENABLED`, silently dropping custom headers (auth tokens, tenant IDs)
+- **Simplified tracing setup** (#554): Single `MCP_MESH_TRACING=true` env var enables end-to-end distributed tracing
+- **Watch mode random port** (#552): Uses `MCP_MESH_HTTP_PORT=0` to eliminate "Address already in use" errors on restarts
+- **Compile-before-restart in watch mode** (#556): Java runs `mvn compile` and Python runs `py_compile` before restarting, catching build errors early
+- **Built-in retry for `meshctl trace`** (#555): Handles Tempo propagation delay automatically instead of requiring manual retries
+- **Removed user-level config file** (#553): Eliminated `~/.mcp-mesh/config.yaml` to prevent cross-project conflicts
+
+### 🐛 Bug Fixes
+
+- **Java SDK** — `MeshEnvironmentPostProcessor` no longer overrides `server.port` for non-mesh Spring Boot apps (#558)
+- **TypeScript SDK** — HTTP headers now propagate through `mesh.route()` Express middleware (#559)
+- **meshctl** — `--env` flag uses `StringArray` instead of `StringSlice` so comma-separated values are not split (#564)
+- **bump_version.py** — Added coverage for Docker image tags in `scaffold/compose.go` and Java pom.xml files in integration test artifacts (#560)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.3...v0.9.4)
 
 ## v0.9.4 (2026-02-10)

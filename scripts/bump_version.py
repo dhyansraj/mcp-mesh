@@ -429,7 +429,7 @@ def bump_docker_example_helm(old: str, new: str, dry_run: bool) -> list[str]:
 
 
 def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 18: Integration test TypeScript artifact package.json files."""
+    """Category 18: Integration test artifact package.json and pom.xml files."""
     changed = []
     suites_dir = PROJECT_ROOT / "tests" / "integration" / "suites"
     if not suites_dir.exists():
@@ -441,6 +441,13 @@ def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[s
         replacement = rf"\g<1>\g<2>{new}\3"
         if replace_in_file(pkg, pattern, replacement, dry_run):
             changed.append(str(pkg.relative_to(PROJECT_ROOT)))
+
+    # Java pom.xml: <mcp-mesh.version>OLD</mcp-mesh.version>
+    for pom in sorted(suites_dir.rglob("*/pom.xml")):
+        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
+        replacement = rf"\g<1>{new}\2"
+        if replace_in_file(pom, pattern, replacement, dry_run):
+            changed.append(str(pom.relative_to(PROJECT_ROOT)))
     return changed
 
 
