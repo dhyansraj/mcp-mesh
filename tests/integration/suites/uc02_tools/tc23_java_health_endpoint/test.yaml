@@ -1,0 +1,130 @@
+# Test Case: Java Health Endpoint
+# Tests GET /health and HEAD /health on Java Spring Boot agents.
+#
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java)
+
+name: "UC02: Java Health Endpoint"
+description: "Verify Java agents expose GET /health and HEAD /health endpoints"
+tags:
+  - tools
+  - java
+  - health
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start the Java agent with meshctl (registry starts automatically)
+  - name: "Start Java agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java agent starting via meshctl"
+    capture: start_agent
+
+  # Wait for agent to start and register
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java agent to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Agent registered after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs java-greeter-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Get agent port from meshctl list
+  - name: "Get agent port"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Extract port from meshctl list output
+      PORT=$(meshctl list 2>/dev/null | grep "greeter" | grep -oE ':[0-9]+' | head -1 | tr -d ':')
+      if [ -z "$PORT" ]; then
+        echo "ERROR: Could not determine agent port"
+        meshctl list
+        exit 1
+      fi
+      echo "$PORT"
+    capture: agent_port
+
+  # Test GET /health
+  - name: "Test GET /health"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=$(echo "${captured.agent_port}" | tr -d '[:space:]')
+      echo "Curling GET http://localhost:${PORT}/health"
+      curl -s -w "\nHTTP_CODE:%{http_code}" "http://localhost:${PORT}/health"
+    capture: get_health
+
+  # Test HEAD /health
+  - name: "Test HEAD /health"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=$(echo "${captured.agent_port}" | tr -d '[:space:]')
+      echo "Curling HEAD http://localhost:${PORT}/health"
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "http://localhost:${PORT}/health")
+      echo "HTTP_CODE:${HTTP_CODE}"
+    capture: head_health
+
+assertions:
+  # Agent registered
+  - expr: "${captured.wait_registration} contains 'Agent registered'"
+    message: "Java greeter agent should register successfully"
+
+  # GET /health returns 200
+  - expr: "${captured.get_health} contains 'HTTP_CODE:200'"
+    message: "GET /health should return HTTP 200"
+
+  # GET /health returns healthy status
+  - expr: "${captured.get_health} contains 'healthy'"
+    message: "GET /health should contain 'healthy' status"
+
+  # GET /health returns agent name
+  - expr: "${captured.get_health} contains 'greeter'"
+    message: "GET /health should contain agent name"
+
+  # HEAD /health returns 200
+  - expr: "${captured.head_health} contains 'HTTP_CODE:200'"
+    message: "HEAD /health should return HTTP 200"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Also kill any remaining Java processes
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

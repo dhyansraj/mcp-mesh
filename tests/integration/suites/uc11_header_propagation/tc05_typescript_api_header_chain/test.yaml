@@ -1,0 +1,165 @@
+# Test Case: TypeScript API Header Propagation via mesh.route()
+# Verifies that HTTP headers sent to an Express API endpoint using mesh.route()
+# are propagated through to downstream mesh agents.
+#
+# Scenario:
+#   - header-echo-ts provides echo_headers tool that returns propagated headers
+#   - header-api is an Express app using mesh.route() to call echo_headers
+#   - curl sends custom headers to the Express API endpoint (NOT the MCP endpoint)
+#   - mesh.route() extracts propagated headers and forwards them via mesh
+#   - Assert the response contains the original header values
+
+name: "TypeScript API Header Propagation via mesh.route()"
+description: "Test header propagation from Express API through mesh.route() to downstream agent"
+tags:
+  - header_propagation
+  - typescript
+  - api
+  - mesh_route
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/* /workspace/"
+
+  # Install npm dependencies for echo agent
+  - name: "Install header-echo-ts npm dependencies"
+    handler: npm-install
+    path: /workspace/header-echo-ts
+
+  # Install npm dependencies for header-api
+  - name: "Install header-api npm dependencies"
+    handler: npm-install
+    path: /workspace/header-api
+
+  # Start echo agent (provider)
+  - name: "Start header-echo-ts agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3030 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register
+  - name: "Wait for header-echo-ts registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo-ts"; then
+          echo "header-echo-ts registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-ts did not register within 40s"
+      meshctl logs header-echo-ts 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  # Start header-api Express app (consumer-only, auto-inits via mesh.route())
+  # Not using meshctl — this is a standalone Express app
+  - name: "Start header-api Express app"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace/header-api
+      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id PORT=3031 nohup npx tsx index.ts > /workspace/header-api.log 2>&1 &
+      echo $! > /workspace/header-api.pid
+      echo "header-api starting with PID $(cat /workspace/header-api.pid)"
+    capture: start_api
+
+  # Wait for Express app to be ready
+  - name: "Wait for header-api to be ready"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        if curl -s http://localhost:3031/health 2>/dev/null | grep -q "healthy"; then
+          echo "header-api ready after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-api did not start within 60s"
+      cat /workspace/header-api.log 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_api
+    timeout: 90
+
+  # Wait for mesh.route() dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify echo agent is registered
+  - name: "Verify agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Send HTTP request with custom headers to the Express API endpoint
+  # This tests: curl -> Express /api/echo-headers -> mesh.route() -> header-echo-ts
+  - name: "Call Express API with custom headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:3031/api/echo-headers \
+        -H "X-Custom-Auth: test-token-123" \
+        -H "X-Tenant-Id: tenant-abc"
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show logs
+  - name: "Get header-echo-ts logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo-ts 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-api logs"
+    handler: shell
+    workdir: /workspace
+    command: "cat /workspace/header-api.log 2>/dev/null | tail -30 || echo 'no api logs'"
+    capture: api_logs
+
+assertions:
+  # Echo agent registered
+  - expr: "${captured.list_agents} contains 'header-echo-ts'"
+    message: "header-echo-ts agent should be registered"
+
+  # Express API started
+  - expr: "${captured.wait_api} contains 'header-api ready'"
+    message: "header-api Express app should start successfully"
+
+  # Header values propagated through mesh.route() to echo agent
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value propagated via mesh.route()"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value propagated via mesh.route()"
+
+  # Verify it came through mesh-route path
+  - expr: "${captured.curl_result} contains 'mesh-route'"
+    message: "Response should indicate it came through mesh-route path"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Kill the Express API process
+      if [ -f /workspace/header-api.pid ]; then
+        kill $(cat /workspace/header-api.pid) 2>/dev/null || true
+      fi
+      pkill -f "tsx.*header-api" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

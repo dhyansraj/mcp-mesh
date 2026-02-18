@@ -1,0 +1,219 @@
+# Test Case: Java @MeshRoute with McpMeshTool<List<T>> and Nested Types
+# Tests that McpMeshTool<List<Employee>> and McpMeshTool<Organization>
+# correctly deserialize via @MeshRoute REST API endpoints (#562).
+# The @MeshRoute path shares McpMeshToolProxy -> McpHttpClient with @MeshTool,
+# but goes through MeshRouteHandlerInterceptor for dependency injection.
+#
+# Scenario:
+#   - employee-service provides list_employees (List<Employee>) and get_organization (Organization)
+#   - rest-api-consumer's /api/team-roster uses McpMeshTool<List<Employee>>
+#   - rest-api-consumer's /api/organization uses McpMeshTool<Organization> (nested types)
+
+name: "UC07: Java @MeshRoute McpMeshTool<List<T>> and Nested Types (#562)"
+description: "Verify McpMeshTool<List<Employee>> and nested Organization type work via @MeshRoute REST endpoints"
+tags:
+  - java
+  - spring
+  - rest
+  - mesh-route
+  - generic-types
+  - nested-types
+  - regression
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      cp -r /uc-artifacts/java-rest-api /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for employee service
+  - name: "Install employee service dependencies"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Install Maven dependencies for REST API
+  - name: "Install REST API dependencies"
+    handler: maven-install
+    path: /workspace/java-rest-api
+    timeout: 600
+
+  # Start Java employee service (provides list_employees + get_organization)
+  - name: "Start Java employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting"
+    capture: start_employee
+
+  # Wait for employee service to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java employee service..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_employee
+    timeout: 120
+
+  # Start REST API consumer
+  - name: "Start REST API consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-rest-api -d
+      echo "REST API consumer starting"
+    capture: start_rest_api
+
+  # Wait for REST API to register as API type
+  - name: "Wait for REST API registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for REST API consumer (API type)..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "API"; then
+          echo "REST API registered as API type after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: REST API consumer did not register as API type within 90s"
+      meshctl logs 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_rest_api
+    timeout: 120
+
+  # Wait for Spring Boot HTTP to be ready
+  - name: "Wait for HTTP server ready"
+    handler: shell
+    command: |
+      echo "Waiting for Spring Boot HTTP..."
+      for i in $(seq 1 30); do
+        if curl -s --max-time 3 http://localhost:8080/api/health 2>/dev/null | grep -q "healthy"; then
+          echo "HTTP server ready after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: HTTP server not ready within 60s"
+      exit 1
+    capture: wait_http
+    timeout: 90
+
+  # Verify agents registered
+  - name: "List all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Scenario 1: team-roster with department filter (McpMeshTool<List<Employee>>)
+  - name: "Test team-roster for Engineering"
+    handler: shell
+    command: "curl -s --max-time 15 'http://localhost:8080/api/team-roster?department=Engineering'"
+    capture: roster_engineering
+
+  # Scenario 2: team-roster for all employees
+  - name: "Test team-roster for all"
+    handler: shell
+    command: "curl -s --max-time 15 'http://localhost:8080/api/team-roster'"
+    capture: roster_all
+
+  # Scenario 3: organization structure (nested types)
+  - name: "Test organization endpoint"
+    handler: shell
+    command: "curl -s --max-time 15 'http://localhost:8080/api/organization'"
+    capture: org_result
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'employee'"
+    message: "Employee service should be registered"
+
+  - expr: "${captured.list_agents} contains 'API'"
+    message: "REST API consumer should be registered as API type"
+
+  # Scenario 1: Engineering roster via McpMeshTool<List<Employee>>
+  - expr: "${jq:captured.roster_engineering:.source} == 'mesh-agent-typed-list'"
+    message: "Engineering roster should use mesh-agent-typed-list source"
+
+  - expr: ${jq:captured.roster_engineering:.count} == 3
+    message: "Engineering roster should have count=3"
+
+  - expr: "${jq:captured.roster_engineering:.department} == 'Engineering'"
+    message: "Engineering roster should have department=Engineering"
+
+  - expr: ${jq:captured.roster_engineering:.totalSalary} == 360000.0
+    message: "Engineering totalSalary should be 360000 (120k+115k+125k)"
+
+  - expr: "${jq:captured.roster_engineering:.type} == 'Employee'"
+    message: "List elements should be Employee type (not LinkedHashMap) — proves #562 fix works via @MeshRoute"
+
+  # Scenario 2: All employees roster
+  - expr: ${jq:captured.roster_all:.count} == 5
+    message: "All roster should have count=5"
+
+  - expr: "${jq:captured.roster_all:.department} == 'all'"
+    message: "All roster should have department=all"
+
+  - expr: ${jq:captured.roster_all:.totalSalary} > 0
+    message: "All roster should have positive totalSalary"
+
+  - expr: "${jq:captured.roster_all:.type} == 'Employee'"
+    message: "All roster list elements should be Employee type (not LinkedHashMap)"
+
+  # Scenario 3: Organization nested types via McpMeshTool<Organization>
+  - expr: "${jq:captured.org_result:.source} == 'mesh-agent-typed-nested'"
+    message: "Organization should use mesh-agent-typed-nested source"
+
+  - expr: "${jq:captured.org_result:.type} == 'Organization'"
+    message: "Organization should be deserialized as Organization type (not LinkedHashMap)"
+
+  - expr: ${jq:captured.org_result:.teamCount} == 3
+    message: "Organization should have 3 teams"
+
+  - expr: ${jq:captured.org_result:.totalHeadcount} == 5
+    message: "Organization should have totalHeadcount=5"
+
+  # Verify nested structure is fully deserialized
+  - expr: "${jq:captured.org_result:.result.name} == 'Acme Corp'"
+    message: "Organization name should be 'Acme Corp'"
+
+  - expr: ${jq:captured.org_result:.result.teams | length} == 3
+    message: "Organization result should have 3 teams"
+
+  - expr: "${jq:captured.org_result:.result.teams[0]} contains 'members'"
+    message: "Team should have members field (nested List<Employee> deserialized)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+      pkill -f "java.*rest-api" 2>/dev/null || true
+      pkill -f "java.*api" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

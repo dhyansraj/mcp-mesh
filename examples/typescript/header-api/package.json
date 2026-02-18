@@ -1,0 +1,23 @@
+{
+  "name": "header-api",
+  "version": "1.0.0",
+  "description": "Express API for header propagation testing via mesh.route()",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx watch index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^0.9.4",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

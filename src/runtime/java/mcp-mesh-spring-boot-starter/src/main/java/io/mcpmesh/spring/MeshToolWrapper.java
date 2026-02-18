@@ -595,7 +595,8 @@ public class MeshToolWrapper implements McpToolHandler {
         // Use Jackson for complex conversions (with full generic type info)
         try {
             tools.jackson.databind.JavaType javaType = objectMapper.getTypeFactory().constructType(targetType);
-            return objectMapper.convertValue(value, javaType);
+            String json = objectMapper.writeValueAsString(value);
+            return objectMapper.readValue(json, javaType);
         } catch (Exception e) {
             log.warn("Failed to convert {} to {}: {}", value, targetType, e.getMessage());
             return value;

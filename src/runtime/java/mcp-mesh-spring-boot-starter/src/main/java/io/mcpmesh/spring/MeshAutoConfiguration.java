@@ -196,6 +196,13 @@ public class MeshAutoConfiguration {
             llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, objectMapper, applicationContext);
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshHealthController meshHealthController(ObjectProvider<MeshRuntime> runtimeProvider) {
+        MeshRuntime runtime = runtimeProvider.getIfAvailable();
+        return new MeshHealthController(runtime);
+    }
+
     private AgentSpec buildAgentSpec(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,

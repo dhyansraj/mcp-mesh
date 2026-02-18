@@ -137,6 +137,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "Observability",
 		Description: "Distributed tracing, Grafana dashboards, and monitoring setup",
 	},
+	"headers": {
+		Name:        "headers",
+		Aliases:     []string{"header-propagation", "propagation", "forwarding"},
+		Title:       "HTTP Header Propagation",
+		Description: "Propagate custom HTTP headers across agent calls",
+	},
 	"prerequisites": {
 		Name:                 "prerequisites",
 		Aliases:              []string{"prereq", "setup", "install"},
@@ -264,7 +270,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm",
-		"proxies", "api", "environment", "deployment", "observability",
+		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli",
 	}
 	for _, name := range order {

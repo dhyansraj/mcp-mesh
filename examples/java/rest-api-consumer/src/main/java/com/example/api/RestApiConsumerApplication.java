@@ -70,6 +70,10 @@ record TeamMember(String name, String department, double salary) {}
 
 record TeamAnalysis(int teamSize, double totalSalary, double averageSalary, String topDepartment) {}
 
+record Team(String teamName, String department, List<Employee> members, double totalBudget) {}
+
+record Organization(String name, List<Team> teams, int totalHeadcount, double totalBudget) {}
+
 @RestController
 @RequestMapping("/api")
 class ApiController {
@@ -190,6 +194,64 @@ class ApiController {
                 "source", "mesh",
                 "analysis", result
         ));
+    }
+
+    /**
+     * List employees via mesh, returning a List of typed records.
+     * Tests McpMeshTool&lt;List&lt;Employee&gt;&gt; via @MeshRoute (#562).
+     * This verifies the ParameterizedType is correctly resolved through
+     * the MeshRouteHandlerInterceptor → McpMeshToolProxy → McpHttpClient path.
+     */
+    @GetMapping("/team-roster")
+    @MeshRoute(dependencies = @MeshDependency(capability = "list_employees"))
+    public ResponseEntity<Map<String, Object>> getTeamRoster(
+            @RequestParam(required = false) String department,
+            @MeshInject("list_employees") McpMeshTool<List<Employee>> employeeListTool) {
+
+        log.info("Getting team roster for department: {} via mesh agent (typed list)", department);
+
+        List<Employee> employees;
+        if (department != null && !department.isEmpty()) {
+            employees = employeeListTool.call(Map.of("department", department));
+        } else {
+            employees = employeeListTool.call(Map.of());
+        }
+
+        double totalSalary = employees.stream().mapToDouble(Employee::salary).sum();
+        String firstEmployee = employees.isEmpty() ? "none" : employees.get(0).firstName();
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("source", "mesh-agent-typed-list");
+        response.put("department", department != null ? department : "all");
+        response.put("count", employees.size());
+        response.put("totalSalary", totalSalary);
+        response.put("firstEmployeeName", firstEmployee);
+        response.put("type", employees.isEmpty() ? "empty" : employees.get(0).getClass().getSimpleName());
+        response.put("timestamp", LocalDateTime.now().toString());
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get organization structure with deeply nested types via mesh.
+     * Tests McpMeshTool&lt;Organization&gt; where Organization contains
+     * List&lt;Team&gt; and each Team contains List&lt;Employee&gt;.
+     */
+    @GetMapping("/organization")
+    @MeshRoute(dependencies = @MeshDependency(capability = "get_organization"))
+    public ResponseEntity<Map<String, Object>> getOrganization(
+            @MeshInject("get_organization") McpMeshTool<Organization> orgTool) {
+
+        log.info("Getting organization structure via mesh agent (nested types)");
+        Organization org = orgTool.call(Map.of());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("source", "mesh-agent-typed-nested");
+        response.put("result", org);
+        response.put("type", org.getClass().getSimpleName());
+        response.put("teamCount", org.teams().size());
+        response.put("totalHeadcount", org.totalHeadcount());
+        response.put("timestamp", LocalDateTime.now().toString());
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/health")

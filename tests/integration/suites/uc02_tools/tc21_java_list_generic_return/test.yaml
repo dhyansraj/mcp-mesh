@@ -1,0 +1,185 @@
+# Test Case: Java McpMeshTool<List<T>> Generic Return Type (#562)
+# Tests that McpMeshTool<List<Employee>> correctly resolves the ParameterizedType
+# and deserializes the response as List<Employee> instead of List<LinkedHashMap>.
+# Before the fix, the proxy cache could return a proxy with returnType=null,
+# causing ClassCastException when accessing record fields like Employee::salary.
+#
+# Scenario:
+#   - employee-service provides list_employees (returns List<Employee>)
+#   - greeter's listTeamMembers depends on list_employees via McpMeshTool<List<Employee>>
+#   - Call listTeamMembers → verify TeamRoster fields prove correct deserialization
+
+name: "UC02: Java McpMeshTool<List<T>> Generic Return (#562)"
+description: "Verify McpMeshTool<List<Record>> correctly deserializes generic list types"
+tags:
+  - tools
+  - java
+  - generic-types
+  - cross-agent
+  - regression
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy both artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-employee-service /workspace/
+      cp -r /uc-artifacts/java-greeter-agent /workspace/
+      ls -la /workspace/java-employee-service/
+      ls -la /workspace/java-greeter-agent/
+    capture: copy_output
+
+  # Install Maven dependencies for employee service
+  - name: "Install Maven dependencies for employee service"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Install Maven dependencies for greeter
+  - name: "Install Maven dependencies for greeter"
+    handler: maven-install
+    path: /workspace/java-greeter-agent
+    timeout: 600
+
+  # Start employee service first (provider)
+  - name: "Start Java employee service (provider)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+      echo "Java employee service starting via meshctl"
+    capture: start_employee
+
+  # Wait for employee service to register
+  - name: "Wait for employee service registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for employee-service..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "employee"; then
+          echo "Employee service registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Employee service did not register within 90s"
+      meshctl logs employee-service 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_employee
+    timeout: 120
+
+  # Start greeter agent (consumer with list_employees dependency)
+  - name: "Start Java greeter agent (consumer)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-greeter-agent -d
+      echo "Java greeter agent starting via meshctl"
+    capture: start_greeter
+
+  # Wait for greeter to register
+  - name: "Wait for greeter registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for greeter..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "Greeter registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Greeter did not register within 90s"
+      meshctl logs greeter 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_greeter
+    timeout: 120
+
+  # Verify both agents registered
+  - name: "List all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify listTeamMembers tool is listed
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Scenario 1: Filtered department — Engineering has 3 employees
+  - name: "List team members for Engineering"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call listTeamMembers ''{"department": "Engineering"}'''
+    capture: roster_engineering
+    timeout: 60
+
+  # Scenario 2: All employees (no department filter)
+  - name: "List all team members"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call listTeamMembers '{}'"
+    capture: roster_all
+    timeout: 60
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'employee'"
+    message: "Employee service should be registered"
+
+  - expr: "${captured.list_agents} contains 'greeter'"
+    message: "Greeter agent should be registered"
+
+  # listTeamMembers tool available
+  - expr: "${captured.list_tools} contains 'listTeamMembers'"
+    message: "listTeamMembers tool should be listed"
+
+  # Scenario 1: Engineering roster — 3 employees, correct totalSalary
+  # Alice=120000, Bob=115000, Eve=125000 → total=360000
+  - expr: ${jq:captured.roster_engineering:.content[0].text | fromjson | .count} == 3
+    message: "Engineering roster should have count=3"
+
+  - expr: "${jq:captured.roster_engineering:.content[0].text | fromjson | .department} == 'Engineering'"
+    message: "Engineering roster should have department=Engineering"
+
+  - expr: ${jq:captured.roster_engineering:.content[0].text | fromjson | .totalSalary} == 360000.0
+    message: "Engineering totalSalary should be 360000 (120k+115k+125k)"
+
+  - expr: "${jq:captured.roster_engineering:.content[0].text | fromjson | .firstEmployeeName} != 'none'"
+    message: "Engineering roster should have a firstEmployeeName (not 'none')"
+
+  # Scenario 2: All employees — 5 total
+  - expr: ${jq:captured.roster_all:.content[0].text | fromjson | .count} == 5
+    message: "All roster should have count=5"
+
+  - expr: "${jq:captured.roster_all:.content[0].text | fromjson | .department} == 'all'"
+    message: "All roster should have department=all"
+
+  - expr: ${jq:captured.roster_all:.content[0].text | fromjson | .totalSalary} > 0
+    message: "All roster should have positive totalSalary"
+
+  - expr: "${jq:captured.roster_all:.content[0].text | fromjson | .firstEmployeeName} != 'none'"
+    message: "All roster should have a firstEmployeeName (not 'none')"
+
+post_run:
+  # Stop all agents
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

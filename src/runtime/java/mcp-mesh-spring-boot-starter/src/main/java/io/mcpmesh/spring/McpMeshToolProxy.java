@@ -70,6 +70,10 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         this.returnType = returnType;
     }
 
+    Type getReturnType() {
+        return this.returnType;
+    }
+
     @Override
     public T call() {
         return call(Map.of());
