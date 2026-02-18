@@ -31,8 +31,9 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
-import { normalizeDependency } from "./proxy.js";
+import { normalizeDependency, runWithPropagatedHeaders } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
+import { PROPAGATE_HEADERS } from "./tracing.js";
 
 /**
  * Global flag to track if Express auto-detection has been performed.
@@ -383,12 +384,30 @@ export function route(
         }
       }
 
-      // Call handler with dependencies
-      if (handler.length === 4) {
-        // Handler accepts next function
-        await (handler as MeshRouteHandlerWithNext)(req, res, deps, next);
+      // Extract propagated headers from incoming HTTP request
+      const propagatedHeaders: Record<string, string> = {};
+      if (PROPAGATE_HEADERS.length > 0) {
+        for (const headerName of PROPAGATE_HEADERS) {
+          const value = req.headers[headerName];
+          if (typeof value === "string") {
+            propagatedHeaders[headerName] = value;
+          }
+        }
+      }
+
+      // Call handler with propagated headers context
+      const runHandler = async () => {
+        if (handler.length === 4) {
+          await (handler as MeshRouteHandlerWithNext)(req, res, deps, next);
+        } else {
+          await (handler as MeshRouteHandler)(req, res, deps);
+        }
+      };
+
+      if (Object.keys(propagatedHeaders).length > 0) {
+        await runWithPropagatedHeaders(propagatedHeaders, runHandler);
       } else {
-        await (handler as MeshRouteHandler)(req, res, deps);
+        await runHandler();
       }
     } catch (error) {
       next(error);

@@ -1,0 +1,167 @@
+# Test Case: Java API Header Propagation via @MeshRoute
+# Verifies that HTTP headers sent to a Spring Boot REST endpoint using @MeshRoute
+# are propagated through to downstream mesh agents.
+#
+# Scenario:
+#   - header-echo-java provides echo_headers tool that returns propagated headers
+#   - header-api is a Spring Boot REST API using @MeshRoute to call echo_headers
+#   - curl sends custom headers to the REST endpoint (NOT the MCP endpoint)
+#   - @MeshRoute + TracingFilter extracts headers and forwards them via mesh
+#   - Assert the response contains the original header values
+
+name: "Java API Header Propagation via @MeshRoute"
+description: "Test header propagation from Spring Boot REST API through @MeshRoute to downstream agent"
+tags:
+  - header_propagation
+  - java
+  - api
+  - mesh_route
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/* /workspace/"
+
+  # Install Maven dependencies for echo agent
+  - name: "Install header-echo-java Maven dependencies"
+    handler: maven-install
+    path: /workspace/header-echo-java
+    timeout: 600
+
+  # Install Maven dependencies for header-api
+  - name: "Install header-api Maven dependencies"
+    handler: maven-install
+    path: /workspace/header-api
+    timeout: 600
+
+  # Start echo agent (provider)
+  - name: "Start header-echo-java agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/header-echo-java --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  # Wait for echo agent to register (Java is slow to start)
+  - name: "Wait for header-echo-java registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "header-echo"; then
+          echo "header-echo-java registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-java did not register within 90s"
+      meshctl logs header-echo 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_echo
+    timeout: 120
+
+  # Start header-api Spring Boot app (consumer-only, no @MeshAgent)
+  # Uses mvn spring-boot:run with MCP_MESH_PROPAGATE_HEADERS env var
+  - name: "Start header-api Spring Boot app"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace/header-api
+      MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id nohup mvn spring-boot:run -q > /workspace/header-api.log 2>&1 &
+      echo $! > /workspace/header-api.pid
+      echo "header-api starting with PID $(cat /workspace/header-api.pid)"
+    capture: start_api
+
+  # Wait for Spring Boot app to be ready
+  - name: "Wait for header-api to be ready"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if curl -s http://localhost:8080/api/health 2>/dev/null | grep -q "healthy"; then
+          echo "header-api ready after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-api did not start within 90s"
+      cat /workspace/header-api.log 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_api
+    timeout: 120
+
+  # Wait for @MeshRoute dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Send HTTP request with custom headers to the Spring Boot REST endpoint
+  # This tests: curl -> Spring /api/echo-headers -> @MeshRoute -> header-echo-java
+  - name: "Call Spring Boot API with custom headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8080/api/echo-headers \
+        -H "X-Custom-Auth: test-token-123" \
+        -H "X-Tenant-Id: tenant-abc"
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show logs
+  - name: "Get header-echo-java logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo 2>/dev/null | tail -30 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-api logs"
+    handler: shell
+    workdir: /workspace
+    command: "cat /workspace/header-api.log 2>/dev/null | tail -30 || echo 'no api logs'"
+    capture: api_logs
+
+assertions:
+  # Echo agent registered
+  - expr: "${captured.list_agents} contains 'header-echo'"
+    message: "header-echo-java agent should be registered"
+
+  # Spring Boot API started
+  - expr: "${captured.wait_api} contains 'header-api ready'"
+    message: "header-api Spring Boot app should start successfully"
+
+  # Header values propagated through @MeshRoute to echo agent
+  - expr: "${captured.curl_result} contains 'test-token-123'"
+    message: "Response should contain X-Custom-Auth header value propagated via @MeshRoute"
+
+  - expr: "${captured.curl_result} contains 'tenant-abc'"
+    message: "Response should contain X-Tenant-Id header value propagated via @MeshRoute"
+
+  # Verify it came through mesh-route path
+  - expr: "${captured.curl_result} contains 'mesh-route'"
+    message: "Response should indicate it came through mesh-route path"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      if [ -f /workspace/header-api.pid ]; then
+        kill $(cat /workspace/header-api.pid) 2>/dev/null || true
+      fi
+      pkill -f "spring-boot:run.*header-api" 2>/dev/null || true
+      pkill -f "java.*header-api" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
