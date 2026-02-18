@@ -61,9 +61,7 @@ def replace_in_file(
     return True
 
 
-def bump_python_packages(
-    old: str, new_pep440: str, dry_run: bool
-) -> list[str]:
+def bump_python_packages(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 1: Python package version fields."""
     changed = []
     files = [
@@ -89,9 +87,7 @@ def bump_python_packages(
     return changed
 
 
-def bump_python_dependencies(
-    old: str, new_pep440: str, dry_run: bool
-) -> list[str]:
+def bump_python_dependencies(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 2: Python OUR dependencies (mcp-mesh-core only)."""
     changed = []
     f = PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml"
@@ -175,9 +171,7 @@ def bump_java_example_poms(old: str, new: str, dry_run: bool) -> list[str]:
                 pom_files.append(pom)
 
     for f in pom_files:
-        pattern = (
-            rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
-        )
+        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
         replacement = rf"\g<1>{new}\2"
         if replace_in_file(f, pattern, replacement, dry_run):
             changed.append(str(f.relative_to(PROJECT_ROOT)))
@@ -207,9 +201,7 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
         file_changed = False
         # version: OLD (top-level chart version, start of line)
         p1 = rf"(^version:\s*){re.escape(old)}$"
-        if replace_in_file(
-            chart_yaml, p1, rf"\g<1>{new}", dry_run, flags=re.MULTILINE
-        ):
+        if replace_in_file(chart_yaml, p1, rf"\g<1>{new}", dry_run, flags=re.MULTILINE):
             file_changed = True
         # appVersion: "OLD"
         p2 = rf'(appVersion:\s*"){re.escape(old)}(")'
@@ -300,9 +292,7 @@ def bump_scaffold_templates(old: str, new: str, dry_run: bool) -> list[str]:
 
     # Java templates: <mcp-mesh.version>OLD</mcp-mesh.version>
     for pom_tmpl in sorted(templates_dir.glob("java/*/pom.xml.tmpl")):
-        pattern = (
-            rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
-        )
+        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
         replacement = rf"\g<1>{new}\2"
         if replace_in_file(pom_tmpl, pattern, replacement, dry_run):
             changed.append(str(pom_tmpl.relative_to(PROJECT_ROOT)))
@@ -317,9 +307,7 @@ def bump_scaffold_templates(old: str, new: str, dry_run: bool) -> list[str]:
     return changed
 
 
-def _bump_version_in_md(
-    md_file: Path, old: str, new: str, dry_run: bool
-) -> bool:
+def _bump_version_in_md(md_file: Path, old: str, new: str, dry_run: bool) -> bool:
     """Apply version replacement patterns to a single markdown file."""
     file_changed = False
 
@@ -360,9 +348,7 @@ def bump_documentation(old: str, new: str, dry_run: bool) -> list[str]:
     return changed
 
 
-def bump_test_config(
-    old: str, new: str, new_pep440: str, dry_run: bool
-) -> list[str]:
+def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 13: Test configuration file."""
     changed = []
     f = PROJECT_ROOT / "tests" / "lib-tests" / "config.yaml"
@@ -374,7 +360,12 @@ def bump_test_config(
     new_content = content
 
     # Replace non-Python version lines
-    for key in ["cli_version", "sdk_typescript_version", "core_version", "sdk_java_version"]:
+    for key in [
+        "cli_version",
+        "sdk_typescript_version",
+        "core_version",
+        "sdk_java_version",
+    ]:
         p = rf'({key}:\s*"){re.escape(old)}(")'
         new_content = re.sub(p, rf"\g<1>{new}\2", new_content)
 
@@ -390,9 +381,7 @@ def bump_test_config(
     return changed
 
 
-def bump_example_requirements(
-    old: str, new_pep440: str, dry_run: bool
-) -> list[str]:
+def bump_example_requirements(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 14: Example agent requirements.txt files."""
     changed = []
     agents_dir = PROJECT_ROOT / "examples" / "docker-examples" / "agents"
@@ -440,7 +429,7 @@ def bump_docker_example_helm(old: str, new: str, dry_run: bool) -> list[str]:
 
 
 def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 18: Integration test TypeScript artifact package.json files."""
+    """Category 18: Integration test artifact package.json and pom.xml files."""
     changed = []
     suites_dir = PROJECT_ROOT / "tests" / "integration" / "suites"
     if not suites_dir.exists():
@@ -452,6 +441,13 @@ def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[s
         replacement = rf"\g<1>\g<2>{new}\3"
         if replace_in_file(pkg, pattern, replacement, dry_run):
             changed.append(str(pkg.relative_to(PROJECT_ROOT)))
+
+    # Java pom.xml: <mcp-mesh.version>OLD</mcp-mesh.version>
+    for pom in sorted(suites_dir.rglob("*/pom.xml")):
+        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
+        replacement = rf"\g<1>{new}\2"
+        if replace_in_file(pom, pattern, replacement, dry_run):
+            changed.append(str(pom.relative_to(PROJECT_ROOT)))
     return changed
 
 
@@ -472,6 +468,26 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
             if not dry_run:
                 f.write_text(new_content)
             changed.append(str(f.relative_to(PROJECT_ROOT)))
+    return changed
+
+
+def bump_scaffold_docker_tags(old: str, new: str, dry_run: bool) -> list[str]:
+    """Category 20: Docker image tags in scaffold compose.go."""
+    changed = []
+    old_parts = old.split(".")
+    new_parts = new.split(".")
+    old_minor = f"{old_parts[0]}.{old_parts[1]}"
+    new_minor = f"{new_parts[0]}.{new_parts[1]}"
+
+    if old_minor == new_minor:
+        return changed
+
+    f = PROJECT_ROOT / "src" / "core" / "cli" / "scaffold" / "compose.go"
+    pattern = rf"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime|registry):){re.escape(old_minor)}"
+    replacement = rf"\g<1>{new_minor}"
+    if replace_in_file(f, pattern, replacement, dry_run):
+        changed.append(str(f.relative_to(PROJECT_ROOT)))
+
     return changed
 
 
@@ -607,6 +623,10 @@ def main() -> int:
     changed = bump_test_documentation(old, new, dry_run)
     categories.append(("Test Documentation", changed))
 
+    # Category 20: Docker Image Tags (Scaffold)
+    changed = bump_scaffold_docker_tags(old, new, dry_run)
+    categories.append(("Docker Image Tags (Scaffold)", changed))
+
     # Print results
     total_files = 0
     total_categories = 0
@@ -629,7 +649,9 @@ def main() -> int:
             f"{total_categories} categories"
         )
     else:
-        print(f"Summary: {total_files} files updated across {total_categories} categories")
+        print(
+            f"Summary: {total_files} files updated across {total_categories} categories"
+        )
 
     # Reminder for Helm Chart.lock
     chart_lock = PROJECT_ROOT / "helm" / "mcp-mesh-core" / "Chart.lock"
