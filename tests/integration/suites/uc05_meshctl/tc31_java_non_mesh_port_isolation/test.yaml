@@ -1,0 +1,117 @@
+# Test Case: Java Non-Mesh Port Isolation (#558)
+# Verifies that MCP_MESH_HTTP_PORT does NOT override server.port for
+# Spring Boot apps that have mcp-mesh-spring-boot-starter on the classpath
+# but do NOT use @MeshAgent.
+
+name: "Non-Mesh App Port Isolation"
+description: "Verify MCP_MESH_HTTP_PORT does not affect non-mesh Spring Boot apps"
+tags:
+  - meshctl
+  - port
+  - java
+  - isolation
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-non-mesh-app /workspace/
+      ls -la /workspace/java-non-mesh-app/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-non-mesh-app
+    timeout: 600
+
+  # Start the non-mesh app with MCP_MESH_HTTP_PORT=7777
+  # Without the fix, this would override server.port from 8080 to 7777
+  - name: "Start non-mesh app with MCP_MESH_HTTP_PORT set"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace/java-non-mesh-app
+      MCP_MESH_HTTP_PORT=7777 mvn spring-boot:run > /tmp/non-mesh-app.log 2>&1 &
+      APP_PID=$!
+      echo "PID:${APP_PID}"
+      echo "Started non-mesh app with MCP_MESH_HTTP_PORT=7777"
+    capture: start_app
+
+  # Wait for the app to start on port 8080
+  - name: "Wait for app on port 8080"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for app to start on port 8080..."
+      for i in $(seq 1 45); do
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ping 2>/dev/null | grep -q "200"; then
+          echo "App responding on port 8080 after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: App did not start on port 8080 within 90s"
+      echo "=== App logs ==="
+      tail -50 /tmp/non-mesh-app.log 2>/dev/null || true
+      echo "=== Check if app started on 7777 instead ==="
+      curl -s http://localhost:7777/ping 2>/dev/null && echo "FAIL: App is on 7777 (port override not guarded)" || echo "Not on 7777 either"
+      exit 1
+    capture: wait_app
+    timeout: 120
+
+  # Verify app responds on 8080
+  - name: "Verify app on port 8080"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/ping)
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ping)
+      echo "Response: ${RESPONSE}"
+      echo "HTTP_CODE:${HTTP_CODE}"
+    capture: check_8080
+
+  # Verify app is NOT on port 7777
+  - name: "Verify app NOT on port 7777"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 http://localhost:7777/ping 2>/dev/null || echo "000")
+      echo "HTTP_CODE:${HTTP_CODE}"
+      if [ "${HTTP_CODE}" = "200" ]; then
+        echo "FAIL: App is listening on 7777 - MCP_MESH_HTTP_PORT leaked to non-mesh app"
+      else
+        echo "PASS: App is NOT on port 7777"
+      fi
+    capture: check_7777
+
+assertions:
+  # App started on 8080
+  - expr: "${captured.wait_app} contains 'App responding on port 8080'"
+    message: "Non-mesh app should start on port 8080 despite MCP_MESH_HTTP_PORT=7777"
+
+  # Ping works on 8080
+  - expr: "${captured.check_8080} contains 'HTTP_CODE:200'"
+    message: "App should respond 200 on port 8080"
+
+  - expr: "${captured.check_8080} contains 'pong'"
+    message: "App should return 'pong' from /ping endpoint"
+
+  # App NOT on 7777
+  - expr: "${captured.check_7777} contains 'PASS'"
+    message: "MCP_MESH_HTTP_PORT should NOT override port for non-mesh apps"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*non-mesh" 2>/dev/null || true
+      pkill -f "java.*NonMesh" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -4,7 +4,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.stereotype.Controller;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -15,7 +15,7 @@ import java.util.Map;
  * <p>Provides {@code GET /health} and {@code HEAD /health} for Kubernetes probes,
  * load balancers, and Docker Compose healthchecks.
  */
-@RestController
+@Controller
 public class MeshHealthController {
 
     private final MeshRuntime runtime;
