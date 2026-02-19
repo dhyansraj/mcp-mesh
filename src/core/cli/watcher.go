@@ -28,6 +28,7 @@ type WatchConfig struct {
 	PortDelay     time.Duration // delay after kill for port release, default 500ms, configurable via MCP_MESH_RELOAD_PORT_DELAY
 	StopTimeout   time.Duration // SIGTERM -> SIGKILL timeout, default 3s
 	AgentName       string        // for logging
+	LogFileFactory  func() (*os.File, error) // returns fresh log file (with rotation); nil = use os.Stdout
 	PreRestartCheck func() error  // optional: validate before killing agent (e.g., compile check)
 }
 
@@ -40,8 +41,9 @@ type AgentWatcher struct {
 	mu         sync.Mutex
 	stopChan   chan struct{}
 	doneChan   chan struct{}
-	stopOnce   sync.Once
-	quiet      bool
+	stopOnce       sync.Once
+	quiet          bool
+	currentLogFile *os.File
 }
 
 // NewAgentWatcher creates a new AgentWatcher with the given config, command factory, and quiet flag.
@@ -106,6 +108,13 @@ func (aw *AgentWatcher) Start() error {
 	// agent registers it with the mesh registry. Callers resolve via the registry
 	// (meshctl call, cross-agent calls, @MeshRoute), so the actual port is irrelevant.
 	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
+	if aw.config.LogFileFactory != nil {
+		if logFile, err := aw.config.LogFileFactory(); err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+			aw.currentLogFile = logFile
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		aw.watcher.Close()
@@ -134,6 +143,9 @@ func (aw *AgentWatcher) Start() error {
 
 	defer func() {
 		aw.watcher.Close()
+		if aw.currentLogFile != nil {
+			aw.currentLogFile.Close()
+		}
 		close(aw.doneChan)
 	}()
 
@@ -304,9 +316,22 @@ func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 
 	aw.terminateAgent()
 
+	// Close old log file before starting new one
+	if aw.currentLogFile != nil {
+		aw.currentLogFile.Close()
+		aw.currentLogFile = nil
+	}
+
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
 	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
+	if aw.config.LogFileFactory != nil {
+		if logFile, err := aw.config.LogFileFactory(); err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+			aw.currentLogFile = logFile
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		aw.mu.Unlock()
 		if !aw.quiet {

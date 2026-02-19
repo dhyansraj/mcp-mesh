@@ -1668,6 +1668,14 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
 			}
 
+			if lm != nil {
+				agentName := watcher.config.AgentName
+				watcher.config.LogFileFactory = func() (*os.File, error) {
+					lm.RotateLogs(agentName)
+					return lm.CreateLogFile(agentName)
+				}
+			}
+
 			watchers = append(watchers, watcher)
 			continue
 		}
@@ -1677,6 +1685,14 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 			watcher, err := createPythonWatcher(absPath, env, workingDir, user, group, quiet)
 			if err != nil {
 				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
+			}
+
+			if lm != nil {
+				agentName := watcher.config.AgentName
+				watcher.config.LogFileFactory = func() (*os.File, error) {
+					lm.RotateLogs(agentName)
+					return lm.CreateLogFile(agentName)
+				}
 			}
 
 			watchers = append(watchers, watcher)
