@@ -85,18 +85,12 @@ func LoadConfig() (*CLIConfig, error) {
 	// 1. Load from environment variables (MCP_MESH_ prefix)
 	loadFromEnvironment(config)
 
-	// 2. Check for stale config file and warn
-	configPath := getConfigFilePath()
-	if _, err := os.Stat(configPath); err == nil {
-		fmt.Fprintf(os.Stderr, "Warning: Config file %s is no longer loaded. Use environment variables or CLI flags instead.\n", configPath)
-	}
-
-	// 3. Validate configuration
+	// 2. Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
-	// 4. Migrate configuration if needed
+	// 3. Migrate configuration if needed
 	if err := config.Migrate(); err != nil {
 		return nil, fmt.Errorf("configuration migration failed: %w", err)
 	}
