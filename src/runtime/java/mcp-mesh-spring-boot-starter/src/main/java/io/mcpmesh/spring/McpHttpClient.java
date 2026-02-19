@@ -110,12 +110,14 @@ public class McpHttpClient {
                     traceInfo.getSpanId().substring(0, 8));
             }
 
-            // Build merged headers: session propagated + per-call (per-call wins, not filtered — explicitly set by caller)
+            // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
             Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
             Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
             if (extraHeaders != null) {
                 for (Map.Entry<String, String> entry : extraHeaders.entrySet()) {
-                    mergedHeaders.put(entry.getKey().toLowerCase(), entry.getValue());
+                    if (TraceContext.matchesPropagateHeader(entry.getKey())) {
+                        mergedHeaders.put(entry.getKey().toLowerCase(), entry.getValue());
+                    }
                 }
             }
             if (!mergedHeaders.isEmpty()) {

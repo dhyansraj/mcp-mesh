@@ -11,6 +11,7 @@ import {
   generateSpanId,
   publishTraceSpan,
   createTraceHeaders,
+  matchesPropagateHeader,
 } from "./tracing.js";
 
 /**
@@ -164,12 +165,14 @@ async function callMcpTool(
     argsWithTrace._trace_id = traceCtx.traceId;
     argsWithTrace._parent_span = spanId;
   }
-  // Build merged headers: session propagated + per-call (per-call wins, not filtered — explicitly set by caller)
+  // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
   const propagatedHeaders = getCurrentPropagatedHeaders();
   const mergedHeaders: Record<string, string> = { ...propagatedHeaders };
   if (extraHeaders) {
     for (const [key, value] of Object.entries(extraHeaders)) {
-      mergedHeaders[key.toLowerCase()] = value;
+      if (matchesPropagateHeader(key)) {
+        mergedHeaders[key.toLowerCase()] = value;
+      }
     }
   }
   if (Object.keys(mergedHeaders).length > 0) {

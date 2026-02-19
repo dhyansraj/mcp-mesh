@@ -461,10 +461,11 @@ class UnifiedMCPProxy:
                 if matches_propagate_header(k):
                     merged_headers[k.lower()] = v
 
-        # Merge per-call headers (wins, not filtered — explicitly set by caller)
+        # Merge per-call headers (wins, filtered by allowlist)
         if per_call_headers:
             for k, v in per_call_headers.items():
-                merged_headers[k.lower()] = v
+                if matches_propagate_header(k):
+                    merged_headers[k.lower()] = v
 
         # Inject merged headers into args for TypeScript agents
         if merged_headers:

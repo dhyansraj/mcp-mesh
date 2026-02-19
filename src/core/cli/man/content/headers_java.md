@@ -122,15 +122,14 @@ CompletableFuture<String> future = tool.callAsync(
 Per-call headers merge on top of session-level propagated headers:
 
 ```
-Session propagated headers (from incoming request, filtered by allowlist)
-  + Per-call headers (from call(params, headers), NOT filtered)
+Session propagated headers (from incoming request)
+  + Per-call headers (from call(params, headers))
   = Merged headers sent downstream
 ```
 
-Per-call headers **win** on conflict and are **not subject to** the
-`MCP_MESH_PROPAGATE_HEADERS` allowlist — they are explicitly set by agent
-code, not ambient from external input. Session-level propagated headers
-remain filtered by the allowlist as before.
+Per-call headers **win** on conflict. All headers (session and per-call)
+are filtered by the `MCP_MESH_PROPAGATE_HEADERS` prefix allowlist — agents
+cannot inject arbitrary headers unless the operator explicitly allows them.
 
 ## Example: Auth Token Forwarding
 
