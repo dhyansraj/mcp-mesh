@@ -63,9 +63,10 @@ func TestExclusionHardBlock(t *testing.T) {
 		response, err := service.RegisterAgent(consumerReq)
 		require.NoError(t, err)
 
-		// Verify NO dependency was resolved (exclusion blocked the only provider)
+		// Verify dependency is unresolved placeholder (exclusion blocked the only provider)
 		deps := response.DependenciesResolved["anti_opus_chat"]
-		assert.Len(t, deps, 0, "Should have NO resolved dependencies - exclusion blocked the only provider")
+		assert.Len(t, deps, 1, "Should have unresolved placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", deps[0].Status, "Placeholder should have unresolved status - exclusion blocked the only provider")
 
 		t.Logf("✅ Exclusion working correctly:")
 		t.Logf("   Available providers: claude-opus-only (claude, opus)")

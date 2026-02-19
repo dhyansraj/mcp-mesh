@@ -1,0 +1,147 @@
+# Test Case: tc19_ts_dep_index_alignment
+# Regression test for issue #572: dep_index alignment when dependencies
+# resolve at different times. TypeScript version.
+#
+# Scenario:
+#   - ts-alpha-provider: student_lookup capability (dep_index=0)
+#   - ts-beta-provider: schedule_lookup capability (dep_index=1)
+#   - ts-dual-consumer: depends on [student_lookup, schedule_lookup]
+#
+# Phase 1: Only beta running - verify dep_index=0 is unavailable, dep_index=1 is available
+# Phase 2: Start alpha - verify both available with correct data
+#
+# Uses TC-level artifacts from /artifacts
+# Regression: https://github.com/dhyansraj/mcp-mesh/issues/572
+
+name: "TypeScript dep_index Alignment (Issue #572)"
+description: "Verify dependency index alignment when dependencies resolve at different times"
+tags:
+  - capabilities
+  - dep-index
+  - issue-572
+  - regression
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy TC-level artifacts
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/ts-alpha-provider /workspace/
+      cp -r /artifacts/ts-beta-provider /workspace/
+      cp -r /artifacts/ts-dual-consumer /workspace/
+    capture: copy_output
+
+  # Install TypeScript dependencies
+  - name: "Install ts-alpha-provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-alpha-provider
+
+  - name: "Install ts-beta-provider dependencies"
+    handler: npm-install
+    path: /workspace/ts-beta-provider
+
+  - name: "Install ts-dual-consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-dual-consumer
+
+  # === PHASE 1: Only beta provider running ===
+  - name: "Phase 1: Start beta provider (schedule_lookup)"
+    handler: shell
+    command: "meshctl start ts-beta-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_beta
+
+  - name: "Wait for beta to register"
+    handler: wait
+    seconds: 12
+
+  - name: "Phase 1: Start consumer (before alpha is available)"
+    handler: shell
+    command: "meshctl start ts-dual-consumer/src/index.ts -d"
+    workdir: /workspace
+    capture: start_consumer_1
+
+  - name: "Wait for consumer to wire"
+    handler: wait
+    seconds: 12
+
+  - name: "Phase 1: Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_phase1
+
+  - name: "Phase 1: Call check_enrollment (only beta available)"
+    handler: shell
+    command: 'meshctl call check_enrollment ''{"id": "test1"}'''
+    workdir: /workspace
+    capture: phase1_result
+
+  # === PHASE 2: Start alpha provider, both should work ===
+  - name: "Phase 2: Start alpha provider (student_lookup)"
+    handler: shell
+    command: "meshctl start ts-alpha-provider/src/index.ts -d"
+    workdir: /workspace
+    capture: start_alpha
+
+  - name: "Wait for alpha to register and consumer to re-wire"
+    handler: wait
+    seconds: 12
+
+  - name: "Phase 2: Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_phase2
+
+  - name: "Phase 2: Call check_enrollment (both available)"
+    handler: shell
+    command: 'meshctl call check_enrollment ''{"id": "test2"}'''
+    workdir: /workspace
+    capture: phase2_result
+
+assertions:
+  # Phase 1: Partial resolution - agents registered
+  - expr: "${captured.list_phase1} contains 'ts-beta-provider'"
+    message: "Beta provider should be registered"
+
+  - expr: "${captured.list_phase1} contains 'ts-dual-consumer'"
+    message: "Consumer should be registered"
+
+  # Phase 1: dep_index alignment check (THE key regression assertions)
+  - expr: ${jq:captured.phase1_result:.content[0].text | fromjson | .student_available} == false
+    message: "Phase 1: student_available should be false (alpha not started, dep_index=0 should be unwired)"
+
+  - expr: ${jq:captured.phase1_result:.content[0].text | fromjson | .schedule_available} == true
+    message: "Phase 1: schedule_available should be true (beta is running, dep_index=1 should be wired)"
+
+  # Phase 2: Full resolution - all agents registered
+  - expr: "${captured.list_phase2} contains 'ts-alpha-provider'"
+    message: "Alpha provider should be registered"
+
+  # Phase 2: Both available with correct data
+  - expr: ${jq:captured.phase2_result:.content[0].text | fromjson | .student_available} == true
+    message: "Phase 2: student_available should be true"
+
+  - expr: ${jq:captured.phase2_result:.content[0].text | fromjson | .schedule_available} == true
+    message: "Phase 2: schedule_available should be true"
+
+  - expr: "${jq:captured.phase2_result:.content[0].text | fromjson | .student.source} == 'alpha-provider'"
+    message: "Phase 2: student data should come from alpha provider"
+
+  - expr: "${jq:captured.phase2_result:.content[0].text | fromjson | .schedule[0].day} == 'Monday'"
+    message: "Phase 2: schedule data should have correct list shape"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

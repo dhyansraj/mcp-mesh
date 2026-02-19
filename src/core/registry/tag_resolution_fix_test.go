@@ -76,7 +76,8 @@ func TestTagResolutionConsistency(t *testing.T) {
 	assert.Len(t, response.DependenciesResolved["function_matching_tags"], 1, "Function with matching tags should resolve")
 
 	assert.Contains(t, response.DependenciesResolved, "function_mismatched_tags")
-	assert.Len(t, response.DependenciesResolved["function_mismatched_tags"], 0, "Function with mismatched tags should not resolve")
+	assert.Len(t, response.DependenciesResolved["function_mismatched_tags"], 1, "Unresolved dep should have placeholder to preserve positional index")
+	assert.Equal(t, "unresolved", response.DependenciesResolved["function_mismatched_tags"][0].Status, "Placeholder should have unresolved status")
 
 	// Now check that database shows the SAME counts as response
 	params := &AgentQueryParams{}

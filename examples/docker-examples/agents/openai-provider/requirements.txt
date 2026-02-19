@@ -2,7 +2,7 @@
 mcp-mesh>=0.9.5
 
 # FastMCP for MCP server
-fastmcp
+fastmcp<3.0.0
 
 # LiteLLM for LLM provider
 litellm

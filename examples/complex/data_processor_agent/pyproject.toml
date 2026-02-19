@@ -12,7 +12,7 @@ authors = [
     {name = "MCP Mesh Team", email = "team@mcpmesh.com"}
 ]
 keywords = [
-    "mcp", "mesh", "agent", "data-processing", 
+    "mcp", "mesh", "agent", "data-processing",
     "analytics", "statistics", "data-transformation"
 ]
 classifiers = [
@@ -34,20 +34,20 @@ dependencies = [
     # Core MCP Mesh requirements
     # For production: "mcp-mesh>=0.1.0,<0.2.0",
     # For development: install mcp-mesh in editable mode from project root
-    "fastmcp>=0.9.1",
-    
+    "fastmcp>=0.9.1,<3.0.0",
+
     # Data processing core
     "pandas>=1.5.0,<3.0.0",
     "numpy>=1.21.0,<2.0.0",
-    
+
     # Statistical analysis
     "scipy>=1.9.0,<2.0.0",
-    
+
     # File format support
     "openpyxl>=3.0.0,<4.0.0",      # Excel files
     "pyarrow>=10.0.0,<15.0.0",     # Parquet files
     "xlsxwriter>=3.0.0,<4.0.0",    # Excel writing
-    
+
     # Development and utility
     "python-dateutil>=2.8.0,<3.0.0",
     "pytz>=2022.1",
@@ -59,13 +59,13 @@ dev = [
     "pytest>=7.0.0,<8.0.0",
     "pytest-cov>=4.0.0,<5.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
-    
+
     # Code quality
     "black>=23.0.0,<24.0.0",
     "isort>=5.12.0,<6.0.0",
     "flake8>=6.0.0,<7.0.0",
     "mypy>=1.0.0,<2.0.0",
-    
+
     # Documentation
     "sphinx>=5.0.0,<7.0.0",
     "sphinx-rtd-theme>=1.2.0,<2.0.0",

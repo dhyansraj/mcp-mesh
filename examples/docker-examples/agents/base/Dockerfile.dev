@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir \
     urllib3 \
     pydantic \
     python-dateutil \
-    fastmcp \
+    "fastmcp<3.0.0" \
     litellm \
     jinja2
 

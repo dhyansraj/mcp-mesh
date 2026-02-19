@@ -504,10 +504,11 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
 			resolvedDeps++
 		} else {
-			// Ensure function exists in map even if no resolutions
-			if _, exists := dependenciesResolved[res.FunctionName]; !exists {
-				dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
-			}
+			// Append placeholder to preserve positional dep_index alignment
+			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], &DependencyResolution{
+				Capability: res.Spec.Capability,
+				Status:     "unresolved",
+			})
 		}
 	}
 
@@ -1196,9 +1197,11 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
 					resolvedDeps++
 				} else {
-					if _, exists := dependenciesResolved[res.FunctionName]; !exists {
-						dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
-					}
+					// Append placeholder to preserve positional dep_index alignment
+					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], &DependencyResolution{
+						Capability: res.Spec.Capability,
+						Status:     "unresolved",
+					})
 				}
 			}
 
