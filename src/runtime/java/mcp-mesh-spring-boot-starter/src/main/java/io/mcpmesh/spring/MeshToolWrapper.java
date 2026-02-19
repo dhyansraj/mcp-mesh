@@ -404,12 +404,11 @@ public class MeshToolWrapper implements McpToolHandler {
         if (meshHeadersObj instanceof Map) {
             @SuppressWarnings("unchecked")
             Map<String, Object> meshHeaders = (Map<String, Object>) meshHeadersObj;
-            List<String> allowedHeaders = TraceContext.getPropagateHeaderNames();
-            if (!allowedHeaders.isEmpty()) {
+            if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
                 Map<String, String> filtered = new HashMap<>();
                 for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
                     if (entry.getValue() instanceof String
-                        && allowedHeaders.contains(entry.getKey().toLowerCase())) {
+                        && TraceContext.matchesPropagateHeader(entry.getKey())) {
                         filtered.put(entry.getKey().toLowerCase(), (String) entry.getValue());
                     }
                 }

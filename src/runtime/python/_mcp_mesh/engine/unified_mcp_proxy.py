@@ -5,6 +5,7 @@ using FastMCP's superior client capabilities with async support.
 """
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -20,6 +21,11 @@ from ..tracing.context import TraceContext
 from ..tracing.utils import generate_span_id
 
 logger = logging.getLogger(__name__)
+
+# ContextVar for passing per-call headers into httpx event_hooks closure
+_per_call_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
+    contextvars.ContextVar("_per_call_headers", default=None)
+)
 
 
 class UnifiedMCPProxy:
@@ -140,6 +146,12 @@ class UnifiedMCPProxy:
                         propagated = TraceContext.get_propagated_headers()
                         for key, value in propagated.items():
                             request.headers[key] = value
+
+                        # Inject per-call headers from ContextVar
+                        per_call = _per_call_headers_var.get()
+                        if per_call:
+                            for key, value in per_call.items():
+                                request.headers[key] = value
                     except Exception as e:
                         # Never fail HTTP requests due to tracing issues
                         proxy_instance.logger.trace(
@@ -333,16 +345,27 @@ class UnifiedMCPProxy:
     # Main tool call method - clean async interface following FastMCP patterns
     async def __call__(self, *args, **kwargs) -> Any:
         """Call the remote tool using natural async patterns."""
-        return await self.call_tool_with_tracing(self.function_name, kwargs)
+        per_call_headers = kwargs.pop("headers", None)
+        return await self.call_tool_with_tracing(
+            self.function_name, kwargs, per_call_headers=per_call_headers
+        )
 
-    async def call_tool_with_tracing(self, name: str, arguments: dict = None) -> Any:
+    async def call_tool_with_tracing(
+        self,
+        name: str,
+        arguments: dict = None,
+        *,
+        per_call_headers: dict[str, str] | None = None,
+    ) -> Any:
         """Call a tool with clean ExecutionTracer integration (v0.4.0 style)."""
         # Check if telemetry is enabled - use same check as ExecutionTracer for consistency
         from ..tracing.execution_tracer import ExecutionTracer
         from ..tracing.utils import is_tracing_enabled
 
         if not self.telemetry_enabled or not is_tracing_enabled():
-            return await self.call_tool(name, arguments)
+            return await self.call_tool(
+                name, arguments, per_call_headers=per_call_headers
+            )
 
         # Create wrapper function for ExecutionTracer compatibility
         async def proxy_call_wrapper(*args, **kwargs):
@@ -381,7 +404,9 @@ class UnifiedMCPProxy:
             except Exception as e:
                 self.logger.debug(f"Failed to add proxy metadata: {e}")
 
-            return await self.call_tool(name, arguments)
+            return await self.call_tool(
+                name, arguments, per_call_headers=per_call_headers
+            )
 
         # Use ExecutionTracer's static async method for clean integration
         return await ExecutionTracer.trace_function_execution_async(
@@ -394,7 +419,13 @@ class UnifiedMCPProxy:
             logger_instance=self.logger,
         )
 
-    async def call_tool(self, name: str, arguments: dict = None) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict = None,
+        *,
+        per_call_headers: dict[str, str] | None = None,
+    ) -> Any:
         """Call a tool using FastMCP client with HTTP transport.
 
         Returns CallToolResult object with structured content parsing.
@@ -419,10 +450,26 @@ class UnifiedMCPProxy:
                 f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
             )
 
-        # Inject propagated headers into args for TypeScript agents
-        propagated = TraceContext.get_propagated_headers()
-        if propagated:
-            args_with_trace["_mesh_headers"] = dict(propagated)
+        # Build merged headers: session propagated + custom_headers + per-call (per-call wins)
+        from ..tracing.context import matches_propagate_header
+
+        merged_headers = dict(TraceContext.get_propagated_headers())
+
+        # Merge custom_headers from kwargs config
+        if self.custom_headers:
+            for k, v in self.custom_headers.items():
+                if matches_propagate_header(k):
+                    merged_headers[k.lower()] = v
+
+        # Merge per-call headers (wins, filtered by allowlist)
+        if per_call_headers:
+            for k, v in per_call_headers.items():
+                if matches_propagate_header(k):
+                    merged_headers[k.lower()] = v
+
+        # Inject merged headers into args for TypeScript agents
+        if merged_headers:
+            args_with_trace["_mesh_headers"] = merged_headers
 
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []
@@ -435,52 +482,58 @@ class UnifiedMCPProxy:
         )
 
         try:
-            # Use correct FastMCP client endpoint - agents expose MCP on /mcp
-            mcp_endpoint = f"{self.endpoint}/mcp"
-            client_instance = self._create_fastmcp_client(mcp_endpoint)
+            # Set per-call headers ContextVar for httpx hook to read
+            _per_call_headers_var.set(merged_headers if merged_headers else None)
 
-            async with client_instance as client:
-
-                # Use FastMCP's call_tool which returns CallToolResult object
-                result = await client.call_tool(name, args_with_trace)
-
-                # Calculate performance metrics
-                end_time = time.time()
-                duration_ms = round((end_time - start_time) * 1000, 2)
-
-                # FastMCP client automatically handles:
-                # - CallToolResult object creation
-                # - Structured content parsing
-                # - Error handling
-
-                # Convert CallToolResult to native Python structures for client simplicity
-                converted_result = self._convert_mcp_result_to_python(result)
-
-                # Log success - summary line
-                self.logger.info(
-                    f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
-                )
-                # Log full result (will be TRACE later)
-                self.logger.debug(
-                    f"{tp}🔄 Cross-agent call result: {format_log_value(converted_result)}"
-                )
-                return converted_result
-
-        except ImportError as e:
-            self.logger.warning(
-                f"FastMCP Client not available: {e}, falling back to HTTP"
-            )
-            return await self._fallback_http_call(name, args_with_trace)
-        except Exception as e:
-            self.logger.warning(f"FastMCP Client failed: {e}, falling back to HTTP")
-            # Try HTTP fallback
             try:
-                result = await self._fallback_http_call(name, args_with_trace)
-                return result
-            except Exception as fallback_error:
-                raise RuntimeError(
-                    f"Tool call to '{name}' failed: {e}, fallback also failed: {fallback_error}"
+                # Use correct FastMCP client endpoint - agents expose MCP on /mcp
+                mcp_endpoint = f"{self.endpoint}/mcp"
+                client_instance = self._create_fastmcp_client(mcp_endpoint)
+
+                async with client_instance as client:
+
+                    # Use FastMCP's call_tool which returns CallToolResult object
+                    result = await client.call_tool(name, args_with_trace)
+
+                    # Calculate performance metrics
+                    end_time = time.time()
+                    duration_ms = round((end_time - start_time) * 1000, 2)
+
+                    # FastMCP client automatically handles:
+                    # - CallToolResult object creation
+                    # - Structured content parsing
+                    # - Error handling
+
+                    # Convert CallToolResult to native Python structures for client simplicity
+                    converted_result = self._convert_mcp_result_to_python(result)
+
+                    # Log success - summary line
+                    self.logger.info(
+                        f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
+                    )
+                    # Log full result (will be TRACE later)
+                    self.logger.debug(
+                        f"{tp}🔄 Cross-agent call result: {format_log_value(converted_result)}"
+                    )
+                    return converted_result
+
+            except ImportError as e:
+                self.logger.warning(
+                    f"FastMCP Client not available: {e}, falling back to HTTP"
                 )
+                return await self._fallback_http_call(name, args_with_trace)
+            except Exception as e:
+                self.logger.warning(f"FastMCP Client failed: {e}, falling back to HTTP")
+                # Try HTTP fallback
+                try:
+                    result = await self._fallback_http_call(name, args_with_trace)
+                    return result
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        f"Tool call to '{name}' failed: {e}, fallback also failed: {fallback_error}"
+                    )
+        finally:
+            _per_call_headers_var.set(None)
 
     def _convert_mcp_result_to_python(self, mcp_result: Any) -> Any:
         """Convert MCP protocol objects (CallToolResult, etc.) to native Python structures.
@@ -654,6 +707,14 @@ class UnifiedMCPProxy:
 
             # Add trace headers
             headers = self._inject_trace_headers(headers)
+
+            # Inject propagated + per-call headers as HTTP headers
+            per_call = _per_call_headers_var.get()
+            merged_http = dict(TraceContext.get_propagated_headers())
+            if per_call:
+                merged_http.update(per_call)
+            for key, value in merged_http.items():
+                headers[key] = value
 
             # Enhanced timeout for large content processing
             enhanced_timeout = max(

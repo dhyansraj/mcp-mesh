@@ -153,12 +153,17 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                                     )
 
                                                     if PROPAGATE_HEADERS:
+                                                        from _mcp_mesh.tracing.context import (
+                                                            matches_propagate_header,
+                                                        )
+
                                                         filtered = {
                                                             k.lower(): v
                                                             for k, v in mesh_headers.items()
                                                             if isinstance(v, str)
-                                                            and k.lower()
-                                                            in PROPAGATE_HEADERS
+                                                            and matches_propagate_header(
+                                                                k
+                                                            )
                                                         }
                                                         if filtered:
                                                             # Merge with HTTP-captured headers (HTTP takes precedence)
@@ -272,15 +277,28 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                             span_id = current_trace.span_id
                             parent_span = current_trace.parent_span
 
-                        # Capture configured propagation headers from HTTP headers (always-on)
+                        # Capture configured propagation headers from HTTP headers (always-on, prefix matching)
                         if PROPAGATE_HEADERS:
+                            from _mcp_mesh.tracing.context import (
+                                matches_propagate_header as _mph,
+                            )
+
                             captured = {}
-                            for header_name in PROPAGATE_HEADERS:
-                                value = get_header_case_insensitive(
-                                    headers_list, header_name
+                            # Iterate all request headers and filter by prefix match
+                            for raw_header in headers_list:
+                                # headers_list is list of (name, value) tuples as bytes
+                                header_name = (
+                                    raw_header[0].decode("latin-1")
+                                    if isinstance(raw_header[0], bytes)
+                                    else raw_header[0]
                                 )
-                                if value:
-                                    captured[header_name] = value
+                                header_value = (
+                                    raw_header[1].decode("latin-1")
+                                    if isinstance(raw_header[1], bytes)
+                                    else raw_header[1]
+                                )
+                                if _mph(header_name):
+                                    captured[header_name.lower()] = header_value
                             if captured:
                                 TraceContext.set_propagated_headers(captured)
                                 logger.debug(

@@ -233,13 +233,13 @@ export interface McpMeshTool {
    * Returns parsed result (object/array) or raw string if not JSON.
    * Matches Python's behavior - no need to JSON.parse().
    */
-  (args?: Record<string, unknown>): Promise<unknown>;
+  (args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): Promise<unknown>;
 
   /**
    * Call a specific tool by name.
    * Returns parsed result (object/array) or raw string if not JSON.
    */
-  callTool(toolName: string, args?: Record<string, unknown>): Promise<unknown>;
+  callTool(toolName: string, args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): Promise<unknown>;
 
   /**
    * Get the endpoint URL for this dependency.

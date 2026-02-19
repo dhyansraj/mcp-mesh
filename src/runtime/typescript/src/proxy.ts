@@ -11,6 +11,7 @@ import {
   generateSpanId,
   publishTraceSpan,
   createTraceHeaders,
+  matchesPropagateHeader,
 } from "./tracing.js";
 
 /**
@@ -90,9 +91,10 @@ export function createProxy(
   // The proxy function that calls the bound tool
   // Returns parsed object (like Python) or raw string if not JSON
   const proxyFn = async (
-    args?: Record<string, unknown>
+    args?: Record<string, unknown>,
+    options?: { headers?: Record<string, string> }
   ): Promise<unknown> => {
-    const result = await callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability);
+    const result = await callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability, options?.headers);
     // Parse JSON if possible, otherwise return raw string (matches Python behavior)
     try {
       return JSON.parse(result);
@@ -110,9 +112,10 @@ export function createProxy(
     callTool: {
       value: async (
         toolName: string,
-        args?: Record<string, unknown>
+        args?: Record<string, unknown>,
+        options?: { headers?: Record<string, string> }
       ): Promise<unknown> => {
-        const result = await callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability);
+        const result = await callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability, options?.headers);
         try {
           return JSON.parse(result);
         } catch {
@@ -139,7 +142,8 @@ async function callMcpTool(
   args: Record<string, unknown> | undefined,
   timeout: number,
   maxAttempts: number,
-  capability: string
+  capability: string,
+  extraHeaders?: Record<string, string>
 ): Promise<string> {
   // Ensure endpoint ends with /mcp
   const mcpEndpoint = endpoint.endsWith("/mcp")
@@ -161,10 +165,18 @@ async function callMcpTool(
     argsWithTrace._trace_id = traceCtx.traceId;
     argsWithTrace._parent_span = spanId;
   }
-  // Inject propagated headers into args for downstream agents
+  // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
   const propagatedHeaders = getCurrentPropagatedHeaders();
-  if (Object.keys(propagatedHeaders).length > 0) {
-    argsWithTrace._mesh_headers = { ...propagatedHeaders };
+  const mergedHeaders: Record<string, string> = { ...propagatedHeaders };
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      if (matchesPropagateHeader(key)) {
+        mergedHeaders[key.toLowerCase()] = value;
+      }
+    }
+  }
+  if (Object.keys(mergedHeaders).length > 0) {
+    argsWithTrace._mesh_headers = mergedHeaders;
   }
 
   const payload = {
@@ -194,9 +206,8 @@ async function callMcpTool(
       if (traceCtx && spanId) {
         Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
       }
-      // Inject propagated headers as HTTP headers
-      const propHeaders = getCurrentPropagatedHeaders();
-      for (const [key, value] of Object.entries(propHeaders)) {
+      // Inject merged headers as HTTP headers (propagated + per-call)
+      for (const [key, value] of Object.entries(mergedHeaders)) {
         headers[key] = value;
       }
 

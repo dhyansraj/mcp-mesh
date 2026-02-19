@@ -5,7 +5,7 @@ MCP Mesh type definitions for dependency injection.
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 try:
     from pydantic_core import core_schema
@@ -66,19 +66,32 @@ class McpMeshTool(Protocol):
     The proxy provides all MCP protocol features while maintaining a simple callable interface.
     """
 
-    def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
+    def __call__(
+        self,
+        arguments: Optional[dict[str, Any]] = None,
+        *,
+        headers: Optional[dict[str, str]] = None
+    ) -> Any:
         """
         Call the bound remote function.
 
         Args:
             arguments: Arguments to pass to the remote function (optional)
+            headers: Per-call headers to inject into the downstream request (optional).
+                     Filtered by MCP_MESH_PROPAGATE_HEADERS allowlist.
+                     Merges with session-level propagated headers (per-call wins).
 
         Returns:
             Result from the remote function call (CallToolResult object)
         """
         ...
 
-    def invoke(self, arguments: Optional[dict[str, Any]] = None) -> Any:
+    def invoke(
+        self,
+        arguments: Optional[dict[str, Any]] = None,
+        *,
+        headers: Optional[dict[str, str]] = None
+    ) -> Any:
         """
         Explicitly invoke the bound remote function.
 
@@ -87,6 +100,8 @@ class McpMeshTool(Protocol):
 
         Args:
             arguments: Arguments to pass to the remote function (optional)
+            headers: Per-call headers to inject into the downstream request (optional).
+                     Filtered by MCP_MESH_PROPAGATE_HEADERS allowlist.
 
         Returns:
             Result from the remote function call (CallToolResult object)

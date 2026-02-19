@@ -107,6 +107,32 @@ public class ToolInvoker {
     }
 
     /**
+     * Invoke a tool remotely via cached proxy with per-call headers.
+     *
+     * @param endpoint     The tool's HTTP endpoint URL
+     * @param functionName The function name to call
+     * @param args         Arguments to pass to the tool
+     * @param returnType   Expected return type for deserialization
+     * @param headers      Per-call headers to inject into the downstream request
+     * @return The result from the remote tool
+     */
+    public Object invokeRemote(String endpoint, String functionName,
+                               Map<String, Object> args, Type returnType,
+                               Map<String, String> headers) {
+        if (endpoint == null || endpoint.isBlank()) {
+            throw new MeshToolUnavailableException(
+                "Tool endpoint is null or blank: " + functionName);
+        }
+
+        log.debug("Invoking remote tool: {} at {} (returnType={}, headers={})",
+            functionName, endpoint, returnType, headers != null ? headers.size() : 0);
+
+        McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
+            endpoint, functionName, returnType != null ? returnType : Object.class);
+        return proxy.call(args, headers);
+    }
+
+    /**
      * Invoke a local tool handler by capability.
      *
      * <p>Looks up the handler in {@link MeshToolWrapperRegistry} and invokes it

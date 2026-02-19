@@ -37,7 +37,7 @@ import {
   generateTraceId,
   generateSpanId,
   publishTraceSpan,
-  PROPAGATE_HEADERS,
+  matchesPropagateHeader,
   type TraceContext,
   type AgentMetadata,
 } from "./tracing.js";
@@ -165,7 +165,7 @@ export class MeshAgent {
           const meshHeaders = argsObj._mesh_headers as Record<string, unknown>;
           // Filter against allowlist
           for (const [key, value] of Object.entries(meshHeaders)) {
-            if (typeof value === "string" && PROPAGATE_HEADERS.includes(key.toLowerCase())) {
+            if (typeof value === "string" && matchesPropagateHeader(key)) {
               propagatedHeaders[key.toLowerCase()] = value;
             }
           }

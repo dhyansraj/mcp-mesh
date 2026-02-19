@@ -91,6 +91,23 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     }
 
     @Override
+    public T call(Map<String, Object> params, Map<String, String> headers) {
+        EndpointInfo info = endpointRef.get();
+        if (info == null || !info.available()) {
+            throw new MeshToolUnavailableException(capability);
+        }
+
+        log.debug("Calling tool {} at {} with params: {} and {} extra headers",
+            info.functionName(), info.endpoint(), params, headers != null ? headers.size() : 0);
+        return mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType, headers);
+    }
+
+    @Override
+    public CompletableFuture<T> callAsync(Map<String, Object> params, Map<String, String> headers) {
+        return CompletableFuture.supplyAsync(() -> call(params, headers));
+    }
+
+    @Override
     public T call(Object... args) {
         if (args.length == 0) {
             return call(Map.of());

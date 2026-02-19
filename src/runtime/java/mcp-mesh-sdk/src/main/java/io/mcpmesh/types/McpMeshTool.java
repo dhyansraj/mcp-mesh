@@ -114,6 +114,22 @@ public interface McpMeshTool<T> {
     T call(Map<String, Object> params);
 
     /**
+     * Call the remote tool with parameters and per-call headers.
+     *
+     * <p>Per-call headers are filtered by the MCP_MESH_PROPAGATE_HEADERS allowlist
+     * and merge on top of session-level propagated headers (per-call wins).
+     *
+     * @param params Parameters to pass to the tool
+     * @param headers Per-call headers to inject into the downstream request
+     * @return The tool's response, deserialized to type T
+     * @throws MeshToolUnavailableException if the tool is not available
+     * @throws MeshToolCallException if the call fails
+     */
+    default T call(Map<String, Object> params, Map<String, String> headers) {
+        return call(params);
+    }
+
+    /**
      * Call the remote tool with flexible argument handling.
      *
      * <p>This method intelligently handles different argument patterns:
@@ -159,6 +175,17 @@ public interface McpMeshTool<T> {
      * @return A future that completes with the tool's response, deserialized to type T
      */
     CompletableFuture<T> callAsync(Map<String, Object> params);
+
+    /**
+     * Asynchronously call the remote tool with parameters and per-call headers.
+     *
+     * @param params Parameters to pass to the tool
+     * @param headers Per-call headers to inject into the downstream request
+     * @return A future that completes with the tool's response, deserialized to type T
+     */
+    default CompletableFuture<T> callAsync(Map<String, Object> params, Map<String, String> headers) {
+        return callAsync(params);
+    }
 
     /**
      * Asynchronously call the remote tool with varargs key-value pairs.
