@@ -72,9 +72,9 @@ type AgentRegistrationResponse struct {
 
 // DependencyResolution represents a resolved dependency in the new format
 type DependencyResolution struct {
-	AgentID      string `json:"agent_id"`
-	FunctionName string `json:"function_name"`
-	Endpoint     string `json:"endpoint"`
+	AgentID      string `json:"agent_id,omitempty"`
+	FunctionName string `json:"function_name,omitempty"`
+	Endpoint     string `json:"endpoint,omitempty"`
 	Capability   string `json:"capability"`
 	Status       string `json:"status"`
 }
