@@ -75,7 +75,8 @@ class McpMeshTool(Protocol):
         Args:
             arguments: Arguments to pass to the remote function (optional)
             headers: Per-call headers to inject into the downstream request (optional).
-                     Filtered by MCP_MESH_PROPAGATE_HEADERS allowlist.
+                     Filtered by MCP_MESH_PROPAGATE_HEADERS prefix allowlist
+                     (e.g., allowlist "x-audit" permits "x-audit-id").
                      Merges with session-level propagated headers (per-call wins).
 
         Returns:

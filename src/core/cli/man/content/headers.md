@@ -96,7 +96,7 @@ async def relay(echo_svc: McpMeshTool = None) -> str:
 The `headers` keyword argument is available on `__call__`:
 
 ```python
-# Positional args style
+# Headers only (no tool arguments)
 result = await tool(headers={"x-audit-id": "abc"})
 
 # With tool arguments
