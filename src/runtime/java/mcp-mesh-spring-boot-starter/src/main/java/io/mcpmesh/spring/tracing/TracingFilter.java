@@ -14,7 +14,6 @@ import org.springframework.core.annotation.Order;
 
 import java.io.IOException;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -93,13 +92,16 @@ public class TracingFilter implements Filter {
             }
 
             // Capture configured propagation headers from incoming request
-            List<String> propagateNames = TraceContext.getPropagateHeaderNames();
-            if (!propagateNames.isEmpty()) {
+            if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
                 Map<String, String> captured = new HashMap<>();
-                for (String headerName : propagateNames) {
-                    String value = httpRequest.getHeader(headerName);
-                    if (value != null && !value.isEmpty()) {
-                        captured.put(headerName.toLowerCase(), value);
+                java.util.Enumeration<String> headerNames = httpRequest.getHeaderNames();
+                while (headerNames.hasMoreElements()) {
+                    String headerName = headerNames.nextElement();
+                    if (TraceContext.matchesPropagateHeader(headerName)) {
+                        String value = httpRequest.getHeader(headerName);
+                        if (value != null && !value.isEmpty()) {
+                            captured.put(headerName.toLowerCase(), value);
+                        }
                     }
                 }
                 if (!captured.isEmpty()) {

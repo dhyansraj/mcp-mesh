@@ -433,12 +433,16 @@ class HttpMcpWrapper:
                                         PROPAGATE_HEADERS as _PH,
                                     )
                                     from ..tracing.context import TraceContext as _TC2
+                                    from ..tracing.context import (
+                                        matches_propagate_header,
+                                    )
 
                                     if _PH:
                                         filtered = {
                                             k.lower(): v
                                             for k, v in mesh_headers_raw.items()
-                                            if isinstance(v, str) and k.lower() in _PH
+                                            if isinstance(v, str)
+                                            and matches_propagate_header(k)
                                         }
                                         if filtered:
                                             # Merge with HTTP-captured headers (HTTP takes precedence)
@@ -484,15 +488,17 @@ class HttpMcpWrapper:
                         )
 
                     # Capture configured propagation headers from incoming request
-                    from ..tracing.context import PROPAGATE_HEADERS
+                    from ..tracing.context import (
+                        PROPAGATE_HEADERS,
+                        matches_propagate_header,
+                    )
                     from ..tracing.context import TraceContext as _TC
 
                     if PROPAGATE_HEADERS:
                         captured = {}
-                        for header_name in PROPAGATE_HEADERS:
-                            value = request.headers.get(header_name)
-                            if value:
-                                captured[header_name] = value
+                        for header_name, value in request.headers.items():
+                            if matches_propagate_header(header_name):
+                                captured[header_name.lower()] = value
                         if captured:
                             existing = _TC.get_propagated_headers()
                             if existing:

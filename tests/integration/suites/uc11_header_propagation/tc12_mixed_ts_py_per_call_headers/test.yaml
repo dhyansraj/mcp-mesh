@@ -1,0 +1,182 @@
+# Test Case: Mixed Per-Call Headers (TypeScript relay -> Python echo)
+# Verifies cross-runtime per-call header injection -- the TypeScript relay agent
+# injects x-audit-id via per-call headers when calling Python echo agent.
+#
+# Scenario:
+#   - header-echo-py (Python) provides echo_headers tool that returns propagated headers
+#   - header-relay-ts (TypeScript) checks if x-audit-id is in propagated headers
+#   - If x-audit-id is NOT present, relay injects "x-audit-id: injected-by-relay-ts"
+#     via per-call headers when calling echo_headers
+#   - curl sends NO custom headers to header-relay-ts
+#   - TypeScript relay calls Python echo via mesh
+#   - Assert the response contains "injected-by-relay-ts" proving per-call header
+#     injection works across the TypeScript -> Python runtime boundary
+
+name: "Mixed Per-Call Headers (TypeScript relay -> Python echo)"
+description: "Test per-call header injection from TypeScript relay agent to Python echo agent"
+tags:
+  - header_propagation
+  - python
+  - typescript
+  - mixed_language
+  - cross_runtime
+  - per_call_headers
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace (dereference symlinks)
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/* /workspace/"
+
+  # Install npm dependencies for TypeScript relay agent
+  - name: "Install header-relay-ts npm dependencies"
+    handler: npm-install
+    path: /workspace/header-relay-ts
+
+  # Start Python echo agent (provider) first so relay can discover it
+  - name: "Start header-echo-py agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-py/main.py --env MCP_MESH_HTTP_PORT=3046 --env MCP_MESH_PROPAGATE_HEADERS=x-audit -d"
+    capture: start_echo
+
+  # Wait for echo agent to register
+  - name: "Wait for header-echo-py registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo"; then
+          echo "header-echo-py registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo-py did not register within 40s"
+      meshctl logs header-echo 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  # Start TypeScript relay agent (consumer)
+  - name: "Start header-relay-ts agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-relay-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3047 --env MCP_MESH_PROPAGATE_HEADERS=x-audit -d"
+    capture: start_relay
+
+  # Wait for relay agent to register
+  - name: "Wait for header-relay-ts registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-relay-ts"; then
+          echo "header-relay-ts registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay-ts did not register within 40s"
+      meshctl logs header-relay-ts 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_relay
+    timeout: 60
+
+  # Wait for dependency wiring
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 10
+
+  # Verify both agents are running
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_agents
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Get relay agent port (Node.js one-liner, grep for header-relay-ts)
+  - name: "Get relay agent port"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl list --json 2>/dev/null | node -e "let d='''';process.stdin.on(''data'',c=>d+=c);process.stdin.on(''end'',()=>{const j=JSON.parse(d);const a=(j.agents||[]).find(x=>x.name.includes(''header-relay-ts''));console.log(a?a.endpoint.split('':'').pop():''3047'')})"'
+    capture: relay_port
+
+  # Send curl request with NO custom headers to relay agent
+  # The relay agent will inject x-audit-id itself via per-call headers
+  - name: "Call relay_headers via curl with no custom headers (TypeScript -> Python)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=${captured.relay_port}
+      curl -s -X POST http://localhost:${PORT}/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relay_headers","arguments":{}}}'
+    capture: curl_result
+    timeout: 30
+
+  # Debug: show agent logs
+  - name: "Get header-echo-py logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay-ts logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay-ts 2>/dev/null | tail -20 || echo 'no relay logs'"
+    capture: relay_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_agents} contains 'header-echo'"
+    message: "header-echo-py agent should be registered"
+
+  - expr: "${captured.list_agents} contains 'header-relay-ts'"
+    message: "header-relay-ts agent should be registered"
+
+  # Tools available
+  - expr: "${captured.list_tools} contains 'echo_headers'"
+    message: "echo_headers tool should be available"
+
+  - expr: "${captured.list_tools} contains 'relay_headers'"
+    message: "relay_headers tool should be available"
+
+  # Per-call header injection: relay injected x-audit-id across TypeScript -> Python boundary
+  - expr: "${captured.curl_result} contains 'injected-by-relay-ts'"
+    message: "Response should contain injected-by-relay-ts proving per-call header injection crossed TypeScript -> Python boundary"
+
+  - expr: "${captured.curl_result} contains 'x-audit-id'"
+    message: "Response should contain x-audit-id header name proving the header was propagated cross-runtime"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

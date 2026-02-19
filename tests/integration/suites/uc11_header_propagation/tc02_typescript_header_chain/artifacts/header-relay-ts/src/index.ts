@@ -3,7 +3,7 @@
  * header-relay-ts - Calls echo_headers dependency and returns result
  */
 
-import { FastMCP, mesh, McpMeshTool } from "@mcpmesh/sdk";
+import { FastMCP, mesh, McpMeshTool, getCurrentPropagatedHeaders } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 const server = new FastMCP({
@@ -27,6 +27,12 @@ agent.addTool({
     echoSvc: McpMeshTool | null = null
   ): Promise<string> => {
     if (!echoSvc) return '{"error": "echo_headers not available"}';
+    // If x-audit-id not already propagated, inject it via per-call headers
+    const propagated = getCurrentPropagatedHeaders();
+    if (!propagated["x-audit-id"]) {
+      const result = await echoSvc({}, { headers: { "x-audit-id": "injected-by-relay-ts" } });
+      return JSON.stringify(result);
+    }
     const result = await echoSvc({});
     return JSON.stringify(result);
   },

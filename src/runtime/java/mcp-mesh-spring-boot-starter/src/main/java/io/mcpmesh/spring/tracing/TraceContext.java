@@ -139,6 +139,23 @@ public class TraceContext {
     }
 
     /**
+     * Check if a header name matches any prefix in the propagate headers allowlist.
+     * Uses prefix matching: if PROPAGATE_HEADERS contains "x-audit", it will match
+     * "x-audit", "x-audit-id", "x-audit-source", etc.
+     *
+     * @param name Header name to check
+     * @return true if the name matches any prefix in the allowlist
+     */
+    public static boolean matchesPropagateHeader(String name) {
+        if (PROPAGATE_HEADERS.isEmpty()) return false;
+        String lower = name.toLowerCase();
+        for (String prefix : PROPAGATE_HEADERS) {
+            if (lower.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    /**
      * Wrap a Runnable to propagate trace context to another thread.
      *
      * <p>Use this when submitting tasks to ExecutorService or other async mechanisms

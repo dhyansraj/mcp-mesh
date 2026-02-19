@@ -33,7 +33,7 @@ import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
 import { normalizeDependency, runWithPropagatedHeaders } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
-import { PROPAGATE_HEADERS } from "./tracing.js";
+import { PROPAGATE_HEADERS, matchesPropagateHeader } from "./tracing.js";
 
 /**
  * Global flag to track if Express auto-detection has been performed.
@@ -387,10 +387,9 @@ export function route(
       // Extract propagated headers from incoming HTTP request
       const propagatedHeaders: Record<string, string> = {};
       if (PROPAGATE_HEADERS.length > 0) {
-        for (const headerName of PROPAGATE_HEADERS) {
-          const value = req.headers[headerName];
-          if (typeof value === "string") {
-            propagatedHeaders[headerName] = value;
+        for (const [headerName, value] of Object.entries(req.headers)) {
+          if (typeof value === "string" && matchesPropagateHeader(headerName)) {
+            propagatedHeaders[headerName.toLowerCase()] = value;
           }
         }
       }

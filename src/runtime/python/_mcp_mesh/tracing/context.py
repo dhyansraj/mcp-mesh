@@ -15,6 +15,18 @@ _raw = os.environ.get("MCP_MESH_PROPAGATE_HEADERS", "")
 PROPAGATE_HEADERS: list[str] = [h.strip().lower() for h in _raw.split(",") if h.strip()]
 
 
+def matches_propagate_header(name: str) -> bool:
+    """Check if a header name matches any prefix in the propagate headers allowlist.
+
+    Uses prefix matching: if PROPAGATE_HEADERS contains 'x-audit', it will match
+    'x-audit', 'x-audit-id', 'x-audit-source', etc.
+    """
+    if not PROPAGATE_HEADERS:
+        return False
+    lower_name = name.lower()
+    return any(lower_name.startswith(prefix) for prefix in PROPAGATE_HEADERS)
+
+
 class TraceInfo:
     """Container for trace context information"""
 

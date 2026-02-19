@@ -5,7 +5,7 @@ MCP Mesh type definitions for dependency injection.
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 try:
     from pydantic_core import core_schema
@@ -39,9 +39,6 @@ class McpMeshTool(Protocol):
             # With arguments
             current_date = date_service({"format": "ISO"})
 
-            # Explicit invoke (same as call)
-            current_date = date_service.invoke({"format": "ISO"})
-
             return f"Hello {name}, today is {current_date}"
 
         @mesh.tool(dependencies=["file-service"])
@@ -66,34 +63,24 @@ class McpMeshTool(Protocol):
     The proxy provides all MCP protocol features while maintaining a simple callable interface.
     """
 
-    def __call__(self, arguments: Optional[dict[str, Any]] = None) -> Any:
+    def __call__(
+        self,
+        arguments: Optional[dict[str, Any]] = None,
+        *,
+        headers: Optional[dict[str, str]] = None
+    ) -> Any:
         """
         Call the bound remote function.
 
         Args:
             arguments: Arguments to pass to the remote function (optional)
+            headers: Per-call headers to inject into the downstream request (optional).
+                     Filtered by MCP_MESH_PROPAGATE_HEADERS prefix allowlist
+                     (e.g., allowlist "x-audit" permits "x-audit-id").
+                     Merges with session-level propagated headers (per-call wins).
 
         Returns:
             Result from the remote function call (CallToolResult object)
-        """
-        ...
-
-    def invoke(self, arguments: Optional[dict[str, Any]] = None) -> Any:
-        """
-        Explicitly invoke the bound remote function.
-
-        This method provides the same functionality as __call__ but with
-        an explicit method name for those who prefer it.
-
-        Args:
-            arguments: Arguments to pass to the remote function (optional)
-
-        Returns:
-            Result from the remote function call (CallToolResult object)
-
-        Example:
-            result = date_service.invoke({"format": "ISO"})
-            # Same as: result = date_service({"format": "ISO"})
         """
         ...
 

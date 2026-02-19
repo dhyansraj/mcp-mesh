@@ -27,6 +27,17 @@ function parsePropagateHeaders(): string[] {
 
 export const PROPAGATE_HEADERS: string[] = parsePropagateHeaders();
 
+/**
+ * Check if a header name matches any prefix in the propagate headers allowlist.
+ * Uses prefix matching: if PROPAGATE_HEADERS contains 'x-audit', it will match
+ * 'x-audit', 'x-audit-id', 'x-audit-source', etc.
+ */
+export function matchesPropagateHeader(name: string): boolean {
+  if (PROPAGATE_HEADERS.length === 0) return false;
+  const lower = name.toLowerCase();
+  return PROPAGATE_HEADERS.some((prefix) => lower.startsWith(prefix));
+}
+
 // Trace context passed between agents via headers
 export interface TraceContext {
   traceId: string;

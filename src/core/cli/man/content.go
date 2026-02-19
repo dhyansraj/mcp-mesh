@@ -138,10 +138,12 @@ var guideRegistry = map[string]*Guide{
 		Description: "Distributed tracing, Grafana dashboards, and monitoring setup",
 	},
 	"headers": {
-		Name:        "headers",
-		Aliases:     []string{"header-propagation", "propagation", "forwarding"},
-		Title:       "HTTP Header Propagation",
-		Description: "Propagate custom HTTP headers across agent calls",
+		Name:                 "headers",
+		Aliases:              []string{"header-propagation", "propagation", "forwarding"},
+		Title:                "HTTP Header Propagation",
+		Description:          "Propagate custom HTTP headers across agent calls",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
 	},
 	"prerequisites": {
 		Name:                 "prerequisites",

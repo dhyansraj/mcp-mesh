@@ -71,6 +71,26 @@ public class McpHttpClient {
      */
     @SuppressWarnings("unchecked")
     public <T> T callTool(String endpoint, String functionName, Map<String, Object> params, Type returnType) {
+        return callTool(endpoint, functionName, params, returnType, null);
+    }
+
+    /**
+     * Call a tool on a remote MCP server with typed response deserialization and per-call headers.
+     *
+     * <p>Per-call headers are filtered by the MCP_MESH_PROPAGATE_HEADERS allowlist
+     * and merge on top of session-level propagated headers (per-call wins).
+     *
+     * @param endpoint     The MCP server endpoint (e.g., http://localhost:9000)
+     * @param functionName The tool/function name to call
+     * @param params       Parameters to pass to the tool
+     * @param returnType   The expected return type for deserialization (null for dynamic typing)
+     * @param extraHeaders Per-call headers to inject into the downstream request (may be null)
+     * @param <T>          Expected return type
+     * @return The tool result, deserialized to the specified type
+     * @throws MeshToolCallException if the call fails
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T callTool(String endpoint, String functionName, Map<String, Object> params, Type returnType, Map<String, String> extraHeaders) {
         try {
             // Build MCP tools/call request
             // Use /mcp endpoint (stateless transport) - not /mcp/v1
@@ -90,11 +110,19 @@ public class McpHttpClient {
                     traceInfo.getSpanId().substring(0, 8));
             }
 
-            // Inject propagated headers into arguments for TypeScript agents
+            // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
             Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
-            if (!propagatedHeaders.isEmpty()) {
-                argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(propagatedHeaders));
-                log.trace("Injecting {} propagated headers into args", propagatedHeaders.size());
+            Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
+            if (extraHeaders != null) {
+                for (Map.Entry<String, String> entry : extraHeaders.entrySet()) {
+                    if (TraceContext.matchesPropagateHeader(entry.getKey())) {
+                        mergedHeaders.put(entry.getKey().toLowerCase(), entry.getValue());
+                    }
+                }
+            }
+            if (!mergedHeaders.isEmpty()) {
+                argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                log.trace("Injecting {} merged headers into args", mergedHeaders.size());
             }
 
             Map<String, Object> request = Map.of(
@@ -126,9 +154,8 @@ public class McpHttpClient {
                     traceInfo.getSpanId().substring(0, 8));
             }
 
-            // Inject propagated headers as HTTP headers
-            Map<String, String> propagated = TraceContext.getPropagatedHeaders();
-            for (Map.Entry<String, String> entry : propagated.entrySet()) {
+            // Inject merged headers as HTTP headers (propagated + per-call)
+            for (Map.Entry<String, String> entry : mergedHeaders.entrySet()) {
                 requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
