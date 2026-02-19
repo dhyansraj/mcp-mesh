@@ -22,9 +22,9 @@ from ..tracing.utils import generate_span_id
 
 logger = logging.getLogger(__name__)
 
-# ContextVar for passing per-call headers into httpx event_hooks closure
-_per_call_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
-    contextvars.ContextVar("_per_call_headers", default=None)
+# ContextVar for passing merged outbound headers into httpx event_hooks closure
+_outbound_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
+    contextvars.ContextVar("_outbound_headers", default=None)
 )
 
 
@@ -142,15 +142,11 @@ class UnifiedMCPProxy:
                                 f"parent_span={trace_context.span_id[:8]}..."
                             )
 
-                        # Inject propagated headers (independent of tracing)
-                        propagated = TraceContext.get_propagated_headers()
-                        for key, value in propagated.items():
-                            request.headers[key] = value
-
-                        # Inject per-call headers from ContextVar
-                        per_call = _per_call_headers_var.get()
-                        if per_call:
-                            for key, value in per_call.items():
+                        # Inject merged outbound headers from ContextVar
+                        # (session propagated + custom + per-call, merged in call_tool)
+                        outbound = _outbound_headers_var.get()
+                        if outbound:
+                            for key, value in outbound.items():
                                 request.headers[key] = value
                     except Exception as e:
                         # Never fail HTTP requests due to tracing issues
@@ -482,8 +478,8 @@ class UnifiedMCPProxy:
         )
 
         try:
-            # Set per-call headers ContextVar for httpx hook to read
-            _per_call_headers_var.set(merged_headers if merged_headers else None)
+            # Set merged outbound headers ContextVar for httpx hook to read
+            _outbound_headers_var.set(merged_headers if merged_headers else None)
 
             try:
                 # Use correct FastMCP client endpoint - agents expose MCP on /mcp
@@ -533,7 +529,7 @@ class UnifiedMCPProxy:
                         f"Tool call to '{name}' failed: {e}, fallback also failed: {fallback_error}"
                     )
         finally:
-            _per_call_headers_var.set(None)
+            _outbound_headers_var.set(None)
 
     def _convert_mcp_result_to_python(self, mcp_result: Any) -> Any:
         """Convert MCP protocol objects (CallToolResult, etc.) to native Python structures.
@@ -708,13 +704,11 @@ class UnifiedMCPProxy:
             # Add trace headers
             headers = self._inject_trace_headers(headers)
 
-            # Inject propagated + per-call headers as HTTP headers
-            per_call = _per_call_headers_var.get()
-            merged_http = dict(TraceContext.get_propagated_headers())
-            if per_call:
-                merged_http.update(per_call)
-            for key, value in merged_http.items():
-                headers[key] = value
+            # Inject merged outbound headers (session propagated + custom + per-call)
+            outbound = _outbound_headers_var.get()
+            if outbound:
+                for key, value in outbound.items():
+                    headers[key] = value
 
             # Enhanced timeout for large content processing
             enhanced_timeout = max(
