@@ -1,4 +1,4 @@
-# HTTP Header Propagation (Python)
+# HTTP Header Propagation (Java/Spring Boot)
 
 > Forward custom HTTP headers across agent-to-agent calls
 
@@ -32,24 +32,24 @@ With no value set, no custom headers are propagated. Trace headers
 
 ```
 Client                Agent A              Agent B              Agent C
-  |                     |                     |                    |
-  | Authorization: Bxxx |                     |                    |
-  |-------------------->|                     |                    |
-  |                     | captures "authorization" from allowlist  |
-  |                     |                     |                    |
-  |                     | Authorization: Bxxx |                    |
-  |                     |-------------------->|                    |
-  |                     |                     | Authorization: Bxxx|
-  |                     |                     |------------------>|
+  │                     │                     │                    │
+  │ Authorization: Bxxx │                     │                    │
+  │────────────────────>│                     │                    │
+  │                     │ captures "authorization" from allowlist  │
+  │                     │                     │                    │
+  │                     │ Authorization: Bxxx │                    │
+  │                     │────────────────────>│                    │
+  │                     │                     │ Authorization: Bxxx│
+  │                     │                     │───────────────────>│
 ```
 
 1. Incoming request arrives with headers
-2. Agent captures headers matching the allowlist into request-scoped context
+2. `TracingFilter` captures headers matching the allowlist into request-scoped context
 3. When the agent calls another agent, captured headers are injected
    into the outgoing HTTP request automatically
 4. The downstream agent repeats the process — headers flow end-to-end
 
-Python uses `contextvars.ContextVar` for async-safe, request-scoped storage
+Java uses `InheritableThreadLocal` for thread-safe, request-scoped storage
 so concurrent requests are fully isolated.
 
 ## Reading Headers in Tool Handlers
@@ -57,14 +57,15 @@ so concurrent requests are fully isolated.
 Headers are captured and forwarded automatically. You can also read them
 explicitly in your tool code:
 
-```python
-from _mcp_mesh.tracing.context import TraceContext
+```java
+import io.mcpmesh.spring.tracing.TraceContext;
 
-@mesh.tool(capability="my_tool")
-async def my_tool(name: str) -> dict:
-    headers = TraceContext.get_propagated_headers()
-    tenant = headers.get("x-tenant-id", "unknown")
-    return {"user": name, "tenant": tenant}
+@MeshTool(capability = "my_tool", description = "My tool")
+public Map<String, Object> myTool(@Param("name") String name) {
+    Map<String, String> headers = TraceContext.getPropagatedHeaders();
+    String tenant = headers.getOrDefault("x-tenant-id", "unknown");
+    return Map.of("user", name, "tenant", tenant);
+}
 ```
 
 ## Per-Call Header Injection
@@ -73,34 +74,47 @@ Agents can inject headers when calling other tools. This enables use cases
 like audit correlation where an orchestrating agent stamps metadata on
 downstream calls.
 
-```python
-from _mcp_mesh.tracing.context import TraceContext
-from mesh.types import McpMeshTool
+```java
+import io.mcpmesh.spring.tracing.TraceContext;
+import io.mcpmesh.types.McpMeshTool;
 
-@mesh.tool(capability="relay", dependencies=["echo_headers"])
-async def relay(echo_svc: McpMeshTool = None) -> str:
-    # Check what's already propagated
-    propagated = TraceContext.get_propagated_headers()
+@MeshTool(
+    capability = "relay",
+    description = "Relay with audit headers",
+    dependencies = @Selector(capability = "echo_headers")
+)
+public String relayHeaders(McpMeshTool<String> echoSvc) {
+    // Check what's already propagated
+    Map<String, String> propagated = TraceContext.getPropagatedHeaders();
 
-    if "x-audit-id" not in propagated:
-        # Inject a new header on this specific call
-        result = await echo_svc(headers={"x-audit-id": "audit-12345"})
-    else:
-        result = await echo_svc()
+    if (!propagated.containsKey("x-audit-id")) {
+        // Inject a new header on this specific call
+        return echoSvc.call(Map.of(), Map.of("x-audit-id", "audit-12345"));
+    }
 
-    return str(result)
+    return echoSvc.call();
+}
 ```
 
-**API:** `await tool(headers={"header-name": "value"})`
+**API:** `tool.call(params, headers)`
 
-The `headers` keyword argument is available on `__call__`:
+The `headers` map is the second argument to `call` and `callAsync`:
 
-```python
-# Positional args style
-result = await tool(headers={"x-audit-id": "abc"})
+```java
+// No tool arguments, just headers
+String result = tool.call(Map.of(), Map.of("x-audit-id", "abc"));
 
-# With tool arguments
-result = await tool(query="test", headers={"x-audit-id": "abc"})
+// With tool arguments
+String result = tool.call(
+    Map.of("query", "test"),
+    Map.of("x-audit-id", "abc")
+);
+
+// Async variant
+CompletableFuture<String> future = tool.callAsync(
+    Map.of("query", "test"),
+    Map.of("x-audit-id", "abc")
+);
 ```
 
 ### Merge Semantics
@@ -109,7 +123,7 @@ Per-call headers merge on top of session-level propagated headers:
 
 ```
 Session propagated headers (from incoming request)
-  + Per-call headers (from headers= argument)
+  + Per-call headers (from call(params, headers))
   = Merged headers sent downstream
 ```
 
@@ -132,23 +146,20 @@ curl -H "Authorization: Bearer tok_abc123" \
 ```
 
 The `Authorization` header flows automatically through every agent call.
-Each agent can enforce auth using FastAPI dependencies:
+Each agent can enforce auth using Spring Security:
 
-```python
-from fastapi import Depends, HTTPException
-from _mcp_mesh.tracing.context import TraceContext
+```java
+import org.springframework.security.access.prepost.PreAuthorize;
 
-def require_auth():
-    headers = TraceContext.get_propagated_headers()
-    token = headers.get("authorization", "")
-    if not token.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing token")
-    return token
-
-@mesh.tool(capability="secure_tool")
-async def secure_tool(data: str, auth: str = Depends(require_auth)) -> dict:
-    return {"result": "ok", "authenticated": True}
+@MeshTool(capability = "secure_tool", description = "Secured tool")
+@PreAuthorize("hasRole('ADMIN')")
+public Map<String, Object> secureTool(@Param("data") String data) {
+    return Map.of("result", "ok", "authenticated", true);
+}
 ```
+
+Spring Security reads the `Authorization` header from the HTTP request
+automatically — no extra wiring needed when headers are propagated.
 
 ## Cross-Language Behavior
 
@@ -172,5 +183,5 @@ SDK combination is in the chain.
 
 - `meshctl man observability` — Distributed tracing with X-Trace-ID
 - `meshctl man environment` — All configuration variables
-- `meshctl man proxies` — Inter-agent communication mechanics
-- `meshctl man api` — Adding mesh to existing web frameworks
+- `meshctl man proxies --java` — Inter-agent communication mechanics
+- `meshctl man api --java` — Adding mesh to existing web frameworks

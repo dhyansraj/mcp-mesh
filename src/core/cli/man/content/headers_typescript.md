@@ -1,4 +1,4 @@
-# HTTP Header Propagation (Python)
+# HTTP Header Propagation (TypeScript)
 
 > Forward custom HTTP headers across agent-to-agent calls
 
@@ -32,15 +32,15 @@ With no value set, no custom headers are propagated. Trace headers
 
 ```
 Client                Agent A              Agent B              Agent C
-  |                     |                     |                    |
-  | Authorization: Bxxx |                     |                    |
-  |-------------------->|                     |                    |
-  |                     | captures "authorization" from allowlist  |
-  |                     |                     |                    |
-  |                     | Authorization: Bxxx |                    |
-  |                     |-------------------->|                    |
-  |                     |                     | Authorization: Bxxx|
-  |                     |                     |------------------>|
+  │                     │                     │                    │
+  │ Authorization: Bxxx │                     │                    │
+  │────────────────────>│                     │                    │
+  │                     │ captures "authorization" from allowlist  │
+  │                     │                     │                    │
+  │                     │ Authorization: Bxxx │                    │
+  │                     │────────────────────>│                    │
+  │                     │                     │ Authorization: Bxxx│
+  │                     │                     │───────────────────>│
 ```
 
 1. Incoming request arrives with headers
@@ -49,7 +49,7 @@ Client                Agent A              Agent B              Agent C
    into the outgoing HTTP request automatically
 4. The downstream agent repeats the process — headers flow end-to-end
 
-Python uses `contextvars.ContextVar` for async-safe, request-scoped storage
+TypeScript uses `AsyncLocalStorage` for async-safe, request-scoped storage
 so concurrent requests are fully isolated.
 
 ## Reading Headers in Tool Handlers
@@ -57,14 +57,19 @@ so concurrent requests are fully isolated.
 Headers are captured and forwarded automatically. You can also read them
 explicitly in your tool code:
 
-```python
-from _mcp_mesh.tracing.context import TraceContext
+```typescript
+import { getCurrentPropagatedHeaders } from "@mcpmesh/sdk";
 
-@mesh.tool(capability="my_tool")
-async def my_tool(name: str) -> dict:
-    headers = TraceContext.get_propagated_headers()
-    tenant = headers.get("x-tenant-id", "unknown")
-    return {"user": name, "tenant": tenant}
+agent.addTool({
+  name: "my_tool",
+  capability: "my_capability",
+  parameters: z.object({ name: z.string() }),
+  execute: async ({ name }) => {
+    const headers = getCurrentPropagatedHeaders();
+    const tenant = headers["x-tenant-id"] ?? "unknown";
+    return JSON.stringify({ user: name, tenant });
+  },
+});
 ```
 
 ## Per-Call Header Injection
@@ -73,34 +78,50 @@ Agents can inject headers when calling other tools. This enables use cases
 like audit correlation where an orchestrating agent stamps metadata on
 downstream calls.
 
-```python
-from _mcp_mesh.tracing.context import TraceContext
-from mesh.types import McpMeshTool
+```typescript
+import { getCurrentPropagatedHeaders, McpMeshTool } from "@mcpmesh/sdk";
 
-@mesh.tool(capability="relay", dependencies=["echo_headers"])
-async def relay(echo_svc: McpMeshTool = None) -> str:
-    # Check what's already propagated
-    propagated = TraceContext.get_propagated_headers()
+agent.addTool({
+  name: "relay",
+  capability: "relay_headers",
+  dependencies: ["echo_headers"],
+  parameters: z.object({}),
+  execute: async ({}, { echo_headers }: { echo_headers: McpMeshTool | null }) => {
+    // Check what's already propagated
+    const propagated = getCurrentPropagatedHeaders();
 
-    if "x-audit-id" not in propagated:
-        # Inject a new header on this specific call
-        result = await echo_svc(headers={"x-audit-id": "audit-12345"})
-    else:
-        result = await echo_svc()
+    if (!propagated["x-audit-id"]) {
+      // Inject a new header on this specific call
+      const result = await echo_headers!({}, {
+        headers: { "x-audit-id": "audit-12345" },
+      });
+      return JSON.stringify(result);
+    }
 
-    return str(result)
+    const result = await echo_headers!({});
+    return JSON.stringify(result);
+  },
+});
 ```
 
-**API:** `await tool(headers={"header-name": "value"})`
+**API:** `await tool(args, { headers: { "header-name": "value" } })`
 
-The `headers` keyword argument is available on `__call__`:
+The `headers` option is passed as part of the second argument (options object):
 
-```python
-# Positional args style
-result = await tool(headers={"x-audit-id": "abc"})
+```typescript
+// No tool arguments, just headers
+const result = await tool({}, { headers: { "x-audit-id": "abc" } });
 
-# With tool arguments
-result = await tool(query="test", headers={"x-audit-id": "abc"})
+// With tool arguments
+const result = await tool(
+  { query: "test" },
+  { headers: { "x-audit-id": "abc" } }
+);
+
+// Via callTool
+const result = await tool.callTool("specific_tool", { query: "test" }, {
+  headers: { "x-audit-id": "abc" },
+});
 ```
 
 ### Merge Semantics
@@ -109,7 +130,7 @@ Per-call headers merge on top of session-level propagated headers:
 
 ```
 Session propagated headers (from incoming request)
-  + Per-call headers (from headers= argument)
+  + Per-call headers (from options.headers)
   = Merged headers sent downstream
 ```
 
@@ -132,23 +153,6 @@ curl -H "Authorization: Bearer tok_abc123" \
 ```
 
 The `Authorization` header flows automatically through every agent call.
-Each agent can enforce auth using FastAPI dependencies:
-
-```python
-from fastapi import Depends, HTTPException
-from _mcp_mesh.tracing.context import TraceContext
-
-def require_auth():
-    headers = TraceContext.get_propagated_headers()
-    token = headers.get("authorization", "")
-    if not token.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing token")
-    return token
-
-@mesh.tool(capability="secure_tool")
-async def secure_tool(data: str, auth: str = Depends(require_auth)) -> dict:
-    return {"result": "ok", "authenticated": True}
-```
 
 ## Cross-Language Behavior
 
@@ -162,6 +166,12 @@ The `_mesh_headers` argument is stripped before user code sees it. This
 dual mechanism is transparent — headers flow correctly regardless of which
 SDK combination is in the chain.
 
+**TypeScript limitation:** TypeScript agents cannot capture headers from
+direct external HTTP callers (curl, API gateways) due to FastMCP not
+exposing HTTP headers. Headers are only received from other mesh agents
+that tunnel them via `_mesh_headers`. Agent-to-agent calls work correctly
+across all SDK combinations.
+
 ## Environment Variables
 
 | Variable                     | Description                                       | Default  |
@@ -172,5 +182,5 @@ SDK combination is in the chain.
 
 - `meshctl man observability` — Distributed tracing with X-Trace-ID
 - `meshctl man environment` — All configuration variables
-- `meshctl man proxies` — Inter-agent communication mechanics
-- `meshctl man api` — Adding mesh to existing web frameworks
+- `meshctl man proxies --typescript` — Inter-agent communication mechanics
+- `meshctl man api --typescript` — Adding mesh to existing web frameworks

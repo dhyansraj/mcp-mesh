@@ -39,9 +39,6 @@ class McpMeshTool(Protocol):
             # With arguments
             current_date = date_service({"format": "ISO"})
 
-            # Explicit invoke (same as call)
-            current_date = date_service.invoke({"format": "ISO"})
-
             return f"Hello {name}, today is {current_date}"
 
         @mesh.tool(dependencies=["file-service"])
@@ -83,32 +80,6 @@ class McpMeshTool(Protocol):
 
         Returns:
             Result from the remote function call (CallToolResult object)
-        """
-        ...
-
-    def invoke(
-        self,
-        arguments: Optional[dict[str, Any]] = None,
-        *,
-        headers: Optional[dict[str, str]] = None
-    ) -> Any:
-        """
-        Explicitly invoke the bound remote function.
-
-        This method provides the same functionality as __call__ but with
-        an explicit method name for those who prefer it.
-
-        Args:
-            arguments: Arguments to pass to the remote function (optional)
-            headers: Per-call headers to inject into the downstream request (optional).
-                     Filtered by MCP_MESH_PROPAGATE_HEADERS allowlist.
-
-        Returns:
-            Result from the remote function call (CallToolResult object)
-
-        Example:
-            result = date_service.invoke({"format": "ISO"})
-            # Same as: result = date_service({"format": "ISO"})
         """
         ...
 
