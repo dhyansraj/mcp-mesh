@@ -77,6 +77,10 @@ public class McpMeshToolProxyFactory {
         // Update returnType if the cached proxy was created without one (e.g., from untyped path)
         if (returnType != null && proxy.getReturnType() == null) {
             proxy.setReturnType(returnType);
+        } else if (returnType != null && proxy.getReturnType() != null && !proxy.getReturnType().equals(returnType)) {
+            log.warn("ReturnType mismatch for proxy {}:{} — cached={}, requested={}. "
+                    + "This may indicate a dependency resolution ordering issue.",
+                    endpoint, functionName, proxy.getReturnType(), returnType);
         }
 
         return (McpMeshTool<T>) proxy;

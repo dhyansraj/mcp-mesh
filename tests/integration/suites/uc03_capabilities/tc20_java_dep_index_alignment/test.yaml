@@ -1,0 +1,202 @@
+# Test Case: tc20_java_dep_index_alignment
+# Regression test for issue #572: dep_index alignment when dependencies
+# resolve at different times. Java version.
+#
+# Scenario:
+#   - java-alpha-provider: student_lookup capability (dep_index=0)
+#   - java-beta-provider: schedule_lookup capability (dep_index=1)
+#   - java-dual-consumer: depends on [student_lookup, schedule_lookup]
+#
+# Phase 1: Only beta running - verify dep_index=0 is unavailable, dep_index=1 is available
+# Phase 2: Start alpha - verify both available with correct data
+#
+# Uses TC-level artifacts (symlinks to examples/java/)
+# Regression: https://github.com/dhyansraj/mcp-mesh/issues/572
+
+name: "Java dep_index Alignment (Issue #572)"
+description: "Verify dependency index alignment when dependencies resolve at different times"
+tags:
+  - capabilities
+  - dep-index
+  - issue-572
+  - regression
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/java-alpha-provider /workspace/
+      cp -r /artifacts/java-beta-provider /workspace/
+      cp -r /artifacts/java-dual-consumer /workspace/
+      ls -la /workspace/
+    capture: copy_output
+
+  # Install Maven dependencies for all agents
+  - name: "Install alpha-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-alpha-provider
+    timeout: 600
+
+  - name: "Install beta-provider dependencies"
+    handler: maven-install
+    path: /workspace/java-beta-provider
+    timeout: 600
+
+  - name: "Install dual-consumer dependencies"
+    handler: maven-install
+    path: /workspace/java-dual-consumer
+    timeout: 600
+
+  # === PHASE 1: Only beta provider running ===
+  # Start beta (schedule_lookup, dep_index=1) and consumer FIRST
+  # Do NOT start alpha (student_lookup, dep_index=0)
+  - name: "Phase 1: Start beta provider (schedule_lookup)"
+    handler: shell
+    command: "meshctl start /workspace/java-beta-provider --env MCP_MESH_HTTP_PORT=0 -d"
+    workdir: /workspace
+    capture: start_beta
+
+  - name: "Wait for beta provider to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-beta-provider"; then
+          echo "Beta provider registered after $((i*3))s"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Beta provider did not register within 90s"
+      exit 1
+    workdir: /workspace
+    capture: wait_beta
+    timeout: 120
+
+  - name: "Phase 1: Start consumer (before alpha is available)"
+    handler: shell
+    command: "meshctl start /workspace/java-dual-consumer --env MCP_MESH_HTTP_PORT=0 -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - name: "Wait for consumer to register and wire"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-dual-consumer"; then
+          echo "Consumer registered after $((i*3))s"
+          # Extra wait for dependency wiring
+          sleep 5
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Consumer did not register within 90s"
+      exit 1
+    workdir: /workspace
+    capture: wait_consumer
+    timeout: 120
+
+  - name: "Phase 1: Verify agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_phase1
+
+  - name: "Phase 1: Call checkEnrollment (only beta available)"
+    handler: shell
+    command: 'meshctl call checkEnrollment ''{"id": "test1"}'''
+    workdir: /workspace
+    capture: phase1_result
+    timeout: 30
+
+  # === PHASE 2: Start alpha provider, both should work ===
+  - name: "Phase 2: Start alpha provider (student_lookup)"
+    handler: shell
+    command: "meshctl start /workspace/java-alpha-provider --env MCP_MESH_HTTP_PORT=0 -d"
+    workdir: /workspace
+    capture: start_alpha
+
+  - name: "Wait for alpha provider to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "java-alpha-provider"; then
+          echo "Alpha provider registered after $((i*3))s"
+          # Extra wait for consumer to re-wire
+          sleep 5
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Alpha provider did not register within 90s"
+      exit 1
+    workdir: /workspace
+    capture: wait_alpha
+    timeout: 120
+
+  - name: "Phase 2: Verify all agents registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_phase2
+
+  - name: "Phase 2: Call checkEnrollment (both available)"
+    handler: shell
+    command: 'meshctl call checkEnrollment ''{"id": "test2"}'''
+    workdir: /workspace
+    capture: phase2_result
+    timeout: 30
+
+assertions:
+  # Phase 1: Partial resolution - agents registered
+  - expr: "${captured.list_phase1} contains 'java-beta-provider'"
+    message: "Beta provider should be registered"
+
+  - expr: "${captured.list_phase1} contains 'java-dual-consumer'"
+    message: "Consumer should be registered"
+
+  # Phase 1: dep_index alignment check (THE key regression assertions)
+  - expr: ${jq:captured.phase1_result:.content[0].text | fromjson | .student_available} == false
+    message: "Phase 1: student_available should be false (alpha not started, dep_index=0 should be unwired)"
+
+  - expr: ${jq:captured.phase1_result:.content[0].text | fromjson | .schedule_available} == true
+    message: "Phase 1: schedule_available should be true (beta is running, dep_index=1 should be wired)"
+
+  # Phase 2: Full resolution - all agents registered
+  - expr: "${captured.list_phase2} contains 'java-alpha-provider'"
+    message: "Alpha provider should be registered"
+
+  # Phase 2: Both available with correct data
+  - expr: ${jq:captured.phase2_result:.content[0].text | fromjson | .student_available} == true
+    message: "Phase 2: student_available should be true"
+
+  - expr: ${jq:captured.phase2_result:.content[0].text | fromjson | .schedule_available} == true
+    message: "Phase 2: schedule_available should be true"
+
+  - expr: "${jq:captured.phase2_result:.content[0].text | fromjson | .student.source} == 'alpha-provider'"
+    message: "Phase 2: student data should come from alpha provider"
+
+  - expr: "${jq:captured.phase2_result:.content[0].text | fromjson | .schedule[0].day} == 'Monday'"
+    message: "Phase 2: schedule data should have correct list shape"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - handler: shell
+    command: |
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*alpha-provider" 2>/dev/null || true
+      pkill -f "java.*beta-provider" 2>/dev/null || true
+      pkill -f "java.*dual-consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -266,7 +266,8 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		// With partial resolution, functions with unresolvable dependencies are included but with empty deps
 		depsResolved := response.DependenciesResolved
 		assert.Contains(t, depsResolved, "orphaned_function", "Function should be included even with unresolvable dependencies")
-		assert.Empty(t, depsResolved["orphaned_function"], "Function with unresolvable dependencies should have empty dependency list")
+		assert.Len(t, depsResolved["orphaned_function"], 1, "Unresolved dep should have placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", depsResolved["orphaned_function"][0].Status, "Placeholder should have unresolved status")
 
 		t.Logf("✅ Unresolvable dependencies handled gracefully")
 	})
@@ -350,9 +351,10 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		assert.Equal(t, "get_time", resolvedDep.FunctionName)
 		assert.Equal(t, "time_service", resolvedDep.Capability)
 
-		// Function with mismatched tags should not resolve
+		// Function with mismatched tags should not resolve but should have placeholder
 		assert.Contains(t, depsResolved, "function_with_mismatched_tags", "Function with mismatched tags should be included")
-		assert.Empty(t, depsResolved["function_with_mismatched_tags"], "Function with mismatched tags should have empty dependency list")
+		assert.Len(t, depsResolved["function_with_mismatched_tags"], 1, "Unresolved dep should have placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", depsResolved["function_with_mismatched_tags"][0].Status, "Placeholder should have unresolved status")
 
 		t.Logf("✅ Partial resolution with tag mismatch handled correctly")
 	})
@@ -436,9 +438,10 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		assert.Equal(t, "query_db", resolvedDep.FunctionName)
 		assert.Equal(t, "database_service", resolvedDep.Capability)
 
-		// Function with incompatible version should not resolve
+		// Function with incompatible version should not resolve but should have placeholder
 		assert.Contains(t, depsResolved, "incompatible_function", "Function with incompatible version should be included")
-		assert.Empty(t, depsResolved["incompatible_function"], "Function with incompatible version should have empty dependency list")
+		assert.Len(t, depsResolved["incompatible_function"], 1, "Unresolved dep should have placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", depsResolved["incompatible_function"][0].Status, "Placeholder should have unresolved status")
 
 		t.Logf("✅ Partial resolution with version mismatch handled correctly")
 	})
@@ -547,13 +550,16 @@ func TestDependencyResolutionNewFormat(t *testing.T) {
 		assert.Contains(t, depsResolved, "secure_operation")
 		assert.Len(t, depsResolved["secure_operation"], 2, "secure_operation should have 2 resolved dependencies")
 
-		// legacy_operation should have only storage resolved (auth fails version constraint)
+		// legacy_operation should have 2 entries: auth (unresolved placeholder at index 0) + storage (resolved at index 1)
 		assert.Contains(t, depsResolved, "legacy_operation")
-		assert.Len(t, depsResolved["legacy_operation"], 1, "legacy_operation should have 1 resolved dependency")
+		assert.Len(t, depsResolved["legacy_operation"], 2, "legacy_operation should have 2 entries (1 unresolved placeholder + 1 resolved)")
 
-		// Verify which service was resolved for legacy_operation
-		legacyDep := depsResolved["legacy_operation"][0]
-		assert.Equal(t, "storage_service", legacyDep.Capability, "Only storage_service should resolve for legacy_operation")
+		// Index 0 is auth_service (unresolved - version <2.0.0 won't match 2.1.0)
+		assert.Equal(t, "unresolved", depsResolved["legacy_operation"][0].Status, "auth_service should be unresolved placeholder")
+		assert.Equal(t, "auth_service", depsResolved["legacy_operation"][0].Capability)
+
+		// Index 1 is storage_service (resolved)
+		assert.Equal(t, "storage_service", depsResolved["legacy_operation"][1].Capability, "storage_service should resolve for legacy_operation")
 
 		t.Logf("✅ Complex partial resolution with mixed constraints handled correctly")
 	})
@@ -988,9 +994,10 @@ func TestPositionalDependencyResolution(t *testing.T) {
 		depsResolved := response.DependenciesResolved
 		require.Contains(t, depsResolved, "smart_chat")
 
-		// All alternatives failed - should have empty resolved list (or unresolved status after fix)
+		// All alternatives failed - should have unresolved placeholder to preserve positional index
 		deps := depsResolved["smart_chat"]
-		assert.Empty(t, deps, "All alternatives unresolved - should have empty deps")
+		assert.Len(t, deps, 1, "All alternatives unresolved - should have placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", deps[0].Status, "Placeholder should have unresolved status")
 
 		t.Logf("✅ OR alternatives - all unresolved handled gracefully")
 	})
@@ -1388,9 +1395,9 @@ func TestTagLevelOR(t *testing.T) {
 		require.Contains(t, depsResolved, "calculate")
 
 		deps := depsResolved["calculate"]
-		// When no alternatives match, the dependency is not resolved
-		// The DependenciesResolved map only contains successfully resolved deps
-		assert.Len(t, deps, 0, "No resolved dependencies when no OR alternatives match")
+		// When no alternatives match, we still get an unresolved placeholder to preserve positional index
+		assert.Len(t, deps, 1, "Unresolved dep should have placeholder to preserve positional index")
+		assert.Equal(t, "unresolved", deps[0].Status, "Placeholder should have unresolved status")
 
 		t.Logf("✅ Tag-level OR: No resolved deps when no alternatives available (unresolved tracked in DB)")
 	})

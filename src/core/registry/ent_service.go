@@ -72,9 +72,9 @@ type AgentRegistrationResponse struct {
 
 // DependencyResolution represents a resolved dependency in the new format
 type DependencyResolution struct {
-	AgentID      string `json:"agent_id"`
-	FunctionName string `json:"function_name"`
-	Endpoint     string `json:"endpoint"`
+	AgentID      string `json:"agent_id,omitempty"`
+	FunctionName string `json:"function_name,omitempty"`
+	Endpoint     string `json:"endpoint,omitempty"`
 	Capability   string `json:"capability"`
 	Status       string `json:"status"`
 }
@@ -504,10 +504,11 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
 			resolvedDeps++
 		} else {
-			// Ensure function exists in map even if no resolutions
-			if _, exists := dependenciesResolved[res.FunctionName]; !exists {
-				dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
-			}
+			// Append placeholder to preserve positional dep_index alignment
+			dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], &DependencyResolution{
+				Capability: res.Spec.Capability,
+				Status:     "unresolved",
+			})
 		}
 	}
 
@@ -1196,9 +1197,11 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], res.Resolution)
 					resolvedDeps++
 				} else {
-					if _, exists := dependenciesResolved[res.FunctionName]; !exists {
-						dependenciesResolved[res.FunctionName] = []*DependencyResolution{}
-					}
+					// Append placeholder to preserve positional dep_index alignment
+					dependenciesResolved[res.FunctionName] = append(dependenciesResolved[res.FunctionName], &DependencyResolution{
+						Capability: res.Spec.Capability,
+						Status:     "unresolved",
+					})
 				}
 			}
 
