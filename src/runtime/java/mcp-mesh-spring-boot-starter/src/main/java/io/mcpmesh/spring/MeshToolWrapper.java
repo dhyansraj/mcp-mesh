@@ -389,10 +389,10 @@ public class MeshToolWrapper implements McpToolHandler {
         // Set trace context from arguments (authoritative source for trace propagation)
         // Arguments take precedence over any existing context because:
         // 1. TypeScript agents inject trace IDs into arguments (FastMCP doesn't expose headers)
-        // 2. InheritableThreadLocal can leak stale context from thread pool reuse
+        // 2. ThreadLocal retains stale context when servlet threads are reused
         // 3. The calling agent explicitly passed these trace IDs for this specific call
         if (traceId != null && !traceId.isEmpty()) {
-            TraceInfo traceInfo = TraceInfo.fromHeaders(traceId, parentSpan);
+            TraceInfo traceInfo = TraceInfo.forPropagation(traceId, parentSpan);
             TraceContext.set(traceInfo);
             log.trace("Set trace context from arguments: trace={}, parent={}",
                 traceId.substring(0, Math.min(8, traceId.length())),

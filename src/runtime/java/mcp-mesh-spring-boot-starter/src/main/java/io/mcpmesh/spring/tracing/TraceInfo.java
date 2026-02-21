@@ -76,7 +76,10 @@ public class TraceInfo {
      * @param traceId Trace ID from X-Trace-ID header
      * @param parentSpan Parent span from X-Parent-Span header (may be null)
      * @return New TraceInfo with given trace context and new span_id
+     * @deprecated Use {@link #forPropagation(String, String)} instead to avoid phantom span creation.
+     *             Kept for backward compatibility with external callers.
      */
+    @Deprecated
     public static TraceInfo fromHeaders(String traceId, String parentSpan) {
         return new TraceInfo(
             traceId,
@@ -84,6 +87,24 @@ public class TraceInfo {
             parentSpan,
             System.currentTimeMillis()
         );
+    }
+
+    /**
+     * Create TraceInfo for trace propagation from incoming headers.
+     *
+     * <p>Unlike {@link #fromHeaders}, this method does NOT generate a new span_id.
+     * Instead, the incoming parent span becomes the current span_id so that
+     * {@link #createChild()} correctly parents to the actual caller.
+     * If {@code incomingParentSpan} is null (root calls with no parent),
+     * a new span ID is generated to avoid null span IDs downstream.
+     *
+     * @param traceId Trace ID from X-Trace-ID header
+     * @param incomingParentSpan Parent span from X-Parent-Span header (may be null for root calls)
+     * @return TraceInfo suitable for use in TraceContext propagation
+     */
+    public static TraceInfo forPropagation(String traceId, String incomingParentSpan) {
+        String spanId = (incomingParentSpan != null) ? incomingParentSpan : generateSpanId();
+        return new TraceInfo(traceId, spanId, null, System.currentTimeMillis());
     }
 
     /**

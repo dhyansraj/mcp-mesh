@@ -8,10 +8,10 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 
 /**
- * Thread-safe trace context storage using InheritableThreadLocal.
+ * Thread-safe trace context storage using ThreadLocal.
  *
- * <p>InheritableThreadLocal allows child threads to inherit the trace context,
- * which is important for async operations using CompletableFuture, @Async, etc.
+ * <p>For async operations (CompletableFuture, @Async, etc.), use the
+ * {@link #wrap(Runnable)} or {@link #wrap(Callable)} methods to propagate context.
  *
  * <p>Usage:
  * <pre>
@@ -51,20 +51,14 @@ public class TraceContext {
         }
     }
 
-    static final InheritableThreadLocal<Map<String, String>> PROPAGATED_HEADERS =
-        new InheritableThreadLocal<>() {
-            @Override
-            protected Map<String, String> initialValue() {
-                return Collections.emptyMap();
-            }
-        };
+    static final ThreadLocal<Map<String, String>> PROPAGATED_HEADERS =
+        ThreadLocal.withInitial(Collections::emptyMap);
 
     /**
      * Thread-local storage for trace context.
-     * Uses InheritableThreadLocal so child threads inherit the context.
+     * Use {@link #wrap(Runnable)} or {@link #wrap(Callable)} for async propagation.
      */
-    private static final InheritableThreadLocal<TraceInfo> CONTEXT =
-        new InheritableThreadLocal<>();
+    private static final ThreadLocal<TraceInfo> CONTEXT = new ThreadLocal<>();
 
     /**
      * Get the current trace context.

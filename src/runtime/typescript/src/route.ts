@@ -31,9 +31,16 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
-import { normalizeDependency, runWithPropagatedHeaders } from "./proxy.js";
+import { normalizeDependency, runWithPropagatedHeaders, runWithTraceContext } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
-import { PROPAGATE_HEADERS, matchesPropagateHeader } from "./tracing.js";
+import {
+  PROPAGATE_HEADERS,
+  matchesPropagateHeader,
+  parseTraceContext,
+  generateSpanId,
+  generateTraceId,
+  publishTraceSpan,
+} from "./tracing.js";
 
 /**
  * Global flag to track if Express auto-detection has been performed.
@@ -394,19 +401,79 @@ export function route(
         }
       }
 
-      // Call handler with propagated headers context
-      const runHandler = async () => {
-        if (handler.length === 4) {
-          await (handler as MeshRouteHandlerWithNext)(req, res, deps, next);
-        } else {
-          await (handler as MeshRouteHandler)(req, res, deps);
+      // Parse trace context from incoming request headers
+      const reqHeaders: Record<string, string | undefined> = {};
+      if (req.headers) {
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (typeof value === "string") {
+            reqHeaders[key.toLowerCase()] = value;
+          }
         }
-      };
+      }
+      const incomingTrace = parseTraceContext(reqHeaders);
 
-      if (Object.keys(propagatedHeaders).length > 0) {
-        await runWithPropagatedHeaders(propagatedHeaders, runHandler);
-      } else {
-        await runHandler();
+      // Set up trace context: use incoming or generate new
+      const traceId = incomingTrace?.traceId ?? generateTraceId();
+      const spanId = generateSpanId();
+      const parentSpanId = incomingTrace?.parentSpanId ?? null;
+
+      // Route name for span (matches Python convention: "METHOD /path")
+      const routeName = `${req.method} ${req.path}`;
+      const startTime = Date.now() / 1000;
+      let success = true;
+      let error: string | null = null;
+
+      try {
+        // Call handler with trace context + propagated headers
+        // runWithTraceContext populates AsyncLocalStorage so downstream proxy calls
+        // get _trace_id/_parent_span injected automatically
+        const traceContext = { traceId, parentSpanId: spanId };
+        const runHandler = async () => {
+          if (handler.length === 4) {
+            await (handler as MeshRouteHandlerWithNext)(req, res, deps, next);
+          } else {
+            await (handler as MeshRouteHandler)(req, res, deps);
+          }
+        };
+
+        const runWithHeaders = async () => {
+          if (Object.keys(propagatedHeaders).length > 0) {
+            await runWithPropagatedHeaders(propagatedHeaders, runHandler);
+          } else {
+            await runHandler();
+          }
+        };
+
+        await runWithTraceContext(traceContext, runWithHeaders);
+      } catch (err) {
+        success = false;
+        error = err instanceof Error ? err.message : String(err);
+        throw err;
+      } finally {
+        // Publish route handler span (fire and forget)
+        // publishTraceSpan gates on tracingEnabled internally
+        const endTime = Date.now() / 1000;
+        const durationMs = (endTime - startTime) * 1000;
+
+        publishTraceSpan({
+          traceId,
+          spanId,
+          parentSpan: parentSpanId,
+          functionName: routeName,
+          startTime,
+          endTime,
+          durationMs,
+          success,
+          error,
+          resultType: "route_handler",
+          argsCount: 0,
+          kwargsCount: 0,
+          dependencies: [],
+          injectedDependencies: Object.values(deps).filter((d) => d !== null).length,
+          meshPositions: [],
+        }).catch(() => {
+          // Silently ignore publish errors
+        });
       }
     } catch (error) {
       next(error);

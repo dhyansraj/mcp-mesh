@@ -1,0 +1,229 @@
+# Test Case: TypeScript mesh.route() Handler Span Export (Regression)
+# Regression test verifying that mesh.route() in the TypeScript SDK correctly
+# exports route handler spans to Tempo (fix for #582).
+#
+# Agent Setup:
+#   - ts-math-agent (port 9013): Tool agent providing "add" capability
+#   - express-api (port 3000): API agent with mesh.route() depending on "add"
+#
+# Flow: curl with X-Trace-ID -> express-api /api/add -> ts-math-agent add tool
+#
+# Expected: Trace contains spans from BOTH the route handler (api) and
+#           the tool provider (ts-math-agent).
+
+name: "TypeScript mesh.route handler spans exported to Tempo"
+description: >
+  Verify that mesh.route() (TypeScript) exports trace spans to Tempo.
+  When an API route handler calls a mesh tool, the trace should contain spans
+  from both the route handler agent and the tool provider agent.
+  Regression test for #582: ensures route handler spans are present in the trace.
+tags:
+  - observability
+  - tracing
+  - typescript
+  - api
+  - regression
+  - bug-582
+timeout: 240
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/ts-math-agent /workspace/
+      cp -rL /uc-artifacts/express-api /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  # Create env file with tracing enabled
+  - name: "Create env file with secrets"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
+
+  # Install npm dependencies for both agents
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install express-api dependencies"
+    handler: npm-install
+    path: /workspace/express-api
+
+  # Start ts-math-agent (tool provider)
+  - name: "Start ts-math-agent"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: start_ts_math
+
+  # Start express-api (API route agent)
+  - name: "Start express-api"
+    handler: shell
+    command: "meshctl start express-api/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: start_api
+
+  # Wait for both agents to register
+  - name: "Wait for tool and API agents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for ts-math-agent and API agent..."
+      for i in $(seq 1 20); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-math-agent" && echo "$AGENTS" | grep -q "API"; then
+          echo "Both agents registered after ${i} iterations"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agents did not register within 40s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_agents
+    timeout: 90
+
+  # Verify agents are running
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools to verify add is available
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # Generate a trace ID so we can query it from Tempo later
+  - name: "Generate trace ID"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TRACE_ID=$(node -e "console.log(require('crypto').randomBytes(16).toString('hex'))")
+      echo "TRACE_ID=$TRACE_ID"
+    capture: gen_trace_id
+
+  # Call the API route with an explicit trace ID header
+  - name: "Call API route with trace headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TRACE_ID=$(echo "${captured.gen_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      echo "Using trace ID: $TRACE_ID"
+      RESPONSE=$(curl -s -X POST http://localhost:3000/api/add \
+        -H 'Content-Type: application/json' \
+        -H "X-Trace-ID: ${TRACE_ID}" \
+        -d '{"a": 10, "b": 20}')
+      echo "API_RESPONSE=$RESPONSE"
+    capture: api_call_output
+    timeout: 30
+
+  # Wait for spans to flush to Tempo
+  - name: "Wait for trace flush"
+    handler: wait
+    seconds: 5
+
+  # Query the trace from Tempo using the known trace ID
+  # Note: TS SDK may not propagate trace context through mesh.route() at all,
+  # so the trace may not exist. Capture output regardless for assertion evaluation.
+  - name: "Query trace from Tempo"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TRACE_ID=$(echo "${captured.gen_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      echo "Querying trace: $TRACE_ID" >&2
+      meshctl trace $TRACE_ID --json --retries 6 --retry-delay 5 || echo '{"Success":false,"SpanCount":0,"AgentCount":0,"Spans":[]}'
+    capture: trace_json
+    timeout: 60
+
+  # Check for route handler spans (from express-api / API agent)
+  # Verifies that mesh.route() exports its handler span to Tempo
+  - name: "Check for route handler spans"
+    handler: shell
+    workdir: /workspace
+    command: |
+      ROUTE_SPANS=$(echo '${captured.trace_json}' | jq '[.Spans[] | select(.AgentName | test("^api|express"; "i"))] | length')
+      echo "ROUTE_SPAN_COUNT=$ROUTE_SPANS"
+    capture: route_span_check
+
+  # Check for tool call spans (from ts-math-agent)
+  - name: "Check for tool call spans"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TOOL_SPANS=$(echo '${captured.trace_json}' | jq '[.Spans[] | select(.AgentName | test("ts-math-agent"; "i"))] | length')
+      echo "TOOL_SPAN_COUNT=$TOOL_SPANS"
+    capture: tool_span_check
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Agent registration
+  - expr: "${captured.list_output} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API agent (express-api) should be registered with API type"
+
+  # Tool availability
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  # API call succeeded
+  - expr: "${captured.api_call_output} contains 'result'"
+    message: "API endpoint /api/add should return a result field"
+
+  # Trace was captured
+  - expr: "${captured.gen_trace_id} contains 'TRACE_ID='"
+    message: "Trace ID should have been generated"
+
+  - expr: ${jq:captured.trace_json:.SpanCount} >= 1
+    message: "Trace should have at least 1 span"
+
+  - expr: ${jq:captured.trace_json:.Success} == true
+    message: "Trace query should succeed"
+
+  # Tool span exists (this should pass -- tool spans work fine)
+  - expr: "${captured.tool_span_check} contains 'TOOL_SPAN_COUNT='"
+    message: "Tool span count should be extracted"
+
+  - expr: "${captured.tool_span_check} not contains 'TOOL_SPAN_COUNT=0'"
+    message: "Tool call span from ts-math-agent should exist in trace"
+
+  # Route handler span exists (regression for #582 fix)
+  - expr: "${captured.route_span_check} not contains 'ROUTE_SPAN_COUNT=0'"
+    message: "Route handler span from express-api should exist in trace"
+
+  # Trace should involve both agents (regression for #582 fix)
+  - expr: ${jq:captured.trace_json:.AgentCount} >= 2
+    message: "Trace should involve at least 2 agents (API route handler + tool provider)"
+
+post_run:
+  - handler: shell
+    command: |
+      pkill -f 'tsx' 2>/dev/null || true
+      pkill -f 'node.*express-api' 2>/dev/null || true
+      pkill -f 'node.*ts-math-agent' 2>/dev/null || true
+      meshctl stop 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

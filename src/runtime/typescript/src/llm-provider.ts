@@ -31,9 +31,9 @@ import type {
   LlmToolCallRequest,
 } from "./types.js";
 import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/index.js";
-import { generateTraceId, generateSpanId, publishTraceSpan } from "./tracing.js";
+import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
-import { runWithTraceContext } from "./proxy.js";
+import { runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
 
 const debug = createDebug("llm-provider");
 
@@ -359,6 +359,20 @@ export function llmProvider(config: LlmProviderConfig): {
       }
     }
 
+    // Extract _mesh_headers from arguments for header propagation
+    let propagatedHeaders: Record<string, string> = {};
+    if (args && typeof args === "object") {
+      const argsObj = args as Record<string, unknown>;
+      if (argsObj._mesh_headers && typeof argsObj._mesh_headers === "object") {
+        const meshHeaders = argsObj._mesh_headers as Record<string, unknown>;
+        for (const [key, value] of Object.entries(meshHeaders)) {
+          if (typeof value === "string" && matchesPropagateHeader(key)) {
+            propagatedHeaders[key.toLowerCase()] = value;
+          }
+        }
+      }
+    }
+
     // Set up trace context
     const traceId = incomingTraceId ?? generateTraceId();
     const spanId = generateSpanId();
@@ -370,7 +384,7 @@ export function llmProvider(config: LlmProviderConfig): {
     let traceError: string | null = null;
 
     try {
-      return await runWithTraceContext(traceContext, async () => {
+      const runInner = async () => {
         try {
     const { request } = args;
     const startTime = Date.now();
@@ -730,7 +744,16 @@ export function llmProvider(config: LlmProviderConfig): {
           }
           throw err;
         }
-      });
+      };
+
+      const runWithHeaders = async () => {
+        if (Object.keys(propagatedHeaders).length > 0) {
+          return await runWithPropagatedHeaders(propagatedHeaders, runInner);
+        }
+        return await runInner();
+      };
+
+      return await runWithTraceContext(traceContext, runWithHeaders);
     } catch (err) {
       traceSuccess = false;
       traceError = err instanceof Error ? err.message : String(err);

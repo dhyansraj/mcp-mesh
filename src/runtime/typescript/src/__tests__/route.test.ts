@@ -35,6 +35,18 @@ vi.mock("../proxy.js", () => ({
     });
     return mockProxy as McpMeshTool;
   }),
+  runWithPropagatedHeaders: vi.fn(async (_headers, fn) => fn()),
+  runWithTraceContext: vi.fn(async (_ctx, fn) => fn()),
+}));
+
+// Mock tracing functions used by route.ts
+vi.mock("../tracing.js", () => ({
+  PROPAGATE_HEADERS: [],
+  matchesPropagateHeader: vi.fn(() => false),
+  parseTraceContext: vi.fn(() => null),
+  generateSpanId: vi.fn(() => "mock-span-id"),
+  generateTraceId: vi.fn(() => "mock-trace-id"),
+  publishTraceSpan: vi.fn(async () => false),
 }));
 
 describe("RouteRegistry", () => {

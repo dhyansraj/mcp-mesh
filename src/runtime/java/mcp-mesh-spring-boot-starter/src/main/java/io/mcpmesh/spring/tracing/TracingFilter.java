@@ -61,8 +61,8 @@ public class TracingFilter implements Filter {
         HttpServletResponse httpResponse = (HttpServletResponse) response;
 
         try {
-            // CRITICAL: Clear any inherited context from previous requests
-            // InheritableThreadLocal can leak context when thread pools reuse threads
+            // CRITICAL: Clear any stale context from previous requests on this thread
+            // Thread pools reuse threads, so previous request context must be cleared
             TraceContext.clear();
             TraceContext.clearPropagatedHeaders();
 
@@ -73,7 +73,7 @@ public class TracingFilter implements Filter {
             if (traceId != null && !traceId.isEmpty()) {
                 // Continue existing trace from upstream service
                 // Create a new span for this request, with parent from headers
-                TraceInfo traceInfo = TraceInfo.fromHeaders(traceId, parentSpan);
+                TraceInfo traceInfo = TraceInfo.forPropagation(traceId, parentSpan);
                 TraceContext.set(traceInfo);
 
                 log.trace("Extracted trace context from headers: trace={}, parent={}",

@@ -45,9 +45,9 @@ import type {
 } from "./types.js";
 import { MeshLlmAgent, createLlmToolProxy } from "./llm-agent.js";
 import { debug } from "./debug.js";
-import { generateTraceId, generateSpanId, publishTraceSpan } from "./tracing.js";
+import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
-import { runWithTraceContext } from "./proxy.js";
+import { runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
 
 /**
  * Registry for LLM tools - stores configuration and resolved dependencies.
@@ -263,10 +263,13 @@ export function llm<
 
   // Create the execute wrapper
   const wrappedExecute = async (args: z.infer<TParams>): Promise<string> => {
-    // Extract trace context from arguments (injected by upstream proxy)
+    // Extract trace context and mesh headers from arguments (injected by upstream proxy)
     let incomingTraceId: string | null = null;
     let incomingParentSpan: string | null = null;
     let cleanArgs = args;
+
+    // Extract _mesh_headers from arguments for header propagation
+    let propagatedHeaders: Record<string, string> = {};
 
     if (args && typeof args === "object") {
       const argsObj = args as Record<string, unknown>;
@@ -276,9 +279,17 @@ export function llm<
       if (typeof argsObj._parent_span === "string") {
         incomingParentSpan = argsObj._parent_span;
       }
-      // Remove trace context from args before passing to tool
-      if (incomingTraceId || incomingParentSpan) {
-        const { _trace_id, _parent_span, ...rest } = argsObj;
+      if (argsObj._mesh_headers && typeof argsObj._mesh_headers === "object") {
+        const meshHeaders = argsObj._mesh_headers as Record<string, unknown>;
+        for (const [key, value] of Object.entries(meshHeaders)) {
+          if (typeof value === "string" && matchesPropagateHeader(key)) {
+            propagatedHeaders[key.toLowerCase()] = value;
+          }
+        }
+      }
+      // Remove trace context and mesh headers from args before passing to tool
+      if (incomingTraceId || incomingParentSpan || argsObj._mesh_headers || Object.keys(propagatedHeaders).length > 0) {
+        const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
         cleanArgs = rest as z.infer<TParams>;
       }
     }
@@ -297,50 +308,52 @@ export function llm<
     try {
       // Run within trace context for propagation to downstream calls
       return await runWithTraceContext(traceContext, async () => {
-        try {
-          debug.llm(`Executing ${functionId} with args:`, JSON.stringify(cleanArgs));
+        return await runWithPropagatedHeaders(propagatedHeaders, async () => {
+          try {
+            debug.llm(`Executing ${functionId} with args:`, JSON.stringify(cleanArgs));
 
-          // Get resolved tools and provider
-          const tools = registry.getResolvedTools(functionId);
-          const meshProvider = registry.getResolvedProvider(functionId);
-          debug.llm(`Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : "none");
+            // Get resolved tools and provider
+            const tools = registry.getResolvedTools(functionId);
+            const meshProvider = registry.getResolvedProvider(functionId);
+            debug.llm(`Tools: ${tools.length}, Provider:`, meshProvider ? meshProvider.endpoint : "none");
 
-          // Extract template context from args if contextParam is specified
-          let templateContext: Record<string, unknown> = {};
-          if (llmConfig.contextParam && cleanArgs && typeof cleanArgs === "object") {
-            const argsObj = cleanArgs as Record<string, unknown>;
-            if (argsObj[llmConfig.contextParam]) {
-              templateContext = argsObj[llmConfig.contextParam] as Record<string, unknown>;
+            // Extract template context from args if contextParam is specified
+            let templateContext: Record<string, unknown> = {};
+            if (llmConfig.contextParam && cleanArgs && typeof cleanArgs === "object") {
+              const argsObj = cleanArgs as Record<string, unknown>;
+              if (argsObj[llmConfig.contextParam]) {
+                templateContext = argsObj[llmConfig.contextParam] as Record<string, unknown>;
+              }
             }
+
+            // Create callable LLM agent
+            const llmCallable = agent.createCallable({
+              tools,
+              meshProvider: meshProvider
+                ? {
+                    endpoint: meshProvider.endpoint,
+                    functionName: meshProvider.functionName,
+                    model: meshProvider.model,
+                  }
+                : undefined,
+              templateContext,
+            });
+
+            // Call user's execute handler
+            debug.llm(`Calling user execute handler`);
+            const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
+            debug.llm(`Execute completed successfully`);
+
+            // Convert result to string for MCP
+            if (typeof result === "string") {
+              return result;
+            }
+            return JSON.stringify(result);
+          } catch (innerError) {
+            debug.llm(`Error in ${functionId}:`, innerError);
+            throw innerError;
           }
-
-          // Create callable LLM agent
-          const llmCallable = agent.createCallable({
-            tools,
-            meshProvider: meshProvider
-              ? {
-                  endpoint: meshProvider.endpoint,
-                  functionName: meshProvider.functionName,
-                  model: meshProvider.model,
-                }
-              : undefined,
-            templateContext,
-          });
-
-          // Call user's execute handler
-          debug.llm(`Calling user execute handler`);
-          const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
-          debug.llm(`Execute completed successfully`);
-
-          // Convert result to string for MCP
-          if (typeof result === "string") {
-            return result;
-          }
-          return JSON.stringify(result);
-        } catch (innerError) {
-          debug.llm(`Error in ${functionId}:`, innerError);
-          throw innerError;
-        }
+        });
       });
     } catch (err) {
       success = false;

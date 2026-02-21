@@ -213,6 +213,7 @@ export async function publishTraceSpan(span: SpanData): Promise<boolean> {
       agent_ip: currentAgentMetadata.agentIp,
       agent_port: String(currentAgentMetadata.agentPort),
       agent_endpoint: currentAgentMetadata.agentEndpoint,
+      runtime: "typescript",
     };
 
     return await publishSpan(spanMap);

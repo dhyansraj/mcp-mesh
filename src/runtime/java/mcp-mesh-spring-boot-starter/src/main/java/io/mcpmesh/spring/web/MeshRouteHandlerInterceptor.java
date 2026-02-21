@@ -1,6 +1,8 @@
 package io.mcpmesh.spring.web;
 
 import io.mcpmesh.spring.MeshDependencyInjector;
+import io.mcpmesh.spring.tracing.ExecutionTracer;
+import io.mcpmesh.spring.tracing.SpanScope;
 import io.mcpmesh.types.McpMeshTool;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -13,6 +15,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Spring MVC interceptor that resolves mesh dependencies for @MeshRoute endpoints.
@@ -45,6 +48,14 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
      */
     public static final String MESH_ROUTE_METADATA_ATTR = "io.mcpmesh.route.metadata";
 
+    /**
+     * Request attribute key for the span scope (used to close span in afterCompletion).
+     */
+    public static final String MESH_SPAN_SCOPE_ATTR = "io.mcpmesh.route.spanScope";
+
+    // Tracing support (set lazily via setter, same pattern as MeshToolWrapper)
+    private final AtomicReference<ExecutionTracer> tracerRef = new AtomicReference<>();
+
     private final MeshRouteRegistry registry;
     private final ObjectProvider<MeshDependencyInjector> injectorProvider;
 
@@ -52,6 +63,15 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
                                         ObjectProvider<MeshDependencyInjector> injectorProvider) {
         this.registry = registry;
         this.injectorProvider = injectorProvider;
+    }
+
+    /**
+     * Set the ExecutionTracer for this interceptor.
+     *
+     * @param tracer The tracer to use
+     */
+    public void setTracer(ExecutionTracer tracer) {
+        tracerRef.set(tracer);
     }
 
     private MeshDependencyInjector getInjector() {
@@ -73,6 +93,21 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         if (metadata == null || metadata.getDependencies().isEmpty()) {
             return true;
         }
+
+        // Start tracing span BEFORE dependency resolution
+        ExecutionTracer tracer = tracerRef.get();
+        SpanScope spanScope = SpanScope.NOOP;
+        if (tracer != null) {
+            Map<String, Object> spanMetadata = new LinkedHashMap<>();
+            spanMetadata.put("handler", handlerMethod.getMethod().getName());
+            spanMetadata.put("http_method", request.getMethod());
+            spanMetadata.put("path", request.getRequestURI());
+            spanMetadata.put("dependency_count", metadata.getDependencies().size());
+            spanScope = tracer.startSpan("route:" + handlerMethod.getMethod().getName(), spanMetadata);
+        }
+
+        // Store span scope in request for afterCompletion
+        request.setAttribute(MESH_SPAN_SCOPE_ATTR, spanScope);
 
         // Store metadata in request for later access
         request.setAttribute(MESH_ROUTE_METADATA_ATTR, metadata);
@@ -107,6 +142,11 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         // Handle missing dependencies
         if (!allResolved && metadata.isFailOnMissingDependency()) {
             log.error("One or more dependencies unavailable for route: {}", handlerMethodId);
+            // CRITICAL: Close span before early return — Spring MVC does NOT call
+            // afterCompletion when preHandle returns false
+            spanScope.withError(new RuntimeException("Dependencies unavailable"));
+            spanScope.close();
+            request.removeAttribute(MESH_SPAN_SCOPE_ATTR);
             response.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
             response.setContentType("application/json");
             response.getWriter().write(
@@ -158,8 +198,18 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
                                 Object handler, Exception ex) {
+        // Close tracing span
+        Object spanObj = request.getAttribute(MESH_SPAN_SCOPE_ATTR);
+        if (spanObj instanceof SpanScope spanScope) {
+            if (ex != null) {
+                spanScope.withError(ex);
+            }
+            spanScope.close();
+        }
+
         // Clean up request attributes
         request.removeAttribute(MESH_DEPENDENCIES_ATTR);
         request.removeAttribute(MESH_ROUTE_METADATA_ATTR);
+        request.removeAttribute(MESH_SPAN_SCOPE_ATTR);
     }
 }
