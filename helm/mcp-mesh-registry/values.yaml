@@ -245,20 +245,14 @@ podDisruptionBudget:
 # Network policies
 networkPolicy:
   enabled: false
+  # Namespace allowed to send ingress traffic. Empty = release namespace.
+  allowedNamespace: ""
   policyTypes:
     - Ingress
     - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: mcp-mesh
-        - podSelector:
-            matchLabels:
-              app: mcp-agent
-      ports:
-        - protocol: TCP
-          port: 8080
+  ingressPorts:
+    - protocol: TCP
+      port: 8080
   egress:
     - to:
         - namespaceSelector: {}

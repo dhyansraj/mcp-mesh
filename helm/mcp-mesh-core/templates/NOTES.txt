@@ -12,10 +12,10 @@ Components deployed:
 {{- end }}
 
 To check the status of your deployment:
-  kubectl get pods -n {{ .Values.global.namespace }}
+  kubectl get pods -n {{ .Values.global.namespace | default .Release.Namespace }}
 
 To access the registry:
-  kubectl port-forward -n {{ .Values.global.namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8000:8000
+  kubectl port-forward -n {{ .Values.global.namespace | default .Release.Namespace }} svc/{{ .Release.Name }}-mcp-mesh-registry 8000:8000
 
 Then visit: http://localhost:8000/health
 

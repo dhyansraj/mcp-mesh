@@ -21,9 +21,10 @@ resources:
     cpu: 200m
     memory: 256Mi
 
-# Enable mesh connectivity
 mesh:
   enabled: true
+  # Short name resolves in same namespace as core. For cross-namespace:
+  #   registryUrl: http://mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local:8000
   registryUrl: http://mcp-core-mcp-mesh-registry:8000
 
 # LLM provider needs API keys for the backend LLM service
