@@ -178,6 +178,7 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
                 ),
                 "call_context": "fastapi_route_execution",
                 "agent_type": "fastapi_app",
+                "runtime": "python",
             }
 
             # Add agent context metadata

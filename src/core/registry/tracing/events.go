@@ -97,7 +97,7 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 	// Default runtime to "python" if not specified
 	te.Runtime = getString(data, "runtime")
 	if te.Runtime == "" {
-		te.Runtime = "python"
+		te.Runtime = "unknown"
 	}
 
 	// Parse timestamp (Go uses "timestamp", Python uses "start_time")

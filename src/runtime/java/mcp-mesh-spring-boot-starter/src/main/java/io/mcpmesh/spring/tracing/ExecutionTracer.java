@@ -123,6 +123,7 @@ public class ExecutionTracer {
         traceData.put("start_time", span.getStartTime() / 1000.0);  // Convert to seconds
         traceData.put("end_time", endTime / 1000.0);
         traceData.put("published_at", System.currentTimeMillis() / 1000.0);
+        traceData.put("runtime", "java");
 
         // Add error info if present
         if (error != null) {
