@@ -61,8 +61,8 @@ public class TracingFilter implements Filter {
         HttpServletResponse httpResponse = (HttpServletResponse) response;
 
         try {
-            // CRITICAL: Clear any inherited context from previous requests
-            // InheritableThreadLocal can leak context when thread pools reuse threads
+            // CRITICAL: Clear any stale context from previous requests on this thread
+            // Thread pools reuse threads, so previous request context must be cleared
             TraceContext.clear();
             TraceContext.clearPropagatedHeaders();
 
