@@ -7,7 +7,7 @@
 #   - py-math-agent (port 9000): Tool agent providing "add" capability
 #   - py-mesh-api (port 8080): API agent with @mesh.route depending on "add"
 #
-# Flow: curl with traceparent -> py-mesh-api /api/add -> py-math-agent add tool
+# Flow: curl with X-Trace-ID -> py-mesh-api /api/add -> py-math-agent add tool
 #
 # Expected (bug #582 fixed): Trace contains spans from BOTH agents
 # Actual   (bug #582 open):  Trace contains span from py-math-agent only
@@ -119,9 +119,9 @@ test:
       echo "TRACE_ID=$TRACE_ID"
     capture: gen_trace_id
 
-  # Call the API route with an explicit traceparent header
+  # Call the API route with an explicit trace ID header
   # This ensures the trace ID is known and queryable from Tempo
-  - name: "Call API route with traceparent header"
+  - name: "Call API route with trace headers"
     handler: shell
     workdir: /workspace
     command: |
@@ -129,7 +129,7 @@ test:
       echo "Using trace ID: $TRACE_ID"
       RESPONSE=$(curl -s -X POST http://localhost:8080/api/add \
         -H 'Content-Type: application/json' \
-        -H "traceparent: 00-${TRACE_ID}-0000000000000001-01" \
+        -H "X-Trace-ID: ${TRACE_ID}" \
         -d '{"a": 10, "b": 20}')
       echo "API_RESPONSE=$RESPONSE"
     capture: api_call_output
@@ -146,7 +146,7 @@ test:
     workdir: /workspace
     command: |
       TRACE_ID=$(echo "${captured.gen_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
-      echo "Querying trace: $TRACE_ID"
+      echo "Querying trace: $TRACE_ID" >&2
       meshctl trace $TRACE_ID --json --retries 6 --retry-delay 5
     capture: trace_json
     timeout: 60

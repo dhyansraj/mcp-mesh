@@ -531,7 +531,6 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 			argsWithTrace[k] = v
 		}
 		argsWithTrace["_trace_id"] = traceCtx.TraceID
-		argsWithTrace["_parent_span"] = traceCtx.SpanID
 	}
 
 	// Build MCP request
@@ -563,7 +562,6 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	// Inject trace headers if tracing is enabled (Issue #310)
 	if traceCtx != nil {
 		req.Header.Set("X-Trace-ID", traceCtx.TraceID)
-		req.Header.Set("X-Parent-Span", traceCtx.SpanID)
 	}
 
 	// Set Host header for ingress routing
@@ -639,7 +637,6 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 			argsWithTrace[k] = v
 		}
 		argsWithTrace["_trace_id"] = traceCtx.TraceID
-		argsWithTrace["_parent_span"] = traceCtx.SpanID
 	}
 
 	// Build MCP request
@@ -671,7 +668,6 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	// Inject trace headers if tracing is enabled (Issue #310)
 	if traceCtx != nil {
 		req.Header.Set("X-Trace-ID", traceCtx.TraceID)
-		req.Header.Set("X-Parent-Span", traceCtx.SpanID)
 	}
 
 	resp, err := client.Do(req)

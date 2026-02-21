@@ -392,7 +392,7 @@ public class MeshToolWrapper implements McpToolHandler {
         // 2. ThreadLocal retains stale context when servlet threads are reused
         // 3. The calling agent explicitly passed these trace IDs for this specific call
         if (traceId != null && !traceId.isEmpty()) {
-            TraceInfo traceInfo = TraceInfo.fromHeaders(traceId, parentSpan);
+            TraceInfo traceInfo = TraceInfo.forPropagation(traceId, parentSpan);
             TraceContext.set(traceInfo);
             log.trace("Set trace context from arguments: trace={}, parent={}",
                 traceId.substring(0, Math.min(8, traceId.length())),

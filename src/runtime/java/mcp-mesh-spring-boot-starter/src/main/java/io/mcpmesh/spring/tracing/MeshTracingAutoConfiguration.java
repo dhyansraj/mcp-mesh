@@ -5,6 +5,7 @@ import io.mcpmesh.spring.McpToolHandler;
 import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.spring.MeshToolWrapper;
 import io.mcpmesh.spring.MeshToolWrapperRegistry;
+import io.mcpmesh.spring.web.MeshRouteHandlerInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -46,6 +47,9 @@ public class MeshTracingAutoConfiguration {
 
     @Autowired
     private ObjectProvider<MeshToolWrapperRegistry> wrapperRegistryProvider;
+
+    @Autowired
+    private ObjectProvider<MeshRouteHandlerInterceptor> routeInterceptorProvider;
 
     private TracePublisher tracePublisher;
 
@@ -107,6 +111,13 @@ public class MeshTracingAutoConfiguration {
         MeshToolWrapperRegistry registry = wrapperRegistryProvider.getIfAvailable();
         if (registry != null) {
             wireTracerToWrappers(tracer, registry);
+        }
+
+        // Wire tracer to route interceptor (if present)
+        MeshRouteHandlerInterceptor routeInterceptor = routeInterceptorProvider.getIfAvailable();
+        if (routeInterceptor != null) {
+            routeInterceptor.setTracer(tracer);
+            log.debug("Wired tracer to MeshRouteHandlerInterceptor");
         }
 
         return tracer;
