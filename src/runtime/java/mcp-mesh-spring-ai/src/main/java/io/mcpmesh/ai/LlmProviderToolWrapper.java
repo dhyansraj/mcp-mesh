@@ -8,6 +8,7 @@ import io.mcpmesh.spring.tracing.TraceInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,7 +106,7 @@ public class LlmProviderToolWrapper implements McpToolHandler {
     /**
      * Extract trace context from arguments and set up TraceContext.
      *
-     * @param mcpArgs The MCP arguments (may contain _trace_id and _parent_span)
+     * @param mcpArgs The MCP arguments (may contain _trace_id, _parent_span, and _mesh_headers)
      * @return Clean arguments with trace fields removed
      */
     private Map<String, Object> extractAndSetupTraceContext(Map<String, Object> mcpArgs) {
@@ -137,6 +138,36 @@ public class LlmProviderToolWrapper implements McpToolHandler {
             log.trace("Set trace context from arguments: trace={}, parent={}",
                 traceId.substring(0, Math.min(8, traceId.length())),
                 parentSpan != null ? parentSpan.substring(0, Math.min(8, parentSpan.length())) : "null");
+        }
+
+        // Extract _mesh_headers from arguments and set propagated headers context
+        Object meshHeadersObj = cleanArgs.remove("_mesh_headers");
+        if (meshHeadersObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> meshHeaders = (Map<String, Object>) meshHeadersObj;
+            if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
+                Map<String, String> filtered = new HashMap<>();
+                for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
+                    if (entry.getValue() instanceof String
+                        && TraceContext.matchesPropagateHeader(entry.getKey())) {
+                        filtered.put(entry.getKey().toLowerCase(), (String) entry.getValue());
+                    }
+                }
+                if (!filtered.isEmpty()) {
+                    // Merge with any headers already captured by TracingFilter
+                    Map<String, String> existing = TraceContext.getPropagatedHeaders();
+                    if (!existing.isEmpty()) {
+                        Map<String, String> merged = new HashMap<>(existing);
+                        // Args headers fill in gaps but don't override HTTP headers
+                        for (Map.Entry<String, String> e : filtered.entrySet()) {
+                            merged.putIfAbsent(e.getKey(), e.getValue());
+                        }
+                        filtered = merged;
+                    }
+                    TraceContext.setPropagatedHeaders(filtered);
+                    log.trace("Set {} propagated headers from _mesh_headers args", filtered.size());
+                }
+            }
         }
 
         return cleanArgs;
