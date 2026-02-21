@@ -288,7 +288,7 @@ export function llm<
         }
       }
       // Remove trace context and mesh headers from args before passing to tool
-      if (incomingTraceId || incomingParentSpan || Object.keys(propagatedHeaders).length > 0) {
+      if (incomingTraceId || incomingParentSpan || argsObj._mesh_headers || Object.keys(propagatedHeaders).length > 0) {
         const { _trace_id, _parent_span, _mesh_headers, ...rest } = argsObj;
         cleanArgs = rest as z.infer<TParams>;
       }
