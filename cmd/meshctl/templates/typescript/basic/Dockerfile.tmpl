@@ -20,6 +20,6 @@ USER mcp-mesh
 # Expose the agent port
 EXPOSE {{ .Port }}
 
-# Run the agent (tsx for .ts files)
-# NOTE: Base image has tsx installed for TypeScript execution
-CMD ["npx", "tsx", "src/index.ts"]
+# Run the agent
+# NOTE: Base image has ENTRYPOINT ["npx", "tsx"], so CMD only needs the script path
+CMD ["src/index.ts"]

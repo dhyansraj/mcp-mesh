@@ -107,8 +107,8 @@ USER mcp-mesh
 # Expose the agent port
 EXPOSE 9000
 
-# Run the agent
-CMD ["python", "main.py"]
+# NOTE: Base image has ENTRYPOINT ["python"], so CMD only needs the script name
+CMD ["main.py"]
 `
 }
 
@@ -120,7 +120,7 @@ func (h *PythonHandler) GenerateHelmValues() map[string]interface{} {
 			"repository": "mcpmesh/python-runtime",
 			"tag":        "0.8",
 		},
-		"command": []string{"python", "main.py"},
+		"command": []string{"main.py"},
 	}
 }
 

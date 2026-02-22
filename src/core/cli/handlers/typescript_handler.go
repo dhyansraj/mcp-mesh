@@ -113,8 +113,8 @@ USER mcp-mesh
 # Expose the agent port
 EXPOSE 9000
 
-# Run the agent (tsx for .ts files)
-CMD ["npx", "tsx", "src/index.ts"]
+# NOTE: Base image has ENTRYPOINT ["npx", "tsx"], so CMD only needs the script path
+CMD ["src/index.ts"]
 `
 }
 
@@ -126,7 +126,7 @@ func (h *TypeScriptHandler) GenerateHelmValues() map[string]interface{} {
 			"repository": "mcpmesh/typescript-runtime",
 			"tag":        "0.8",
 		},
-		"command": []string{"npx", "tsx", "src/index.ts"},
+		"command": []string{"src/index.ts"},
 	}
 }
 

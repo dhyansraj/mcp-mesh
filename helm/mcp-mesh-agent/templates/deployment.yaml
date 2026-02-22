@@ -1,5 +1,5 @@
-{{- /* Render deployment if either script is specified OR using custom image (not base runtime) */ -}}
-{{- if or .Values.agent.script (ne .Values.image.repository "mcpmesh/python-runtime") -}}
+{{- /* Render deployment — always enabled when image.repository is set */ -}}
+{{- if .Values.image.repository -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -136,11 +136,10 @@ spec:
             - name: MCP_MESH_AGENT_NAME
               value: {{ .Values.agent.name | quote }}
             {{- end }}
+            {{- if include "mcp-mesh-agent.isPython" . }}
             # Python environment variables
             - name: PYTHONUNBUFFERED
               value: "1"
-            {{- with .Values.agent.python.env }}
-            {{- toYaml . | nindent 12 }}
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
@@ -200,7 +199,7 @@ spec:
       {{- end }}
 {{- else }}
 ---
-# Warning: No agent configured - using base runtime image without agent code
+# Warning: No agent image configured
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -209,14 +208,10 @@ metadata:
     {{- include "mcp-mesh-agent.labels" . | nindent 4 }}
 data:
   message: |
-    WARNING: No agent configured!
+    WARNING: No agent image configured!
 
-    Either set image.repository to your built agent image:
+    Set image.repository to your built agent image:
       helm install my-agent ... --set image.repository=your-registry/my-agent
-
-    Or set agent.script for single-file agents:
-      agent:
-        script: "/app/main.py"
 
     See: meshctl man deployment
 {{- end }}

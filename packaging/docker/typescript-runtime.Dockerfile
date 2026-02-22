@@ -33,5 +33,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 EXPOSE 8080
 
-# Default entrypoint - agents will override with their scripts
-ENTRYPOINT ["node"]
+# Default entrypoint - agents provide the script path as CMD
+ENTRYPOINT ["npx", "tsx"]

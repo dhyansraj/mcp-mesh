@@ -23,4 +23,5 @@ USER mcp-mesh
 EXPOSE {{ .Port }}
 
 # Run the agent
-CMD ["java", "-jar", "target/{{ .NameKebab }}-1.0.0-SNAPSHOT.jar"]
+# NOTE: Base image has ENTRYPOINT ["java", "-jar"], so CMD only needs the jar path
+CMD ["target/{{ .NameKebab }}-1.0.0-SNAPSHOT.jar"]

@@ -9,6 +9,7 @@ image:
 
 agent:
   name: {{ .Name }}
+  runtime: python
   # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
   # http:
   #   port: 8080

@@ -79,25 +79,28 @@ func (h *JavaHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns Java Dockerfile content
 func (h *JavaHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh Java agent
-FROM eclipse-temurin:17-jdk-jammy
+FROM mcpmesh/java-runtime:0.8
 
 WORKDIR /app
 
-# Copy Maven wrapper and pom.xml
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
+# Switch to root to copy files
+USER root
 
-# Download dependencies
-RUN ./mvnw dependency:resolve -q
-
-# Copy source code
+# Copy Maven config and source
+COPY pom.xml .
 COPY src/ src/
 
 # Build the application
-RUN ./mvnw package -DskipTests -q
+RUN mvn package -DskipTests -q
 
-# Run the agent
-CMD ["java", "-jar", "target/*.jar"]
+# Set permissions
+RUN chown -R mcp-mesh:mcp-mesh /app
+
+# Switch back to non-root user
+USER mcp-mesh
+
+# NOTE: Base image has ENTRYPOINT ["java", "-jar"], so CMD only needs the jar path
+CMD ["target/*.jar"]
 `
 }
 
@@ -106,10 +109,10 @@ func (h *JavaHandler) GenerateHelmValues() map[string]interface{} {
 	return map[string]interface{}{
 		"runtime": "java",
 		"image": map[string]interface{}{
-			"repository": "eclipse-temurin",
-			"tag":        "17-jdk-jammy",
+			"repository": "mcpmesh/java-runtime",
+			"tag":        "0.8",
 		},
-		"command": []string{"java", "-jar", "target/*.jar"},
+		"command": []string{"target/*.jar"},
 	}
 }
 
@@ -152,7 +155,7 @@ func (h *JavaHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the Java runtime Docker image
 func (h *JavaHandler) GetDockerImage() string {
-	return "eclipse-temurin:17-jdk-jammy"
+	return "mcpmesh/java-runtime:0.8"
 }
 
 // ValidatePrerequisites checks Java environment
