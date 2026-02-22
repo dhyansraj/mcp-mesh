@@ -104,10 +104,12 @@ public class McpHttpClient {
             Map<String, Object> argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
             if (traceInfo != null) {
                 argsWithTrace.put("_trace_id", traceInfo.getTraceId());
-                argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                if (traceInfo.getSpanId() != null) {
+                    argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                }
                 log.trace("Injecting trace context into args: trace={}, parent={}",
                     traceInfo.getTraceId().substring(0, 8),
-                    traceInfo.getSpanId().substring(0, 8));
+                    traceInfo.getSpanId() != null ? traceInfo.getSpanId().substring(0, 8) : "null");
             }
 
             // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
@@ -148,10 +150,12 @@ public class McpHttpClient {
             // Inject trace context into HTTP headers
             if (traceInfo != null) {
                 requestBuilder.header("X-Trace-ID", traceInfo.getTraceId());
-                requestBuilder.header("X-Parent-Span", traceInfo.getSpanId());
+                if (traceInfo.getSpanId() != null) {
+                    requestBuilder.header("X-Parent-Span", traceInfo.getSpanId());
+                }
                 log.trace("Injecting trace headers: X-Trace-ID={}, X-Parent-Span={}",
                     traceInfo.getTraceId().substring(0, 8),
-                    traceInfo.getSpanId().substring(0, 8));
+                    traceInfo.getSpanId() != null ? traceInfo.getSpanId().substring(0, 8) : "null");
             }
 
             // Inject merged headers as HTTP headers (propagated + per-call)
