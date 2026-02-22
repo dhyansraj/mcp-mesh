@@ -60,7 +60,7 @@ Add the Spring Boot starter to your `pom.xml`:
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>0.9.6</version>
+        <version>0.9.7</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>

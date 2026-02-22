@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/core",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "MCP Mesh Rust core bindings for Node.js",
   "main": "index.js",
   "types": "index.d.ts",
