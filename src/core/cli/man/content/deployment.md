@@ -183,7 +183,7 @@ override service hostnames with FQDNs:
 
 ```bash
 helm install my-agent ... \
-  --set mesh.registryUrl=http://mcp-core-mcp-mesh-registry.core-ns.svc.cluster.local:8000
+  --set registry.host=mcp-core-mcp-mesh-registry.core-ns.svc.cluster.local
 ```
 
 For multi-tenant clusters (separate core per team/app), deploy each core into
@@ -231,7 +231,10 @@ agent:
 
 mesh:
   enabled: true
-  registry_url: http://mcp-core-mcp-mesh-registry:8000
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
 
 resources:
   limits:

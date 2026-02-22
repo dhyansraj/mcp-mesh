@@ -25,8 +25,11 @@ resources:
 mesh:
   enabled: true
   # Short name resolves in same namespace as core. For cross-namespace:
-  #   registryUrl: http://mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local:8000
-  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+  #   registry.host: mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
 
 # LLM provider needs API keys for the backend LLM service
 env:
