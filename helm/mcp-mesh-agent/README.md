@@ -67,16 +67,17 @@ helm uninstall my-agent -n mcp-mesh
 
 ### Agent Configuration
 
-| Parameter                   | Description                                      | Default   |
-| --------------------------- | ------------------------------------------------ | --------- |
-| `agent.name`                | Agent name override (empty = use from decorator) | `""`      |
-| `agent.version`             | Agent version                                    | `"1.0.0"` |
-| `agent.description`         | Agent description                                | `""`      |
-| `agent.capabilities`        | List of capabilities provided                    | `[]`      |
-| `agent.dependencies`        | List of required dependencies                    | `[]`      |
-| `agent.healthCheck.enabled` | Enable health checks                             | `true`    |
-| `agent.command`             | Container command override                       | `[]`      |
-| `agent.advertisedHost`      | Hostname advertised to registry                  | `""`      |
+| Parameter                   | Description                                       | Default   |
+| --------------------------- | ------------------------------------------------- | --------- |
+| `agent.name`                | Agent name override (empty = use from decorator)  | `""`      |
+| `agent.runtime`             | Runtime override (empty = auto-detect from image) | `""`      |
+| `agent.version`             | Agent version                                     | `"1.0.0"` |
+| `agent.description`         | Agent description                                 | `""`      |
+| `agent.capabilities`        | List of capabilities provided                     | `[]`      |
+| `agent.dependencies`        | List of required dependencies                     | `[]`      |
+| `agent.healthCheck.enabled` | Enable health checks                              | `true`    |
+| `agent.command`             | Container command override                        | `[]`      |
+| `agent.advertisedHost`      | Hostname advertised to registry                   | `""`      |
 
 ### HTTP Configuration
 

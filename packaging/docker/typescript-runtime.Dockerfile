@@ -22,7 +22,8 @@ WORKDIR /app
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     echo "Installing @mcpmesh/sdk@${VERSION} from npm" && \
     npm init -y && \
-    npm install @mcpmesh/sdk@${VERSION}
+    npm install @mcpmesh/sdk@${VERSION} && \
+    npm install -g tsx
 
 # Switch to non-root user
 USER mcp-mesh
