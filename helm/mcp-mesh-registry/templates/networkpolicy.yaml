@@ -23,7 +23,7 @@ spec:
         - namespaceSelector:
             matchLabels:
               name: {{ .Values.networkPolicy.allowedNamespace | default .Release.Namespace }}
-        - podSelector:
+          podSelector:
             matchLabels:
               app: mcp-agent
       ports:

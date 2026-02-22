@@ -100,7 +100,8 @@ RUN chown -R mcp-mesh:mcp-mesh /app
 USER mcp-mesh
 
 # NOTE: Base image has ENTRYPOINT ["java", "-jar"], so CMD only needs the jar path
-CMD ["target/*.jar"]
+# Replace with your actual jar name: target/<artifactId>-<version>.jar
+CMD ["target/agent-1.0.0-SNAPSHOT.jar"]
 `
 }
 
@@ -112,7 +113,7 @@ func (h *JavaHandler) GenerateHelmValues() map[string]interface{} {
 			"repository": "mcpmesh/java-runtime",
 			"tag":        "0.8",
 		},
-		"command": []string{"target/*.jar"},
+		"command": []string{"target/agent-1.0.0-SNAPSHOT.jar"},
 	}
 }
 
