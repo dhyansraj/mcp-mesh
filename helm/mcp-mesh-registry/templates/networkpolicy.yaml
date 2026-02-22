@@ -23,9 +23,6 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.allowedNamespace | default .Release.Namespace }}
-          podSelector:
-            matchLabels:
-              app: mcp-agent
       ports:
         {{- toYaml .Values.networkPolicy.ingressPorts | nindent 8 }}
   {{- if .Values.networkPolicy.egress }}

@@ -20,7 +20,7 @@ helm install my-agent ./helm/mcp-mesh-agent -n mcp-mesh \
   --set agent.name=my-agent
 ```
 
-Default image is `mcpmesh/python-runtime` — Python-specific env vars (`PYTHONUNBUFFERED`, `PYTHONPATH`, `UVICORN_*`) are auto-injected when the image repository contains "python".
+Default image is `mcpmesh/python-runtime` — Python-specific env vars (`PYTHONUNBUFFERED`, `PYTHONPATH`, `UVICORN_*`) are auto-injected when the runtime is detected as Python (see [Runtime Detection](#runtime-detection)).
 
 ### TypeScript Agent
 
@@ -121,10 +121,17 @@ helm uninstall my-agent -n mcp-mesh
 
 ## Runtime Detection
 
-The chart auto-detects the runtime from `image.repository`:
+The chart detects the runtime in two ways:
 
-- **Python** (image contains "python"): Injects `PYTHONUNBUFFERED`, `PYTHONPATH`, and `UVICORN_*` env vars
-- **TypeScript / Java / Other**: No Python-specific env vars are injected
+1. **Explicit**: Set `agent.runtime` to `"python"`, `"typescript"`, or `"java"`
+2. **Auto-detect**: If `agent.runtime` is empty, checks if `image.repository` contains "python"
+
+When Python runtime is detected:
+
+- `PYTHONUNBUFFERED`, `PYTHONPATH`, and `UVICORN_*` env vars are injected
+- Non-Python runtimes (TypeScript, Java, other) get no Python-specific env vars
+
+Scaffold-generated `helm-values.yaml` files set `agent.runtime` explicitly, so auto-detection is mainly for manual deployments using the default `mcpmesh/python-runtime` image.
 
 ## Examples
 
