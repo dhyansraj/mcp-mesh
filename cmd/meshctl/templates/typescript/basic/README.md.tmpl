@@ -42,29 +42,10 @@ docker run -p {{ .Port }}:{{ .Port }} {{ .Name }}:latest
 ```bash
 # Deploy using Helm
 helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/{{ .Name }} \
   --set image.tag=v1.0.0
-```
-
-## Adding Tools
-
-Add new tools in `src/index.ts`:
-
-```typescript
-agent.addTool({
-  name: "my_tool",
-  capability: "my_capability",
-  description: "What this tool does",
-  tags: ["tools"],
-  parameters: z.object({
-    input: z.string().describe("Input parameter"),
-  }),
-  execute: async ({ input }) => {
-    // Implement your tool logic
-    return `Result: ${input}`;
-  },
-});
 ```
 
 ## Documentation

@@ -9,6 +9,7 @@ image:
 
 agent:
   name: {{ .Name }}
+  runtime: java
 
 resources:
   limits:
@@ -20,7 +21,12 @@ resources:
 
 mesh:
   enabled: true
-  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+  # Short name resolves in same namespace as core. For cross-namespace:
+  #   registry.host: mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
 
 env: []
 

@@ -39,6 +39,33 @@ The agent will start on port {{ .Port }} by default.
     └── {{ .NamePascal }}Application.java
 ```
 
+## Docker
+
+```bash
+# Build the image
+docker build -t {{ .Name }}:latest .
+
+# Run the container
+docker run -p {{ .Port }}:{{ .Port }} {{ .Name }}:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/{{ .Name }} \
+  --set image.tag=v1.0.0
+```
+
+## Documentation
+
+- [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
+- [Java SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/java)
+- Run `meshctl man decorators --java` for decorator reference
+
 ## License
 
 MIT

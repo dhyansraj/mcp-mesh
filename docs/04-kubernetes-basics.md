@@ -153,6 +153,50 @@ helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
   --namespace mcp-mesh
 ```
 
+### Custom Namespace
+
+By default, examples use `mcp-mesh` as the namespace. You can deploy into any namespace —
+just match `-n` with `--set global.namespace`:
+
+```bash
+# Deploy core to a custom namespace
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n my-namespace --create-namespace \
+  --set global.namespace=my-namespace
+
+# Deploy agent to the same namespace
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.9.6 \
+  -n my-namespace \
+  -f helm-values.yaml
+```
+
+Service hostnames use short names (e.g., `mcp-core-mcp-mesh-registry`) that resolve
+within the same namespace automatically. No FQDN changes needed.
+
+For **multi-tenant** clusters (separate core per team), deploy each core to its own namespace:
+
+```bash
+# Team A
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n team-a --create-namespace --set global.namespace=team-a
+
+# Team B — same values, different namespace
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n team-b --create-namespace --set global.namespace=team-b
+```
+
+For **cross-namespace** access (agent in one namespace, core in another), use FQDNs:
+
+```bash
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.9.6 -n other-ns \
+  --set mesh.registryUrl=http://mcp-core-mcp-mesh-registry.team-a.svc.cluster.local:8000
+```
+
 ## Common Operations
 
 ```bash

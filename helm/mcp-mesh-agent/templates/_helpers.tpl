@@ -105,3 +105,12 @@ Build dependencies JSON
 []
 {{- end }}
 {{- end }}
+
+{{/*
+Detect if using Python runtime (checks agent.runtime first, then image name)
+*/}}
+{{- define "mcp-mesh-agent.isPython" -}}
+{{- if eq (toString .Values.agent.runtime) "python" }}true
+{{- else if and (not .Values.agent.runtime) (contains "python" .Values.image.repository) }}true
+{{- end }}
+{{- end }}

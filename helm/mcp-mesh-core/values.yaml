@@ -3,12 +3,19 @@
 
 # Global configuration
 global:
-  # Namespace for all components
+  # Namespace for all components (used by namespaceCreate).
+  # Usually matches the -n flag: helm install ... -n my-namespace --set global.namespace=my-namespace
   namespace: mcp-mesh
   # Release name for mcp-mesh-core (used to construct service hostnames)
   # Override this if you install mcp-mesh-core with a different release name
   # Example: helm install my-core ... → set coreReleaseName: "my-core"
   coreReleaseName: "mcp-core"
+
+# Service hostname convention:
+# All internal service hostnames use short names (e.g., "mcp-core-mcp-mesh-redis")
+# which resolve within the same namespace via Kubernetes DNS.
+# For cross-namespace access, override with FQDNs:
+#   --set mcp-mesh-registry.registry.redis.host=mcp-core-mcp-mesh-redis.other-ns.svc.cluster.local
 
 # Component enablement
 postgres:
@@ -74,7 +81,7 @@ mcp-mesh-registry:
     # Note: Hostnames use global.coreReleaseName prefix (default: "mcp-core")
     database:
       type: "postgres"
-      host: "mcp-core-mcp-mesh-postgres.mcp-mesh.svc.cluster.local"
+      host: "mcp-core-mcp-mesh-postgres"
       port: 5432
       name: "mcpmesh"
       username: "mcpmesh"
@@ -90,14 +97,14 @@ mcp-mesh-registry:
     # Redis configuration (optional session storage)
     redis:
       enabled: true
-      host: "mcp-core-mcp-mesh-redis.mcp-mesh.svc.cluster.local" # Full DNS name for reliable resolution
+      host: "mcp-core-mcp-mesh-redis"
       port: 6379
 
     # Observability configuration - matches k8s examples
     observability:
       distributedTracing:
         enabled: true
-        redisUrl: "redis://mcp-core-mcp-mesh-redis.mcp-mesh.svc.cluster.local:6379"
+        redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
         exporterType: "otlp"
         telemetryProtocol: "grpc"
         batchSize: "100"
@@ -106,7 +113,7 @@ mcp-mesh-registry:
         enableStats: "true"
         streamName: "mesh:trace"
         consumerGroup: "mcp-mesh-registry-processors"
-      telemetryEndpoint: "mcp-core-mcp-mesh-tempo.mcp-mesh.svc.cluster.local:4317"
+      telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
     # Additional environment variables for tracing (matches k8s examples)
     environment:
@@ -178,7 +185,7 @@ mcp-mesh-grafana:
     datasources:
       tempo:
         enabled: true
-        url: "http://mcp-core-mcp-mesh-tempo.mcp-mesh.svc.cluster.local:3200"
+        url: "http://mcp-core-mcp-mesh-tempo:3200"
       prometheus:
         enabled: true
         url: "http://prometheus:9090"

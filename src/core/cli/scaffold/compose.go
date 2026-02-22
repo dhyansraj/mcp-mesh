@@ -988,7 +988,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, npm install runs on startup and source is mounted.
 #       In production (Dockerfile), dependencies are pre-installed in the image.
 {{ .Name }}:
-  image: mcpmesh/typescript-runtime:0.8
+  image: mcpmesh/typescript-runtime:0.9
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1031,7 +1031,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # Agent: {{ .Name }} (Java/Spring Boot)
 # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
 {{ .Name }}:
-  image: mcpmesh/java-runtime:0.8
+  image: mcpmesh/java-runtime:0.9
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1772,7 +1772,7 @@ services:
   # NOTE: In dev mode, npm install runs on startup and source is mounted.
   #       In production (Dockerfile), dependencies are pre-installed in the image.
   {{ .Name }}:
-    image: mcpmesh/typescript-runtime:0.8
+    image: mcpmesh/typescript-runtime:0.9
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -1816,7 +1816,7 @@ services:
   # Java Agent: {{ .Name }}
   # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
   {{ .Name }}:
-    image: mcpmesh/java-runtime:0.8
+    image: mcpmesh/java-runtime:0.9
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root

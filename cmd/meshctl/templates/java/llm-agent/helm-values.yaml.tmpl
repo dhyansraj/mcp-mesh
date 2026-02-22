@@ -9,6 +9,7 @@ image:
 
 agent:
   name: {{ .Name }}
+  runtime: java
   # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
   # http:
   #   port: 8080
@@ -21,10 +22,14 @@ resources:
     cpu: 200m
     memory: 256Mi
 
-# Enable mesh connectivity for cross-agent calls
 mesh:
   enabled: true
-  registryUrl: http://mcp-core-mcp-mesh-registry:8000
+  # Short name resolves in same namespace as core. For cross-namespace:
+  #   registry.host: mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
 
 # LLM agent typically needs API keys
 env:

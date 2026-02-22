@@ -42,6 +42,7 @@ data:
   MCP_MESH_NAMESPACE: "default"
   HOST: "0.0.0.0"
 
+  {{- if include "mcp-mesh-agent.isPython" . }}
   # Python runtime
   PYTHONUNBUFFERED: "1"
   PYTHONPATH: "/app/lib:/app/agents"
@@ -50,6 +51,7 @@ data:
   UVICORN_WORKERS: "1"
   UVICORN_LOOP: "auto"
   UVICORN_LIFESPAN: "on"
+  {{- end }}
 
   # Observability configuration - matches Docker setup
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.agent.observability.distributedTracing.enabled | default true | quote }}

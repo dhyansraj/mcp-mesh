@@ -12,7 +12,7 @@ MCP Mesh supports multiple deployment patterns from local development to product
 | -------------------------------- | -------------------------------------------------- |
 | `mcpmesh/registry:0.8`           | Registry service for agent discovery               |
 | `mcpmesh/python-runtime:0.8`     | Python runtime with mcp-mesh SDK pre-installed     |
-| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -162,6 +162,51 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
   -f my-agent/helm-values.yaml
 ```
 
+### Custom Namespace
+
+Deploy into any namespace — just match `-n` with `--set global.namespace`:
+
+```bash
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n my-namespace --create-namespace \
+  --set global.namespace=my-namespace
+
+helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.9.6 \
+  -n my-namespace \
+  -f helm-values.yaml
+```
+
+For cross-namespace deployments (core and agents in different namespaces),
+override service hostnames with FQDNs:
+
+```bash
+helm install my-agent ... \
+  --set registry.host=mcp-core-mcp-mesh-registry.core-ns.svc.cluster.local
+```
+
+For multi-tenant clusters (separate core per team/app), deploy each core into
+its own namespace. Short service names resolve independently within each namespace:
+
+```bash
+# Team A
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n team-a --create-namespace --set global.namespace=team-a
+
+helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.9.6 -n team-a -f greeter/helm-values.yaml
+
+# Team B — same helm-values.yaml, different namespace
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 0.9.6 \
+  -n team-b --create-namespace --set global.namespace=team-b
+
+helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  --version 0.9.6 -n team-b -f greeter/helm-values.yaml
+```
+
 ### Available Helm Charts
 
 | Chart                                                | Description                                     |
@@ -186,7 +231,10 @@ agent:
 
 mesh:
   enabled: true
-  registry_url: http://mcp-core-mcp-mesh-registry:8000
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
 
 resources:
   limits:

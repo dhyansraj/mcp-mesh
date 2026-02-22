@@ -12,7 +12,8 @@ global:
 replicaCount: 1
 
 image:
-  # Default: base runtime image (has no agent code)
+  # Default: Python base runtime image (has no agent code)
+  # Available runtimes: mcpmesh/python-runtime, mcpmesh/typescript-runtime, mcpmesh/java-runtime
   # Override with your built agent image: --set image.repository=your-registry/my-agent
   repository: mcpmesh/python-runtime
   pullPolicy: IfNotPresent
@@ -43,7 +44,7 @@ securityContext:
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: false # Python apps often need writable filesystem
+  readOnlyRootFilesystem: false # Agents may need writable filesystem
   runAsNonRoot: true
   runAsUser: 999 # mcp-mesh user in the container
 
@@ -108,16 +109,14 @@ mesh:
 
 # Agent-specific configuration
 agent:
-  # Python script to run (for single-file agents)
-  # Leave empty if using a multi-file agent with custom Docker CMD
-  script: "/app/agent.py"
-  # Example: "/app/agents/hello_world.py"
+  # Runtime type (auto-detected from image if empty)
+  # Explicit values: "python", "typescript", "java"
+  # When set, controls which language-specific env vars are injected
+  runtime: ""
 
   # Container command override (optional)
-  # If empty, uses Docker image's CMD (recommended for multi-file agents)
-  # For single-file agents: ["/app/agent.py"]
-  # For multi-file agents: [] (uses Docker CMD)
-  # Note: Don't include "python" - the mcpmesh/python-runtime image ENTRYPOINT provides it
+  # If empty, uses the Docker image's CMD (recommended)
+  # Example: ["python", "-m", "myagent"]
   command: []
 
   # Hostname advertised to registry for service discovery
@@ -173,15 +172,6 @@ agent:
       enabled: true
       origins: ["*"]
 
-  # Python runtime configuration
-  python:
-    # Python interpreter (leave empty to auto-detect)
-    interpreter: ""
-    # Additional Python packages to install
-    packages: []
-    # Example:
-    # - numpy==1.24.0
-
   # Observability configuration
   # Hostnames use global.coreReleaseName prefix (default: "mcp-core")
   observability:
@@ -201,14 +191,6 @@ agent:
     TELEMETRY_ENDPOINT: "mcp-core-mcp-mesh-tempo:4317"
     MCP_MESH_TRACING_ENABLED: "true"
     MCP_MESH_METRICS_ENABLED: "true"
-    # - pandas>=1.5.0
-
-    # Environment variables for Python
-    env: []
-    # Example:
-    # - name: PYTHONUNBUFFERED
-    #   value: "1"
-
 # Duplicate registry and mesh sections removed - see lines 85-97 for the main definitions
 
 # ConfigMap for agent code
@@ -300,17 +282,14 @@ podDisruptionBudget:
 # Network policies
 networkPolicy:
   enabled: false
+  # Namespace allowed to send ingress traffic. Empty = release namespace.
+  allowedNamespace: ""
   policyTypes:
     - Ingress
     - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: mcp-mesh
-      ports:
-        - protocol: TCP
-          port: 8080
+  ingressPorts:
+    - protocol: TCP
+      port: 8080
   egress:
     - to:
         - namespaceSelector: {}

@@ -22,7 +22,8 @@ WORKDIR /app
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     echo "Installing @mcpmesh/sdk@${VERSION} from npm" && \
     npm init -y && \
-    npm install @mcpmesh/sdk@${VERSION}
+    npm install @mcpmesh/sdk@${VERSION} && \
+    npm install -g tsx@4
 
 # Switch to non-root user
 USER mcp-mesh
@@ -33,5 +34,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 EXPOSE 8080
 
-# Default entrypoint - agents will override with their scripts
-ENTRYPOINT ["node"]
+# Default entrypoint - agents provide the script path as CMD
+ENTRYPOINT ["npx", "tsx"]
