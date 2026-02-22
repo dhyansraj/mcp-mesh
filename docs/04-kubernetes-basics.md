@@ -21,7 +21,7 @@ kubectl create namespace mcp-mesh
 
 # Deploy core (OCI registry - no "helm repo add" needed)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh
 
 # Wait for registry
@@ -65,7 +65,7 @@ Build the image:
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=my-agent \
@@ -76,7 +76,7 @@ For cloud deployments, use your full registry path:
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
@@ -138,7 +138,7 @@ resources:
 ```bash
 # Core without Grafana/Tempo (lighter footprint)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh \
   --set grafana.enabled=false \
   --set tempo.enabled=false
@@ -149,7 +149,7 @@ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
 ```bash
 # Just the registry, no database or observability
 helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh
 ```
 
@@ -161,13 +161,13 @@ just match `-n` with `--set global.namespace`:
 ```bash
 # Deploy core to a custom namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.7 \
+  --version 0.9.8 \
   -n my-namespace --create-namespace \
   --set global.namespace=my-namespace
 
 # Deploy agent to the same namespace
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 \
+  --version 0.9.8 \
   -n my-namespace \
   -f helm-values.yaml
 ```
@@ -180,12 +180,12 @@ For **multi-tenant** clusters (separate core per team), deploy each core to its 
 ```bash
 # Team A
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.7 \
+  --version 0.9.8 \
   -n team-a --create-namespace --set global.namespace=team-a
 
 # Team B — same values, different namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 0.9.7 \
+  --version 0.9.8 \
   -n team-b --create-namespace --set global.namespace=team-b
 ```
 
@@ -193,7 +193,7 @@ For **cross-namespace** access (agent in one namespace, core in another), use FQ
 
 ```bash
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 -n other-ns \
+  --version 0.9.8 -n other-ns \
   --set mesh.registryUrl=http://mcp-core-mcp-mesh-registry.team-a.svc.cluster.local:8000
 ```
 
@@ -205,13 +205,13 @@ helm list -n mcp-mesh
 
 # Upgrade an agent
 helm upgrade my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh \
   --set image.tag=v2
 
 # Scale replicas
 helm upgrade my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 0.9.7 \
+  --version 0.9.8 \
   --namespace mcp-mesh \
   --reuse-values \
   --set replicaCount=3

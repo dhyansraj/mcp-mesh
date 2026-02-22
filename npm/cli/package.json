@@ -1,6 +1,6 @@
 {
   "name": "@mcpmesh/cli",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "CLI for MCP Mesh — build distributed AI agents with auto-discovery, dependency injection, and LLM integration",
   "license": "MIT",
   "repository": {
@@ -22,10 +22,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@mcpmesh/cli-linux-x64": "0.9.7",
-    "@mcpmesh/cli-linux-arm64": "0.9.7",
-    "@mcpmesh/cli-darwin-x64": "0.9.7",
-    "@mcpmesh/cli-darwin-arm64": "0.9.7"
+    "@mcpmesh/cli-linux-x64": "0.9.8",
+    "@mcpmesh/cli-linux-arm64": "0.9.8",
+    "@mcpmesh/cli-darwin-x64": "0.9.8",
+    "@mcpmesh/cli-darwin-arm64": "0.9.8"
   },
   "keywords": [
     "mcp",

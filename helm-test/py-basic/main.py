@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""
+py-basic - MCP Mesh Agent
+
+A MCP Mesh agent generated using meshctl scaffold.
+"""
+
+
+import mesh
+from fastmcp import FastMCP
+
+# FastMCP server instance
+app = FastMCP("PyBasic Service")
+
+
+# ===== TOOLS =====
+
+
+@app.tool()
+@mesh.tool(
+    capability="hello",
+    description="A tool",
+    tags=["tools"],
+)
+async def hello() -> str:
+    """
+    A tool.
+
+    Returns:
+        Result string.
+    """
+    # TODO: Implement tool logic
+    return "Not implemented"
+
+
+# ===== TOOL PARAMETER EXAMPLES (uncomment and adapt) =====
+#
+# Tool functions can accept typed parameters. The mesh SDK generates
+# JSON Schema from the type hints automatically.
+#
+# @app.tool()
+# @mesh.tool(capability="process", description="Process data", tags=["tools"])
+# async def process(
+#     text: str,                          # required string
+#     count: int = 1,                     # optional int with default
+#     threshold: float = 0.5,             # optional float with default
+#     verbose: bool = False,              # optional boolean with default
+# ) -> str:
+#     return f"Processed {text} x{count}"
+
+
+# ===== DEPENDENCY INJECTION EXAMPLE (uncomment and adapt) =====
+#
+# Declare dependencies to call tools on other agents in the mesh.
+# The mesh runtime injects McpMeshTool instances by keyword name.
+#
+# @app.tool()
+# @mesh.tool(
+#     capability="orchestrate",
+#     description="Calls another agent's tool",
+#     tags=["tools"],
+#     dependencies=["calculator"],          # declare dependency on "calculator" capability
+# )
+# async def orchestrate(
+#     input_text: str,
+#     calculator: mesh.McpMeshTool = None,  # injected by mesh (matches dependency name)
+# ) -> str:
+#     if calculator is None:
+#         return "calculator dependency not available"
+#     result = await calculator({"expression": "2 + 2"})
+#     return f"Calculator says: {result}"
+
+
+@mesh.agent(
+    name="py-basic",
+    version="1.0.0",
+    description="MCP Mesh agent for py-basic",
+    http_port=8080,
+    enable_http=True,
+    auto_run=True,
+)
+class PyBasicAgent:
+    """
+    Agent class that configures how mesh should run the FastMCP server.
+
+    The mesh processor will:
+    1. Discover the 'app' FastMCP instance
+    2. Apply dependency injection to decorated functions
+    3. Start the FastMCP HTTP server on the configured port
+    4. Register all capabilities with the mesh registry
+    """
+
+    pass
+
+
+# No main method needed!
+# Mesh processor automatically handles:
+# - FastMCP server discovery and startup
+# - Dependency injection between functions
+# - HTTP server configuration
+# - Service registration with mesh registry

@@ -1,5 +1,17 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.7...v0.9.8)
+
+## v0.9.8 (2026-02-22)
+
+### 🐛 Bug Fixes
+
+- **Java SDK — Orphan spans in trace graph** (#589): `TraceInfo.forPropagation()` generated a phantom spanId when no parent span was provided (e.g., `meshctl call --trace`), creating a span reference that was never published — downstream spans appeared as orphans with no root. Removed phantom generation so the first tool span is correctly a root span
+- **Java SDK — Header propagation returning empty `{}`** (#589): `MeshMcpServerConfiguration` used default `immediateExecution=false`, causing MCP tool handlers to run on Reactor's `boundedElastic` thread pool instead of the servlet thread where `TracingFilter` sets ThreadLocal context. Set `immediateExecution(true)` so tool handlers execute on the servlet thread and can access propagated headers
+- **Java SDK — Null guards on spanId** (#589): Added null checks on `getSpanId()` in `McpHttpClient` (argument injection and HTTP header injection) and `TracingFilter` (response header) to prevent NPE when parent span is legitimately null
+
+All three bugs were regressions introduced in v0.9.7 by PR #585.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.6...v0.9.7)
 
 ## v0.9.7 (2026-02-22)
