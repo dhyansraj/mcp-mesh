@@ -12,7 +12,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "0.9.6",
+    "@mcpmesh/sdk": "0.9.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {

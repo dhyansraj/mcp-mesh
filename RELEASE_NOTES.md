@@ -1,5 +1,48 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.6...v0.9.7)
+
+## v0.9.7 (2026-02-22)
+
+### ✨ New Features
+
+- **Language-agnostic Helm chart** (#580): `mcp-mesh-agent` chart now supports Python, TypeScript, and Java agents natively — added `agent.runtime` field and `isPython` helper for conditional Python env var injection; removed dead `agent.script` and `agent.python` fields; rewrote README with multi-language examples
+- **Arbitrary namespace support** (#579): Helm charts deploy into any namespace — replaced hardcoded FQDN hostnames with short names, added `networkPolicy.allowedNamespace` with `| default .Release.Namespace` fallback, documented custom namespace, multi-tenant, and cross-namespace deployment patterns
+
+### 🔧 Improvements
+
+- **ENTRYPOINT/CMD alignment** (#586): TypeScript runtime ENTRYPOINT changed from `node` to `npx tsx`; all scaffold Dockerfiles now set CMD to just the script/jar path (ENTRYPOINT provides the runtime command)
+- **NetworkPolicy** (#586): Registry ingress rule now filters by namespace only (not pod label), allowing both agents and APIs to reach the registry
+
+### 🐛 Bug Fixes
+
+- **Distributed tracing** (#585): Fixed `InheritableThreadLocal` trace context leak across Java thread pool reuse; added route handler span publishing to TypeScript `mesh.route()` and Java `@MeshRoute`; added `runtime` field to trace span metadata in all SDKs; fixed NPE in Java `TraceInfo.forPropagation()` when parent span is null
+- **Scaffold registry URL** (#586): Fixed `mesh.registryUrl` in scaffold helm-values templates and deployment docs — the chart reads `registry.host`/`registry.port` but docs and templates were using a key the chart ignores, causing cross-namespace registry overrides to silently fail
+- **TypeScript runtime tsx availability** (#586): Pinned `tsx@4` as global install in TypeScript runtime Dockerfile — previously relied on `npx` runtime download which fails in airgapped clusters
+- **Registry NetworkPolicy port** (#586): Fixed default `ingressPorts` from 8080 to 8000 to match actual registry service port
+- **Registry NetworkPolicy namespace label** (#586): Changed from `name:` to `kubernetes.io/metadata.name:` (auto-applied by K8s 1.21+)
+- **Image tag consistency** (#586): Bumped all Go handler, scaffold template, and Dockerfile image tags from 0.8 to 0.9
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.5...v0.9.6)
+
+## v0.9.6 (2026-02-19)
+
+### ✨ New Features
+
+- **Per-call custom headers** (#575): Inject headers like `x-audit-id` on individual tool invocations across all three SDKs — `tool(headers={"x-audit-id": "abc"})` (Python), `tool({}, { headers })` (TypeScript), `tool.call(args, headers)` (Java). Per-call headers merge with session-propagated headers (per-call wins)
+
+### 🔧 Improvements
+
+- **Header allowlist prefix matching** (#575): `MCP_MESH_PROPAGATE_HEADERS` now uses case-insensitive prefix matching — `x-audit` matches `x-audit-id`, `x-audit-source`, etc.
+
+### 🐛 Bug Fixes
+
+- **Registry dep_index alignment** (#574): Fixed dependency index positional alignment when dependencies can't be resolved — registry now preserves unresolved placeholder entries instead of empty arrays, ensuring Rust core assigns correct dep_index values
+- **Pin fastmcp<3.0.0** (#574): Pinned across all Python source and examples to prevent breakage from FastMCP 3.0.0 breaking API changes
+- **Watch mode detach logs** (#576): `meshctl start -w --detach` now writes agent stdout/stderr to per-agent log files (`~/.mcp-mesh/logs/<agent>.log`) instead of mixing everything into `meshctl.log`
+- **Python header propagation** (#575): Fixed `decorators.py` middleware to use prefix matching for header allowlist (was exact-only, silently dropping prefixed headers)
+- **Stale config warning removed** (#576): Removed noisy `cli_config.json` warning printed on every meshctl invocation since v0.9.5
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.4...v0.9.5)
 
 ## v0.9.5 (2026-02-17)

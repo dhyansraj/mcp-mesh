@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-parent</artifactId>
-        <version>0.9.6</version>
+        <version>0.9.7</version>
     </parent>
 
     <artifactId>mcp-mesh-native</artifactId>
