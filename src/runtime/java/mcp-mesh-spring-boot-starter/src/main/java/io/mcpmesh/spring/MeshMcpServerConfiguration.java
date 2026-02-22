@@ -99,6 +99,7 @@ public class MeshMcpServerConfiguration {
             .capabilities(ServerCapabilities.builder()
                 .tools(true)
                 .build())
+            .immediateExecution(true)
             .build();
 
         // Register all tools from wrapper registry (includes both @MeshTool and @MeshLlmProvider)

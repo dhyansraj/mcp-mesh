@@ -83,7 +83,9 @@ public class TracingFilter implements Filter {
                 // Add trace headers to response for debugging (only when tracing enabled)
                 if (enabled) {
                     httpResponse.setHeader(TRACE_ID_HEADER, traceInfo.getTraceId());
-                    httpResponse.setHeader(PARENT_SPAN_HEADER, traceInfo.getSpanId());
+                    if (traceInfo.getSpanId() != null) {
+                        httpResponse.setHeader(PARENT_SPAN_HEADER, traceInfo.getSpanId());
+                    }
                 }
             } else {
                 // No trace headers - don't create root trace here
