@@ -12,7 +12,7 @@ MCP Mesh supports multiple deployment patterns from local development to product
 | -------------------------------- | -------------------------------------------------- |
 | `mcpmesh/registry:0.8`           | Registry service for agent discovery               |
 | `mcpmesh/python-runtime:0.8`     | Python runtime with mcp-mesh SDK pre-installed     |
-| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 

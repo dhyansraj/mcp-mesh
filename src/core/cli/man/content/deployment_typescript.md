@@ -11,7 +11,7 @@ MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshc
 | Image                            | Description                                        |
 | -------------------------------- | -------------------------------------------------- |
 | `mcpmesh/registry:0.8`           | Registry service for agent discovery               |
-| `mcpmesh/typescript-runtime:0.8` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -75,7 +75,7 @@ meshctl stop               # Stop all
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:0.8
+FROM mcpmesh/typescript-runtime:0.9
 
 WORKDIR /app
 
@@ -124,7 +124,7 @@ Generated `docker-compose.yml` includes:
 
 - PostgreSQL database for registry
 - Registry service (`mcpmesh/registry:0.8`)
-- TypeScript agents with `mcpmesh/typescript-runtime:0.8`
+- TypeScript agents with `mcpmesh/typescript-runtime:0.9`
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
 

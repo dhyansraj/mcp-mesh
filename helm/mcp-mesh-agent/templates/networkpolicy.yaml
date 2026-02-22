@@ -22,7 +22,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              name: {{ .Values.networkPolicy.allowedNamespace | default .Release.Namespace }}
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.allowedNamespace | default .Release.Namespace }}
       ports:
         {{- toYaml .Values.networkPolicy.ingressPorts | nindent 8 }}
   {{- if .Values.networkPolicy.egress }}

@@ -412,7 +412,7 @@ func TestTypeScriptHandler_GetDockerImage(t *testing.T) {
 		t.Error("GetDockerImage() returned empty string")
 	}
 	// Should contain typescript
-	if image != "mcpmesh/typescript-runtime:0.8" && image != "mcpmesh/typescript-runtime:latest" {
+	if image != "mcpmesh/typescript-runtime:0.9" && image != "mcpmesh/typescript-runtime:latest" {
 		// Just check it's not empty - version may vary
 		t.Logf("Docker image: %s", image)
 	}
