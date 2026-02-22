@@ -226,7 +226,7 @@ existingSecret: my-secret
 FROM mcpmesh/python-runtime:0.9
 
 COPY . /app/
-CMD ["python", "-m", "myagent"]
+CMD ["-m", "myagent"]
 ```
 
 ### TypeScript
@@ -235,7 +235,7 @@ CMD ["python", "-m", "myagent"]
 FROM mcpmesh/typescript-runtime:0.9
 
 COPY . /app/
-CMD ["npx", "tsx", "src/index.ts"]
+CMD ["src/index.ts"]
 ```
 
 ### Java
@@ -244,7 +244,7 @@ CMD ["npx", "tsx", "src/index.ts"]
 FROM mcpmesh/java-runtime:0.9
 
 COPY target/myagent.jar /app/
-CMD ["java", "-jar", "/app/myagent.jar"]
+CMD ["/app/myagent.jar"]
 ```
 
 Build and deploy:
