@@ -2,346 +2,346 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://mcp-mesh.ai/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/02-local-development/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/03-docker-deployment/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/04-kubernetes-basics/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/architecture-and-design/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/comparison/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/contributing/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/deployment/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/enhanced-tag-matching-migration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/environment-variables/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/faq/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/mesh-decorators/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/meshctl-cli/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/meshctl-scaffold/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/00-why-mcp-mesh/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/01-prerequisites/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/02-installation/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/03-hello-world/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/04-dependency-injection/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/05-first-agent/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/06-llm-integration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/01-getting-started/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/03-docker-deployment/04-networking/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/03-docker-deployment/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/04-kubernetes-basics/05-troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/01-prometheus-integration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/02-grafana-dashboards/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/03-distributed-tracing/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/04-centralized-logging/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/05-alerting-slos/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/07-observability/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/cli/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/concepts/architecture/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/concepts/health-discovery/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/concepts/registry/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/concepts/tag-matching/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/annotations/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/capabilities-tags/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/dependency-injection/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/examples/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/spring-boot-integration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/getting-started/prerequisites/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/llm/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/01-getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/02-scaffold/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/03-running-agents/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/04-inspecting-mesh/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/05-calling-tools/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/java/local-development/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/capabilities-tags/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/decorators/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/dependency-injection/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/examples/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/fastapi-integration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/getting-started/prerequisites/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/llm/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/01-getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/02-scaffold/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/03-running-agents/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/04-inspecting-mesh/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/05-calling-tools/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/capabilities-tags/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/dependency-injection/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/examples/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/express-integration/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/mesh-functions/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/getting-started/prerequisites/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/llm/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/01-getting-started/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/02-scaffold/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/03-running-agents/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/04-inspecting-mesh/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/05-calling-tools/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
     <url>
          <loc>https://mcp-mesh.ai/typescript/local-development/troubleshooting/</loc>
-         <lastmod>2026-02-19</lastmod>
+         <lastmod>2026-02-22</lastmod>
     </url>
 </urlset>
