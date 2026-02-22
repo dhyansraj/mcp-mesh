@@ -202,7 +202,7 @@ func TestDetectLanguage_PythonDirectoryRequirements(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create requirements.txt
-	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==0.9.7"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==0.9.8"), 0644); err != nil {
 		t.Fatalf("Failed to create requirements.txt: %v", err)
 	}
 
