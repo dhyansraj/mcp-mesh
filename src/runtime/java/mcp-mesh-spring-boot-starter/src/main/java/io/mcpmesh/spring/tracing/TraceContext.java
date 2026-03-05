@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.function.Supplier;
 
 /**
  * Thread-safe trace context storage using ThreadLocal.
@@ -211,6 +212,45 @@ public class TraceContext {
                     setPropagatedHeaders(currentHeaders);
                 }
                 return task.call();
+            } finally {
+                if (previous != null) {
+                    set(previous);
+                } else {
+                    clear();
+                }
+                if (!previousHeaders.isEmpty()) {
+                    setPropagatedHeaders(previousHeaders);
+                } else {
+                    clearPropagatedHeaders();
+                }
+            }
+        };
+    }
+
+    /**
+     * Wrap a Supplier to propagate trace context to another thread.
+     *
+     * <p>Use this with {@code CompletableFuture.supplyAsync(TraceContext.wrapSupplier(supplier))}
+     * to ensure trace context is available in the async task.
+     *
+     * @param supplier The supplier to wrap
+     * @param <T> Return type of the supplier
+     * @return Wrapped supplier that restores trace context on execution
+     */
+    public static <T> Supplier<T> wrapSupplier(Supplier<T> supplier) {
+        TraceInfo current = get();
+        Map<String, String> currentHeaders = getPropagatedHeaders();
+        return () -> {
+            TraceInfo previous = get();
+            Map<String, String> previousHeaders = getPropagatedHeaders();
+            try {
+                if (current != null) {
+                    set(current);
+                }
+                if (!currentHeaders.isEmpty()) {
+                    setPropagatedHeaders(currentHeaders);
+                }
+                return supplier.get();
             } finally {
                 if (previous != null) {
                     set(previous);

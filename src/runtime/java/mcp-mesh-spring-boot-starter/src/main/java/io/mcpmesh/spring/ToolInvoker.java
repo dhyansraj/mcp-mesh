@@ -7,8 +7,12 @@ import io.mcpmesh.types.MeshToolUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.mcpmesh.spring.tracing.ExecutionTracer;
+import io.mcpmesh.spring.tracing.SpanScope;
+
 import java.lang.reflect.Type;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Unified tool invocation utility for both local and remote tool calls.
@@ -50,6 +54,7 @@ public class ToolInvoker {
     private final McpMeshToolProxyFactory proxyFactory;
     private final MeshToolWrapperRegistry wrapperRegistry;
     private final String currentAgentId;
+    private final AtomicReference<ExecutionTracer> tracerRef = new AtomicReference<>();
 
     /**
      * Create a ToolInvoker with all dependencies.
@@ -75,6 +80,15 @@ public class ToolInvoker {
      */
     public ToolInvoker(McpMeshToolProxyFactory proxyFactory) {
         this(proxyFactory, null, null);
+    }
+
+    /**
+     * Set the ExecutionTracer for creating trace spans around tool calls.
+     *
+     * @param tracer The ExecutionTracer instance
+     */
+    public void setTracer(ExecutionTracer tracer) {
+        this.tracerRef.set(tracer);
     }
 
     /**
@@ -159,10 +173,21 @@ public class ToolInvoker {
 
         log.debug("Invoking local tool: {} (funcId={})", capability, handler.getFuncId());
 
-        try {
-            return handler.invoke(args);
-        } catch (Exception e) {
-            throw new MeshToolCallException(capability, handler.getMethodName(), e);
+        ExecutionTracer tracer = tracerRef.get();
+        Map<String, Object> spanMeta = Map.of(
+            "tool_name", capability,
+            "call_type", "local_call"
+        );
+
+        try (SpanScope span = tracer != null ? tracer.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            try {
+                Object result = handler.invoke(args);
+                span.withResult(result);
+                return result;
+            } catch (Exception e) {
+                span.withError(e);
+                throw new MeshToolCallException(capability, handler.getMethodName(), e);
+            }
         }
     }
 

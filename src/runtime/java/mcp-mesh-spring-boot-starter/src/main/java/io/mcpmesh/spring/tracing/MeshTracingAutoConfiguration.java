@@ -1,8 +1,10 @@
 package io.mcpmesh.spring.tracing;
 
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.spring.McpMeshToolProxyFactory;
 import io.mcpmesh.spring.McpToolHandler;
 import io.mcpmesh.spring.MeshRuntime;
+import io.mcpmesh.spring.ToolInvoker;
 import io.mcpmesh.spring.MeshToolWrapper;
 import io.mcpmesh.spring.MeshToolWrapperRegistry;
 import io.mcpmesh.spring.web.MeshRouteHandlerInterceptor;
@@ -50,6 +52,12 @@ public class MeshTracingAutoConfiguration {
 
     @Autowired
     private ObjectProvider<MeshRouteHandlerInterceptor> routeInterceptorProvider;
+
+    @Autowired
+    private ObjectProvider<ToolInvoker> toolInvokerProvider;
+
+    @Autowired
+    private ObjectProvider<McpMeshToolProxyFactory> proxyFactoryProvider;
 
     private TracePublisher tracePublisher;
 
@@ -118,6 +126,20 @@ public class MeshTracingAutoConfiguration {
         if (routeInterceptor != null) {
             routeInterceptor.setTracer(tracer);
             log.debug("Wired tracer to MeshRouteHandlerInterceptor");
+        }
+
+        // Wire tracer to ToolInvoker (for proxy call spans)
+        ToolInvoker toolInvoker = toolInvokerProvider.getIfAvailable();
+        if (toolInvoker != null) {
+            toolInvoker.setTracer(tracer);
+            log.debug("Wired tracer to ToolInvoker");
+        }
+
+        // Wire tracer to McpMeshToolProxyFactory (for proxy call spans)
+        McpMeshToolProxyFactory proxyFactory = proxyFactoryProvider.getIfAvailable();
+        if (proxyFactory != null) {
+            proxyFactory.setTracer(tracer);
+            log.debug("Wired tracer to McpMeshToolProxyFactory");
         }
 
         return tracer;

@@ -6,6 +6,7 @@ import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.Selector;
+import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.ai.handlers.LlmProviderHandler;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
@@ -219,12 +220,12 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     @Override
     public CompletableFuture<String> generateAsync(String prompt) {
-        return request().user(prompt).generateAsync();
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> generate(prompt)));
     }
 
     @Override
     public <T> CompletableFuture<T> generateAsync(String prompt, Class<T> responseType) {
-        return request().user(prompt).generateAsync(responseType);
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> generate(prompt, responseType)));
     }
 
     /**
@@ -1033,12 +1034,12 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
         @Override
         public CompletableFuture<String> generateAsync() {
-            return CompletableFuture.supplyAsync(this::generate);
+            return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(this::generate));
         }
 
         @Override
         public <T> CompletableFuture<T> generateAsync(Class<T> responseType) {
-            return CompletableFuture.supplyAsync(() -> generate(responseType));
+            return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> generate(responseType)));
         }
 
         @Override
