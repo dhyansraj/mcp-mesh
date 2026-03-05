@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v0.9.8)"
+        description: "Version (e.g., v0.9.9)"
         required: true
-        default: "v0.9.8"
+        default: "v0.9.9"
       environment:
         description: "Environment"
         type: choice

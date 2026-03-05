@@ -1,5 +1,13 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.8...v0.9.9)
+
+## v0.9.9 (2026-03-05)
+
+### 🐛 Bug Fixes
+
+- **Java SDK — Flat trace spans in Grafana** (#595): Java agent traces appeared flat — all downstream agent spans at the same level under the handler span — while Python and TypeScript showed proper nested hierarchy. Added `proxy_call_wrapper` intermediate spans around outgoing tool/proxy calls in `McpMeshToolProxy.call()` and `ToolInvoker.invokeLocal()`, matching the span nesting behavior of Python and TypeScript SDKs. Also added `TraceContext.wrapSupplier()` for async trace context propagation via `CompletableFuture.supplyAsync()`, and wired `ExecutionTracer` to `McpMeshToolProxyFactory` and `ToolInvoker` via auto-configuration
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.7...v0.9.8)
 
 ## v0.9.8 (2026-02-22)
