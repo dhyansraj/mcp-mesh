@@ -230,7 +230,7 @@ public class TraceContext {
     /**
      * Wrap a Supplier to propagate trace context to another thread.
      *
-     * <p>Use this with {@code CompletableFuture.supplyAsync(TraceContext.wrap(supplier))}
+     * <p>Use this with {@code CompletableFuture.supplyAsync(TraceContext.wrapSupplier(supplier))}
      * to ensure trace context is available in the async task.
      *
      * @param supplier The supplier to wrap

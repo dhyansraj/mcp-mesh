@@ -115,20 +115,9 @@ public class ToolInvoker {
         log.debug("Invoking remote tool: {} at {} (returnType={})",
             functionName, endpoint, returnType);
 
-        ExecutionTracer tracer = tracerRef.get();
-        Map<String, Object> spanMeta = Map.of(
-            "endpoint", endpoint,
-            "tool_name", functionName,
-            "call_type", "proxy_call"
-        );
-
-        try (SpanScope span = tracer != null ? tracer.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
-            McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
-                endpoint, functionName, returnType != null ? returnType : Object.class);
-            Object result = proxy.call(args);
-            span.withResult(result);
-            return result;
-        }
+        McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
+            endpoint, functionName, returnType != null ? returnType : Object.class);
+        return proxy.call(args);
     }
 
     /**
@@ -152,20 +141,9 @@ public class ToolInvoker {
         log.debug("Invoking remote tool: {} at {} (returnType={}, headers={})",
             functionName, endpoint, returnType, headers != null ? headers.size() : 0);
 
-        ExecutionTracer tracer = tracerRef.get();
-        Map<String, Object> spanMeta = Map.of(
-            "endpoint", endpoint,
-            "tool_name", functionName,
-            "call_type", "proxy_call"
-        );
-
-        try (SpanScope span = tracer != null ? tracer.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
-            McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
-                endpoint, functionName, returnType != null ? returnType : Object.class);
-            Object result = proxy.call(args, headers);
-            span.withResult(result);
-            return result;
-        }
+        McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
+            endpoint, functionName, returnType != null ? returnType : Object.class);
+        return proxy.call(args, headers);
     }
 
     /**
@@ -202,11 +180,14 @@ public class ToolInvoker {
         );
 
         try (SpanScope span = tracer != null ? tracer.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
-            Object result = handler.invoke(args);
-            span.withResult(result);
-            return result;
-        } catch (Exception e) {
-            throw new MeshToolCallException(capability, handler.getMethodName(), e);
+            try {
+                Object result = handler.invoke(args);
+                span.withResult(result);
+                return result;
+            } catch (Exception e) {
+                span.withError(e);
+                throw new MeshToolCallException(capability, handler.getMethodName(), e);
+            }
         }
     }
 
