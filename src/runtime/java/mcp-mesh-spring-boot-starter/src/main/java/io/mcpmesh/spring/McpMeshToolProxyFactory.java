@@ -1,5 +1,6 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ public class McpMeshToolProxyFactory {
     private final Map<String, McpMeshToolProxy> proxyCache = new ConcurrentHashMap<>();
 
     private final McpHttpClient mcpClient;
+    private volatile ExecutionTracer tracer;
 
     public McpMeshToolProxyFactory() {
         this.mcpClient = new McpHttpClient();
@@ -33,6 +35,14 @@ public class McpMeshToolProxyFactory {
 
     public McpMeshToolProxyFactory(McpHttpClient mcpClient) {
         this.mcpClient = mcpClient;
+    }
+
+    /**
+     * Set the ExecutionTracer for all proxies (existing and future).
+     */
+    public void setTracer(ExecutionTracer tracer) {
+        this.tracer = tracer;
+        proxyCache.values().forEach(p -> p.setTracer(tracer));
     }
 
     /**
@@ -71,6 +81,9 @@ public class McpMeshToolProxyFactory {
             log.debug("Creating new proxy for {}:{} with returnType={}", endpoint, functionName, returnType);
             McpMeshToolProxy newProxy = new McpMeshToolProxy(functionName, mcpClient, returnType);
             newProxy.updateEndpoint(endpoint, functionName);
+            if (tracer != null) {
+                newProxy.setTracer(tracer);
+            }
             return newProxy;
         });
 

@@ -3,6 +3,9 @@ package io.mcpmesh.spring;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshObjectMappers;
+import io.mcpmesh.spring.tracing.ExecutionTracer;
+import io.mcpmesh.spring.tracing.SpanScope;
+import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshToolCallException;
 import io.mcpmesh.types.MeshToolUnavailableException;
@@ -36,6 +39,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     private final McpHttpClient mcpClient;
     private volatile Type returnType;
     private final AtomicReference<EndpointInfo> endpointRef = new AtomicReference<>();
+    private volatile ExecutionTracer tracer;
 
     public McpMeshToolProxy(String capability) {
         this(capability, new McpHttpClient(), null);
@@ -66,6 +70,10 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         }
     }
 
+    void setTracer(ExecutionTracer tracer) {
+        this.tracer = tracer;
+    }
+
     void setReturnType(Type returnType) {
         this.returnType = returnType;
     }
@@ -87,7 +95,19 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         }
 
         log.debug("Calling tool {} at {} with params: {}", info.functionName(), info.endpoint(), params);
-        return mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType);
+
+        ExecutionTracer t = this.tracer;
+        Map<String, Object> spanMeta = Map.of(
+            "endpoint", info.endpoint(),
+            "tool_name", info.functionName(),
+            "call_type", "proxy_call"
+        );
+
+        try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType);
+            span.withResult(result);
+            return result;
+        }
     }
 
     @Override
@@ -99,12 +119,24 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
         log.debug("Calling tool {} at {} with params: {} and {} extra headers",
             info.functionName(), info.endpoint(), params, headers != null ? headers.size() : 0);
-        return mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType, headers);
+
+        ExecutionTracer t = this.tracer;
+        Map<String, Object> spanMeta = Map.of(
+            "endpoint", info.endpoint(),
+            "tool_name", info.functionName(),
+            "call_type", "proxy_call"
+        );
+
+        try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType, headers);
+            span.withResult(result);
+            return result;
+        }
     }
 
     @Override
     public CompletableFuture<T> callAsync(Map<String, Object> params, Map<String, String> headers) {
-        return CompletableFuture.supplyAsync(() -> call(params, headers));
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> call(params, headers)));
     }
 
     @Override
@@ -141,17 +173,17 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
 
     @Override
     public CompletableFuture<T> callAsync() {
-        return CompletableFuture.supplyAsync(this::call);
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(this::call));
     }
 
     @Override
     public CompletableFuture<T> callAsync(Map<String, Object> params) {
-        return CompletableFuture.supplyAsync(() -> call(params));
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> call(params)));
     }
 
     @Override
     public CompletableFuture<T> callAsync(Object... args) {
-        return CompletableFuture.supplyAsync(() -> call(args));
+        return CompletableFuture.supplyAsync(TraceContext.wrapSupplier(() -> call(args)));
     }
 
     @Override

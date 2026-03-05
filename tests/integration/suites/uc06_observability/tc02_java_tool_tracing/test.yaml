@@ -158,6 +158,16 @@ test:
     capture: trace_output
     timeout: 30
 
+  # Verify proxy_call_wrapper spans exist (shown with --show-internal)
+  - name: "Query trace with internal spans"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.trace_id_output}" | grep "TRACE_ID=" | cut -d= -f2)
+      meshctl trace $TRACE_ID --json --show-internal 2>&1
+    workdir: /workspace
+    capture: trace_internal
+    timeout: 30
+
   # Stop all agents
   - name: "Stop agents"
     handler: shell
@@ -194,9 +204,9 @@ assertions:
   - expr: "${captured.trace_id_output} contains 'TRACE_ID='"
     message: "Trace ID should be extracted from output"
 
-  # Trace should have correct span count (8 spans: 1 calculate + 6 adds + 1 multiply)
-  - expr: ${jq:captured.trace_output:.SpanCount} == 8
-    message: "Trace should have exactly 8 spans (1 calculate + 6 adds + 1 multiply)"
+  # Trace should have correct span count (15 spans: 1 calculate + 7 proxy_call_wrapper + 6 adds + 1 multiply)
+  - expr: ${jq:captured.trace_output:.SpanCount} == 15
+    message: "Trace should have exactly 15 spans (1 calculate + 7 proxy_call_wrapper + 6 adds + 1 multiply)"
 
   # Trace should involve 2 agents
   - expr: ${jq:captured.trace_output:.AgentCount} == 2
@@ -205,6 +215,10 @@ assertions:
   # Trace should be successful
   - expr: ${jq:captured.trace_output:.Success} == true
     message: "Trace should show successful execution"
+
+  # Proxy call wrapper spans should exist
+  - expr: "${captured.trace_internal} contains 'proxy_call_wrapper'"
+    message: "Trace should contain proxy_call_wrapper spans for outgoing tool calls"
 
 post_run:
   - handler: shell
