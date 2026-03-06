@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +35,7 @@ Examples:
 	cmd.AddCommand(newEntityRegisterCommand())
 	cmd.AddCommand(newEntityListCommand())
 	cmd.AddCommand(newEntityRevokeCommand())
+	cmd.AddCommand(newEntityRotateCmd())
 	return cmd
 }
 
@@ -343,6 +346,90 @@ func runEntityRevoke(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Entity '%s' revoked\n", entityName)
 	fmt.Fprintln(cmd.OutOrStdout(), "Note: Run 'meshctl entity rotate' to evict connected agents immediately")
+
+	return nil
+}
+
+func newEntityRotateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "rotate [entity-name]",
+		Short: "Trigger certificate rotation for agents",
+		Long: `Triggers all agents (or agents of a specific entity) to re-register on their next heartbeat.
+Agents with valid certificates will re-register successfully.
+Agents with revoked or expired certificates will be evicted.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runEntityRotate,
+	}
+	cmd.Flags().String("registry-url", "", "Registry admin URL (default: auto-detect)")
+	return cmd
+}
+
+func runEntityRotate(cmd *cobra.Command, args []string) error {
+	entityName := ""
+	if len(args) > 0 {
+		entityName = args[0]
+		if err := validateEntityName(entityName); err != nil {
+			return err
+		}
+	}
+
+	// Determine the registry URL
+	registryURL, _ := cmd.Flags().GetString("registry-url")
+	if registryURL == "" {
+		registryURL = os.Getenv("MCP_MESH_REGISTRY_URL")
+	}
+	if registryURL == "" {
+		// Auto-detect: try HTTPS first, fall back to HTTP
+		client := newTLSSkipVerifyClient()
+		resp, err := client.Get("https://localhost:8000/health")
+		if err == nil {
+			resp.Body.Close()
+			registryURL = "https://localhost:8000"
+		} else {
+			registryURL = "http://localhost:8000"
+		}
+	}
+
+	// Build request URL
+	rotateURL := registryURL + "/admin/rotate"
+	if entityName != "" {
+		rotateURL += "?entity_id=" + entityName
+	}
+
+	// Make POST request
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Post(rotateURL, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to registry: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("rotation trigger failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Message        string `json:"message"`
+		AffectedAgents int    `json:"affected_agents"`
+		EntityID       string `json:"entity_id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	target := "all agents"
+	if entityName != "" {
+		target = fmt.Sprintf("entity '%s'", entityName)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Rotation triggered for %s\n", target)
+	fmt.Fprintf(cmd.OutOrStdout(), "%d agent(s) will re-register on next heartbeat\n", result.AffectedAgents)
+	fmt.Fprintln(cmd.OutOrStdout(), "Note: Agents with revoked certificates will be evicted within 5 seconds")
 
 	return nil
 }

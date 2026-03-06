@@ -196,6 +196,10 @@ func (s *Server) setupOperationalEndpoints() {
 	s.engine.GET("/trace/list", s.handleTraceList)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
+
+	// Admin endpoints on main engine (for dev mode without separate admin port)
+	s.engine.GET("/admin/entities", s.handleListEntities)
+	s.engine.POST("/admin/rotate", s.handleRotateTrigger)
 }
 
 // handleTracingInfo provides detailed tracing manager information
@@ -527,5 +531,24 @@ func (s *Server) handleListEntities(c *gin.Context) {
 }
 
 func (s *Server) handleRotateTrigger(c *gin.Context) {
-	c.JSON(200, gin.H{"message": "not yet implemented"})
+	entityID := c.Query("entity_id")
+
+	count, err := s.service.TriggerRotation(c.Request.Context(), entityID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	target := "all agents"
+	if entityID != "" {
+		target = fmt.Sprintf("entity '%s'", entityID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":         fmt.Sprintf("Rotation triggered for %s", target),
+		"affected_agents": count,
+		"entity_id":       entityID,
+	})
 }
