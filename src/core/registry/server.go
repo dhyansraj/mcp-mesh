@@ -197,9 +197,11 @@ func (s *Server) setupOperationalEndpoints() {
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
 
-	// Admin endpoints on main engine (for dev mode without separate admin port)
-	s.engine.GET("/admin/entities", s.handleListEntities)
-	s.engine.POST("/admin/rotate", s.handleRotateTrigger)
+	// Admin endpoints on main engine only when no separate admin port is configured
+	if s.config.AdminPort <= 0 {
+		s.engine.GET("/admin/entities", s.handleListEntities)
+		s.engine.POST("/admin/rotate", s.handleRotateTrigger)
+	}
 }
 
 // handleTracingInfo provides detailed tracing manager information
