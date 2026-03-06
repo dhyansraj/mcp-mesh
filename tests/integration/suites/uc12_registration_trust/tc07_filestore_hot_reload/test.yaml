@@ -1,0 +1,90 @@
+name: "FileStore Hot Reload - Entity Registration While Running"
+description: "Verify FileStore backend hot-reloads when entity CAs are added/removed"
+tags:
+  - registration-trust
+  - filestore
+  - hot-reload
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start registry with TLS auto"
+    handler: shell
+    command: |
+      meshctl start --registry-only --tls-auto -d
+      sleep 3
+      curl -sk https://localhost:8000/health
+    workdir: /workspace
+    capture: registry_start
+
+  - name: "List entities before registration"
+    handler: shell
+    command: meshctl entity list
+    capture: list_before
+
+  - name: "Register entity while registry running"
+    handler: shell
+    command: |
+      meshctl entity register live-entity --ca-cert $HOME/.mcp_mesh/tls/ca.pem
+      sleep 2
+      meshctl entity list
+    capture: register_live
+
+  - name: "Verify entity appears in JSON listing"
+    handler: shell
+    command: meshctl entity list --json
+    capture: list_json_after
+
+  - name: "Revoke entity while registry running"
+    handler: shell
+    command: |
+      meshctl entity revoke live-entity --force
+      sleep 2
+      meshctl entity list
+    capture: revoke_live
+
+  - name: "Stop registry"
+    handler: shell
+    command: meshctl stop
+    workdir: /workspace
+    capture: stop_output
+
+assertions:
+  - expr: "${captured.registry_start} contains 'healthy'"
+    message: "Registry should be healthy after startup"
+
+  - expr: "${captured.register_live} contains 'registered'"
+    message: "Entity should be registered while registry is running"
+
+  - expr: "${captured.register_live} contains 'live-entity'"
+    message: "Entity list should show live-entity after registration"
+
+  - expr: "${captured.list_json_after} contains 'live-entity'"
+    message: "JSON entity list should include live-entity"
+
+  - expr: "${captured.revoke_live} contains 'revoked'"
+    message: "Entity should be revoked while registry is running"
+
+  - expr: "${captured.revoke_live}"
+    not_contains: "live-entity"
+    message: "Entity list after revoke should not contain live-entity"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

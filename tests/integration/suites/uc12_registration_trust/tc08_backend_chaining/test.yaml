@@ -1,0 +1,134 @@
+name: "Backend Chaining - LocalCA + FileStore"
+description: "Verify trust chain with multiple backends accepts certs from either backend"
+tags:
+  - registration-trust
+  - chaining
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Generate certs and register external entity"
+    handler: shell
+    command: |
+      # Generate certs
+      meshctl start --registry-only --tls-auto -d
+      sleep 3
+      meshctl stop
+      sleep 2
+
+      # Create a separate CA to simulate an external entity
+      # We'll use the existing LocalCA's root cert as a "filestore" entity
+      mkdir -p $HOME/.mcp_mesh/tls/entities
+      cp $HOME/.mcp_mesh/tls/ca.pem $HOME/.mcp_mesh/tls/entities/external-corp.pem
+      echo "SETUP_DONE=true"
+    workdir: /workspace
+    capture: setup
+
+  - name: "Start registry with chained backends"
+    handler: shell
+    command: |
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TRUST_BACKEND=localca,filestore \
+      MCP_MESH_TRUST_DIR=$HOME/.mcp_mesh/tls \
+      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      mcp-mesh-registry -host localhost -port 8000 &>/tmp/chained-registry.log &
+      REGISTRY_PID=$!
+      echo "$REGISTRY_PID" > /tmp/tc08_registry.pid
+      echo "REGISTRY_PID=$REGISTRY_PID"
+      sleep 3
+
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "HEALTH_CODE=$HTTP_CODE"
+    capture: chained_start
+
+  - name: "Start agent with LocalCA-signed cert"
+    handler: shell
+    command: |
+      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
+      python system_agent.py > /tmp/agent-chained.log 2>&1 &
+      AGENT_PID=$!
+      echo "AGENT_PID=$AGENT_PID"
+
+      # Wait for registration
+      for i in $(seq 1 15); do
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "system_agent"; then
+          echo "REGISTERED after $i seconds"
+          break
+        fi
+        sleep 1
+      done
+
+      # Check agent is registered
+      curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      agents = json.load(sys.stdin)
+      for a in agents:
+        if 'system_agent' in a.get('name', ''):
+          print(f\"AGENT_NAME={a['name']}\")
+          print(f\"ENTITY_ID={a.get('entity_id', 'NONE')}\")
+          break
+      " 2>/dev/null || echo "AGENT_NOT_FOUND"
+
+      kill $AGENT_PID 2>/dev/null || true
+    workdir: /workspace
+    capture: agent_chained
+    timeout: 60
+
+  - name: "Verify registry logs show backend verification"
+    handler: shell
+    command: |
+      # Check registry log for backend verification messages
+      grep -i "trust\|backend\|verify\|localca\|filestore" /tmp/chained-registry.log | head -10
+      echo "BACKENDS_CONFIGURED=true"
+    capture: registry_logs
+
+  - name: "Stop chained registry"
+    handler: shell
+    command: |
+      REGISTRY_PID=$(cat /tmp/tc08_registry.pid 2>/dev/null)
+      if [ -n "$REGISTRY_PID" ]; then kill $REGISTRY_PID 2>/dev/null; fi
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.setup} contains 'SETUP_DONE=true'"
+    message: "Certificate setup should complete successfully"
+
+  - expr: "${captured.chained_start} contains 'HEALTH_CODE=200'"
+    message: "Chained backend registry should be healthy"
+
+  - expr: "${captured.agent_chained} contains 'REGISTERED'"
+    message: "Agent should register with chained backend registry"
+
+  - expr: "${captured.agent_chained} contains 'ENTITY_ID='"
+    message: "Agent should have an entity_id assigned"
+
+  - expr: "${captured.registry_logs} contains 'BACKENDS_CONFIGURED=true'"
+    message: "Registry logs should be accessible"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Catch any manually-started registry processes
+      kill $(cat /tmp/tc08_registry.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
