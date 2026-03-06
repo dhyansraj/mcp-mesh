@@ -65,6 +65,7 @@ test:
       MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
       python system_agent.py > /tmp/agent-chained.log 2>&1 &
       AGENT_PID=$!
+      echo "$AGENT_PID" > /tmp/tc08_agent.pid
       echo "AGENT_PID=$AGENT_PID"
 
       # Wait for registration
@@ -75,27 +76,16 @@ test:
         fi
         sleep 1
       done
-
-      # Check agent is registered
-      curl -sk https://localhost:8000/agents | python3 -c "
-      import sys, json
-      resp = json.load(sys.stdin)
-      agents = resp.get('agents', resp) if isinstance(resp, dict) else resp
-      for a in agents:
-        if 'system-agent' in a.get('name', '') or 'system-agent' in a.get('id', ''):
-          print(f\"AGENT_NAME={a.get('name', a.get('id', 'unknown'))}\")
-          print(f\"ENTITY_ID={a.get('entity_id', 'NONE')}\")
-          break
-      " 2>/dev/null || echo "AGENT_NOT_FOUND"
-
-      # Dump agent log for diagnostics if registration failed
-      echo "--- Agent log (last 20 lines) ---"
-      tail -20 /tmp/agent-chained.log 2>/dev/null || echo "No agent log"
-
-      kill $AGENT_PID 2>/dev/null || true
     workdir: /workspace
     capture: agent_chained
     timeout: 60
+
+  - name: "Fetch registered agents"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents
+      kill $(cat /tmp/tc08_agent.pid 2>/dev/null) 2>/dev/null || true
+    capture: agents_json
 
   - name: "Verify registry logs show backend verification"
     handler: shell
@@ -123,7 +113,7 @@ assertions:
   - expr: "${captured.agent_chained} contains 'REGISTERED'"
     message: "Agent should register with chained backend registry"
 
-  - expr: "${captured.agent_chained} contains 'AGENT_NAME='"
+  - expr: ${jq:captured.agents_json:[.agents[] | select(.id | contains("system-agent"))] | length} > 0
     message: "Agent should be listed in registry agents endpoint"
 
   - expr: "${captured.registry_logs} contains 'BACKENDS_CONFIGURED=true'"
@@ -135,5 +125,6 @@ post_run:
       meshctl stop 2>/dev/null || true
       # Catch any manually-started registry processes
       kill $(cat /tmp/tc08_registry.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/tc08_agent.pid 2>/dev/null) 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace
