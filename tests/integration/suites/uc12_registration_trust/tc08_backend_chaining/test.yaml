@@ -79,10 +79,11 @@ test:
       # Check agent is registered
       curl -sk https://localhost:8000/agents | python3 -c "
       import sys, json
-      agents = json.load(sys.stdin)
+      resp = json.load(sys.stdin)
+      agents = resp.get('agents', resp) if isinstance(resp, dict) else resp
       for a in agents:
-        if 'system-agent' in a.get('name', ''):
-          print(f\"AGENT_NAME={a['name']}\")
+        if 'system-agent' in a.get('name', '') or 'system-agent' in a.get('id', ''):
+          print(f\"AGENT_NAME={a.get('name', a.get('id', 'unknown'))}\")
           print(f\"ENTITY_ID={a.get('entity_id', 'NONE')}\")
           break
       " 2>/dev/null || echo "AGENT_NOT_FOUND"
@@ -122,8 +123,8 @@ assertions:
   - expr: "${captured.agent_chained} contains 'REGISTERED'"
     message: "Agent should register with chained backend registry"
 
-  - expr: "${captured.agent_chained} contains 'ENTITY_ID='"
-    message: "Agent should have an entity_id assigned"
+  - expr: "${captured.agent_chained} contains 'AGENT_NAME='"
+    message: "Agent should be listed in registry agents endpoint"
 
   - expr: "${captured.registry_logs} contains 'BACKENDS_CONFIGURED=true'"
     message: "Registry logs should be accessible"
