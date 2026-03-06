@@ -69,7 +69,7 @@ test:
 
       # Wait for registration
       for i in $(seq 1 30); do
-        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "system_agent"; then
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "system-agent"; then
           echo "REGISTERED after $i seconds"
           break
         fi
@@ -81,7 +81,7 @@ test:
       import sys, json
       agents = json.load(sys.stdin)
       for a in agents:
-        if 'system_agent' in a.get('name', ''):
+        if 'system-agent' in a.get('name', ''):
           print(f\"AGENT_NAME={a['name']}\")
           print(f\"ENTITY_ID={a.get('entity_id', 'NONE')}\")
           break

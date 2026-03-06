@@ -53,8 +53,12 @@ test:
     command: |
       meshctl entity revoke live-entity --force
       sleep 2
-      meshctl entity list
     capture: revoke_live
+
+  - name: "List entities after revoke"
+    handler: shell
+    command: meshctl entity list
+    capture: list_after_revoke
 
   - name: "Stop registry"
     handler: shell
@@ -78,7 +82,7 @@ assertions:
   - expr: "${captured.revoke_live} contains 'revoked'"
     message: "Entity should be revoked while registry is running"
 
-  - expr: "${captured.revoke_live} not contains 'live-entity'"
+  - expr: "${captured.list_after_revoke} not contains 'live-entity'"
     message: "Entity list after revoke should not contain live-entity"
 
 post_run:
