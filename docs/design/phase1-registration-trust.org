@@ -1,0 +1,387 @@
+#+TITLE: Phase 1: Registration Trust — Mesh Governance
+#+AUTHOR: MCP Mesh Team
+#+DATE: 2026-03-05
+#+STARTUP: overview
+#+TODO: TODO IN-PROGRESS REVIEW | DONE CANCELLED
+
+* Overview
+
+MCP Mesh currently operates with open collaboration — any agent that knows the
+registry URL can register and participate. Phase 1 introduces *entity-level
+registration trust* so only agents belonging to operator-approved entities can
+join the mesh.
+
+** Threat Model
+- Rogue process registers as an agent and gets discovered by legitimate agents
+- Registry resolves rogue agent as a dependency → injected into legitimate workflows
+
+** What Phase 1 Solves
+- Registry validates agent identity at registration time
+- Untrusted agents are rejected → never appear in dependency resolution
+- Legitimate agents never discover or get injected with rogue agents
+
+** What Phase 1 Does NOT Solve (Phase 2)
+- Direct agent-to-agent HTTP calls (no mTLS yet)
+- Rogue process calling a legitimate agent directly if it knows the address
+- Man-in-the-middle on agent-to-agent communication
+
+** Key Design Decisions
+- *Entity-level trust*, not per-agent — operator registers entity CAs, entity manages its own agents
+- *X.509 PKI* with entity-level intermediate CAs (RFC 5280 + RFC 8446)
+- *Decorator stays clean* — no TLS config in mesh.agent/@MeshAgent, TLS is deployment config
+- *No DB storage for CA certs* — trust anchors are infrastructure config (files, ConfigMap), not application data
+- *No caching needed* — registry not in call path, validation only at registration
+- *Cert rotation via existing heartbeat protocol* — 203 re-register signal, no new endpoints
+
+** Architecture
+
+*** Trust Flow
+#+begin_example
+  Operator registers Entity CA
+          |
+          v
+  ┌──────────────────┐     ┌──────────────────────────┐
+  │  Trust Backend    │     │  Credential Provider     │
+  │  (Registry-side)  │     │  (Agent-side, Rust core) │
+  │                   │     │                          │
+  │  Validates cert   │ <── │  Presents cert at TLS    │
+  │  chain against    │     │  handshake during        │
+  │  trusted entity   │     │  registration POST       │
+  │  CAs              │     │                          │
+  └──────────────────┘     └──────────────────────────┘
+#+end_example
+
+*** PKI Hierarchy
+#+begin_example
+  Mesh Root CA (or operator-managed CA)
+  ├── Entity A Intermediate CA
+  │   ├── Agent cert (greeter)
+  │   ├── Agent cert (weather)
+  │   └── ... (Entity A's responsibility)
+  ├── Entity B Intermediate CA
+  │   ├── Agent cert (...)
+  │   └── ...
+#+end_example
+
+*** Affected Components
+| Component          | Changes | Scope    |
+|--------------------+---------+----------|
+| Go Registry        | Yes     | Major    |
+| Rust Core (FFI)    | Yes     | Major    |
+| Python SDK         | No      | None     |
+| TypeScript SDK     | No      | None     |
+| Java SDK           | No      | None     |
+| meshctl CLI        | Yes     | Moderate |
+| Helm Charts        | Yes     | Minor    |
+
+*Verified*: All registry communication flows through Rust core FFI.
+Python/TS/Java only use HTTP clients for agent-to-agent calls (=/mcp= endpoint).
+
+* Work Streams
+
+** WS1: Trust Backend Abstraction (Go Registry) [7/7]
+
+The registry needs a pluggable backend to validate agent certificates.
+Registry is backend-agnostic — calls =backend.Verify(certChain)= and gets
+back =(entityID, trusted)=.
+
+*** Interface
+
+#+begin_src go
+type TrustBackend interface {
+    // Verify validates a certificate chain and returns the entity identity.
+    // Returns entity ID and nil error if trusted, error if rejected.
+    Verify(certChain []*x509.Certificate) (entityID string, err error)
+
+    // ListTrustedEntities returns all currently trusted entity identifiers.
+    ListTrustedEntities() ([]TrustedEntity, error)
+
+    // Name returns the backend identifier (for logging/config).
+    Name() string
+}
+#+end_src
+
+*** DONE WS1.1 — Define TrustBackend interface and types
+- File: =src/core/registry/trust/backend.go=
+- =TrustBackend= interface (Verify, ListTrustedEntities, Name)
+- =TrustedEntity= struct (ID, CA subject, expiry, metadata)
+- =TrustChain= struct — ordered list of backends, iterates until first trust match
+
+*** DONE WS1.2 — Implement LocalCA backend
+- File: =src/core/registry/trust/localca.go=
+- Built-in mini-CA for =--tls-auto= dev mode
+- Generates root CA + signs entity/agent certs on demand
+- CA state persisted to local file (survives registry restart in dev)
+- Used by =meshctl start --tls-auto=
+
+*** DONE WS1.3 — Implement FileStore backend
+- File: =src/core/registry/trust/filestore.go=
+- Reads trusted entity CA PEM files from a configured directory
+- Watches directory for changes (inotify/fsnotify) → hot reload
+- Each PEM file = one entity CA (filename or cert OU/CN = entity ID)
+- Simplest production backend — operator drops PEM files via GitOps/config management
+
+*** DONE WS1.4 — Implement K8sSecrets backend
+- File: =src/core/registry/trust/k8s_secrets.go=
+- Reads CA certs from labeled Kubernetes Secrets
+- Label selector: e.g., =mcp-mesh.io/trust=entity-ca=
+- Annotations for metadata: =mcp-mesh.io/entity-name= (display name), =mcp-mesh.io/expiry-warn-days= (expiry warning threshold), =mcp-mesh.io/contact= (entity contact)
+- Watches for Secret changes via K8s informer → hot reload (not polling)
+- Integrates naturally with cert-manager and GitOps
+
+*** DONE WS1.5 — Implement backend chaining
+- File: =src/core/registry/trust/chain.go=
+- =MCP_MESH_TRUST_BACKEND=spire,k8s-secrets= — comma-separated, try in order
+- First backend that trusts the cert wins
+- Single backend is a chain of one — no special case
+- Log which backend validated (for audit/debugging)
+
+*** DONE WS1.7 — Implement SPIRE trust backend
+- File: =src/core/registry/trust/spire.go=
+- Validates certs against SPIFFE trust bundles keyed by trust domain
+- Extracts entity ID from SPIFFE URI SANs (=spiffe://trust-domain/path=)
+- =NewSPIREFromBundles()= constructor for testing without SPIRE SDK
+- Live SDK integration deferred to =spire_connect.go= with =//go:build spire= tag
+
+*** DONE WS1.6 — Integrate TrustBackend into registry server
+- File: =src/core/registry/server.go=
+- Initialize TrustChain from =MCP_MESH_TRUST_BACKEND= env var
+- TLS listener with =ClientAuth: VerifyClientCertIfGiven= (allow non-TLS in =off= mode)
+- Extract client cert from TLS connection state during POST /heartbeat
+- Call =chain.Verify(certs)= → accept or reject registration
+- Add =entity_id= field to agent record (from Verify response)
+- When =MCP_MESH_TLS_MODE=off=, skip validation (backward compatible)
+- *Dual-port listener*: Agent API on primary port (8000), admin API on separate port
+  - Agent port: /heartbeat, /agents, /health (agent-facing)
+  - Admin port: /admin/rotate, /admin/entities (operator-facing)
+  - In K8s, NetworkPolicy restricts admin port to operator namespace only
+  - Configured via =MCP_MESH_ADMIN_PORT= env var (default: disabled in dev, enabled in K8s)
+- *Note*: Admin endpoint handlers (=/admin/entities=, =/admin/rotate=) are stubs — full implementation deferred to WS4
+
+** WS2: Credential Provider Abstraction (Rust Core) [5/5]
+
+The Rust core needs to present agent certificates during TLS handshake
+with the registry. Pluggable provider reads certs from various sources.
+
+*** DONE WS2.1 — Define CredentialProvider trait and types
+- File: =src/runtime/core/src/tls/provider.rs=
+- =CredentialProvider= trait: =fn get_credentials() -> Result<(Certificate, PrivateKey)>=
+- =TlsConfig= struct: mode (off/auto/strict), provider selection
+- Factory function: reads =MCP_MESH_TLS_PROVIDER= env var → instantiates provider
+
+*** DONE WS2.2 — Implement FileProvider
+- File: =src/runtime/core/src/tls/file_provider.rs=
+- Reads cert/key from filesystem paths
+- Configured via =MCP_MESH_TLS_CERT= / =MCP_MESH_TLS_KEY= env vars
+- Implicit default when cert/key env vars are set without explicit provider
+
+*** DONE WS2.3 — Implement AutoProvider
+- File: =src/runtime/core/src/tls/auto_provider.rs=
+- Used with =meshctl start --tls-auto=
+- Reads cert/key from paths injected by meshctl (via env vars)
+- Meshctl generates certs using LocalCA backend, sets env vars, starts agent
+
+*** DONE WS2.4 — Configure reqwest client with TLS
+- File: =src/runtime/core/src/registry.rs= (modify =RegistryClient::new=)
+- Load credentials from active CredentialProvider
+- Configure =reqwest::Client= with =.identity()= for client cert
+- Configure =.add_root_certificate()= for CA trust (=MCP_MESH_TLS_CA=)
+- When =MCP_MESH_TLS_MODE=off=, use plain HTTP (current behavior)
+
+*** DONE WS2.5 — Expose TLS config through FFI
+- File: =src/runtime/core/src/ffi.rs= (or equivalent FFI boundary)
+- TLS config flows from env vars → Rust TlsConfig → RegistryClient
+- No changes needed in Python/TS/Java — env vars are read by Rust directly
+- Verify FFI boundary doesn't need new parameters (env vars are global)
+- *Important*: Add verification test that Rust core reads =MCP_MESH_TLS_*= env vars correctly when loaded as shared lib via FFI from Python/Node/JVM processes — env var inheritance across FFI boundaries can be platform-dependent
+
+** WS3: meshctl CLI Commands [6/6]
+
+Operator commands for managing trust in dev and production.
+
+*** DONE WS3.1 — =meshctl entity register= command
+- File: =src/core/cli/entity.go= (new)
+- =meshctl entity register "partner-corp" --ca-cert /path/to/ca.pem=
+- Dev mode: copies CA PEM to LocalCA/FileStore trust directory
+- Validates PEM format, extracts entity ID from cert subject
+- Confirms registration with entity details
+
+*** DONE WS3.2 — =meshctl entity list= command
+- File: =src/core/cli/entity.go=
+- Lists all trusted entities with CA subject, expiry, backend source
+- Calls registry API or reads trust config directly
+
+*** DONE WS3.3 — =meshctl entity revoke= command
+- File: =src/core/cli/entity.go=
+- =meshctl entity revoke "partner-corp"=
+- Removes entity CA from trust config
+- Triggers re-register flag → evicts entity's agents within 5 seconds
+
+*** DONE WS3.4 — Enhance =meshctl start --tls-auto=
+- File: =src/core/cli/start.go= (modify)
+- =--tls-auto= flag already exists conceptually via =--cert-file= / =--key-file=
+- Auto-generate: root CA → entity CA → agent cert (all local, ephemeral)
+- Set =MCP_MESH_TLS_CERT=, =MCP_MESH_TLS_KEY=, =MCP_MESH_TLS_CA= env vars for agent process
+- Start registry with LocalCA backend pointing to generated CA
+- Zero-config: =meshctl start --tls-auto agent.py= just works
+
+*** DONE WS3.5 — HTTPS auto-detection in CLI commands
+- Files: =src/core/cli/list.go=, =src/core/cli/utils.go= (modify)
+- =meshctl list=, =meshctl status=, =meshctl call=, =meshctl trace= auto-detect HTTPS
+- Try HTTPS first (=/health= probe), fall back to HTTP
+- =--registry-scheme= flag to override auto-detection
+- =--insecure= flag to skip TLS verification
+
+*** DONE WS3.6 — Fix =meshctl stop= for =--registry-only -d= mode
+- File: =src/core/cli/start.go= (modify)
+- Write actual =mcp-mesh-registry= binary PID (not wrapper meshctl PID) to PID file
+- =startRegistryOnlyMode()= writes PID after =StartRegistryProcess()= returns
+- Enables =meshctl stop= to find and cleanly terminate detached registry
+
+** WS4: Cert Rotation via Heartbeat Protocol [3/3]
+
+Leverage existing HEAD heartbeat + 203 topology change signal for
+certificate rotation and entity eviction.
+
+*** DONE WS4.1 — Add re-register flag to registry
+- File: =src/core/registry/server.go= or =ent_service.go=
+- Internal flag (set via operator action) that forces 203 on next heartbeat
+- Can be global (all agents re-register) or per-entity
+- Flag auto-clears after one heartbeat cycle
+
+*** DONE WS4.2 — =meshctl entity rotate= command
+- File: =src/core/cli/entity.go=
+- =meshctl entity rotate= — sets global re-register flag
+- =meshctl entity rotate "partner-corp"= — per-entity re-register
+- Agents re-register on next heartbeat (within 5 seconds)
+- Agents with valid certs pass, agents with revoked/expired certs get evicted
+
+*** DONE WS4.3 — Registry admin API endpoint for rotation trigger
+- File: =src/core/registry/ent_handlers.go=
+- =POST /admin/rotate= — triggers re-register flag
+- Served on *admin port only* (separate listener from agent API, see WS1.6)
+- In K8s, admin port restricted to operator namespace via NetworkPolicy
+- In dev, =meshctl entity rotate= calls admin port directly
+- Used by meshctl, UI, or GitOps webhook
+- Returns count of agents that will be affected
+
+** WS5: Helm Chart Integration [3/3]
+
+Helm values for TLS configuration in Kubernetes deployments.
+
+*** DONE WS5.1 — mcp-mesh-registry chart TLS values
+- File: =helm/mcp-mesh-registry/values.yaml=, =templates/configmap.yaml=, =templates/deployment.yaml=
+- Added =registry.security.tls.mode= (off/auto/strict), =registry.security.trust= (backend, dir, caSecret, k8sSecrets, spire)
+- Added =registry.security.adminPort= for admin port isolation
+- Template: conditional env vars (MCP_MESH_TLS_MODE, TRUST_BACKEND, etc.), volume mounts for CA certs and SPIRE socket
+- Default: =tls.mode: off= (backward compatible)
+
+*** DONE WS5.2 — mcp-mesh-agent chart TLS values
+- File: =helm/mcp-mesh-agent/values.yaml=, =templates/configmap.yaml=, =templates/deployment.yaml=
+- Added =mesh.tls= section: mode, provider (file/spire/vault), certSecret, caSecret, spire, vault
+- Template: conditional env vars (MCP_MESH_TLS_MODE, TLS_PROVIDER, SPIRE_SOCKET, VAULT_ADDR, etc.)
+- Volume mounts for TLS certs, CA cert, and SPIRE agent socket
+- HTTPS registry URL auto-detection when tls.mode is set
+- Default: no TLS (backward compatible)
+
+*** DONE WS5.3 — cert-manager integration example
+- Files: =examples/k8s/tls/= (README, self-signed CA, Vault PKI, Helm values)
+- Self-signed CA: ClusterIssuer → root CA Certificate → namespace Issuer → registry/agent certs
+- Vault PKI: Issuer with Kubernetes auth → registry/agent certs
+- Helm values mapping cert-manager secrets to chart TLS configuration
+
+** WS6: Testing [4/4]
+
+*** DONE WS6.1 — Unit tests for TrustBackend implementations
+- Go unit tests for LocalCA, FileStore, K8sSecrets, chain logic
+- Test cert validation, expiry handling, entity ID extraction
+- Test chain ordering (first-match-wins semantics)
+- Test hot reload (FileStore directory watch)
+
+*** DONE WS6.2 — Unit tests for CredentialProvider implementations
+- Rust unit tests for FileProvider, AutoProvider
+- Test cert loading, error handling, env var resolution
+- Test TLS config construction for reqwest client
+
+*** DONE WS6.3 — Integration tests: registration with TLS
+- tsuite integration suite: =uc12_registration_trust= with 8 test cases
+- tc01: Python agent with mTLS auto registration + entity_id + tool call
+- tc02: TypeScript agent with mTLS auto registration
+- tc03: Java agent with mTLS auto registration
+- tc04: Strict mode rejects agents without valid client certificates (403)
+- tc05: Multi-language mTLS mesh (Python + TypeScript + Java)
+- tc06: Entity management — register, list (table+JSON), revoke, duplicate handling
+- tc07: FileStore hot reload — register/revoke entity while registry running
+- tc08: Backend chaining — localca,filestore chained backends with agent registration
+
+*** DONE WS6.4 — Integration tests: cert rotation and eviction
+- tc09: Rotation trigger — meshctl entity rotate triggers agent re-registration, valid cert survives
+- tc10: Entity eviction via rotate — revoke entity + rotate, agent signed by different CA survives
+- tc11: Admin port isolation — admin endpoints only on admin port when MCP_MESH_ADMIN_PORT is set
+
+** WS7: Documentation [2/2]
+
+*** DONE WS7.1 — =meshctl man security= topic
+- Files: =src/core/cli/man/content/security.md=, =content.go=
+- New man page topic: TLS modes, entity trust, rotation, env vars, admin isolation, K8s backends
+- Aliases: tls, entity, trust, mtls
+- Cross-referenced from deployment man page
+
+*** DONE WS7.2 — Governance section in deployment docs
+- Files: =docs/deployment.md=, =docs/environment-variables.md=
+- Security & Governance section: TLS encryption, entity trust, cert rotation, admin port isolation
+- TLS and Security env vars added to environment reference
+
+* Environment Variables Reference
+
+| Variable                 | Component | Description                                        |
+|--------------------------+-----------+----------------------------------------------------|
+| MCP_MESH_TLS_MODE        | Both      | off (default), auto, strict                        |
+| MCP_MESH_TRUST_BACKEND   | Registry  | Comma-separated: localca, filestore, k8s-secrets   |
+| MCP_MESH_TLS_PROVIDER    | Agent     | file (default), spire, vault, auto                 |
+| MCP_MESH_TLS_CERT        | Agent     | Path to agent certificate PEM                      |
+| MCP_MESH_TLS_KEY         | Agent     | Path to agent private key PEM                      |
+| MCP_MESH_TLS_CA          | Agent     | Path to CA certificate PEM (for verifying registry)|
+| MCP_MESH_ADMIN_PORT      | Registry  | Admin API port (separate from agent API)           |
+| MCP_MESH_SPIRE_SOCKET    | Agent     | SPIRE workload API socket path (deferred)          |
+| MCP_MESH_VAULT_ADDR      | Agent     | HashiCorp Vault address (deferred)                 |
+| MCP_MESH_VAULT_PKI_PATH  | Agent     | Vault PKI secrets engine path (deferred)           |
+
+* Implementation Order
+
+Priority order based on dependencies and value delivery:
+
+1. *WS1.1 + WS1.3* — TrustBackend interface + FileStore (simplest production backend)
+2. *WS2.1 + WS2.2 + WS2.4* — CredentialProvider + FileProvider + reqwest TLS config
+3. *WS1.6* — Integrate into registry server (end-to-end registration with TLS)
+4. *WS6.1 + WS6.2 + WS6.3* — Tests (validate the core flow works)
+5. *WS1.2 + WS2.3 + WS3.4* — LocalCA + AutoProvider + =--tls-auto= (dev experience)
+6. *WS3.1 + WS3.2 + WS3.3* — meshctl entity commands
+7. *WS4.1 + WS4.2 + WS4.3* — Cert rotation via heartbeat
+8. *WS6.4* — Rotation/eviction integration tests
+9. *WS1.4 + WS1.5* — K8sSecrets backend + backend chaining
+10. *WS5.1 + WS5.2 + WS5.3* — Helm chart integration
+11. *WS7.1 + WS7.2* — Documentation
+
+Steps 1-4 give a *working end-to-end TLS registration flow*.
+Steps 5-6 give the *dev experience*.
+Steps 7-8 give *operational tooling*.
+Steps 9-11 are *production hardening*.
+
+* Deferred (Explicitly Out of Phase 1)
+
+These are referenced in env vars and design but deliberately not implemented in Phase 1:
+
+- *SPIRE Provider* (=MCP_MESH_TLS_PROVIDER=spire=): Requires SPIRE infrastructure. Phase 1 gets FileStore + LocalCA working. SPIRE comes when K8s production deployments need it.
+- *Vault Provider* (=MCP_MESH_TLS_PROVIDER=vault=): Similar — requires Vault infrastructure. FileProvider covers the same use case (Vault agent can write certs to disk, FileProvider reads them).
+- *OPA Integration*: Complex policy engine for Phase 3 (authorization), not Phase 1 (registration trust).
+- *Multi-cluster federation trust*: Future — requires cross-cluster CA trust distribution.
+
+* References
+
+- [[https://github.com/dhyansraj/mcp-mesh/issues/593][Issue #593 — Mesh Governance]]
+- [[https://datatracker.ietf.org/doc/html/rfc5280][RFC 5280 — X.509 PKI]]
+- [[https://datatracker.ietf.org/doc/html/rfc8446][RFC 8446 — TLS 1.3]]
+- [[https://spiffe.io/][SPIFFE/SPIRE — Workload Identity]]
+- [[https://cert-manager.io/][cert-manager — K8s Certificate Management]]
+- [[https://datatracker.ietf.org/doc/html/rfc6749][RFC 6749 — OAuth2 (secondary option)]]

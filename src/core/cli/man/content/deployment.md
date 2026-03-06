@@ -371,3 +371,4 @@ export MCP_MESH_DEBUG_MODE=false
 - `meshctl man environment` - Configuration options
 - `meshctl man health` - Health monitoring
 - `meshctl man registry` - Registry setup
+- `meshctl man security` - TLS, entity trust, and certificate management

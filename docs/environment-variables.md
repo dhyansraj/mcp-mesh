@@ -91,6 +91,41 @@ export DATABASE_URL=mcp_mesh_registry.db
 export REGISTRY_NAME=mcp-mesh-registry
 ```
 
+### TLS and Security
+
+```bash
+# TLS mode: off, auto, or strict
+export MCP_MESH_TLS_MODE=auto
+
+# TLS certificate and key paths
+export MCP_MESH_TLS_CERT=/path/to/cert.pem
+export MCP_MESH_TLS_KEY=/path/to/key.pem
+export MCP_MESH_TLS_CA=/path/to/ca.pem
+
+# Trust backend: localca, filestore, k8s-secrets, spire
+export MCP_MESH_TRUST_BACKEND=filestore
+
+# Trust store directory (for filestore backend)
+export MCP_MESH_TRUST_DIR=/path/to/trust/dir
+
+# Admin port isolation (admin endpoints only on this port)
+export MCP_MESH_ADMIN_PORT=8001
+
+# Kubernetes secrets backend
+export MCP_MESH_K8S_NAMESPACE=mcp-mesh
+export MCP_MESH_K8S_LABEL_SELECTOR=mcp-mesh/trust-ca=true
+
+# SPIRE integration
+export MCP_MESH_SPIRE_SOCKET=/run/spire/sockets/agent.sock
+
+# Agent TLS provider: file, spire, vault
+export MCP_MESH_TLS_PROVIDER=file
+
+# Vault PKI integration
+export MCP_MESH_VAULT_ADDR=https://vault.example.com:8200
+export MCP_MESH_VAULT_PKI_PATH=pki/issue/mcp-mesh
+```
+
 ### Fast Heartbeat & Health Monitoring
 
 ```bash

@@ -1,0 +1,71 @@
+# cert-manager Issuer backed by Vault PKI secrets engine.
+#
+# Prerequisites:
+#   1. Vault server is running and reachable from the cluster.
+#   2. Vault PKI secrets engine is enabled and configured:
+#        vault secrets enable pki
+#        vault secrets tune -max-lease-ttl=87600h pki
+#        vault write pki/root/generate/internal \
+#          common_name="mcp-mesh-root-ca" ttl=87600h
+#        vault write pki/roles/mcp-mesh \
+#          allowed_domains="mcp-mesh,mcp-mesh.svc,mcp-mesh.svc.cluster.local" \
+#          allow_subdomains=true \
+#          allow_bare_domains=true \
+#          max_ttl=8760h
+#   3. Vault authentication is configured for cert-manager. Common methods:
+#        - Kubernetes auth (recommended):
+#            vault auth enable kubernetes
+#            vault write auth/kubernetes/config \
+#              kubernetes_host="https://$KUBERNETES_HOST"
+#            vault write auth/kubernetes/role/cert-manager \
+#              bound_service_account_names=cert-manager \
+#              bound_service_account_namespaces=cert-manager \
+#              policies=pki-policy ttl=1h
+#        - AppRole or Token auth (see cert-manager Vault docs)
+#   4. A Vault policy grants cert-manager access to the PKI path:
+#        vault policy write pki-policy - <<EOF
+#        path "pki/sign/mcp-mesh" { capabilities = ["create", "update"] }
+#        path "pki/issue/mcp-mesh" { capabilities = ["create"] }
+#        EOF
+#   5. A K8s Secret holds the Vault authentication token (if using token auth):
+#        kubectl create secret generic vault-token \
+#          -n mcp-mesh --from-literal=token=hvs.XXXXXXXXXXXX
+#
+# Adjust spec.vault.path, spec.vault.server, and auth settings for your
+# environment.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mcp-mesh-vault-issuer
+  namespace: mcp-mesh
+spec:
+  vault:
+    # Vault server address (use internal K8s service if Vault runs in-cluster)
+    server: https://vault.vault.svc.cluster.local:8200
+
+    # PKI sign path — must match the role created in Vault
+    path: pki/sign/mcp-mesh
+
+    # CA bundle to verify the Vault server's TLS certificate (optional if
+    # Vault uses a publicly trusted cert or if you set caBundle inline).
+    # caBundle: <base64-encoded-ca-bundle>
+
+    # --- Authentication: choose ONE of the methods below ---
+
+    # Option A: Kubernetes ServiceAccount auth (recommended)
+    auth:
+      kubernetes:
+        # Vault auth mount path (default: "kubernetes")
+        mountPath: /v1/auth/kubernetes
+        # Vault role that cert-manager will authenticate as
+        role: cert-manager
+        # ServiceAccount used by cert-manager (typically in cert-manager ns)
+        secretRef:
+          name: cert-manager-vault-sa-token
+          key: token
+
+    # Option B: Token auth (uncomment and remove kubernetes block above)
+    # auth:
+    #   tokenSecretRef:
+    #     name: vault-token
+    #     key: token

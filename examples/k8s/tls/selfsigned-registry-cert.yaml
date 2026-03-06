@@ -1,0 +1,34 @@
+# Registry leaf certificate.
+# dnsNames cover in-cluster service discovery names so agents can verify
+# the registry's identity regardless of how they resolve it.
+# The cert + key are stored in Secret "mcp-mesh-registry-tls".
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mcp-mesh-registry-cert
+  namespace: mcp-mesh
+spec:
+  secretName: mcp-mesh-registry-tls
+  duration: 8760h # 1 year
+  renewBefore: 720h # Renew 30 days before expiry
+  commonName: mcp-mesh-registry
+  dnsNames:
+    - mcp-mesh-registry
+    - mcp-mesh-registry.mcp-mesh
+    - mcp-mesh-registry.mcp-mesh.svc
+    - mcp-mesh-registry.mcp-mesh.svc.cluster.local
+    # Include the default Helm release-prefixed service name
+    - mcp-core-mcp-mesh-registry
+    - mcp-core-mcp-mesh-registry.mcp-mesh
+    - mcp-core-mcp-mesh-registry.mcp-mesh.svc
+    - mcp-core-mcp-mesh-registry.mcp-mesh.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - client auth
+  issuerRef:
+    name: mcp-mesh-ca-issuer
+    kind: Issuer
+    group: cert-manager.io

@@ -1,0 +1,35 @@
+# Agent leaf certificate template.
+# Use this as a starting point for each agent. Duplicate and adjust
+# metadata.name, spec.secretName, and spec.dnsNames per agent.
+#
+# For example, if your agent Helm release is "my-agent":
+#   dnsNames:
+#     - my-agent-mcp-mesh-agent
+#     - my-agent-mcp-mesh-agent.mcp-mesh.svc
+#     - my-agent-mcp-mesh-agent.mcp-mesh.svc.cluster.local
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mcp-mesh-agent-cert
+  namespace: mcp-mesh
+spec:
+  secretName: mcp-mesh-agent-tls
+  duration: 8760h # 1 year
+  renewBefore: 720h # Renew 30 days before expiry
+  commonName: mcp-mesh-agent
+  dnsNames:
+    # Generic agent service names — adjust per agent deployment
+    - mcp-mesh-agent
+    - mcp-mesh-agent.mcp-mesh
+    - mcp-mesh-agent.mcp-mesh.svc
+    - mcp-mesh-agent.mcp-mesh.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - client auth
+  issuerRef:
+    name: mcp-mesh-ca-issuer
+    kind: Issuer
+    group: cert-manager.io
