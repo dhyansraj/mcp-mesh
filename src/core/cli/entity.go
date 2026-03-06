@@ -396,8 +396,8 @@ func runEntityRotate(cmd *cobra.Command, args []string) error {
 		rotateURL += "?entity_id=" + entityName
 	}
 
-	// Make POST request
-	client := newTLSSkipVerifyClient()
+	// Make POST request (with client cert if available for strict mode)
+	client := newTLSClientWithOptionalCert()
 	resp, err := client.Post(rotateURL, "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to registry: %w", err)

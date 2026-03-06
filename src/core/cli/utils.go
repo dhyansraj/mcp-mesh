@@ -45,6 +45,31 @@ func newTLSSkipVerifyClient() *http.Client {
 	}
 }
 
+// newTLSClientWithOptionalCert creates an HTTP client that skips server cert
+// verification and loads client certs from MCP_MESH_TLS_CERT/KEY env vars if set.
+// This allows CLI commands to work with registries running in strict TLS mode.
+func newTLSClientWithOptionalCert() *http.Client {
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	certFile := os.Getenv("MCP_MESH_TLS_CERT")
+	keyFile := os.Getenv("MCP_MESH_TLS_KEY")
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err == nil {
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+	}
+
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+}
+
 // IsPortAvailable checks if a port is available for use
 func IsPortAvailable(host string, port int) bool {
 	address := fmt.Sprintf("%s:%d", host, port)

@@ -163,6 +163,25 @@ func (fs *FileStore) loadAll() error {
 		entities = append(entities, *ent)
 	}
 
+	// Also scan entities/ subdirectory (used by meshctl entity register)
+	entitiesDir := filepath.Join(fs.dir, "entities")
+	if entInfo, err := os.Stat(entitiesDir); err == nil && entInfo.IsDir() {
+		entEntries, err := os.ReadDir(entitiesDir)
+		if err == nil {
+			for _, entry := range entEntries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pem") {
+					continue
+				}
+				ent, err := fs.loadPEMFile(filepath.Join(entitiesDir, entry.Name()))
+				if err != nil {
+					log.Printf("[trust/filestore] skipping entities/%s: %v", entry.Name(), err)
+					continue
+				}
+				entities = append(entities, *ent)
+			}
+		}
+	}
+
 	fs.mu.Lock()
 	fs.entities = entities
 	fs.mu.Unlock()
@@ -239,6 +258,13 @@ func (fs *FileStore) startWatcher() error {
 		return fmt.Errorf("watching directory: %w", err)
 	}
 
+	entitiesDir := filepath.Join(fs.dir, "entities")
+	if entInfo, err := os.Stat(entitiesDir); err == nil && entInfo.IsDir() {
+		if err := watcher.Add(entitiesDir); err != nil {
+			log.Printf("[trust/filestore] warning: cannot watch entities dir: %v", err)
+		}
+	}
+
 	fs.watcher = watcher
 
 	go func() {
@@ -249,6 +275,15 @@ func (fs *FileStore) startWatcher() error {
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
+				}
+				// Watch newly created entities/ subdirectory
+				if event.Has(fsnotify.Create) && filepath.Base(event.Name) == "entities" {
+					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+						if err := watcher.Add(event.Name); err != nil {
+							log.Printf("[trust/filestore] warning: cannot watch new entities dir: %v", err)
+						}
+						log.Printf("[trust/filestore] now watching entities directory: %s", event.Name)
+					}
 				}
 				if !strings.HasSuffix(event.Name, ".pem") {
 					continue
