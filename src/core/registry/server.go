@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -474,6 +475,27 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			chain.Add(lca)
 			l.Info("🔒 Trust backend '%s' initialized", name)
 			l.Debug("  Trust dir: %s", config.TrustDir)
+		case "k8s-secrets":
+			namespace := os.Getenv("MCP_MESH_K8S_NAMESPACE")
+			if namespace == "" {
+				namespace = "default"
+			}
+			labelSelector := os.Getenv("MCP_MESH_K8S_LABEL_SELECTOR")
+			ks, err := trust.NewK8sSecretsFromConfig(namespace, labelSelector)
+			if err != nil {
+				l.Warning("Failed to initialize k8s-secrets backend: %v", err)
+				continue
+			}
+			chain.Add(ks)
+			l.Info("🔒 Trust backend '%s' initialized", name)
+			l.Debug("  Namespace: %s, LabelSelector: %s", namespace, labelSelector)
+		case "spire":
+			socketPath := os.Getenv("MCP_MESH_SPIRE_SOCKET")
+			if socketPath == "" {
+				socketPath = "/run/spire/agent/sockets/agent.sock"
+			}
+			l.Warning("spire backend requires spire_connect.go (build with -tags spire); socket: %s", socketPath)
+			continue
 		default:
 			l.Warning("Unknown trust backend: %s", name)
 		}
