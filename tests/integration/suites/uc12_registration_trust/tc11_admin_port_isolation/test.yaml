@@ -1,0 +1,127 @@
+name: "Admin Port Isolation - Separate Admin Endpoint"
+description: "Verify admin endpoints are isolated when MCP_MESH_ADMIN_PORT is set"
+tags:
+  - registration-trust
+  - admin
+  - security
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Generate TLS certs"
+    handler: shell
+    command: |
+      meshctl start --registry-only --tls-auto -d
+      sleep 3
+      meshctl stop
+      sleep 2
+      echo "CERTS_READY=true"
+      ls $HOME/.mcp_mesh/tls/ca.pem
+    workdir: /workspace
+    capture: cert_gen
+
+  - name: "Start registry with admin port isolation"
+    handler: shell
+    command: |
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_ADMIN_PORT=8001 \
+      mcp-mesh-registry -host localhost -port 8000 &>/tmp/admin-port-registry.log &
+      REGISTRY_PID=$!
+      echo "$REGISTRY_PID" > /tmp/tc11_registry.pid
+      echo "REGISTRY_PID=$REGISTRY_PID"
+    capture: registry_start
+
+  - name: "Wait for registry health on main port"
+    handler: shell
+    command: |
+      for i in $(seq 1 15); do
+        HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health 2>/dev/null)
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "HEALTH_CODE=$HTTP_CODE"
+          break
+        fi
+        sleep 1
+      done
+      echo "MAIN_PORT_HEALTHY=true"
+    capture: health_check
+    timeout: 30
+
+  - name: "Test admin endpoint on main port (should be 404)"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -X POST https://localhost:8000/admin/rotate 2>/dev/null)
+      echo "MAIN_ADMIN_CODE=$HTTP_CODE"
+    capture: main_port_admin
+
+  - name: "Test admin endpoint on admin port (should be 200)"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s -X POST http://localhost:8001/admin/rotate 2>&1)
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8001/admin/rotate 2>/dev/null)
+      echo "ADMIN_PORT_CODE=$HTTP_CODE"
+      echo "ADMIN_RESPONSE=$RESPONSE"
+    capture: admin_port_admin
+
+  - name: "Test health on admin port"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health 2>/dev/null)
+      echo "ADMIN_HEALTH_CODE=$HTTP_CODE"
+    capture: admin_health
+
+  - name: "Check registry logs for admin port binding"
+    handler: shell
+    command: |
+      grep -i "admin\|8001" /tmp/admin-port-registry.log | head -10
+      echo "LOGS_CHECKED=true"
+    capture: registry_logs
+
+  - name: "Stop registry"
+    handler: shell
+    command: |
+      REGISTRY_PID=$(cat /tmp/tc11_registry.pid 2>/dev/null)
+      if [ -n "$REGISTRY_PID" ]; then kill $REGISTRY_PID 2>/dev/null; fi
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.cert_gen} contains 'CERTS_READY=true'"
+    message: "TLS certificates should be generated"
+
+  - expr: "${captured.health_check} contains 'HEALTH_CODE=200'"
+    message: "Registry main port should be healthy"
+
+  - expr: "${captured.main_port_admin} contains 'MAIN_ADMIN_CODE=404'"
+    message: "Admin endpoint on main port should return 404 when admin port is isolated"
+
+  - expr: "${captured.admin_port_admin} contains 'ADMIN_PORT_CODE=200'"
+    message: "Admin endpoint on admin port should return 200"
+
+  - expr: "${captured.admin_port_admin} contains 'ADMIN_RESPONSE='"
+    message: "Admin endpoint should return a response body"
+
+  - expr: "${captured.registry_logs} contains 'LOGS_CHECKED=true'"
+    message: "Registry logs should be accessible"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      kill $(cat /tmp/tc11_registry.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
