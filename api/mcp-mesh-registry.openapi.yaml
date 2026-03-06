@@ -1249,6 +1249,10 @@ components:
         version:
           type: string
           example: "1.0.0"
+        entity_id:
+          type: string
+          description: "Entity ID from TLS certificate verification (set when mTLS is enabled)"
+          example: "local-dev"
 
     # Capability information schema
     CapabilityInfo:

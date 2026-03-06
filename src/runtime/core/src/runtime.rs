@@ -18,6 +18,7 @@ use crate::handle::HandleState;
 use crate::heartbeat::{HeartbeatAction, HeartbeatConfig, HeartbeatStateMachine};
 use crate::registry::{HeartbeatRequest, HeartbeatResponse, RegistryClient};
 use crate::spec::{AgentSpec, ToolSpec};
+use crate::tls::TlsConfig;
 
 /// Commands that can be sent to the runtime to modify its state.
 #[derive(Debug)]
@@ -118,7 +119,8 @@ impl AgentRuntime {
         shutdown_rx: mpsc::Receiver<()>,
         command_rx: mpsc::Receiver<RuntimeCommand>,
     ) -> Result<Self, crate::registry::RegistryError> {
-        let registry_client = RegistryClient::new(&spec.registry_url)?;
+        let tls_config = TlsConfig::from_env();
+        let registry_client = RegistryClient::new(&spec.registry_url, &tls_config)?;
         let heartbeat_config = HeartbeatConfig {
             interval: Duration::from_secs(spec.heartbeat_interval),
             ..config.heartbeat.clone()

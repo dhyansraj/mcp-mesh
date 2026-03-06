@@ -18,6 +18,7 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
       - id: detect-private-key
+        exclude: '^src/runtime/core/src/tls\.rs$'
       - id: mixed-line-ending
 
   - repo: https://github.com/psf/black

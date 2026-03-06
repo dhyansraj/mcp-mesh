@@ -2,7 +2,10 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -11,16 +14,20 @@ import (
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
 	"mcp-mesh/src/core/registry/tracing"
+	"mcp-mesh/src/core/registry/trust"
 )
 
 // Server represents the registry HTTP server
 type Server struct {
 	engine         *gin.Engine
 	service        *EntService
+	config         *RegistryConfig
 	startTime      time.Time
 	handlers       *EntBusinessLogicHandlers
 	healthMonitor  *AgentHealthMonitor
 	tracingManager *tracing.TracingManager
+	trustChain     *trust.TrustChain
+	logger         *logger.Logger
 }
 
 // NewServer creates a new registry server using Ent database
@@ -47,19 +54,44 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		}
 	}
 
+	// Initialize trust chain if TLS is not "off"
+	var trustChain *trust.TrustChain
+	if config.TlsMode != "" && config.TlsMode != "off" {
+		trustChain = initTrustChain(config, logger)
+		logger.Info("🔒 TLS mode: %s | trust backend: %s", config.TlsMode, config.TrustBackend)
+		if trustChain != nil {
+			entities, _ := trustChain.ListTrustedEntities()
+			logger.Info("🔒 Trust chain loaded: %d trusted entity CA(s)", len(entities))
+			for _, e := range entities {
+				logger.Debug("  Entity: %s | subject: %s | expires: %s | backend: %s",
+					e.ID, e.Subject, e.NotAfter.Format("2006-01-02"), e.Metadata["source"])
+			}
+		}
+	} else {
+		logger.Info("🔓 TLS mode: off (no registration trust enforcement)")
+	}
+
 	// Create Gin engine
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.Use(gin.Logger())
 
+	// Add TLS middleware before routes (only if trust chain is configured)
+	if trustChain != nil {
+		engine.Use(TLSVerifyMiddleware(trustChain, config.TlsMode))
+	}
+
 	// Create server
 	server := &Server{
 		engine:         engine,
 		service:        entService,
+		config:         config,
 		startTime:      time.Now().UTC(),
 		handlers:       handlers,
 		healthMonitor:  healthMonitor,
 		tracingManager: tracingManager,
+		trustChain:     trustChain,
+		logger:         logger,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -93,6 +125,15 @@ func (s *Server) Run(addr string) error {
 		}
 	}
 
+	// Start admin server if configured
+	if s.config.AdminPort > 0 {
+		s.startAdminServer(s.config.AdminPort)
+	}
+
+	// Use TLS listener when TLS mode is enabled and cert/key are provided
+	if s.config.TlsMode != "" && s.config.TlsMode != "off" && s.config.TlsCertFile != "" && s.config.TlsKeyFile != "" {
+		return s.runWithTLS(addr)
+	}
 	return s.engine.Run(addr)
 }
 
@@ -373,4 +414,96 @@ func (s *Server) handleTraceSearch(c *gin.Context) {
 	}
 
 	c.JSON(200, response)
+}
+
+// runWithTLS starts the server with TLS configured to request (but not require)
+// client certificates. Enforcement is handled by TLSVerifyMiddleware based on TlsMode.
+func (s *Server) runWithTLS(addr string) error {
+	s.logger.Info("🔒 Starting TLS listener (ClientAuth: RequestClientCert)")
+
+	tlsConfig := &tls.Config{
+		ClientAuth: tls.RequestClientCert,
+	}
+
+	cert, err := tls.LoadX509KeyPair(s.config.TlsCertFile, s.config.TlsKeyFile)
+	if err != nil {
+		return fmt.Errorf("loading TLS certificate: %w", err)
+	}
+	tlsConfig.Certificates = []tls.Certificate{cert}
+
+	server := &http.Server{
+		Addr:      addr,
+		Handler:   s.engine,
+		TLSConfig: tlsConfig,
+	}
+
+	return server.ListenAndServeTLS("", "")
+}
+
+// initTrustChain parses the TrustBackend config and builds a TrustChain
+// from the configured backends.
+func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain {
+	names := trust.ParseBackendConfig(config.TrustBackend)
+	chain := trust.NewTrustChain()
+
+	for _, name := range names {
+		switch name {
+		case "filestore":
+			if config.TrustDir == "" {
+				l.Warning("filestore backend requires MCP_MESH_TRUST_DIR")
+				continue
+			}
+			fs, err := trust.NewFileStore(config.TrustDir, true)
+			if err != nil {
+				l.Warning("Failed to initialize filestore backend: %v", err)
+				continue
+			}
+			chain.Add(fs)
+			l.Info("🔒 Trust backend '%s' initialized", name)
+			l.Debug("  Trust dir: %s", config.TrustDir)
+		case "localca":
+			if config.TrustDir == "" {
+				l.Warning("localca backend requires MCP_MESH_TRUST_DIR")
+				continue
+			}
+			lca, err := trust.NewLocalCA(config.TrustDir)
+			if err != nil {
+				l.Warning("Failed to initialize localca backend: %v", err)
+				continue
+			}
+			chain.Add(lca)
+			l.Info("🔒 Trust backend '%s' initialized", name)
+			l.Debug("  Trust dir: %s", config.TrustDir)
+		default:
+			l.Warning("Unknown trust backend: %s", name)
+		}
+	}
+
+	return chain
+}
+
+// startAdminServer starts a secondary Gin engine on the admin port with
+// admin-only endpoints. Runs in its own goroutine.
+func (s *Server) startAdminServer(port int) {
+	adminEngine := gin.New()
+	adminEngine.Use(gin.Recovery())
+
+	adminEngine.GET("/admin/entities", s.handleListEntities)
+	adminEngine.POST("/admin/rotate", s.handleRotateTrigger)
+
+	go func() {
+		addr := fmt.Sprintf(":%d", port)
+		log.Printf("[admin] Admin API listening on %s", addr)
+		if err := adminEngine.Run(addr); err != nil {
+			log.Printf("[admin] Admin server error: %v", err)
+		}
+	}()
+}
+
+func (s *Server) handleListEntities(c *gin.Context) {
+	c.JSON(200, gin.H{"entities": []interface{}{}, "message": "not yet implemented"})
+}
+
+func (s *Server) handleRotateTrigger(c *gin.Context) {
+	c.JSON(200, gin.H{"message": "not yet implemented"})
 }

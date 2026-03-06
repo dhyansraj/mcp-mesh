@@ -41,6 +41,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// FieldLastFullRefresh holds the string denoting the last_full_refresh field in the database.
 	FieldLastFullRefresh = "last_full_refresh"
+	// FieldEntityID holds the string denoting the entity_id field in the database.
+	FieldEntityID = "entity_id"
 	// EdgeCapabilities holds the string denoting the capabilities edge name in mutations.
 	EdgeCapabilities = "capabilities"
 	// EdgeEvents holds the string denoting the events edge name in mutations.
@@ -116,6 +118,7 @@ var Columns = []string{
 	FieldCreatedAt,
 	FieldUpdatedAt,
 	FieldLastFullRefresh,
+	FieldEntityID,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -296,6 +299,11 @@ func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLastFullRefresh orders the results by the last_full_refresh field.
 func ByLastFullRefresh(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastFullRefresh, opts...).ToFunc()
+}
+
+// ByEntityID orders the results by the entity_id field.
+func ByEntityID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEntityID, opts...).ToFunc()
 }
 
 // ByCapabilitiesCount orders the results by capabilities count.

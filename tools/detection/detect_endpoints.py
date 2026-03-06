@@ -36,10 +36,12 @@ class DualContractEndpointDetector:
         "/trace/info",
         "/trace/list",
         "/trace/search",
+        "/test",
     }
     EXCLUDED_PATH_PREFIXES = [
         "/trace/",  # Individual trace lookups like /trace/{trace_id}
         "/proxy/",  # Reverse proxy for MCP calls (requires wildcard routing not supported by OpenAPI)
+        "/admin/",  # Admin API on separate port, not part of public OpenAPI spec
     ]
 
     def __init__(

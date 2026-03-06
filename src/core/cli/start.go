@@ -345,6 +345,7 @@ Examples:
 	cmd.Flags().Bool("secure", false, "Enable secure connections")
 	cmd.Flags().String("cert-file", "", "TLS certificate file")
 	cmd.Flags().String("key-file", "", "TLS private key file")
+	cmd.Flags().Bool("tls-auto", false, "Auto-generate TLS certificates for development")
 
 	// Development flags
 	cmd.Flags().BoolP("watch", "w", false, "Watch files and restart on changes")
@@ -380,6 +381,24 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Handle --tls-auto
+	tlsAuto, _ := cmd.Flags().GetBool("tls-auto")
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	if tlsAuto {
+		if !quiet {
+			fmt.Println("Setting up auto TLS certificates...")
+		}
+		tlsAutoConfig, err := SetupTLSAuto(config.StateDir)
+		if err != nil {
+			return fmt.Errorf("TLS auto-setup failed: %w", err)
+		}
+		config.TLSAuto = true
+		config.TLSAutoConfigRef = tlsAutoConfig
+		if !quiet {
+			fmt.Println("TLS certificates generated successfully")
+		}
+	}
+
 	// Parse core mode flags
 	registryOnly, _ := cmd.Flags().GetBool("registry-only")
 	registryURL, _ := cmd.Flags().GetString("registry-url")
@@ -404,7 +423,7 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 
 	// Run pre-flight checks BEFORE forking to background (issue #444)
 	// This ensures validation errors are shown to the user, not hidden in log files
-	quiet, _ := cmd.Flags().GetBool("quiet")
+	quiet, _ = cmd.Flags().GetBool("quiet")
 	if len(resolvedArgs) > 0 {
 		if err := runPrerequisiteValidation(resolvedArgs, quiet); err != nil {
 			return err
@@ -1208,7 +1227,11 @@ func determineStartRegistryURL(cmd *cobra.Command, config *CLIConfig) string {
 		}
 	}
 
-	return fmt.Sprintf("http://%s:%d", host, port)
+	scheme := "http"
+	if config.TLSAuto {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 }
 
 // getRegistryHostFromURL extracts the host from a registry URL, fallback to config host
@@ -1568,6 +1591,11 @@ func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
 	// Set up environment
 	cmd.Env = append(os.Environ(), config.GetRegistryEnvironmentVariables()...)
 
+	// Add TLS auto env vars if enabled
+	if config.TLSAuto && config.TLSAutoConfigRef != nil {
+		cmd.Env = append(cmd.Env, config.TLSAutoConfigRef.GetRegistryTLSEnv()...)
+	}
+
 	// Set up process group for proper signal handling (Unix only)
 	platformManager := NewPlatformProcessManager()
 	platformManager.setProcessGroup(cmd)
@@ -1661,9 +1689,20 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 			fmt.Printf("Starting agent: %s\n", absPath)
 		}
 
+		// Generate per-agent TLS cert and augment env if --tls-auto is enabled
+		agentEnv := env
+		if config.TLSAuto && config.TLSAutoConfigRef != nil {
+			agentName := extractAgentName(absPath)
+			certPath, keyPath, err := config.TLSAutoConfigRef.GenerateAgentCert(agentName)
+			if err != nil {
+				return fmt.Errorf("failed to generate TLS cert for agent %s: %w", agentName, err)
+			}
+			agentEnv = append(append([]string{}, env...), config.TLSAutoConfigRef.GetAgentTLSEnv(certPath, keyPath)...)
+		}
+
 		// For Java agents with watch mode, use AgentWatcher instead of bash wrapper
 		if watch && isJavaProject(absPath) {
-			watcher, err := createJavaWatcher(absPath, env, workingDir, user, group, quiet)
+			watcher, err := createJavaWatcher(absPath, agentEnv, workingDir, user, group, quiet)
 			if err != nil {
 				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
 			}
@@ -1682,7 +1721,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 
 		// For Python agents with watch mode, use AgentWatcher instead of reload_runner
 		if watch && isPythonProject(absPath) {
-			watcher, err := createPythonWatcher(absPath, env, workingDir, user, group, quiet)
+			watcher, err := createPythonWatcher(absPath, agentEnv, workingDir, user, group, quiet)
 			if err != nil {
 				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
 			}
@@ -1700,7 +1739,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		}
 
 		// Create agent command with enhanced environment
-		agentCmd, err := createAgentCommand(absPath, env, workingDir, user, group, watch)
+		agentCmd, err := createAgentCommand(absPath, agentEnv, workingDir, user, group, watch)
 		if err != nil {
 			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
 		}

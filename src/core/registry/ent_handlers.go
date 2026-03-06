@@ -130,6 +130,13 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		Metadata: metadata,
 	}
 
+	// Extract entity_id from TLS verification (set by TLSVerifyMiddleware)
+	if entityID, exists := c.Get("entity_id"); exists {
+		if eid, ok := entityID.(string); ok && eid != "" {
+			heartbeatReq.EntityID = eid
+		}
+	}
+
 	// Call lightweight heartbeat service method using EntService
 	serviceResp, err := h.entService.UpdateHeartbeat(heartbeatReq)
 	if err != nil {
