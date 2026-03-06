@@ -3,11 +3,14 @@ package registry
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -529,7 +532,83 @@ func (s *Server) startAdminServer(port int) {
 }
 
 func (s *Server) handleListEntities(c *gin.Context) {
-	c.JSON(200, gin.H{"entities": []interface{}{}, "message": "not yet implemented"})
+	type entityEntry struct {
+		Name    string `json:"name"`
+		Subject string `json:"subject"`
+		Expires string `json:"expires"`
+	}
+
+	entities := make([]entityEntry, 0)
+
+	// If trust chain is configured, use it (covers all backends: filestore, localca, k8s-secrets, spire)
+	if s.trustChain != nil {
+		trusted, err := s.trustChain.ListTrustedEntities()
+		if err != nil {
+			s.logger.Warning("Failed to list trusted entities: %v", err)
+		}
+		for _, e := range trusted {
+			entities = append(entities, entityEntry{
+				Name:    e.ID,
+				Subject: e.Subject,
+				Expires: e.NotAfter.Format("2006-01-02"),
+			})
+		}
+		c.JSON(200, gin.H{"entities": entities})
+		return
+	}
+
+	// Fallback: read entity CA files directly from the trust directory
+	trustDir := s.config.TrustDir
+	if trustDir == "" {
+		trustDir = os.Getenv("MCP_MESH_TRUST_DIR")
+	}
+	if trustDir == "" {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			trustDir = home + "/.mcp_mesh/tls"
+		}
+	}
+
+	if trustDir != "" {
+		entitiesDir := trustDir + "/entities"
+		entries, err := os.ReadDir(entitiesDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pem") {
+					continue
+				}
+				pemPath := entitiesDir + "/" + entry.Name()
+				data, err := os.ReadFile(pemPath)
+				if err != nil {
+					continue
+				}
+				block, _ := pem.Decode(data)
+				if block == nil || block.Type != "CERTIFICATE" {
+					continue
+				}
+				cert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					continue
+				}
+				name := strings.TrimSuffix(entry.Name(), ".pem")
+				subject := cert.Subject.String()
+				if cert.Subject.CommonName != "" {
+					parts := []string{"CN=" + cert.Subject.CommonName}
+					for _, o := range cert.Subject.Organization {
+						parts = append(parts, "O="+o)
+					}
+					subject = strings.Join(parts, ",")
+				}
+				entities = append(entities, entityEntry{
+					Name:    name,
+					Subject: subject,
+					Expires: cert.NotAfter.Format("2006-01-02"),
+				})
+			}
+		}
+	}
+
+	c.JSON(200, gin.H{"entities": entities})
 }
 
 func (s *Server) handleRotateTrigger(c *gin.Context) {

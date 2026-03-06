@@ -17,7 +17,7 @@ data:
   REGISTRY_PORT: {{ .Values.registry.port | default "8000" | quote }}
 
   # Complete registry URL (primary variable used by runtime)
-  {{- if .Values.mesh.tls.mode }}
+  {{- if and .Values.mesh.tls.mode (ne .Values.mesh.tls.mode "off") }}
   MCP_MESH_REGISTRY_URL: {{ printf "https://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
   {{- else }}
   MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}

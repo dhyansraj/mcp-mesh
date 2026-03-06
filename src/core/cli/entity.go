@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -230,7 +231,7 @@ func runEntityRegister(cmd *cobra.Command, args []string) error {
 	}
 
 	// Write PEM file
-	if err := os.WriteFile(destPath, pemData, 0644); err != nil {
+	if err := os.WriteFile(destPath, pemData, 0600); err != nil {
 		return fmt.Errorf("failed to write entity CA cert: %w", err)
 	}
 
@@ -393,7 +394,7 @@ func runEntityRotate(cmd *cobra.Command, args []string) error {
 	// Build request URL
 	rotateURL := registryURL + "/admin/rotate"
 	if entityName != "" {
-		rotateURL += "?entity_id=" + entityName
+		rotateURL += "?entity_id=" + url.QueryEscape(entityName)
 	}
 
 	// Make POST request (with client cert if available for strict mode)
