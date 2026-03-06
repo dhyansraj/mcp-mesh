@@ -85,6 +85,11 @@ spec:
             - name: metrics
               containerPort: 9090
               protocol: TCP
+            {{- if gt (int .Values.registry.security.adminPort) 0 }}
+            - name: admin
+              containerPort: {{ .Values.registry.security.adminPort }}
+              protocol: TCP
+            {{- end }}
           env:
             # Pod information
             - name: POD_NAME
@@ -180,6 +185,16 @@ spec:
               mountPath: /etc/tls
               readOnly: true
             {{- end }}
+            {{- if .Values.registry.security.trust.caSecret }}
+            - name: trust-ca-certs
+              mountPath: {{ .Values.registry.security.trust.dir }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.registry.security.trust.spire.enabled }}
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent/sockets
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -204,6 +219,18 @@ spec:
           secret:
             secretName: {{ .Values.registry.security.tls.secretName }}
             defaultMode: 0400
+        {{- end }}
+        {{- if .Values.registry.security.trust.caSecret }}
+        - name: trust-ca-certs
+          secret:
+            secretName: {{ .Values.registry.security.trust.caSecret }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.registry.security.trust.spire.enabled }}
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent/sockets
+            type: DirectoryOrCreate
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

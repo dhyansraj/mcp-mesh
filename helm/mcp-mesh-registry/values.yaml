@@ -141,12 +141,35 @@ registry:
     # Enable TLS
     tls:
       enabled: false
+      # TLS mode: off, auto, strict
+      mode: "off"
       certFile: ""
       keyFile: ""
       # Use existing TLS secret
       existingSecret: ""
       certKey: "tls.crt"
       keyKey: "tls.key"
+
+    # Trust backend configuration (for agent registration verification)
+    trust:
+      # Comma-separated backends: localca, filestore, k8s-secrets, spire
+      backend: ""
+      # Directory for filestore/localca backends
+      dir: "/etc/mcp-mesh/trust"
+      # Existing secret containing CA certificates for filestore
+      caSecret: ""
+      # K8s-secrets backend
+      k8sSecrets:
+        namespace: "" # defaults to release namespace
+        labelSelector: "mcp-mesh.io/trust=entity-ca"
+      # SPIRE backend
+      spire:
+        socketPath: "/run/spire/agent/sockets/agent.sock"
+        # Mount SPIRE agent socket
+        enabled: false
+
+    # Admin API port (0 = admin endpoints on main port)
+    adminPort: 0
 
     # Authentication
     auth:
