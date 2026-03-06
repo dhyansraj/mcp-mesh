@@ -78,8 +78,7 @@ assertions:
   - expr: "${captured.revoke_live} contains 'revoked'"
     message: "Entity should be revoked while registry is running"
 
-  - expr: "${captured.revoke_live}"
-    not_contains: "live-entity"
+  - expr: "${captured.revoke_live} not contains 'live-entity'"
     message: "Entity list after revoke should not contain live-entity"
 
 post_run:

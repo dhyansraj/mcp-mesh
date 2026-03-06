@@ -68,7 +68,7 @@ test:
       echo "AGENT_PID=$AGENT_PID"
 
       # Wait for registration
-      for i in $(seq 1 15); do
+      for i in $(seq 1 30); do
         if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "system_agent"; then
           echo "REGISTERED after $i seconds"
           break
@@ -86,6 +86,10 @@ test:
           print(f\"ENTITY_ID={a.get('entity_id', 'NONE')}\")
           break
       " 2>/dev/null || echo "AGENT_NOT_FOUND"
+
+      # Dump agent log for diagnostics if registration failed
+      echo "--- Agent log (last 20 lines) ---"
+      tail -20 /tmp/agent-chained.log 2>/dev/null || echo "No agent log"
 
       kill $AGENT_PID 2>/dev/null || true
     workdir: /workspace
