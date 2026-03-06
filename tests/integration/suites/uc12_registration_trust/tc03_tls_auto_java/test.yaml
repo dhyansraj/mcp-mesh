@@ -1,0 +1,101 @@
+name: "TLS Auto - Java Agent Registration"
+description: "Verify Java agents register with mTLS and entity_id is set"
+tags:
+  - registration-trust
+  - tls
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy Java greeter to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/java-greeter/
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  - name: "Start registry with TLS auto and Java agent"
+    handler: shell
+    command: "meshctl start java-greeter --tls-auto -d"
+    workdir: /workspace
+    capture: java_start
+
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: agent did not register within 90s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    workdir: /workspace
+    capture: wait_output
+    timeout: 120
+
+  - name: "Check agent registered with entity_id"
+    handler: shell
+    command: |
+      meshctl list 2>&1
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Query registry API for entity_id"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: api_output
+
+  - name: "Call greet tool"
+    handler: shell
+    command: |
+      meshctl call greeter:greet '{"name":"TLSTest"}' 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.wait_output} contains 'REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Java greeter should be registered"
+
+  - expr: "${captured.list_output} contains 'https://'"
+    message: "Registry URL should show HTTPS"
+
+  - expr: "${captured.api_output} contains 'local-dev'"
+    message: "API response should include entity_id from mTLS cert"
+
+  - expr: "${captured.call_output} contains 'Hello'"
+    message: "Tool call should succeed over mTLS"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

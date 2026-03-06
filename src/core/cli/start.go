@@ -643,6 +643,14 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return fmt.Errorf("failed to start registry: %w", err)
 	}
 
+	// Write PID file for registry process
+	pidMgr, pidErr := NewPIDManager()
+	if pidErr == nil {
+		if err := pidMgr.WritePID("registry", processInfo.PID); err != nil && !quiet {
+			fmt.Printf("Warning: failed to write registry PID file: %v\n", err)
+		}
+	}
+
 	detach, _ := cmd.Flags().GetBool("detach")
 	if detach {
 		if !quiet {
@@ -2418,10 +2426,6 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		logFile.Close()
 		return fmt.Errorf("failed to start detach process: %w", err)
 	}
-
-	// Note: We no longer write a global PID file here.
-	// Per-agent PID files are written by startAgentsWithEnv when agents start.
-	// Use 'meshctl stop' to stop agents by name.
 
 	if !quiet {
 		// Extract agent names from args for display (use decorator name if available)
