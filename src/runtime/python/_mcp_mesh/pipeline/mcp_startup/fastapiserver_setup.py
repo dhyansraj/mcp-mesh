@@ -551,6 +551,22 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
 
             import uvicorn
 
+            # Resolve TLS config from Rust core
+            from ...shared.tls_config import get_tls_config
+
+            tls = get_tls_config()
+
+            ssl_kwargs = {}
+            if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
+                import ssl
+
+                ssl_kwargs["ssl_certfile"] = tls["cert_path"]
+                ssl_kwargs["ssl_keyfile"] = tls["key_path"]
+                if tls.get("ca_path"):
+                    ssl_kwargs["ssl_ca_certs"] = tls["ca_path"]
+                    ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+                self.logger.info(f"TLS enabled for HTTP server (mode={tls['mode']})")
+
             # Create uvicorn config
             config = uvicorn.Config(
                 app=app,
@@ -559,6 +575,7 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
                 log_level="info",
                 access_log=False,  # Reduce noise
                 ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
+                **ssl_kwargs,
             )
 
             # Create and start server
