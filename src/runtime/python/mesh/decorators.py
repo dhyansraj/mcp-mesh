@@ -456,6 +456,22 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             "⚡ IMMEDIATE UVICORN: Starting server with uvicorn.run() for proper signal handling"
         )
 
+        # Resolve TLS config from Rust core
+        from _mcp_mesh.shared.tls_config import get_tls_config
+
+        tls = get_tls_config()
+
+        ssl_kwargs = {}
+        if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
+            import ssl
+
+            ssl_kwargs["ssl_certfile"] = tls["cert_path"]
+            ssl_kwargs["ssl_keyfile"] = tls["key_path"]
+            if tls.get("ca_path"):
+                ssl_kwargs["ssl_ca_certs"] = tls["ca_path"]
+                ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            logger.info(f"IMMEDIATE UVICORN: TLS enabled (mode={tls['mode']})")
+
         # Start uvicorn server in background thread (NON-daemon to keep process alive)
         def run_server():
             """Run uvicorn server in background thread with proper signal handling."""
@@ -472,6 +488,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                     timeout_graceful_shutdown=30,  # Allow time for registry cleanup
                     access_log=False,  # Reduce noise
                     ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
+                    **ssl_kwargs,
                 )
             except Exception as e:
                 logger.error(f"❌ IMMEDIATE UVICORN: Server failed: {e}")

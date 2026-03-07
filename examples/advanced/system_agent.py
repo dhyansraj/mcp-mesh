@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshTool
+from mesh import McpMeshTool
 
 
 @mesh.agent(name="system-agent", http_port=9091)

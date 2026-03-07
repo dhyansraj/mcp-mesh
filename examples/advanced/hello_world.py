@@ -13,7 +13,7 @@ Start this agent, then start system_agent.py to see dependency injection in acti
 from typing import Any
 
 import mesh
-from mcp_mesh import McpMeshTool
+from mesh import McpMeshTool
 
 
 @mesh.agent(name="hello-world", http_port=9090)

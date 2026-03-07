@@ -87,7 +87,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
 
     namespace = agent_config.get("namespace", "default")
     version = agent_config.get("version", "1.0.0")
-    description = agent_config.get("description", "")
+    description = agent_config.get("description") or ""
 
     # Build tool specs from decorator registry
     from ...engine.decorator_registry import DecoratorRegistry
@@ -220,7 +220,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             function_name=tool_name,
             capability=tool_metadata.get("capability", tool_name),
             version=tool_metadata.get("version", "1.0.0"),
-            description=tool_metadata.get("description", ""),
+            description=tool_metadata.get("description") or "",
             tags=tool_metadata.get("tags", []),
             dependencies=deps if deps else None,
             input_schema=input_schema_json,
