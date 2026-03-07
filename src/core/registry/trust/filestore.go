@@ -74,6 +74,10 @@ func (fs *FileStore) Verify(certChain []*x509.Certificate) (*VerifyResult, error
 
 	leaf := certChain[0]
 
+	if leaf.IsCA {
+		return nil, fmt.Errorf("presented certificate is a CA certificate, not a leaf")
+	}
+
 	now := time.Now()
 	if now.After(leaf.NotAfter) {
 		return nil, ErrExpiredCert
@@ -95,7 +99,7 @@ func (fs *FileStore) Verify(certChain []*x509.Certificate) (*VerifyResult, error
 		opts := x509.VerifyOptions{
 			Roots:         ent.pool,
 			Intermediates: intermediates,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
 		if _, err := leaf.Verify(opts); err == nil {
 			return &VerifyResult{
@@ -224,7 +228,9 @@ func (fs *FileStore) loadPEMFile(path string) (*entityCA, error) {
 
 	pool := x509.NewCertPool()
 	for _, c := range certs {
-		pool.AddCert(c)
+		if c.IsCA {
+			pool.AddCert(c)
+		}
 	}
 
 	return &entityCA{

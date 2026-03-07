@@ -34,12 +34,13 @@ func TLSVerifyMiddleware(chain *trust.TrustChain, mode string) gin.HandlerFunc {
 
 		result, err := chain.Verify(c.Request.TLS.PeerCertificates)
 		if err != nil {
+			log.Printf("[trust] certificate verification failed: %v (from %s)", err, c.Request.RemoteAddr)
 			if mode == "strict" {
-				log.Printf("[trust] REJECTED: %v (from %s)", err, c.Request.RemoteAddr)
 				c.AbortWithStatusJSON(403, gin.H{"error": "untrusted certificate", "detail": err.Error()})
 				return
 			}
-			c.Next()
+			// In auto mode, reject invalid certs but allow missing certs (handled above)
+			c.AbortWithStatusJSON(403, gin.H{"error": "untrusted certificate", "detail": err.Error()})
 			return
 		}
 

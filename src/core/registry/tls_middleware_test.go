@@ -124,7 +124,7 @@ func TestTLSMiddleware_AutoMode_NoCert_Passes(t *testing.T) {
 	assert.Equal(t, 200, w.Code)
 }
 
-func TestTLSMiddleware_AutoMode_UntrustedCert_Passes(t *testing.T) {
+func TestTLSMiddleware_AutoMode_UntrustedCert_Returns403(t *testing.T) {
 	backend := &stubBackend{result: nil, err: trust.ErrUntrustedCert}
 	chain := trust.NewTrustChain(backend)
 	r := setupRouter(chain, "auto")
@@ -136,7 +136,8 @@ func TestTLSMiddleware_AutoMode_UntrustedCert_Passes(t *testing.T) {
 	}
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, 403, w.Code)
+	assert.Contains(t, w.Body.String(), "untrusted certificate")
 }
 
 func TestTLSMiddleware_AutoMode_TrustedCert_SetsEntityID(t *testing.T) {

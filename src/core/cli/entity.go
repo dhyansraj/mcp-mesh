@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -148,8 +149,8 @@ func parseCACertFile(path string) ([]*x509.Certificate, []byte, error) {
 	}
 
 	var certs []*x509.Certificate
+	var sanitized bytes.Buffer
 	rest := data
-	foundCertBlock := false
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -157,20 +158,20 @@ func parseCACertFile(path string) ([]*x509.Certificate, []byte, error) {
 			break
 		}
 		if block.Type == "CERTIFICATE" {
-			foundCertBlock = true
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to parse X.509 certificate: %w", err)
 			}
 			certs = append(certs, cert)
+			pem.Encode(&sanitized, block)
 		}
 	}
 
-	if !foundCertBlock {
+	if len(certs) == 0 {
 		return nil, nil, fmt.Errorf("no CERTIFICATE PEM blocks found in %s", path)
 	}
 
-	return certs, data, nil
+	return certs, sanitized.Bytes(), nil
 }
 
 func formatSubject(cert *x509.Certificate) string {

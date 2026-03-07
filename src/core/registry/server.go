@@ -134,9 +134,16 @@ func (s *Server) Run(addr string) error {
 		s.startAdminServer(s.config.AdminPort)
 	}
 
-	// Use TLS listener when TLS mode is enabled and cert/key are provided
-	if s.config.TlsMode != "" && s.config.TlsMode != "off" && s.config.TlsCertFile != "" && s.config.TlsKeyFile != "" {
-		return s.runWithTLS(addr)
+	// Use TLS listener when TLS mode is enabled
+	if s.config.TlsMode != "" && s.config.TlsMode != "off" {
+		if s.config.TlsCertFile == "" || s.config.TlsKeyFile == "" {
+			if s.config.TlsMode == "strict" {
+				return fmt.Errorf("TLS mode is 'strict' but TLS cert/key not configured (set MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY)")
+			}
+			log.Printf("[server] WARNING: TLS mode '%s' but cert/key not configured, falling back to plaintext", s.config.TlsMode)
+		} else {
+			return s.runWithTLS(addr)
+		}
 	}
 	return s.engine.Run(addr)
 }
