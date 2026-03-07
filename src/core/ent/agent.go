@@ -44,6 +44,8 @@ type Agent struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// Timestamp of last full heartbeat (vs HEAD check)
 	LastFullRefresh time.Time `json:"last_full_refresh,omitempty"`
+	// Entity ID from TLS certificate verification
+	EntityID *string `json:"entity_id,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AgentQuery when eager-loading is set.
 	Edges        AgentEdges `json:"edges"`
@@ -119,7 +121,7 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
-		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus:
+		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus, agent.FieldEntityID:
 			values[i] = new(sql.NullString)
 		case agent.FieldCreatedAt, agent.FieldUpdatedAt, agent.FieldLastFullRefresh:
 			values[i] = new(sql.NullTime)
@@ -222,6 +224,13 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				a.LastFullRefresh = value.Time
 			}
+		case agent.FieldEntityID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field entity_id", values[i])
+			} else if value.Valid {
+				a.EntityID = new(string)
+				*a.EntityID = value.String
+			}
 		default:
 			a.selectValues.Set(columns[i], values[i])
 		}
@@ -321,6 +330,11 @@ func (a *Agent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("last_full_refresh=")
 	builder.WriteString(a.LastFullRefresh.Format(time.ANSIC))
+	builder.WriteString(", ")
+	if v := a.EntityID; v != nil {
+		builder.WriteString("entity_id=")
+		builder.WriteString(*v)
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

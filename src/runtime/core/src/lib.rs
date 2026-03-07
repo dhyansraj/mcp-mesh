@@ -38,6 +38,7 @@ pub mod heartbeat;
 pub mod registry;
 pub mod runtime;
 pub mod spec;
+pub mod tls;
 pub mod tracing_publish;
 
 // C FFI bindings module

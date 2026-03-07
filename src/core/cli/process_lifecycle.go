@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -268,6 +267,11 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 	// Set up environment variables
 	cmd.Env = append(os.Environ(), pm.config.GetRegistryEnvironmentVariables()...)
 
+	// Add TLS auto env vars if enabled
+	if pm.config.TLSAuto && pm.config.TLSAutoConfigRef != nil {
+		cmd.Env = append(cmd.Env, pm.config.TLSAutoConfigRef.GetRegistryTLSEnv()...)
+	}
+
 	// Set working directory
 	workingDir, _ := os.Getwd()
 	cmd.Dir = workingDir
@@ -483,10 +487,11 @@ func (pm *ProcessManager) waitForRegistryReady(timeout time.Duration) error {
 		registryURL = "http://localhost:8080"
 	}
 
+	client := newTLSSkipVerifyClient()
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(registryURL + "/health")
+		resp, err := client.Get(registryURL + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
@@ -513,7 +518,8 @@ func (pm *ProcessManager) checkAgentRegistryStatus(agentName string) map[string]
 		"last_heartbeat": nil,
 	}
 
-	resp, err := http.Get(registryURL + "/agents")
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Get(registryURL + "/agents")
 	if err != nil {
 		status["error"] = err.Error()
 		return status

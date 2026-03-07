@@ -99,7 +99,66 @@ graph LR
 
 ---
 
+## Security & Governance
+
+MCP Mesh provides built-in security features for production deployments.
+
+### TLS Encryption
+
+Enable mutual TLS between agents and the registry:
+
+```bash
+# Local development with auto-generated certificates
+meshctl start --registry-only --tls-auto -d
+meshctl start my_agent.py
+```
+
+For Kubernetes, configure TLS via Helm values:
+
+```bash
+helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
+  --version 0.9.9 -n mcp-mesh --create-namespace \
+  --set registry.security.tls.mode=strict \
+  --set registry.security.trust.backend=k8s-secrets
+```
+
+### Entity Trust
+
+Control which organizations' agents can join the mesh using entity CA certificates:
+
+```bash
+meshctl entity register "partner-corp" --ca-cert /path/to/partner-ca.pem
+meshctl entity list
+meshctl entity revoke "partner-corp" --force
+meshctl entity rotate  # Trigger re-verification
+```
+
+### Certificate Rotation
+
+Rotate certificates without downtime — agents re-register on their next heartbeat:
+
+```bash
+meshctl entity rotate                    # All agents re-register
+meshctl entity rotate "partner-corp"     # Specific entity only
+```
+
+Agents with revoked certificates are automatically evicted in strict TLS mode.
+
+### Admin Port Isolation
+
+Separate admin APIs from the agent-facing port for defense in depth:
+
+```bash
+# Registry listens on 8000 (agents) and 8001 (admin only)
+MCP_MESH_ADMIN_PORT=8001 mcp-mesh-registry
+```
+
+[:material-arrow-right: Security Guide](meshctl-cli.md){ .md-button } — Run `meshctl man security` for the full security reference.
+
+---
+
 ## Next Steps
 
 - **[Docker Deployment](03-docker-deployment.md)** - Start here for local development
 - **[Kubernetes Deployment](04-kubernetes-basics.md)** - Deployment with Helm
+- **Security** - Run `meshctl man security` for TLS, entity trust, and certificate management

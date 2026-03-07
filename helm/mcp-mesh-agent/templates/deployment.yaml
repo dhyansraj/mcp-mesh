@@ -160,6 +160,21 @@ spec:
               mountPath: {{ .Values.agentCode.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if .Values.mesh.tls.certSecret }}
+            - name: mesh-tls-certs
+              mountPath: /etc/mesh-tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.mesh.tls.caSecret }}
+            - name: mesh-ca-cert
+              mountPath: /etc/mesh-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.mesh.tls.spire.enabled }}
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent/sockets
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -177,6 +192,24 @@ spec:
           configMap:
             name: {{ .Values.agentCode.configMapName | default (printf "%s-code" (include "mcp-mesh-agent.fullname" .)) }}
             defaultMode: 0755
+        {{- end }}
+        {{- if .Values.mesh.tls.certSecret }}
+        - name: mesh-tls-certs
+          secret:
+            secretName: {{ .Values.mesh.tls.certSecret }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.mesh.tls.caSecret }}
+        - name: mesh-ca-cert
+          secret:
+            secretName: {{ .Values.mesh.tls.caSecret }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.mesh.tls.spire.enabled }}
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent/sockets
+            type: DirectoryOrCreate
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

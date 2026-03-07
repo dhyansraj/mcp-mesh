@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -114,6 +115,19 @@ func main() {
 		HealthCheckInterval:      cfg.HealthCheckInterval,
 		EnableResponseCache:      cfg.EnableResponseCache,
 		TracingEnabled:           strings.ToLower(os.Getenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED")) == "true",
+		TlsMode:                 getEnvDefault("MCP_MESH_TLS_MODE", "off"),
+		TrustBackend:             os.Getenv("MCP_MESH_TRUST_BACKEND"),
+		TlsCertFile:             os.Getenv("MCP_MESH_TLS_CERT"),
+		TlsKeyFile:              os.Getenv("MCP_MESH_TLS_KEY"),
+		TrustDir:                os.Getenv("MCP_MESH_TRUST_DIR"),
+		AdminPort:               getEnvIntDefault("MCP_MESH_ADMIN_PORT", 0),
+	}
+
+	if registryConfig.TlsMode != "off" {
+		appLogger.Info("🔒 TLS configuration: mode=%s, backend=%s", registryConfig.TlsMode, registryConfig.TrustBackend)
+		if registryConfig.AdminPort > 0 {
+			appLogger.Info("🔒 Admin API port: %d", registryConfig.AdminPort)
+		}
 	}
 
 	// Create and configure server using Ent
@@ -143,4 +157,20 @@ func main() {
 		appLogger.Error("❌ Failed to start server: %v", err)
 		os.Exit(1)
 	}
+}
+
+func getEnvDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvIntDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
 }

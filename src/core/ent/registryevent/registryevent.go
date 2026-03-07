@@ -86,6 +86,7 @@ const (
 	EventTypeUpdate     EventType = "update"
 	EventTypeUnregister EventType = "unregister"
 	EventTypeUnhealthy  EventType = "unhealthy"
+	EventTypeRotate     EventType = "rotate"
 )
 
 func (et EventType) String() string {
@@ -95,7 +96,7 @@ func (et EventType) String() string {
 // EventTypeValidator is a validator for the "event_type" field enum values. It is called by the builders before save.
 func EventTypeValidator(et EventType) error {
 	switch et {
-	case EventTypeRegister, EventTypeHeartbeat, EventTypeExpire, EventTypeUpdate, EventTypeUnregister, EventTypeUnhealthy:
+	case EventTypeRegister, EventTypeHeartbeat, EventTypeExpire, EventTypeUpdate, EventTypeUnregister, EventTypeUnhealthy, EventTypeRotate:
 		return nil
 	default:
 		return fmt.Errorf("registryevent: invalid enum value for event_type field: %q", et)

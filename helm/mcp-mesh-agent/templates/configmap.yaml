@@ -17,7 +17,11 @@ data:
   REGISTRY_PORT: {{ .Values.registry.port | default "8000" | quote }}
 
   # Complete registry URL (primary variable used by runtime)
+  {{- if and .Values.mesh.tls.mode (ne .Values.mesh.tls.mode "off") }}
+  MCP_MESH_REGISTRY_URL: {{ printf "https://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
+  {{- else }}
   MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
+  {{- end }}
 
   # Service DNS for agent endpoint advertisement
   # Default: <release>-mcp-mesh-agent.<namespace> (Kubernetes service DNS)
@@ -58,6 +62,28 @@ data:
   TELEMETRY_ENDPOINT: {{ .Values.agent.observability.telemetryEndpoint | default "mcp-core-mcp-mesh-tempo:4317" | quote }}
   MCP_MESH_TRACING_ENABLED: {{ .Values.agent.observability.tracing.enabled | default true | quote }}
   MCP_MESH_METRICS_ENABLED: {{ .Values.agent.observability.metrics.enabled | default true | quote }}
+
+  # TLS configuration for agent-to-registry communication
+  {{- if .Values.mesh.tls.mode }}
+  MCP_MESH_TLS_MODE: {{ .Values.mesh.tls.mode | quote }}
+  {{- end }}
+  {{- if .Values.mesh.tls.provider }}
+  MCP_MESH_TLS_PROVIDER: {{ .Values.mesh.tls.provider | quote }}
+  {{- end }}
+  {{- if .Values.mesh.tls.certSecret }}
+  MCP_MESH_TLS_CERT: "/etc/mesh-tls/{{ .Values.mesh.tls.certKey }}"
+  MCP_MESH_TLS_KEY: "/etc/mesh-tls/{{ .Values.mesh.tls.keyKey }}"
+  {{- end }}
+  {{- if .Values.mesh.tls.caSecret }}
+  MCP_MESH_TLS_CA: "/etc/mesh-ca/{{ .Values.mesh.tls.caKey }}"
+  {{- end }}
+  {{- if .Values.mesh.tls.spire.enabled }}
+  MCP_MESH_SPIRE_SOCKET: {{ .Values.mesh.tls.spire.socketPath | quote }}
+  {{- end }}
+  {{- if .Values.mesh.tls.vault.enabled }}
+  MCP_MESH_VAULT_ADDR: {{ .Values.mesh.tls.vault.addr | quote }}
+  MCP_MESH_VAULT_PKI_PATH: {{ .Values.mesh.tls.vault.pkiPath | quote }}
+  {{- end }}
 
   # Redis configuration for session/trace storage
   REDIS_URL: {{ .Values.agent.observability.distributedTracing.redisUrl | default "redis://mcp-core-mcp-mesh-redis:6379" | quote }}

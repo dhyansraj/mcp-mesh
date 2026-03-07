@@ -59,6 +59,7 @@ type AgentMutation struct {
 	created_at                      *time.Time
 	updated_at                      *time.Time
 	last_full_refresh               *time.Time
+	entity_id                       *string
 	clearedFields                   map[string]struct{}
 	capabilities                    map[int]struct{}
 	removedcapabilities             map[int]struct{}
@@ -765,6 +766,55 @@ func (m *AgentMutation) ResetLastFullRefresh() {
 	m.last_full_refresh = nil
 }
 
+// SetEntityID sets the "entity_id" field.
+func (m *AgentMutation) SetEntityID(s string) {
+	m.entity_id = &s
+}
+
+// EntityID returns the value of the "entity_id" field in the mutation.
+func (m *AgentMutation) EntityID() (r string, exists bool) {
+	v := m.entity_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEntityID returns the old "entity_id" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldEntityID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEntityID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEntityID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEntityID: %w", err)
+	}
+	return oldValue.EntityID, nil
+}
+
+// ClearEntityID clears the value of the "entity_id" field.
+func (m *AgentMutation) ClearEntityID() {
+	m.entity_id = nil
+	m.clearedFields[agent.FieldEntityID] = struct{}{}
+}
+
+// EntityIDCleared returns if the "entity_id" field was cleared in this mutation.
+func (m *AgentMutation) EntityIDCleared() bool {
+	_, ok := m.clearedFields[agent.FieldEntityID]
+	return ok
+}
+
+// ResetEntityID resets all changes to the "entity_id" field.
+func (m *AgentMutation) ResetEntityID() {
+	m.entity_id = nil
+	delete(m.clearedFields, agent.FieldEntityID)
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by ids.
 func (m *AgentMutation) AddCapabilityIDs(ids ...int) {
 	if m.capabilities == nil {
@@ -1069,7 +1119,7 @@ func (m *AgentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 14)
 	if m.agent_type != nil {
 		fields = append(fields, agent.FieldAgentType)
 	}
@@ -1109,6 +1159,9 @@ func (m *AgentMutation) Fields() []string {
 	if m.last_full_refresh != nil {
 		fields = append(fields, agent.FieldLastFullRefresh)
 	}
+	if m.entity_id != nil {
+		fields = append(fields, agent.FieldEntityID)
+	}
 	return fields
 }
 
@@ -1143,6 +1196,8 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.UpdatedAt()
 	case agent.FieldLastFullRefresh:
 		return m.LastFullRefresh()
+	case agent.FieldEntityID:
+		return m.EntityID()
 	}
 	return nil, false
 }
@@ -1178,6 +1233,8 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldUpdatedAt(ctx)
 	case agent.FieldLastFullRefresh:
 		return m.OldLastFullRefresh(ctx)
+	case agent.FieldEntityID:
+		return m.OldEntityID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Agent field %s", name)
 }
@@ -1278,6 +1335,13 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLastFullRefresh(v)
 		return nil
+	case agent.FieldEntityID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEntityID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)
 }
@@ -1359,6 +1423,9 @@ func (m *AgentMutation) ClearedFields() []string {
 	if m.FieldCleared(agent.FieldHTTPPort) {
 		fields = append(fields, agent.FieldHTTPPort)
 	}
+	if m.FieldCleared(agent.FieldEntityID) {
+		fields = append(fields, agent.FieldEntityID)
+	}
 	return fields
 }
 
@@ -1384,6 +1451,9 @@ func (m *AgentMutation) ClearField(name string) error {
 		return nil
 	case agent.FieldHTTPPort:
 		m.ClearHTTPPort()
+		return nil
+	case agent.FieldEntityID:
+		m.ClearEntityID()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent nullable field %s", name)
@@ -1431,6 +1501,9 @@ func (m *AgentMutation) ResetField(name string) error {
 		return nil
 	case agent.FieldLastFullRefresh:
 		m.ResetLastFullRefresh()
+		return nil
+	case agent.FieldEntityID:
+		m.ResetEntityID()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)

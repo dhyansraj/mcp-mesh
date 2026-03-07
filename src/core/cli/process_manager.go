@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -350,7 +349,8 @@ func (pm *ProcessManager) checkProcessHealth(name string, info *ProcessInfo) {
 func (pm *ProcessManager) checkAgentRegistryHealth(agentName string) bool {
 	registryURL := pm.config.GetRegistryURL()
 
-	resp, err := http.Get(registryURL + "/agents")
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Get(registryURL + "/agents")
 	if err != nil {
 		return false
 	}

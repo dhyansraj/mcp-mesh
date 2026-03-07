@@ -43,6 +43,7 @@ func main() {
 	rootCmd.AddCommand(cli.NewConfigCommand())
 	rootCmd.AddCommand(cli.NewScaffoldCommand())
 	rootCmd.AddCommand(cli.NewTraceCommand()) // Issue #310
+	rootCmd.AddCommand(cli.NewEntityCommand())
 	rootCmd.AddCommand(man.NewManCommand())
 
 	// Execute the root command

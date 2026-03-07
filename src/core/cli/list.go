@@ -1355,7 +1355,6 @@ func determineRegistryURL(config *CLIConfig, registryURL, registryHost string, r
 	// Build URL from individual components
 	host := config.RegistryHost
 	port := config.RegistryPort
-	scheme := "http"
 
 	// Override with flags if provided
 	if registryHost != "" {
@@ -1364,11 +1363,19 @@ func determineRegistryURL(config *CLIConfig, registryURL, registryHost string, r
 	if registryPort > 0 {
 		port = registryPort
 	}
-	if registryScheme != "" {
-		scheme = registryScheme
+
+	// If user explicitly set a scheme, use it
+	if registryScheme != "" && registryScheme != "http" {
+		return fmt.Sprintf("%s://%s:%d", registryScheme, host, port)
 	}
 
-	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	// Auto-detect: try HTTPS first, fall back to HTTP
+	// This avoids stale state from leftover TLS files
+	httpsURL := fmt.Sprintf("https://%s:%d", host, port)
+	if IsRegistryRunning(httpsURL) {
+		return httpsURL
+	}
+	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
 // Global HTTP client for registry connections
@@ -1385,14 +1392,11 @@ func configureHTTPClient(timeoutSeconds int) {
 
 // configureHTTPClientWithTLS sets up the HTTP client with timeout and optional TLS skip
 func configureHTTPClientWithTLS(timeoutSeconds int, insecure bool) {
-	transport := &http.Transport{}
-
-	if insecure {
-		transport.TLSClientConfig = &tls.Config{
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
-		}
+		},
 	}
-
 	registryHTTPClient = &http.Client{
 		Timeout:   time.Duration(timeoutSeconds) * time.Second,
 		Transport: transport,

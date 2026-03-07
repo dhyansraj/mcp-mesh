@@ -115,6 +115,11 @@ func LastFullRefresh(v time.Time) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldLastFullRefresh, v))
 }
 
+// EntityID applies equality check predicate on the "entity_id" field. It's identical to EntityIDEQ.
+func EntityID(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldEntityID, v))
+}
+
 // AgentTypeEQ applies the EQ predicate on the "agent_type" field.
 func AgentTypeEQ(v AgentType) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldAgentType, v))
@@ -713,6 +718,81 @@ func LastFullRefreshLT(v time.Time) predicate.Agent {
 // LastFullRefreshLTE applies the LTE predicate on the "last_full_refresh" field.
 func LastFullRefreshLTE(v time.Time) predicate.Agent {
 	return predicate.Agent(sql.FieldLTE(FieldLastFullRefresh, v))
+}
+
+// EntityIDEQ applies the EQ predicate on the "entity_id" field.
+func EntityIDEQ(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldEntityID, v))
+}
+
+// EntityIDNEQ applies the NEQ predicate on the "entity_id" field.
+func EntityIDNEQ(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldNEQ(FieldEntityID, v))
+}
+
+// EntityIDIn applies the In predicate on the "entity_id" field.
+func EntityIDIn(vs ...string) predicate.Agent {
+	return predicate.Agent(sql.FieldIn(FieldEntityID, vs...))
+}
+
+// EntityIDNotIn applies the NotIn predicate on the "entity_id" field.
+func EntityIDNotIn(vs ...string) predicate.Agent {
+	return predicate.Agent(sql.FieldNotIn(FieldEntityID, vs...))
+}
+
+// EntityIDGT applies the GT predicate on the "entity_id" field.
+func EntityIDGT(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldGT(FieldEntityID, v))
+}
+
+// EntityIDGTE applies the GTE predicate on the "entity_id" field.
+func EntityIDGTE(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldGTE(FieldEntityID, v))
+}
+
+// EntityIDLT applies the LT predicate on the "entity_id" field.
+func EntityIDLT(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldLT(FieldEntityID, v))
+}
+
+// EntityIDLTE applies the LTE predicate on the "entity_id" field.
+func EntityIDLTE(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldLTE(FieldEntityID, v))
+}
+
+// EntityIDContains applies the Contains predicate on the "entity_id" field.
+func EntityIDContains(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldContains(FieldEntityID, v))
+}
+
+// EntityIDHasPrefix applies the HasPrefix predicate on the "entity_id" field.
+func EntityIDHasPrefix(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldHasPrefix(FieldEntityID, v))
+}
+
+// EntityIDHasSuffix applies the HasSuffix predicate on the "entity_id" field.
+func EntityIDHasSuffix(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldHasSuffix(FieldEntityID, v))
+}
+
+// EntityIDIsNil applies the IsNil predicate on the "entity_id" field.
+func EntityIDIsNil() predicate.Agent {
+	return predicate.Agent(sql.FieldIsNull(FieldEntityID))
+}
+
+// EntityIDNotNil applies the NotNil predicate on the "entity_id" field.
+func EntityIDNotNil() predicate.Agent {
+	return predicate.Agent(sql.FieldNotNull(FieldEntityID))
+}
+
+// EntityIDEqualFold applies the EqualFold predicate on the "entity_id" field.
+func EntityIDEqualFold(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldEqualFold(FieldEntityID, v))
+}
+
+// EntityIDContainsFold applies the ContainsFold predicate on the "entity_id" field.
+func EntityIDContainsFold(v string) predicate.Agent {
+	return predicate.Agent(sql.FieldContainsFold(FieldEntityID, v))
 }
 
 // HasCapabilities applies the HasEdge predicate on the "capabilities" edge.

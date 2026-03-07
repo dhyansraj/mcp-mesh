@@ -14,6 +14,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::events::HealthStatus;
 use crate::spec::{AgentSpec, AgentType};
+use crate::tls::TlsConfig;
 
 /// Errors that can occur during registry communication.
 #[derive(Debug, Error)]
@@ -32,6 +33,9 @@ pub enum RegistryError {
 
     #[error("Unexpected response: {0}")]
     UnexpectedResponse(String),
+
+    #[error("TLS configuration error: {0}")]
+    TlsError(String),
 }
 
 /// Result of a fast heartbeat check (HEAD request).
@@ -302,12 +306,37 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
-    /// Create a new registry client.
-    pub fn new(registry_url: &str) -> Result<Self, RegistryError> {
-        let client = Client::builder()
+    /// Create a new registry client with optional TLS configuration.
+    pub fn new(registry_url: &str, tls_config: &TlsConfig) -> Result<Self, RegistryError> {
+        let mut builder = Client::builder()
             .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
-            .build()?;
+            .connect_timeout(Duration::from_secs(10));
+
+        if tls_config.is_enabled() {
+            // Add client identity (cert + key) for mTLS
+            if let Some(identity) = tls_config
+                .build_identity()
+                .map_err(|e| RegistryError::TlsError(e.to_string()))?
+            {
+                builder = builder.identity(identity);
+            }
+
+            // Add custom CA for verifying registry's cert
+            if let Some(ca) = tls_config
+                .build_ca_cert()
+                .map_err(|e| RegistryError::TlsError(e.to_string()))?
+            {
+                builder = builder.add_root_certificate(ca);
+            }
+        }
+
+        let client = builder.build()?;
+
+        if tls_config.is_enabled() {
+            info!("Registry client configured with mTLS");
+        } else {
+            debug!("Registry client using plain HTTP");
+        }
 
         // Normalize URL (remove trailing slash)
         let base_url = registry_url.trim_end_matches('/').to_string();

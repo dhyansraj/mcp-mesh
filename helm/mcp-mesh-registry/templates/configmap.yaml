@@ -51,6 +51,33 @@ data:
   # Exporter type: console (default), otlp (for Tempo/Jaeger), json
   TRACE_EXPORTER_TYPE: {{ .Values.registry.observability.exporterType | default "otlp" | quote }}
 
+  # TLS and trust configuration
+  {{- if .Values.registry.security.tls.mode }}
+  MCP_MESH_TLS_MODE: {{ .Values.registry.security.tls.mode | quote }}
+  {{- end }}
+  {{- if .Values.registry.security.trust.backend }}
+  MCP_MESH_TRUST_BACKEND: {{ .Values.registry.security.trust.backend | quote }}
+  {{- end }}
+  {{- if .Values.registry.security.trust.dir }}
+  MCP_MESH_TRUST_DIR: {{ .Values.registry.security.trust.dir | quote }}
+  {{- end }}
+  {{- if .Values.registry.security.tls.enabled }}
+  MCP_MESH_TLS_CERT: "/etc/tls/{{ .Values.registry.security.tls.certKey }}"
+  MCP_MESH_TLS_KEY: "/etc/tls/{{ .Values.registry.security.tls.keyKey }}"
+  {{- end }}
+  {{- if .Values.registry.security.trust.k8sSecrets.namespace }}
+  MCP_MESH_K8S_NAMESPACE: {{ .Values.registry.security.trust.k8sSecrets.namespace | quote }}
+  {{- end }}
+  {{- if .Values.registry.security.trust.k8sSecrets.labelSelector }}
+  MCP_MESH_K8S_LABEL_SELECTOR: {{ .Values.registry.security.trust.k8sSecrets.labelSelector | quote }}
+  {{- end }}
+  {{- if .Values.registry.security.trust.spire.enabled }}
+  MCP_MESH_SPIRE_SOCKET: {{ .Values.registry.security.trust.spire.socketPath | quote }}
+  {{- end }}
+  {{- if gt (int .Values.registry.security.adminPort) 0 }}
+  MCP_MESH_ADMIN_PORT: {{ .Values.registry.security.adminPort | quote }}
+  {{- end }}
+
   # Redis configuration for session/trace storage
   {{- if .Values.registry.redis.enabled }}
   REDIS_URL: {{ printf "redis://%s:%v" .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}

@@ -107,6 +107,29 @@ mesh:
   tracingEnabled: true
   metricsEnabled: true
 
+  # TLS configuration for agent-to-registry communication
+  tls:
+    # TLS mode: off, auto, strict
+    mode: ""
+    # Credential provider: file (default), spire, vault
+    provider: ""
+    # Existing secret containing agent cert/key
+    certSecret: ""
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    # Existing secret containing CA certificate
+    caSecret: ""
+    caKey: "ca.crt"
+    # SPIRE workload API socket
+    spire:
+      enabled: false
+      socketPath: "/run/spire/agent/sockets/agent.sock"
+    # HashiCorp Vault
+    vault:
+      enabled: false
+      addr: ""
+      pkiPath: ""
+
 # Agent-specific configuration
 agent:
   # Runtime type (auto-detected from image if empty)

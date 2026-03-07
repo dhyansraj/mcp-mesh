@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -31,6 +32,44 @@ type RegistryResponse struct {
 	Count  int             `json:"count"`
 }
 
+// newTLSSkipVerifyClient returns an HTTP client that skips TLS certificate verification.
+// This is used for meshctl connecting to registries with self-signed certs from the built-in mini-CA.
+func newTLSSkipVerifyClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+}
+
+// newTLSClientWithOptionalCert creates an HTTP client that skips server cert
+// verification and loads client certs from MCP_MESH_TLS_CERT/KEY env vars if set.
+// This allows CLI commands to work with registries running in strict TLS mode.
+func newTLSClientWithOptionalCert() *http.Client {
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	certFile := os.Getenv("MCP_MESH_TLS_CERT")
+	keyFile := os.Getenv("MCP_MESH_TLS_KEY")
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err == nil {
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+	}
+
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+}
+
 // IsPortAvailable checks if a port is available for use
 func IsPortAvailable(host string, port int) bool {
 	address := fmt.Sprintf("%s:%d", host, port)
@@ -47,8 +86,9 @@ func WaitForRegistry(registryURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	healthURL := registryURL + "/health"
 
+	client := newTLSSkipVerifyClient()
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(healthURL)
+		resp, err := client.Get(healthURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
 			return nil
@@ -65,7 +105,8 @@ func WaitForRegistry(registryURL string, timeout time.Duration) error {
 // IsRegistryRunning checks if the registry is currently running
 func IsRegistryRunning(registryURL string) bool {
 	healthURL := registryURL + "/health"
-	resp, err := http.Get(healthURL)
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Get(healthURL)
 	if err != nil {
 		return false
 	}
@@ -265,7 +306,8 @@ func StartPythonAgent(agentPath string, config *CLIConfig) (*exec.Cmd, error) {
 // GetRegistryAgents retrieves the list of agents from the registry
 func GetRegistryAgents(registryURL string) ([]RegistryAgent, error) {
 	agentsURL := registryURL + "/agents"
-	resp, err := http.Get(agentsURL)
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Get(agentsURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to registry: %w", err)
 	}

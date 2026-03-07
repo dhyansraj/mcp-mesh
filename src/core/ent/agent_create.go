@@ -199,6 +199,20 @@ func (ac *AgentCreate) SetNillableLastFullRefresh(t *time.Time) *AgentCreate {
 	return ac
 }
 
+// SetEntityID sets the "entity_id" field.
+func (ac *AgentCreate) SetEntityID(s string) *AgentCreate {
+	ac.mutation.SetEntityID(s)
+	return ac
+}
+
+// SetNillableEntityID sets the "entity_id" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableEntityID(s *string) *AgentCreate {
+	if s != nil {
+		ac.SetEntityID(*s)
+	}
+	return ac
+}
+
 // SetID sets the "id" field.
 func (ac *AgentCreate) SetID(s string) *AgentCreate {
 	ac.mutation.SetID(s)
@@ -483,6 +497,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.LastFullRefresh(); ok {
 		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
 		_node.LastFullRefresh = value
+	}
+	if value, ok := ac.mutation.EntityID(); ok {
+		_spec.SetField(agent.FieldEntityID, field.TypeString, value)
+		_node.EntityID = &value
 	}
 	if nodes := ac.mutation.CapabilitiesIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

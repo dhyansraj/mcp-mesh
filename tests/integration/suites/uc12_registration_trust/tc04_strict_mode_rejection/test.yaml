@@ -1,0 +1,140 @@
+name: "Strict Mode - Reject Uncertified Agents"
+description: "Verify registry in strict mode rejects agents without valid client certificates"
+tags:
+  - registration-trust
+  - tls
+  - strict
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Generate TLS certs via meshctl start then stop"
+    handler: shell
+    command: |
+      meshctl start --registry-only --tls-auto -d
+      sleep 3
+      meshctl stop
+      sleep 2
+      echo "Certs generated:"
+      ls $HOME/.mcp_mesh/tls/ca.pem $HOME/.mcp_mesh/tls/local-dev/registry-cert.pem $HOME/.mcp_mesh/tls/local-dev/registry-key.pem
+    workdir: /workspace
+    capture: cert_gen
+
+  - name: "Start registry with strict mode"
+    handler: shell
+    command: |
+      MCP_MESH_TLS_MODE=strict \
+      MCP_MESH_TRUST_BACKEND=localca \
+      MCP_MESH_TRUST_DIR=$HOME/.mcp_mesh/tls \
+      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      mcp-mesh-registry -host localhost -port 8000 &>/tmp/registry-strict.log &
+      REGISTRY_PID=$!
+      echo "$REGISTRY_PID" > /tmp/tc04_registry.pid
+      echo "REGISTRY_PID=$REGISTRY_PID"
+      sleep 3
+      # Verify strict registry is up
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "NO_CERT_HEALTH_CODE=$HTTP_CODE"
+    capture: strict_start
+
+  - name: "Verify strict mode is active (no cert = 403)"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -sk -o /tmp/health_body -w "%{http_code}" https://localhost:8000/health)
+      BODY=$(cat /tmp/health_body)
+      echo "HTTP_CODE=$HTTP_CODE"
+      echo "BODY=$BODY"
+    capture: no_cert_health
+
+  - name: "Start agent WITHOUT client certs (should fail to register)"
+    handler: shell
+    command: |
+      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
+      python system_agent.py > /tmp/agent-no-cert.log 2>&1 &
+      AGENT_PID=$!
+      echo "AGENT_PID=$AGENT_PID"
+      # Wait for agent to attempt registration and get rejected
+      for i in $(seq 1 20); do
+        if grep -q "403" /tmp/agent-no-cert.log 2>/dev/null; then
+          echo "REJECTED after $((i)) seconds"
+          break
+        fi
+        sleep 1
+      done
+      echo "--- Agent rejection logs ---"
+      grep -i "403\|certificate required" /tmp/agent-no-cert.log | head -5
+      kill $AGENT_PID 2>/dev/null || true
+    workdir: /workspace
+    capture: no_cert_agent
+    timeout: 60
+
+  - name: "Health check WITH valid client cert (should succeed)"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -sk -o /tmp/heartbeat_body -w "%{http_code}" \
+        --cert $HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+        --key $HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+        https://localhost:8000/health)
+      BODY=$(cat /tmp/heartbeat_body)
+      echo "HTTP_CODE=$HTTP_CODE"
+      echo "BODY=$BODY"
+    capture: with_cert_health
+
+  - name: "Stop strict registry"
+    handler: shell
+    command: |
+      REGISTRY_PID=$(cat /tmp/tc04_registry.pid 2>/dev/null)
+      if [ -n "$REGISTRY_PID" ]; then kill $REGISTRY_PID 2>/dev/null; fi
+      # Fallback: stop any remaining registry
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.cert_gen} contains 'ca.pem'"
+    message: "TLS certificates should be generated"
+
+  - expr: "${captured.strict_start} contains 'NO_CERT_HEALTH_CODE=403'"
+    message: "Strict registry should reject health check without cert"
+
+  - expr: "${captured.no_cert_health} contains '403'"
+    message: "Health check without cert should return 403"
+
+  - expr: "${captured.no_cert_health} contains 'certificate required'"
+    message: "Error should mention certificate required"
+
+  - expr: "${captured.no_cert_agent} contains '403'"
+    message: "Agent without cert should get 403 from strict registry"
+
+  - expr: "${captured.no_cert_agent} contains 'certificate required'"
+    message: "Agent rejection should mention certificate required"
+
+  - expr: "${captured.with_cert_health} contains '200'"
+    message: "Health check with valid cert should return 200"
+
+  - expr: "${captured.with_cert_health} contains 'healthy'"
+    message: "Health check with valid cert should show healthy"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      # Catch any manually-started registry processes
+      kill $(cat /tmp/tc04_registry.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

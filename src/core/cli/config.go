@@ -47,6 +47,10 @@ type CLIConfig struct {
 	Version      string    `json:"version"`       // Configuration version for migration
 	LastModified time.Time `json:"last_modified"` // Last modification timestamp
 
+	// TLS auto-generation (not persisted, set at runtime)
+	TLSAuto          bool           `json:"-"`
+	TLSAutoConfigRef *TLSAutoConfig `json:"-"`
+
 	// Thread safety
 	mu sync.RWMutex `json:"-"`
 }
@@ -559,7 +563,11 @@ func (c *CLIConfig) Clone() *CLIConfig {
 func (c *CLIConfig) GetRegistryURL() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return fmt.Sprintf("http://%s:%d", c.RegistryHost, c.RegistryPort)
+	scheme := "http"
+	if c.TLSAuto {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, c.RegistryHost, c.RegistryPort)
 }
 
 // GetEnvironmentVariables returns environment variables for agent processes

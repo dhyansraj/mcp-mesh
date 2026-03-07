@@ -24,6 +24,7 @@ var (
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "last_full_refresh", Type: field.TypeTime},
+		{Name: "entity_id", Type: field.TypeString, Nullable: true},
 	}
 	// AgentsTable holds the schema information for the "agents" table.
 	AgentsTable = &schema.Table{
@@ -302,7 +303,7 @@ var (
 	// RegistryEventsColumns holds the columns for the "registry_events" table.
 	RegistryEventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister", "unhealthy"}},
+		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister", "unhealthy", "rotate"}},
 		{Name: "function_name", Type: field.TypeString, Nullable: true},
 		{Name: "timestamp", Type: field.TypeTime},
 		{Name: "data", Type: field.TypeJSON},

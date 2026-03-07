@@ -64,6 +64,10 @@ func (Agent) Fields() []ent.Field {
 		field.Time("last_full_refresh").
 			Default(time.Now).
 			Comment("Timestamp of last full heartbeat (vs HEAD check)"),
+		field.String("entity_id").
+			Optional().
+			Nillable().
+			Comment("Entity ID from TLS certificate verification"),
 	}
 }
 

@@ -1,0 +1,10 @@
+# Namespace-scoped Issuer backed by the root CA.
+# This issuer signs all leaf certificates within the mcp-mesh namespace.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mcp-mesh-ca-issuer
+  namespace: mcp-mesh
+spec:
+  ca:
+    secretName: mcp-mesh-ca-secret

@@ -38,6 +38,12 @@ type RegistryConfig struct {
 	StartupCleanupThreshold  int  // Threshold in seconds for marking stale agents on startup (default: 30)
 	EnableResponseCache      bool
 	TracingEnabled           bool // Enable distributed tracing
+	TlsMode                  string // "off", "auto", "strict" — from MCP_MESH_TLS_MODE
+	TrustBackend             string // comma-separated backend names — from MCP_MESH_TRUST_BACKEND
+	TlsCertFile              string // registry server cert — from MCP_MESH_TLS_CERT
+	TlsKeyFile               string // registry server key — from MCP_MESH_TLS_KEY
+	TrustDir                 string // directory for FileStore backend — from MCP_MESH_TRUST_DIR
+	AdminPort                int    // admin API port — from MCP_MESH_ADMIN_PORT (0 = disabled)
 }
 
 // ResponseCache provides caching functionality matching Python implementation
@@ -57,6 +63,7 @@ type AgentRegistrationRequest struct {
 	AgentID   string                 `json:"agent_id" binding:"required"`
 	Metadata  map[string]interface{} `json:"metadata" binding:"required"`
 	Timestamp string                 `json:"timestamp" binding:"required"`
+	EntityID  string                 `json:"entity_id,omitempty"` // From TLS certificate verification
 }
 
 // AgentRegistrationResponse matches Python response format exactly
@@ -159,6 +166,7 @@ type HeartbeatRequest struct {
 	AgentID  string                 `json:"agent_id" binding:"required"`
 	Status   string                 `json:"status,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	EntityID string                 `json:"entity_id,omitempty"` // From TLS certificate verification
 }
 
 // HeartbeatResponse matches Python response format exactly
@@ -318,6 +326,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		if httpPort > 0 {
 			agentCreate = agentCreate.SetHTTPPort(httpPort)
 		}
+		if req.EntityID != "" {
+			agentCreate = agentCreate.SetEntityID(req.EntityID)
+		}
 
 		// Check if agent already exists and update or create
 		existingAgent, err := tx.Agent.Query().Where(agent.IDEQ(req.AgentID)).Only(ctx)
@@ -351,6 +362,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			}
 			if httpPort > 0 {
 				updateBuilder = updateBuilder.SetHTTPPort(httpPort)
+			}
+			if req.EntityID != "" {
+				updateBuilder = updateBuilder.SetEntityID(req.EntityID)
 			}
 
 			existingAgent, err = updateBuilder.Save(ctx)
@@ -951,6 +965,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					AgentID:   req.AgentID,
 					Metadata:  req.Metadata,
 					Timestamp: now.Format(time.RFC3339),
+					EntityID:  req.EntityID,
 				}
 				regResp, err := s.RegisterAgent(fullReq)
 				if err != nil {
@@ -1073,6 +1088,9 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}
 				if httpPort > 0 {
 					updateBuilder = updateBuilder.SetHTTPPort(httpPort)
+				}
+				if req.EntityID != "" {
+					updateBuilder = updateBuilder.SetEntityID(req.EntityID)
 				}
 
 				existingAgent, err = updateBuilder.Save(ctx)
@@ -1369,6 +1387,7 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			CreatedAt: &a.CreatedAt,
 			LastSeen:  &a.UpdatedAt,
 		}
+		agentInfo.EntityId = a.EntityID
 
 		// Add capabilities
 		var capabilities []generated.CapabilityInfo
@@ -1650,7 +1669,7 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 		Query().
 		Where(
 			registryevent.TimestampGT(lastRefresh),
-			registryevent.EventTypeIn("register", "unregister", "unhealthy"),
+			registryevent.EventTypeIn("register", "unregister", "unhealthy", "rotate"),
 		).
 		Count(ctx)
 
@@ -1659,6 +1678,52 @@ func (s *EntService) HasTopologyChanges(ctx context.Context, agentID string, las
 	}
 
 	return count > 0, nil
+}
+
+// TriggerRotation creates "rotate" events for matching agents so they re-register
+// on their next heartbeat. If entityID is empty, all healthy agents are targeted.
+func (s *EntService) TriggerRotation(ctx context.Context, entityID string) (int, error) {
+	// Build query for healthy agents
+	query := s.entDB.Client.Agent.Query().Where(agent.StatusEQ(agent.StatusHealthy))
+	if entityID != "" {
+		query = query.Where(agent.EntityIDEQ(entityID))
+	}
+
+	agents, err := query.All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query agents for rotation: %w", err)
+	}
+
+	if len(agents) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	affected := 0
+
+	for _, a := range agents {
+		eventData := map[string]interface{}{
+			"agent_id":  a.ID,
+			"name":      a.Name,
+			"entity_id": a.EntityID,
+			"reason":    "cert_rotation",
+		}
+
+		_, err := s.entDB.Client.RegistryEvent.Create().
+			SetEventType(registryevent.EventTypeRotate).
+			SetAgentID(a.ID).
+			SetTimestamp(now).
+			SetData(eventData).
+			Save(ctx)
+		if err != nil {
+			s.logger.Warning("Failed to create rotate event for agent %s: %v", a.ID, err)
+			continue
+		}
+		affected++
+	}
+
+	s.logger.Info("Rotation triggered for %d agent(s) (entity_id=%q)", affected, entityID)
+	return affected, nil
 }
 
 // UnregisterAgent gracefully unregisters an agent by marking it as unhealthy

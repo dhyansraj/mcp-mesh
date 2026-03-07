@@ -1,0 +1,114 @@
+name: "Cert Rotation Trigger - Re-registration via Heartbeat"
+description: "Verify meshctl entity rotate triggers agent re-registration through heartbeat cycle"
+tags:
+  - registration-trust
+  - rotation
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start registry with TLS auto"
+    handler: shell
+    command: "meshctl start --registry-only --tls-auto -d"
+    workdir: /workspace
+    capture: registry_start
+
+  - name: "Wait for registry health"
+    handler: wait
+    type: http
+    url: "https://localhost:8000/health"
+    timeout: 15
+    interval: 2
+
+  - name: "Start Python agent with TLS auto"
+    handler: shell
+    command: |
+      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
+      python system_agent.py > /tmp/agent-rotation.log 2>&1 &
+      AGENT_PID=$!
+      echo "$AGENT_PID" > /tmp/tc09_agent.pid
+      echo "AGENT_PID=$AGENT_PID"
+
+      # Wait for registration
+      for i in $(seq 1 30); do
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "system-agent"; then
+          echo "REGISTERED after $i seconds"
+          break
+        fi
+        sleep 1
+      done
+    workdir: /workspace
+    capture: agent_start
+    timeout: 60
+
+  - name: "Capture initial agents list"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents
+    capture: agents_before
+
+  - name: "Trigger cert rotation"
+    handler: shell
+    command: |
+      meshctl entity rotate 2>&1
+    capture: rotate_output
+
+  - name: "Wait for heartbeat re-registration cycle"
+    handler: wait
+    seconds: 8
+
+  - name: "Capture agents list after rotation"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents
+    capture: agents_after
+
+  - name: "Stop agent"
+    handler: shell
+    command: |
+      kill $(cat /tmp/tc09_agent.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+
+  - name: "Stop registry"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.agent_start} contains 'REGISTERED'"
+    message: "Agent should register with registry"
+
+  - expr: ${jq:captured.agents_before:[.agents[] | select(.id | contains("system-agent"))] | length} > 0
+    message: "Agent should be listed before rotation"
+
+  - expr: "${captured.rotate_output} contains 're-register'"
+    message: "Rotation command should indicate agents will re-register"
+
+  - expr: ${jq:captured.agents_after:[.agents[] | select(.id | contains("system-agent"))] | length} > 0
+    message: "Agent should still be registered after rotation (valid cert survives)"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      kill $(cat /tmp/tc09_agent.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -48,6 +48,7 @@ redis = { version = "0.32.7", features = ["tokio-comp"] }
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1"
+tempfile = "3"
 
 [build-dependencies]
 cbindgen = "0.27"  # C header generation for FFI

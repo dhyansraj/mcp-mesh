@@ -1,0 +1,24 @@
+# Root CA certificate, signed by the self-signed issuer.
+# The resulting CA cert + key are stored in Secret "mcp-mesh-ca-secret".
+# All mesh leaf certs will chain to this CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mcp-mesh-root-ca
+  namespace: mcp-mesh
+spec:
+  isCA: true
+  duration: 87600h # 10 years
+  renewBefore: 8760h # Renew 1 year before expiry
+  commonName: mcp-mesh-root-ca
+  subject:
+    organizations:
+      - mcp-mesh
+  secretName: mcp-mesh-ca-secret
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: mcp-mesh-selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io

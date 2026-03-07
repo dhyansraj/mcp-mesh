@@ -1,0 +1,31 @@
+# Registry certificate issued by Vault.
+# Vault signs this using the "mcp-mesh" PKI role.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mcp-mesh-registry-cert
+  namespace: mcp-mesh
+spec:
+  secretName: mcp-mesh-registry-tls
+  duration: 8760h # 1 year
+  renewBefore: 720h # Renew 30 days before expiry
+  commonName: mcp-mesh-registry
+  dnsNames:
+    - mcp-mesh-registry
+    - mcp-mesh-registry.mcp-mesh
+    - mcp-mesh-registry.mcp-mesh.svc
+    - mcp-mesh-registry.mcp-mesh.svc.cluster.local
+    - mcp-core-mcp-mesh-registry
+    - mcp-core-mcp-mesh-registry.mcp-mesh
+    - mcp-core-mcp-mesh-registry.mcp-mesh.svc
+    - mcp-core-mcp-mesh-registry.mcp-mesh.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - client auth
+  issuerRef:
+    name: mcp-mesh-vault-issuer
+    kind: Issuer
+    group: cert-manager.io

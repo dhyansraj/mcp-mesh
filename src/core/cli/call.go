@@ -288,14 +288,11 @@ func parseToolSpecifier(spec string) (agentName, toolName string) {
 
 // createHTTPClient creates an HTTP client with optional TLS skip
 func createHTTPClient(timeoutSeconds int, insecure bool) *http.Client {
-	transport := &http.Transport{}
-
-	if insecure {
-		transport.TLSClientConfig = &tls.Config{
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
-		}
+		},
 	}
-
 	return &http.Client{
 		Timeout:   time.Duration(timeoutSeconds) * time.Second,
 		Transport: transport,

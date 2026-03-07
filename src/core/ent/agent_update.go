@@ -246,6 +246,26 @@ func (au *AgentUpdate) SetNillableLastFullRefresh(t *time.Time) *AgentUpdate {
 	return au
 }
 
+// SetEntityID sets the "entity_id" field.
+func (au *AgentUpdate) SetEntityID(s string) *AgentUpdate {
+	au.mutation.SetEntityID(s)
+	return au
+}
+
+// SetNillableEntityID sets the "entity_id" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableEntityID(s *string) *AgentUpdate {
+	if s != nil {
+		au.SetEntityID(*s)
+	}
+	return au
+}
+
+// ClearEntityID clears the value of the "entity_id" field.
+func (au *AgentUpdate) ClearEntityID() *AgentUpdate {
+	au.mutation.ClearEntityID()
+	return au
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by IDs.
 func (au *AgentUpdate) AddCapabilityIDs(ids ...int) *AgentUpdate {
 	au.mutation.AddCapabilityIDs(ids...)
@@ -546,6 +566,12 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if value, ok := au.mutation.LastFullRefresh(); ok {
 		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
+	}
+	if value, ok := au.mutation.EntityID(); ok {
+		_spec.SetField(agent.FieldEntityID, field.TypeString, value)
+	}
+	if au.mutation.EntityIDCleared() {
+		_spec.ClearField(agent.FieldEntityID, field.TypeString)
 	}
 	if au.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1005,6 +1031,26 @@ func (auo *AgentUpdateOne) SetNillableLastFullRefresh(t *time.Time) *AgentUpdate
 	return auo
 }
 
+// SetEntityID sets the "entity_id" field.
+func (auo *AgentUpdateOne) SetEntityID(s string) *AgentUpdateOne {
+	auo.mutation.SetEntityID(s)
+	return auo
+}
+
+// SetNillableEntityID sets the "entity_id" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableEntityID(s *string) *AgentUpdateOne {
+	if s != nil {
+		auo.SetEntityID(*s)
+	}
+	return auo
+}
+
+// ClearEntityID clears the value of the "entity_id" field.
+func (auo *AgentUpdateOne) ClearEntityID() *AgentUpdateOne {
+	auo.mutation.ClearEntityID()
+	return auo
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by IDs.
 func (auo *AgentUpdateOne) AddCapabilityIDs(ids ...int) *AgentUpdateOne {
 	auo.mutation.AddCapabilityIDs(ids...)
@@ -1335,6 +1381,12 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if value, ok := auo.mutation.LastFullRefresh(); ok {
 		_spec.SetField(agent.FieldLastFullRefresh, field.TypeTime, value)
+	}
+	if value, ok := auo.mutation.EntityID(); ok {
+		_spec.SetField(agent.FieldEntityID, field.TypeString, value)
+	}
+	if auo.mutation.EntityIDCleared() {
+		_spec.ClearField(agent.FieldEntityID, field.TypeString)
 	}
 	if auo.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{

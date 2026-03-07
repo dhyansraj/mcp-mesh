@@ -1,0 +1,120 @@
+name: "Entity Management - Register, List, Revoke"
+description: "Verify meshctl entity register/list/revoke commands work correctly"
+tags:
+  - registration-trust
+  - entity
+  - cli
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Generate TLS certs"
+    handler: shell
+    command: |
+      meshctl start --registry-only --tls-auto -d
+      sleep 3
+      meshctl stop
+      sleep 2
+      echo "CERTS_READY=true"
+      ls $HOME/.mcp_mesh/tls/ca.pem
+    workdir: /workspace
+    capture: cert_gen
+
+  - name: "Register entity"
+    handler: shell
+    command: |
+      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem
+      echo "EXIT_CODE=$?"
+    capture: register_output
+
+  - name: "List entities"
+    handler: shell
+    command: meshctl entity list
+    capture: list_output
+
+  - name: "List entities JSON"
+    handler: shell
+    command: meshctl entity list --json
+    capture: list_json
+
+  - name: "Register duplicate should fail"
+    handler: shell
+    command: |
+      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem 2>&1 || true
+    capture: duplicate_output
+
+  - name: "Register duplicate with force"
+    handler: shell
+    command: |
+      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem --force
+      echo "FORCE_EXIT=$?"
+    capture: force_output
+
+  - name: "Revoke without force should refuse"
+    handler: shell
+    command: |
+      meshctl entity revoke test-corp 2>&1 || true
+    capture: revoke_noforce
+
+  - name: "Revoke with force"
+    handler: shell
+    command: |
+      meshctl entity revoke test-corp --force
+      echo "REVOKE_EXIT=$?"
+    capture: revoke_output
+
+  - name: "List after revoke"
+    handler: shell
+    command: |
+      meshctl entity list | grep -c "test-corp" || echo "COUNT=0"
+    capture: count_after_revoke
+
+  - name: "Revoke non-existent"
+    handler: shell
+    command: |
+      meshctl entity revoke nonexistent --force 2>&1 || true
+    capture: revoke_missing
+
+assertions:
+  - expr: "${captured.cert_gen} contains 'ca.pem'"
+    message: "TLS certificates should be generated"
+
+  - expr: "${captured.register_output} contains 'registered'"
+    message: "Entity should be registered successfully"
+
+  - expr: "${captured.list_output} contains 'test-corp'"
+    message: "Entity list should include test-corp"
+
+  - expr: "${captured.list_json} contains 'test-corp'"
+    message: "Entity list JSON should include test-corp"
+
+  - expr: "${captured.duplicate_output} contains 'already registered'"
+    message: "Duplicate registration should report already registered"
+
+  - expr: "${captured.force_output} contains 'FORCE_EXIT=0'"
+    message: "Force registration should succeed with exit code 0"
+
+  - expr: "${captured.revoke_noforce} contains '--force'"
+    message: "Revoke without force should mention --force flag"
+
+  - expr: "${captured.revoke_output} contains 'revoked'"
+    message: "Entity should be revoked successfully"
+
+  - expr: "${captured.count_after_revoke} contains 'COUNT=0'"
+    message: "Entity list should not contain test-corp after revocation"
+
+  - expr: "${captured.revoke_missing} contains 'not found'"
+    message: "Revoking non-existent entity should report not found"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
