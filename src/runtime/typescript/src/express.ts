@@ -200,12 +200,31 @@ export class MeshExpress {
     return new Promise((resolve, reject) => {
       try {
         const bindHost = process.env.HOST ?? "0.0.0.0";
-        this.server = this.app.listen(this.config.httpPort, bindHost, () => {
-          console.log(`Service listening on port ${this.config.httpPort}`);
-          resolve();
-        });
 
-        this.server.on("error", (err) => {
+        // Use HTTPS when TLS is enabled
+        const { getTlsOptions } = require("./tls-config.js");
+        const tlsOpts = getTlsOptions();
+        if (tlsOpts) {
+          const https = require("node:https");
+          const serverOpts = {
+            ...tlsOpts,
+            requestCert: true,
+            rejectUnauthorized: true,
+          };
+          this.server = https.createServer(serverOpts, this.app).listen(
+            this.config.httpPort, bindHost, () => {
+              console.log(`Service listening on port ${this.config.httpPort} (HTTPS)`);
+              resolve();
+            }
+          );
+        } else {
+          this.server = this.app.listen(this.config.httpPort, bindHost, () => {
+            console.log(`Service listening on port ${this.config.httpPort}`);
+            resolve();
+          });
+        }
+
+        this.server!.on("error", (err) => {
           reject(err);
         });
       } catch (err) {

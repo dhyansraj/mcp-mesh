@@ -294,6 +294,16 @@ export declare function resolveConfigBool(keyName: string, paramValue?: boolean 
 export declare function resolveConfigInt(keyName: string, paramValue?: number | undefined | null): number | null
 
 /**
+ * Get TLS configuration resolved from environment variables.
+ *
+ * Returns JSON string with TLS mode, cert paths, and enabled status.
+ * SDKs should call this instead of reading TLS env vars directly.
+ *
+ * @returns JSON string: {"enabled": boolean, "mode": string, "cert_path": string|null, "key_path": string|null, "ca_path": string|null}
+ */
+export declare function getTlsConfig(): string
+
+/**
  * Start an agent runtime with the given specification.
  *
  * This spawns a background Tokio runtime that handles:
