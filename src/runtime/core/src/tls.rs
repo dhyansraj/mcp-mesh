@@ -15,6 +15,9 @@ use std::env;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
 /// Errors that can occur during TLS configuration.
 #[derive(Debug, Error)]
 pub enum TlsError {
@@ -182,6 +185,29 @@ impl TlsConfig {
         debug!("Loaded CA certificate from {}", ca_path);
         Ok(Some(cert))
     }
+}
+
+// =============================================================================
+// Python bindings
+// =============================================================================
+
+#[cfg(feature = "python")]
+#[pyfunction]
+pub fn get_tls_config_py() -> String {
+    let config = TlsConfig::from_env();
+    let mode_str = match config.mode {
+        TlsMode::Off => "off",
+        TlsMode::Auto => "auto",
+        TlsMode::Strict => "strict",
+    };
+    serde_json::json!({
+        "enabled": config.is_enabled(),
+        "mode": mode_str,
+        "cert_path": config.cert_path,
+        "key_path": config.key_path,
+        "ca_path": config.ca_path,
+    })
+    .to_string()
 }
 
 #[cfg(test)]

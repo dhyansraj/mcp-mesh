@@ -471,6 +471,32 @@ pub fn get_env_var(key_name: String) -> Option<String> {
 }
 
 // =============================================================================
+// TLS configuration
+// =============================================================================
+
+/// Get TLS configuration resolved from environment variables.
+///
+/// Returns JSON string with TLS config including mode, cert paths, and enabled status.
+/// SDKs should call this instead of reading TLS env vars directly.
+#[napi]
+pub fn get_tls_config() -> String {
+    let config = crate::tls::TlsConfig::from_env();
+    let mode_str = match config.mode {
+        crate::tls::TlsMode::Off => "off",
+        crate::tls::TlsMode::Auto => "auto",
+        crate::tls::TlsMode::Strict => "strict",
+    };
+    serde_json::json!({
+        "enabled": config.is_enabled(),
+        "mode": mode_str,
+        "cert_path": config.cert_path,
+        "key_path": config.key_path,
+        "ca_path": config.ca_path,
+    })
+    .to_string()
+}
+
+// =============================================================================
 // Tracing publish functions
 // =============================================================================
 

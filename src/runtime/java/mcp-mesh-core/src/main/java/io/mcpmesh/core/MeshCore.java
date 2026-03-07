@@ -201,6 +201,16 @@ public interface MeshCore {
     void mesh_free_string(Pointer s);
 
     /**
+     * Get TLS configuration resolved from environment variables.
+     *
+     * Returns JSON with TLS mode, cert paths, and enabled status.
+     * SDKs should call this instead of reading TLS env vars directly.
+     *
+     * @return JSON string (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_get_tls_config();
+
+    /**
      * Get library version string.
      *
      * @return Version string (do not free)

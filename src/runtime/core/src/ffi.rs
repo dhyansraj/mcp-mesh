@@ -644,6 +644,54 @@ pub extern "C" fn mesh_version() -> *const c_char {
         .as_ptr()
 }
 
+/// Get TLS configuration resolved from environment variables.
+///
+/// Returns a JSON string with the TLS config:
+/// ```json
+/// {
+///   "enabled": true,
+///   "mode": "auto",
+///   "cert_path": "/path/to/cert.pem",
+///   "key_path": "/path/to/key.pem",
+///   "ca_path": "/path/to/ca.pem"
+/// }
+/// ```
+///
+/// When TLS is off, returns:
+/// ```json
+/// {"enabled": false, "mode": "off", "cert_path": null, "key_path": null, "ca_path": null}
+/// ```
+///
+/// # Returns
+/// * JSON string (caller must free with `mesh_free_string`)
+/// * NULL on error (check `mesh_last_error`)
+#[no_mangle]
+pub extern "C" fn mesh_get_tls_config() -> *mut c_char {
+    let config = crate::tls::TlsConfig::from_env();
+
+    let mode_str = match config.mode {
+        crate::tls::TlsMode::Off => "off",
+        crate::tls::TlsMode::Auto => "auto",
+        crate::tls::TlsMode::Strict => "strict",
+    };
+
+    let json = serde_json::json!({
+        "enabled": config.is_enabled(),
+        "mode": mode_str,
+        "cert_path": config.cert_path,
+        "key_path": config.key_path,
+        "ca_path": config.ca_path,
+    });
+
+    match CString::new(json.to_string()) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
 // =============================================================================
 // Tracing Functions
 // =============================================================================
