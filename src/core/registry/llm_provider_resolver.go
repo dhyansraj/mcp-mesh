@@ -189,7 +189,11 @@ func buildProviderEndpoint(cap *ent.Capability) string {
 		host = host[8:]
 	}
 
-	return fmt.Sprintf("http://%s:%d", host, agent.HTTPPort)
+	scheme := "http"
+	if agent.EntityID != nil && *agent.EntityID != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, agent.HTTPPort)
 }
 
 // ResolveLLMProvidersFromMetadata resolves LLM providers from heartbeat metadata
