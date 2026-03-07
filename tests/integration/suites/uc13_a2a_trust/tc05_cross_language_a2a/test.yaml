@@ -1,0 +1,185 @@
+name: "A2A mTLS - Cross-Language Communication"
+description: "Verify Python, TypeScript, and Java agents all communicate over mTLS in a single mesh"
+tags:
+  - a2a-trust
+  - tls
+  - cross-language
+  - multi-language
+  - python
+  - typescript
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy all agents to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      cp -rL /uc-artifacts/ts-greeter /workspace/ts-greeter
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-greeter
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  - name: "Start Python system agent with TLS auto (also starts registry)"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: py_start
+
+  - name: "Wait for Python agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Start TypeScript greeter with TLS auto"
+    handler: shell
+    command: "meshctl start ts-greeter/index.ts --tls-auto -d"
+    workdir: /workspace
+    capture: ts_start
+
+  - name: "Wait for TypeScript agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Start Java greeter with TLS auto"
+    handler: shell
+    command: "meshctl start java-greeter --tls-auto -d"
+    workdir: /workspace
+    capture: java_start
+
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter.*Java"; then
+          echo "JAVA_REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: Java agent did not register within 90s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    workdir: /workspace
+    capture: java_wait
+    timeout: 120
+
+  - name: "List all agents"
+    handler: shell
+    command: |
+      meshctl list 2>&1
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Dump agent logs for diagnostics"
+    handler: shell
+    command: |
+      echo "=== system-agent logs ==="
+      meshctl logs system-agent 2>&1 | tail -30
+      echo ""
+      echo "=== greeter logs ==="
+      meshctl logs greeter 2>&1 | tail -30
+      echo ""
+      echo "=== Registry agents API ==="
+      curl -sk https://localhost:8000/agents 2>&1 | head -50
+    workdir: /workspace
+    capture: diagnostics
+    ignore_errors: true
+
+  - name: "Verify all agents have HTTPS endpoints via registry API"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          print(f'{a[\"name\"]}: endpoint={a.get(\"endpoint\", \"\")}')
+      https_count = sum(1 for a in data.get('agents', []) if a.get('endpoint', '').startswith('https://'))
+      total_agents = len(data.get('agents', []))
+      print(f'HTTPS_COUNT={https_count}')
+      print(f'TOTAL_AGENTS={total_agents}')
+      if https_count >= 3:
+          print('ALL_HTTPS=true')
+      else:
+          print('ALL_HTTPS=false')
+      "
+    workdir: /workspace
+    capture: https_check
+
+  - name: "Call Python system agent tool over mTLS"
+    handler: shell
+    command: |
+      meshctl call system:get_current_time '{}' 2>&1
+    workdir: /workspace
+    capture: py_call
+
+  - name: "Call TypeScript greeter over mTLS (depends on system-agent via a2a)"
+    handler: shell
+    command: |
+      meshctl call greeter:greet '{"name":"CrossLangTest"}' 2>&1
+    workdir: /workspace
+    capture: ts_call
+
+  - name: "Call Java greeter over mTLS (depends on system-agent via a2a)"
+    handler: shell
+    command: |
+      meshctl call greet '{"name":"CrossLangJavaTest"}' 2>&1
+    workdir: /workspace
+    capture: java_call
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.java_wait} contains 'JAVA_REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.list_output} contains 'system-agent'"
+    message: "Python system agent should be registered"
+
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Greeter agent(s) should be registered"
+
+  - expr: "${captured.https_check} contains 'ALL_HTTPS=true'"
+    message: "All agents should have HTTPS endpoints"
+
+  - expr: "${captured.py_call} not contains 'error'"
+    message: "Python tool call should succeed over mTLS"
+
+  - expr: "${captured.ts_call} contains 'Hello'"
+    message: "TypeScript greeter a2a call should succeed over mTLS"
+
+  - expr: "${captured.java_call} contains 'Hello'"
+    message: "Java greeter a2a call should succeed over mTLS"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

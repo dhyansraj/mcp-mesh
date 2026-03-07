@@ -1,0 +1,176 @@
+name: "A2A mTLS - Untrusted Agent Rejected"
+description: "Verify agents reject connections from clients with certificates signed by an untrusted CA"
+tags:
+  - a2a-trust
+  - tls
+  - security
+  - rejection
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start system agent with TLS auto"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Dump agent logs for diagnostics"
+    handler: shell
+    command: |
+      echo "=== system-agent logs ==="
+      meshctl logs system-agent 2>&1 | tail -30
+      echo ""
+      echo "=== Registry agents API ==="
+      curl -sk https://localhost:8000/agents 2>&1 | head -50
+    workdir: /workspace
+    capture: diagnostics
+    ignore_errors: true
+
+  - name: "Get agent HTTPS endpoint from registry API"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      echo "AGENT_URL=$AGENT_URL"
+    workdir: /workspace
+    capture: agent_url
+
+  - name: "Generate rogue CA and agent certificate"
+    handler: shell
+    command: |
+      mkdir -p /tmp/rogue-certs
+      cd /tmp/rogue-certs
+      # Generate rogue CA (different trust root)
+      openssl req -x509 -newkey rsa:2048 \
+        -keyout rogue-ca-key.pem -out rogue-ca.pem \
+        -days 1 -nodes -subj "/CN=rogue-ca" 2>&1
+      # Generate rogue agent CSR
+      openssl req -newkey rsa:2048 \
+        -keyout rogue-agent-key.pem -out rogue-agent.csr \
+        -nodes -subj "/CN=rogue-agent" 2>&1
+      # Sign rogue agent cert with rogue CA
+      openssl x509 -req -in rogue-agent.csr \
+        -CA rogue-ca.pem -CAkey rogue-ca-key.pem \
+        -CAcreateserial -out rogue-agent-cert.pem -days 1 2>&1
+      echo "ROGUE_CERTS_GENERATED=true"
+      ls -la /tmp/rogue-certs/
+    capture: rogue_certs
+
+  - name: "Attempt mTLS call with rogue certificate (should fail)"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      echo "Attempting rogue mTLS call to $AGENT_URL..."
+      # Use rogue cert + rogue CA (server won't trust rogue CA)
+      ROGUE_RESULT=$(curl -s -o /tmp/rogue_body -w "%{http_code}" \
+        --cert /tmp/rogue-certs/rogue-agent-cert.pem \
+        --key /tmp/rogue-certs/rogue-agent-key.pem \
+        --cacert /tmp/rogue-certs/rogue-ca.pem \
+        --connect-timeout 10 \
+        -k \
+        ${AGENT_URL}/health 2>&1 || echo "CONNECTION_FAILED")
+      ROGUE_BODY=$(cat /tmp/rogue_body 2>/dev/null || true)
+      echo "ROGUE_RESULT=$ROGUE_RESULT"
+      echo "ROGUE_BODY=$ROGUE_BODY"
+      # Rogue cert should be rejected (TLS handshake failure, connection reset, or 4xx)
+      if echo "$ROGUE_RESULT" | grep -qE "000|CONNECTION_FAILED|reset|error|35|56"; then
+        echo "ROGUE_REJECTED=true"
+      elif echo "$ROGUE_RESULT" | grep -qE "^4[0-9][0-9]$"; then
+        echo "ROGUE_REJECTED=true"
+      else
+        echo "ROGUE_REJECTED=false"
+      fi
+    workdir: /workspace
+    capture: rogue_test
+
+  - name: "Verify legitimate mTLS call still works"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      # Find legitimate agent cert
+      CERT_DIR=$HOME/.mcp_mesh/tls/local-dev/agents
+      LEGIT_CERT=$(ls $CERT_DIR/*-cert.pem 2>/dev/null | head -1)
+      LEGIT_KEY=$(ls $CERT_DIR/*-key.pem 2>/dev/null | head -1)
+      if [ -z "$LEGIT_CERT" ]; then
+        LEGIT_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem
+        LEGIT_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem
+      fi
+      LEGIT_CODE=$(curl -sk -o /tmp/legit_body -w "%{http_code}" \
+        --cert "$LEGIT_CERT" \
+        --key "$LEGIT_KEY" \
+        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        ${AGENT_URL}/health 2>&1)
+      LEGIT_BODY=$(cat /tmp/legit_body 2>/dev/null || true)
+      echo "LEGIT_CODE=$LEGIT_CODE"
+      echo "LEGIT_BODY=$LEGIT_BODY"
+    workdir: /workspace
+    capture: legit_test
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.rogue_certs} contains 'ROGUE_CERTS_GENERATED=true'"
+    message: "Rogue CA and agent certificate should be generated"
+
+  - expr: "${captured.rogue_test} contains 'ROGUE_REJECTED=true'"
+    message: "Agent should reject connections from untrusted CA certificates"
+
+  - expr: "${captured.legit_test} contains 'LEGIT_CODE=200'"
+    message: "Legitimate mTLS call should still succeed"
+
+  - expr: "${captured.legit_test} contains 'healthy'"
+    message: "Legitimate health check should return healthy"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      rm -rf /tmp/rogue-certs 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,182 @@
+name: "A2A mTLS - HTTPS Enforcement"
+description: "Verify agents reject plain HTTP and HTTPS-without-client-cert when started with --tls-auto"
+tags:
+  - a2a-trust
+  - tls
+  - enforcement
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start system agent with TLS auto"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Dump agent logs for diagnostics"
+    handler: shell
+    command: |
+      echo "=== system-agent logs ==="
+      meshctl logs system-agent 2>&1 | tail -30
+      echo ""
+      echo "=== Registry agents API ==="
+      curl -sk https://localhost:8000/agents 2>&1 | head -50
+    workdir: /workspace
+    capture: diagnostics
+    ignore_errors: true
+
+  - name: "Get agent HTTPS endpoint from registry API"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      echo "AGENT_URL=$AGENT_URL"
+      # Extract host and port from HTTPS URL
+      AGENT_HOST_PORT=$(echo "$AGENT_URL" | sed 's|https://||')
+      echo "AGENT_HOST_PORT=$AGENT_HOST_PORT"
+    workdir: /workspace
+    capture: agent_url
+
+  - name: "Test plain HTTP to agent port (should fail)"
+    handler: shell
+    command: |
+      # Extract port from the HTTPS endpoint via registry API
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      AGENT_PORT=$(echo "$AGENT_URL" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+      echo "Testing plain HTTP to port $AGENT_PORT..."
+      HTTP_RESULT=$(curl -s -o /tmp/http_body -w "%{http_code}" --connect-timeout 5 http://localhost:$AGENT_PORT/health 2>&1 || echo "CONNECTION_FAILED")
+      HTTP_BODY=$(cat /tmp/http_body 2>/dev/null || true)
+      echo "HTTP_RESULT=$HTTP_RESULT"
+      echo "HTTP_BODY=$HTTP_BODY"
+      # Plain HTTP to a TLS port should fail (connection error or empty response)
+      if [ "$HTTP_RESULT" = "000" ] || echo "$HTTP_RESULT" | grep -q "CONNECTION_FAILED"; then
+        echo "PLAIN_HTTP_REJECTED=true"
+      else
+        echo "PLAIN_HTTP_REJECTED=false"
+      fi
+    workdir: /workspace
+    capture: http_test
+
+  - name: "Test HTTPS without client cert (should be rejected by mTLS)"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      echo "Testing HTTPS without client cert to $AGENT_URL..."
+      # Use the CA to trust the server, but provide no client cert
+      NO_CERT_RESULT=$(curl -s -o /tmp/nocert_body -w "%{http_code}" \
+        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        --connect-timeout 5 \
+        ${AGENT_URL}/health 2>&1 || echo "CONNECTION_FAILED")
+      NO_CERT_BODY=$(cat /tmp/nocert_body 2>/dev/null || true)
+      echo "NO_CERT_RESULT=$NO_CERT_RESULT"
+      echo "NO_CERT_BODY=$NO_CERT_BODY"
+      # mTLS without client cert should fail (connection reset or TLS error)
+      if echo "$NO_CERT_RESULT" | grep -qE "000|CONNECTION_FAILED|reset|error"; then
+        echo "NO_CLIENT_CERT_REJECTED=true"
+      else
+        echo "NO_CLIENT_CERT_REJECTED=false"
+      fi
+    workdir: /workspace
+    capture: no_cert_test
+
+  - name: "Test HTTPS with valid client cert from same CA (should succeed)"
+    handler: shell
+    command: |
+      AGENT_URL=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep)
+              break
+      ")
+      echo "Testing HTTPS with valid client cert to $AGENT_URL..."
+      # Find agent cert and key
+      CERT_DIR=$HOME/.mcp_mesh/tls/local-dev/agents
+      AGENT_CERT=$(ls $CERT_DIR/*-cert.pem 2>/dev/null | head -1)
+      AGENT_KEY=$(ls $CERT_DIR/*-key.pem 2>/dev/null | head -1)
+      if [ -z "$AGENT_CERT" ]; then
+        # Fallback to registry cert (same CA)
+        AGENT_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem
+        AGENT_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem
+      fi
+      echo "Using cert: $AGENT_CERT"
+      echo "Using key: $AGENT_KEY"
+      WITH_CERT_CODE=$(curl -sk -o /tmp/withcert_body -w "%{http_code}" \
+        --cert "$AGENT_CERT" \
+        --key "$AGENT_KEY" \
+        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        ${AGENT_URL}/health 2>&1)
+      WITH_CERT_BODY=$(cat /tmp/withcert_body 2>/dev/null || true)
+      echo "WITH_CERT_CODE=$WITH_CERT_CODE"
+      echo "WITH_CERT_BODY=$WITH_CERT_BODY"
+    workdir: /workspace
+    capture: with_cert_test
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.http_test} contains 'PLAIN_HTTP_REJECTED=true'"
+    message: "Plain HTTP to TLS-enabled agent should be rejected"
+
+  - expr: "${captured.no_cert_test} contains 'NO_CLIENT_CERT_REJECTED=true'"
+    message: "HTTPS without client cert should be rejected (mTLS enforced)"
+
+  - expr: "${captured.with_cert_test} contains 'WITH_CERT_CODE=200'"
+    message: "HTTPS with valid client cert should return 200"
+
+  - expr: "${captured.with_cert_test} contains 'healthy'"
+    message: "Health check with valid mTLS should return healthy"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

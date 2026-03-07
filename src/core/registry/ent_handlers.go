@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -690,7 +692,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	}
 
 	// Security: Validate target is a registered agent
-	isRegistered, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
+	isRegistered, scheme, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Failed to validate agent: %v", err),
@@ -707,8 +709,8 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		return
 	}
 
-	// Build target URL
-	targetURL := fmt.Sprintf("http://%s%s", hostPort, path)
+	// Build target URL using the scheme from the agent's registered endpoint
+	targetURL := fmt.Sprintf("%s://%s%s", scheme, hostPort, path)
 
 	// Create the proxied request
 	var reqBody io.Reader
@@ -744,6 +746,26 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls
 	}
 
+	// Configure TLS transport for HTTPS targets (mTLS proxy support)
+	if scheme == "https" {
+		tlsConfig := &tls.Config{}
+		if caPath := os.Getenv("MCP_MESH_TLS_CA"); caPath != "" {
+			caCert, err := os.ReadFile(caPath)
+			if err == nil {
+				caCertPool := x509.NewCertPool()
+				caCertPool.AppendCertsFromPEM(caCert)
+				tlsConfig.RootCAs = caCertPool
+			}
+		}
+		if certPath, keyPath := os.Getenv("MCP_MESH_TLS_CERT"), os.Getenv("MCP_MESH_TLS_KEY"); certPath != "" && keyPath != "" {
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err == nil {
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+		client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	}
+
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
@@ -775,37 +797,44 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
 }
 
-// isRegisteredAgentEndpoint checks if the given host:port is a registered agent
-func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, error) {
+// isRegisteredAgentEndpoint checks if the given host:port is a registered agent.
+// Returns (isRegistered, scheme, error) where scheme is "http" or "https".
+func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, string, error) {
 	// Parse host and port
 	parts := strings.Split(hostPort, ":")
 	if len(parts) != 2 {
-		return false, nil // Invalid format
+		return false, "", nil // Invalid format
 	}
 
 	host := parts[0]
-	// port := parts[1] // We could validate port too
 
 	// Query all agents and check if any matches this endpoint
-	// For now, we'll check by host matching agent name (common in Docker/K8s)
 	params := &AgentQueryParams{}
 	resp, err := h.entService.ListAgents(params)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	for _, agent := range resp.Agents {
 		// Check if the host matches agent name or endpoint
 		// In Docker/K8s, hostname typically matches agent name
 		if agent.Name == host {
-			return true, nil
+			scheme := "http"
+			if strings.HasPrefix(agent.Endpoint, "https://") {
+				scheme = "https"
+			}
+			return true, scheme, nil
 		}
 
 		// Also check endpoint field if available
-		if agent.Endpoint == hostPort || strings.HasPrefix(agent.Endpoint, "http://"+hostPort) {
-			return true, nil
+		if agent.Endpoint == hostPort || strings.HasPrefix(agent.Endpoint, "http://"+hostPort) || strings.HasPrefix(agent.Endpoint, "https://"+hostPort) {
+			scheme := "http"
+			if strings.HasPrefix(agent.Endpoint, "https://") {
+				scheme = "https"
+			}
+			return true, scheme, nil
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
