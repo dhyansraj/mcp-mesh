@@ -129,17 +129,35 @@ test:
     workdir: /workspace
     capture: py_call
 
-  - name: "Call TypeScript greeter over mTLS (depends on system-agent via a2a)"
+  - name: "Call TypeScript greeter over mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"CrossLangTest"}' 2>&1
+      TS_AGENT_ID=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          if a.get('runtime') == 'typescript' and 'greeter' in a.get('name', ''):
+              print(a['id'])
+              break
+      ")
+      echo "TS_AGENT_ID=$TS_AGENT_ID"
+      meshctl call ${TS_AGENT_ID}:greet '{"name":"CrossLangTest"}' 2>&1
     workdir: /workspace
     capture: ts_call
 
-  - name: "Call Java greeter over mTLS (depends on system-agent via a2a)"
+  - name: "Call Java greeter over mTLS"
     handler: shell
     command: |
-      meshctl call greet '{"name":"CrossLangJavaTest"}' 2>&1
+      JAVA_AGENT_ID=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          if a.get('runtime') == 'java' and 'greeter' in a.get('name', ''):
+              print(a['id'])
+              break
+      ")
+      echo "JAVA_AGENT_ID=$JAVA_AGENT_ID"
+      meshctl call ${JAVA_AGENT_ID}:greet '{"name":"CrossLangJavaTest"}' 2>&1
     workdir: /workspace
     capture: java_call
 

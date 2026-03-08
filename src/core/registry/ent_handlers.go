@@ -746,15 +746,38 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls
 	}
 
-	// Configure TLS transport for HTTPS targets (mTLS proxy support)
+	// Configure TLS transport for HTTPS targets (mTLS proxy support).
+	// Hostname verification is intentionally skipped because --tls-auto
+	// generates certs with SANs for 127.0.0.1/::1 only, while agents in
+	// K8s bind to pod IPs.  We still verify the peer cert chain against
+	// our mesh CA so only certs issued by the same CA are accepted.
+	// Target legitimacy is already enforced by isRegisteredAgentEndpoint().
 	if scheme == "https" {
 		tlsConfig := &tls.Config{}
+		var caCertPool *x509.CertPool
 		if caPath := os.Getenv("MCP_MESH_TLS_CA"); caPath != "" {
 			caCert, err := os.ReadFile(caPath)
 			if err == nil {
-				caCertPool := x509.NewCertPool()
+				caCertPool = x509.NewCertPool()
 				caCertPool.AppendCertsFromPEM(caCert)
-				tlsConfig.RootCAs = caCertPool
+			}
+		}
+		// Skip hostname check but verify the cert chain against our CA.
+		tlsConfig.InsecureSkipVerify = true
+		if caCertPool != nil {
+			tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return fmt.Errorf("no peer certificates presented")
+				}
+				opts := x509.VerifyOptions{
+					Roots:         caCertPool,
+					Intermediates: x509.NewCertPool(),
+				}
+				for _, cert := range cs.PeerCertificates[1:] {
+					opts.Intermediates.AddCert(cert)
+				}
+				_, err := cs.PeerCertificates[0].Verify(opts)
+				return err
 			}
 		}
 		if certPath, keyPath := os.Getenv("MCP_MESH_TLS_CERT"), os.Getenv("MCP_MESH_TLS_KEY"); certPath != "" && keyPath != "" {

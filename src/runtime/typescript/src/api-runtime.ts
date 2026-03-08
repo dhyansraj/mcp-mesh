@@ -44,6 +44,7 @@ import {
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
+import { getTlsConfigCached } from "./tls-config.js";
 
 /**
  * Build tool specs from registered routes.
@@ -186,6 +187,8 @@ class ApiRuntime {
       const port = resolveConfigInt("http_port", this.config.httpPort ?? null) ?? 0;
 
       // Initialize distributed tracing
+      const tlsConfig = getTlsConfigCached();
+      const scheme = tlsConfig.enabled ? "https" : "http";
       const agentMetadata: AgentMetadata = {
         agentId: this.serviceId,
         agentName: namePart,
@@ -193,7 +196,7 @@ class ApiRuntime {
         agentHostname: autoDetectIp(),
         agentIp: autoDetectIp(),
         agentPort: port,
-        agentEndpoint: port > 0 ? `http://${autoDetectIp()}:${port}` : "",
+        agentEndpoint: port > 0 ? `${scheme}://${autoDetectIp()}:${port}` : "",
       };
       await initTracing(agentMetadata);
 

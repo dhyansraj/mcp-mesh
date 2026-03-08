@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 
 export interface TlsConfig {
   enabled: boolean;
@@ -18,6 +19,7 @@ export function getTlsConfigCached(): TlsConfig {
   if (cached) return cached;
 
   try {
+    const require = createRequire(import.meta.url);
     const { getTlsConfig } = require("@mcpmesh/core");
     const raw = JSON.parse(getTlsConfig());
     cached = {

@@ -145,6 +145,7 @@ func (tc *TLSAutoConfig) GetRegistryTLSEnv() []string {
 		fmt.Sprintf("MCP_MESH_TRUST_DIR=%s", tc.TLSDir),
 		fmt.Sprintf("MCP_MESH_TLS_CERT=%s", tc.RegistryCert),
 		fmt.Sprintf("MCP_MESH_TLS_KEY=%s", tc.RegistryKey),
+		fmt.Sprintf("MCP_MESH_TLS_CA=%s", tc.RootCAPEM),
 	}
 }
 

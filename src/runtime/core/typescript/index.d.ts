@@ -75,6 +75,14 @@ export declare function getEnvVar(keyName: string): string | null
 export declare function getRedisUrl(): string
 
 /**
+ * Get TLS configuration resolved from environment variables.
+ *
+ * Returns JSON string with TLS config including mode, cert paths, and enabled status.
+ * SDKs should call this instead of reading TLS env vars directly.
+ */
+export declare function getTlsConfig(): string
+
+/**
  * Initialize the trace publisher.
  *
  * Must be called before publishing spans. Checks if tracing is enabled
@@ -180,6 +188,8 @@ export interface JsLlmProviderInfo {
   functionName: string
   /** Model name (optional) */
   model?: string
+  /** Vendor name for handler selection (e.g., "gemini", "anthropic") */
+  vendor?: string
 }
 
 /**
@@ -191,6 +201,8 @@ export interface JsLlmToolInfo {
   functionName: string
   /** Capability name */
   capability: string
+  /** Tool description for LLM prompting */
+  description?: string
   /** Endpoint URL to call */
   endpoint: string
   /** Agent ID providing this tool */
@@ -292,16 +304,6 @@ export declare function resolveConfigBool(keyName: string, paramValue?: boolean 
  * @returns Resolved integer value or null if unknown key
  */
 export declare function resolveConfigInt(keyName: string, paramValue?: number | undefined | null): number | null
-
-/**
- * Get TLS configuration resolved from environment variables.
- *
- * Returns JSON string with TLS mode, cert paths, and enabled status.
- * SDKs should call this instead of reading TLS env vars directly.
- *
- * @returns JSON string: {"enabled": boolean, "mode": string, "cert_path": string|null, "key_path": string|null, "ca_path": string|null}
- */
-export declare function getTlsConfig(): string
 
 /**
  * Start an agent runtime with the given specification.
