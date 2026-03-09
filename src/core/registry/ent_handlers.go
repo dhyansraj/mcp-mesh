@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -757,10 +758,16 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		var caCertPool *x509.CertPool
 		if caPath := os.Getenv("MCP_MESH_TLS_CA"); caPath != "" {
 			caCert, err := os.ReadFile(caPath)
-			if err == nil {
-				caCertPool = x509.NewCertPool()
-				caCertPool.AppendCertsFromPEM(caCert)
+			if err != nil {
+				log.Printf("ERROR: failed to read CA cert %s: %v", caPath, err)
+				c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+					Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to read CA cert: %v", err),
+					Timestamp: time.Now().UTC(),
+				})
+				return
 			}
+			caCertPool = x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
 		}
 		// Skip hostname check but verify the cert chain against our CA.
 		tlsConfig.InsecureSkipVerify = true
@@ -782,9 +789,15 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		}
 		if certPath, keyPath := os.Getenv("MCP_MESH_TLS_CERT"), os.Getenv("MCP_MESH_TLS_KEY"); certPath != "" && keyPath != "" {
 			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err == nil {
-				tlsConfig.Certificates = []tls.Certificate{cert}
+			if err != nil {
+				log.Printf("ERROR: failed to load client cert/key (%s, %s): %v", certPath, keyPath, err)
+				c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+					Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to load client certificate: %v", err),
+					Timestamp: time.Now().UTC(),
+				})
+				return
 			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
 		}
 		client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
 	}

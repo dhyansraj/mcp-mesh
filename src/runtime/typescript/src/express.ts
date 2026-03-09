@@ -56,7 +56,7 @@ import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./confi
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
-import { getTlsConfigCached } from "./tls-config.js";
+import { getTlsConfigCached, getTlsOptions } from "./tls-config.js";
 
 /**
  * Build tool specs from registered routes.
@@ -205,7 +205,6 @@ export class MeshExpress {
         const bindHost = process.env.HOST ?? "0.0.0.0";
 
         // Use HTTPS when TLS is enabled
-        const { getTlsOptions } = require("./tls-config.js");
         const tlsOpts = getTlsOptions();
         if (tlsOpts) {
           const https = require("node:https");

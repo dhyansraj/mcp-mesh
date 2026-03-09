@@ -63,9 +63,9 @@ public class McpHttpClient {
             try {
                 SSLContext sslContext = buildSslContext(tlsConfig);
                 builder.sslSocketFactory(sslContext.getSocketFactory(), buildTrustManager(tlsConfig));
-                if (tlsConfig.getCaPath() != null) {
-                    builder.hostnameVerifier((hostname, session) -> true);
-                }
+                // Skip hostname verification: --tls-auto certs have SANs for
+                // 127.0.0.1/::1 only; agents may bind to other IPs in K8s.
+                builder.hostnameVerifier((hostname, session) -> true);
                 log.info("OkHttpClient configured with mTLS (mode={})", tlsConfig.getMode());
             } catch (Exception e) {
                 log.warn("Failed to configure mTLS for OkHttpClient: {}", e.getMessage());

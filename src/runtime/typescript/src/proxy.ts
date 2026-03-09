@@ -229,8 +229,8 @@ async function callMcpTool(
           if (tlsOpts) {
             fetchOptions.dispatcher = new Agent({ connect: tlsOpts });
           }
-        } catch {
-          // undici not available or TLS not configured — proceed without mTLS
+        } catch (err) {
+          console.warn("mTLS proxy setup failed for HTTPS endpoint:", err);
         }
       }
 
