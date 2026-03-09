@@ -175,7 +175,11 @@ class UnifiedMCPProxy:
                     from ..shared.tls_config import get_tls_config
 
                     tls = get_tls_config()
-                    if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
+                    if tls["enabled"]:
+                        if not tls.get("cert_path") or not tls.get("key_path"):
+                            raise RuntimeError(
+                                "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+                            )
                         kwargs["cert"] = (tls["cert_path"], tls["key_path"])
                         if tls.get("ca_path"):
                             kwargs["verify"] = tls["ca_path"]
@@ -735,7 +739,11 @@ class UnifiedMCPProxy:
                 from ..shared.tls_config import get_tls_config
 
                 tls = get_tls_config()
-                if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
+                if tls["enabled"]:
+                    if not tls.get("cert_path") or not tls.get("key_path"):
+                        raise RuntimeError(
+                            "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+                        )
                     tls_kwargs["cert"] = (tls["cert_path"], tls["key_path"])
                     if tls.get("ca_path"):
                         tls_kwargs["verify"] = tls["ca_path"]

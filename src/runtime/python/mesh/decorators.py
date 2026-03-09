@@ -462,7 +462,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         tls = get_tls_config()
 
         ssl_kwargs = {}
-        if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
+        if tls["enabled"]:
+            if not tls.get("cert_path") or not tls.get("key_path"):
+                raise RuntimeError(
+                    "TLS enabled but MCP_MESH_TLS_CERT or MCP_MESH_TLS_KEY is not set"
+                )
             import ssl
 
             ssl_kwargs["ssl_certfile"] = tls["cert_path"]
