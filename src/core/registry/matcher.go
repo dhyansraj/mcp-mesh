@@ -15,6 +15,7 @@ type Candidate struct {
 	Tags         []string
 	HttpHost     string
 	HttpPort     int
+	EntityID     string // Non-empty when agent registered with TLS cert
 }
 
 // ScoredCandidate adds priority scoring to Candidate for ranking.

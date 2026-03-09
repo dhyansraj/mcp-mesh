@@ -319,5 +319,9 @@ func buildEndpoint(cap *ent.Capability) string {
 	host = strings.TrimPrefix(host, "http://")
 	host = strings.TrimPrefix(host, "https://")
 
-	return fmt.Sprintf("http://%s:%d", host, agent.HTTPPort)
+	scheme := "http"
+	if agent.EntityID != nil && *agent.EntityID != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, agent.HTTPPort)
 }

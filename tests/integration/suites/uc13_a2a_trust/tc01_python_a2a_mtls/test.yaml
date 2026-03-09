@@ -1,0 +1,114 @@
+name: "A2A mTLS - Python Agent-to-Agent"
+description: "Verify two Python agents communicate over mTLS when started with --tls-auto"
+tags:
+  - a2a-trust
+  - tls
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agents to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      cp /uc-artifacts/py-hello-world /workspace/hello_world.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start system agent with TLS auto"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for system agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Start hello world agent with TLS auto"
+    handler: shell
+    command: "meshctl start hello_world.py --tls-auto -d"
+    workdir: /workspace
+    capture: hello_start
+
+  - name: "Wait for hello world to register and resolve deps"
+    handler: wait
+    seconds: 10
+
+  - name: "List agents"
+    handler: shell
+    command: |
+      meshctl list 2>&1
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Dump agent logs for diagnostics"
+    handler: shell
+    command: |
+      echo "=== system-agent logs ==="
+      meshctl logs system-agent 2>&1 | tail -30
+      echo ""
+      echo "=== hello-world logs ==="
+      meshctl logs hello-world 2>&1 | tail -30
+      echo ""
+      echo "=== Registry agents API ==="
+      curl -sk https://localhost:8000/agents 2>&1 | head -50
+    workdir: /workspace
+    capture: diagnostics
+    ignore_errors: true
+
+  - name: "Verify both agents serve HTTPS via registry API"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          print(f'{a[\"name\"]}: endpoint={a.get(\"endpoint\", \"\")}')
+      https_count = sum(1 for a in data.get('agents', []) if a.get('endpoint', '').startswith('https://'))
+      print(f'HTTPS_COUNT={https_count}')
+      "
+    workdir: /workspace
+    capture: https_check
+
+  - name: "Call hello_mesh_simple (triggers a2a call to system-agent date_service)"
+    handler: shell
+    command: |
+      meshctl call hello:hello_mesh_simple '{}' 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.list_output} contains 'system-agent'"
+    message: "System agent should be registered"
+
+  - expr: "${captured.list_output} contains 'hello-world'"
+    message: "Hello world agent should be registered"
+
+  - expr: "${captured.https_check} contains 'HTTPS_COUNT=2'"
+    message: "Both agent endpoints should use HTTPS"
+
+  - expr: "${captured.call_output} contains 'Hello from MCP Mesh'"
+    message: "A2A tool call should succeed over mTLS"
+
+  - expr: "${captured.call_output} not contains 'not available'"
+    message: "Date service dependency should be resolved via mTLS a2a call"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

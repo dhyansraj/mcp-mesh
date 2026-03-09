@@ -231,6 +231,7 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			Tags:         cap.Tags,
 			HttpHost:     cap.Edges.Agent.HTTPHost,
 			HttpPort:     cap.Edges.Agent.HTTPPort,
+			EntityID:     derefString(cap.Edges.Agent.EntityID),
 		})
 	}
 
@@ -280,7 +281,11 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 		// Build endpoint
 		endpoint := "stdio://" + c.AgentID // Default
 		if c.HttpHost != "" && c.HttpPort > 0 {
-			endpoint = fmt.Sprintf("http://%s:%d", c.HttpHost, c.HttpPort)
+			scheme := "http"
+			if c.EntityID != "" {
+				scheme = "https"
+			}
+			endpoint = fmt.Sprintf("%s://%s:%d", scheme, c.HttpHost, c.HttpPort)
 		}
 
 		return &DependencyResolution{
@@ -401,4 +406,12 @@ func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) Indexe
 		Resolution: nil,
 		Status:     "unresolved",
 	}
+}
+
+// derefString safely dereferences a *string, returning "" if nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

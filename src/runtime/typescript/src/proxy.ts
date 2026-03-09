@@ -211,12 +211,30 @@ async function callMcpTool(
         headers[key] = value;
       }
 
-      const response = await fetch(mcpEndpoint, {
+      // Build fetch options
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fetchOptions: Record<string, any> = {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
         signal: controller.signal,
-      });
+      };
+
+      // Apply mTLS for https:// endpoints
+      if (mcpEndpoint.startsWith("https://")) {
+        try {
+          const { Agent } = await import("undici");
+          const { getTlsOptions } = await import("./tls-config.js");
+          const tlsOpts = getTlsOptions();
+          if (tlsOpts) {
+            fetchOptions.dispatcher = new Agent({ connect: tlsOpts });
+          }
+        } catch (err) {
+          console.warn("mTLS proxy setup failed for HTTPS endpoint:", err);
+        }
+      }
+
+      const response = await fetch(mcpEndpoint, fetchOptions as RequestInit);
 
       clearTimeout(timeoutId);
 

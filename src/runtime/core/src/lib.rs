@@ -194,6 +194,9 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(config::get_default_py, m)?)?;
     m.add_function(wrap_pyfunction!(config::get_env_var_py, m)?)?;
 
+    // TLS configuration
+    m.add_function(wrap_pyfunction!(tls::get_tls_config_py, m)?)?;
+
     // Tracing publish functions (defined in tracing_publish.rs)
     m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;
     m.add_function(wrap_pyfunction!(tracing_publish::publish_span_py, m)?)?;

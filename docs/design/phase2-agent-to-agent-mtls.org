@@ -1,0 +1,252 @@
+#+TITLE: Phase 2: Agent-to-Agent mTLS — Mesh Governance
+#+AUTHOR: MCP Mesh Team
+#+DATE: 2026-03-07
+#+STARTUP: overview
+#+TODO: TODO IN-PROGRESS REVIEW | DONE CANCELLED
+
+* Overview
+
+Phase 1 secured the registry door — only agents with trusted certificates can
+register. But agent-to-agent calls are still plain HTTP. Any process on the
+network that knows an agent's endpoint can call its MCP tools directly.
+
+Phase 2 adds *mutual TLS to every agent-to-agent call*. Agents serve HTTPS
+and require client certificates. The proxy layer presents certs when calling
+other agents. Same root CA from Phase 1 — if your cert chains to a trusted
+CA, you can talk to any agent in the mesh.
+
+** Threat Model
+- Rogue process on the network calls a legitimate agent's =/mcp= endpoint
+- Man-in-the-middle intercepts agent-to-agent traffic
+- Eavesdropping on tool call payloads (sensitive data in arguments/results)
+
+** What Phase 2 Solves
+- Agents reject MCP calls from untrusted clients (no valid cert = TLS handshake fails)
+- All agent-to-agent traffic is encrypted (TLS)
+- Mutual authentication — both caller and callee verify each other's identity
+
+** What Phase 2 Does NOT Solve (Phase 3)
+- Capability-level authorization (which agent can call which tools)
+- Per-identity access policies
+- Audit logging of inter-agent calls
+
+** Key Design Decisions
+- *Same certs as Phase 1* — no separate certificates for a2a communication
+- *Same root CA = mesh-wide trust* — all agents with trusted certs can call all agents
+- *No authorization rules* — Phase 2 is authentication only (are you in the mesh?)
+- *SDK-native TLS* — each runtime uses its platform's native TLS mechanisms
+- *Self-dependency skips TLS* — same-process calls use loopback, no network
+- *Scheme in topology response* — registry returns =https://= endpoints when TLS is active
+- *Backward compatible* — =MCP_MESH_TLS_MODE=off= (default) preserves plain HTTP behavior
+
+** Architecture
+
+*** mTLS Flow
+#+begin_example
+  Consumer Agent                              Provider Agent
+  ┌──────────────────┐                       ┌──────────────────┐
+  │  Proxy Layer      │                       │  HTTP Server     │
+  │                   │   TLS handshake       │                  │
+  │  httpx / fetch /  │ ◄──────────────────►  │  uvicorn / Node  │
+  │  OkHttp presents  │   mutual cert verify  │  / Tomcat serves │
+  │  client cert      │                       │  with TLS + CA   │
+  │                   │   POST /mcp (JSON-RPC)│                  │
+  │  Uses same cert   │ ─────────────────────►│  Validates client│
+  │  as registration  │                       │  cert against CA │
+  └──────────────────┘                       └──────────────────┘
+         │                                           │
+         │  MCP_MESH_TLS_CERT                        │  MCP_MESH_TLS_CERT
+         │  MCP_MESH_TLS_KEY                         │  MCP_MESH_TLS_KEY
+         │  MCP_MESH_TLS_CA                          │  MCP_MESH_TLS_CA
+         │                                           │
+         └──── Same certs used for Phase 1 ──────────┘
+              registration with registry
+#+end_example
+
+*** Endpoint Scheme Change
+#+begin_example
+  Phase 1 (current):  http://greeter-abc123:9001/mcp
+  Phase 2 (new):      https://greeter-abc123:9001/mcp
+
+  Registry topology response includes scheme based on agent's
+  TLS configuration at registration time.
+#+end_example
+
+*** Affected Components
+| Component          | Changes | Scope    |
+|--------------------+---------+----------|
+| Go Registry        | Yes     | Minor    |
+| Rust Core (FFI)    | Yes     | Moderate |
+| Python SDK         | Yes     | Moderate |
+| TypeScript SDK     | Yes     | Moderate |
+| Java SDK           | Yes     | Moderate |
+| meshctl CLI        | Yes     | Minor    |
+| Helm Charts        | No      | None     |
+
+Phase 1 touched Go registry (major) and Rust core (major) but not the SDKs.
+Phase 2 is the opposite — mostly SDK work, minimal registry changes.
+
+* Work Streams
+
+** WS1: Registry Endpoint Scheme [2/2]
+
+Registry must advertise =https://= endpoints when agents register with TLS.
+
+*** DONE WS1.1 — Store and return endpoint scheme
+- Registry infers =https://= scheme from =EntityID= presence (set during TLS cert verification)
+- Updated 4 endpoint construction sites: resolver.go, ent_service.go, llm_filtering.go, llm_provider_resolver.go
+- No explicit flag needed — EntityID is the inference signal
+
+*** DONE WS1.2 — meshctl start --tls-auto configures agents for a2a
+- =--tls-auto= already generates certs and passes =MCP_MESH_TLS_CERT/KEY/CA= env vars
+- Agent processes inherit TLS env vars from meshctl launcher
+
+** WS2: Rust Core — TLS Config Propagation [2/2]
+
+Rust core is the single source of truth for TLS config — SDKs ask Rust via FFI
+instead of reading env vars directly. One function serves both server and client use cases.
+
+*** DONE WS2.1 — Expose server TLS config via FFI
+- Single =mesh_get_tls_config()= function returns JSON with mode, cert/key/ca paths, enabled flag
+- C FFI (ffi.rs): =mesh_get_tls_config()= for TypeScript/Java
+- PyO3 (tls.rs + lib.rs): =get_tls_config_py()= for Python
+- NAPI-RS (napi.rs): =get_tls_config()= for TypeScript
+- JNR-FFI (MeshCore.java): =mesh_get_tls_config()= for Java
+
+*** DONE WS2.2 — Expose client TLS config for proxy calls
+- Same =mesh_get_tls_config()= function covers client config — same cert/key/ca for both server and client
+- SDKs use returned paths for both HTTPS server setup and outgoing mTLS client calls
+
+** WS3: Python SDK — mTLS [3/3]
+
+*** DONE WS3.1 — HTTPS server with client cert verification
+- uvicorn: ssl_certfile/ssl_keyfile/ssl_ca_certs with ssl.CERT_REQUIRED
+- New =tls_config.py= helper calls Rust core =get_tls_config_py()= (cached)
+
+*** DONE WS3.2 — httpx client with mutual TLS
+- httpx: cert=(cert,key) + verify=ca for =https://= endpoints
+- Both FastMCP client path and HTTP fallback path covered
+
+*** DONE WS3.3 — Self-dependency TLS bypass
+- =SelfDependencyProxy= already bypasses HTTP entirely (direct function call)
+- No TLS changes needed — self-dep never touches the network
+
+** WS4: TypeScript SDK — mTLS [3/3]
+
+*** DONE WS4.1 — HTTPS server with client cert verification
+- express.ts: =https.createServer= with requestCert + rejectUnauthorized
+- agent.ts (FastMCP path) deferred — FastMCP hardcodes =http.createServer=
+
+*** DONE WS4.2 — fetch with mutual TLS
+- proxy.ts: undici =Agent= with cert/key/ca for =https://= fetch calls
+- New =tls-config.ts= helper calls Rust core =getTlsConfig()= (cached)
+- NAPI-RS declaration added to =index.d.ts=
+
+*** DONE WS4.3 — Self-dependency TLS bypass
+- TypeScript SDK does not have explicit self-dep detection
+- Same-host calls work because the agent's own endpoint has a valid cert
+
+** WS5: Java SDK — mTLS [3/3]
+
+*** DONE WS5.1 — Spring Boot HTTPS with client cert verification
+- =MeshEnvironmentPostProcessor= maps TLS env vars to Spring Boot SSL properties
+- PEM-based config: =server.ssl.certificate=, =server.ssl.certificate-private-key=
+- =server.ssl.client-auth=need= for mTLS (Spring Boot 4.x)
+
+*** DONE WS5.2 — OkHttp client with mutual TLS
+- =McpHttpClient=: SSLSocketFactory with PEM cert/key loaded into PKCS12 KeyStore
+- Supports RSA and EC private keys
+- New =MeshTlsConfig.java= calls =mesh_get_tls_config()= via FFI (cached)
+
+*** DONE WS5.3 — Self-dependency TLS bypass
+- =ToolInvoker.isSelfDependency()= already routes to =invokeLocal()= (direct method call)
+- No HTTP/TLS involved for self-dependencies
+
+** WS6: Testing [4/4]
+
+*** DONE WS6.1 — Python a2a mTLS integration test
+- UC13 tc01: Start registry + 2 Python agents with =--tls-auto=
+- Verifies agent-to-agent tool call works over HTTPS
+- Asserts both endpoints use =https://= scheme
+
+*** DONE WS6.2 — TypeScript a2a mTLS integration test
+- UC13 tc02: Python system agent + TypeScript greeter with =--tls-auto=
+- Verifies cross-runtime a2a call over mTLS
+
+*** DONE WS6.3 — Java a2a mTLS integration test
+- UC13 tc03: Python system agent + Java greeter with =--tls-auto=
+- Includes Maven build + Java startup wait (90s timeout)
+
+*** DONE WS6.4 — Cross-language and enforcement tests
+- UC13 tc04: HTTPS enforcement — verifies plain HTTP is rejected
+- UC13 tc05: Cross-language a2a — Python + TypeScript + Java all calling each other
+- UC13 tc06: Untrusted agent rejection — rogue cert rejected by mesh agents
+
+** WS7: Documentation [0/2]
+
+*** TODO WS7.1 — Update meshctl man security
+- Add agent-to-agent mTLS section
+- Explain that same certs work for both registration and a2a
+- Document self-dependency TLS bypass behavior
+
+*** TODO WS7.2 — Update deployment docs
+- Add a2a mTLS section to deployment guide
+- Helm chart already has TLS values from Phase 1 — document how they apply to a2a
+
+* Implementation Notes
+
+** Cert Reuse
+Agents already have certificates from Phase 1:
+- =MCP_MESH_TLS_CERT= — agent's certificate
+- =MCP_MESH_TLS_KEY= — agent's private key
+- =MCP_MESH_TLS_CA= — CA certificate (trust anchor)
+
+These same files are used for:
+1. Registration with registry (Phase 1 — already working)
+2. Serving HTTPS on agent's HTTP port (Phase 2 — new)
+3. Presenting client cert when calling other agents (Phase 2 — new)
+
+** SDK HTTP Clients and Servers
+
+| SDK        | HTTP Server      | HTTP Client | TLS Server Config            | TLS Client Config              |
+|------------+------------------+-------------+------------------------------+--------------------------------|
+| Python     | uvicorn/FastMCP  | httpx       | ssl_certfile, ssl_keyfile    | cert=(cert, key), verify=ca    |
+| TypeScript | Node http/FastMCP| fetch       | https.createServer({cert..}) | https.Agent({cert, key, ca})   |
+| Java       | Spring Boot/Tomcat| OkHttp3    | server.ssl.* properties      | SSLContext + SSLSocketFactory   |
+
+** Endpoint URL Flow
+#+begin_example
+  1. Agent starts HTTPS server (when TLS mode != off)
+  2. Agent registers with registry: endpoint = "https://hostname:port"
+  3. Registry stores endpoint with https:// scheme
+  4. Consumer agent receives dependency_available event with https:// endpoint
+  5. Consumer proxy detects https:// → configures TLS on outgoing call
+  6. mTLS handshake: both sides verify certs
+  7. JSON-RPC POST /mcp proceeds over encrypted channel
+#+end_example
+
+** Self-Dependency Handling
+#+begin_example
+  Agent calls its own tool (self-dependency):
+  - Endpoint resolves to localhost/127.0.0.1
+  - Proxy detects loopback → uses plain HTTP
+  - No TLS overhead for same-process calls
+  - This is safe: the call never leaves the machine
+#+end_example
+
+** Java TLS Implementation
+Spring Boot 3.1+ supports PEM-based SSL directly via =server.ssl.certificate=
+and =server.ssl.certificate-private-key= properties. =MeshEnvironmentPostProcessor=
+maps the mesh TLS env vars to these properties at startup.
+
+For outgoing calls, =McpHttpClient= builds an =SSLContext= by loading PEM files
+into a PKCS12 =KeyStore= in-memory (using =java.security.KeyStore= and
+=CertificateFactory= APIs). This avoids file-system keystore files.
+
+* Implementation Order
+
+1. *WS1* — Registry endpoint scheme (small change, unlocks everything)
+2. *WS2* — Rust core FFI for TLS config propagation
+3. *WS3 + WS4 + WS5* — SDK implementations (can be parallelized)
+4. *WS6* — Integration tests
+5. *WS7* — Documentation updates

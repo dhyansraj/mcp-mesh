@@ -1,0 +1,139 @@
+name: "A2A mTLS - Java Agent-to-Agent"
+description: "Verify Java greeter communicates with Python system-agent over mTLS"
+tags:
+  - a2a-trust
+  - tls
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  - name: "Start Python system agent with TLS auto"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for system agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Start Java greeter with TLS auto"
+    handler: shell
+    command: "meshctl start java-greeter --tls-auto -d"
+    workdir: /workspace
+    capture: java_start
+
+  - name: "Wait for Java agent to register"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "greeter"; then
+          echo "REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: Java agent did not register within 90s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    workdir: /workspace
+    capture: java_wait
+    timeout: 120
+
+  - name: "List agents"
+    handler: shell
+    command: |
+      meshctl list 2>&1
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Dump agent logs for diagnostics"
+    handler: shell
+    command: |
+      echo "=== system-agent logs ==="
+      meshctl logs system-agent 2>&1 | tail -30
+      echo ""
+      echo "=== greeter logs ==="
+      meshctl logs greeter 2>&1 | tail -30
+      echo ""
+      echo "=== Registry agents API ==="
+      curl -sk https://localhost:8000/agents 2>&1 | head -50
+    workdir: /workspace
+    capture: diagnostics
+    ignore_errors: true
+
+  - name: "Verify agents serve HTTPS via registry API"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          print(f'{a[\"name\"]}: endpoint={a.get(\"endpoint\", \"\")}')
+      https_count = sum(1 for a in data.get('agents', []) if a.get('endpoint', '').startswith('https://'))
+      print(f'HTTPS_COUNT={https_count}')
+      "
+    workdir: /workspace
+    capture: https_check
+
+  - name: "Call greeter tool (triggers a2a call to system-agent)"
+    handler: shell
+    command: |
+      meshctl call greeter:greet '{"name":"A2ATest"}' 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.java_wait} contains 'REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.list_output} contains 'system-agent'"
+    message: "Python system agent should be registered"
+
+  - expr: "${captured.list_output} contains 'greeter'"
+    message: "Java greeter should be registered"
+
+  - expr: "${captured.https_check} contains 'HTTPS_COUNT=2'"
+    message: "Both agent endpoints should use HTTPS"
+
+  - expr: "${captured.call_output} contains 'Hello'"
+    message: "A2A tool call should succeed over mTLS"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

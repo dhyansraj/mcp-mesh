@@ -7,6 +7,7 @@ import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -40,6 +41,29 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
             props.put("server.port", meshPort);
             // addFirst gives highest priority, overriding application.properties
             environment.getPropertySources().addFirst(new MapPropertySource("meshPortOverride", props));
+        }
+
+        // Map TLS env vars to Spring Boot SSL properties (PEM-based, Spring Boot 3.1+)
+        String tlsMode = environment.getProperty("MCP_MESH_TLS_MODE", "off");
+        if (!"off".equalsIgnoreCase(tlsMode) && !tlsMode.isEmpty()) {
+            String certPath = environment.getProperty("MCP_MESH_TLS_CERT");
+            String keyPath = environment.getProperty("MCP_MESH_TLS_KEY");
+            String caPath = environment.getProperty("MCP_MESH_TLS_CA");
+
+            if (certPath != null && keyPath != null) {
+                Map<String, Object> sslProps = new LinkedHashMap<>();
+                sslProps.put("server.ssl.certificate", certPath);
+                sslProps.put("server.ssl.certificate-private-key", keyPath);
+                if (caPath != null) {
+                    sslProps.put("server.ssl.trust-certificate", caPath);
+                    sslProps.put("server.ssl.client-auth", "need");
+                }
+                environment.getPropertySources().addFirst(
+                    new MapPropertySource("meshTlsProperties", sslProps));
+            } else {
+                throw new IllegalStateException(
+                    "MCP_MESH_TLS_MODE=" + tlsMode + " but MCP_MESH_TLS_CERT or MCP_MESH_TLS_KEY is not set");
+            }
         }
     }
 }

@@ -2,10 +2,14 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -690,7 +694,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	}
 
 	// Security: Validate target is a registered agent
-	isRegistered, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
+	isRegistered, scheme, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Failed to validate agent: %v", err),
@@ -707,8 +711,8 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		return
 	}
 
-	// Build target URL
-	targetURL := fmt.Sprintf("http://%s%s", hostPort, path)
+	// Build target URL using the scheme from the agent's registered endpoint
+	targetURL := fmt.Sprintf("%s://%s%s", scheme, hostPort, path)
 
 	// Create the proxied request
 	var reqBody io.Reader
@@ -744,6 +748,70 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls
 	}
 
+	// Configure TLS transport for HTTPS targets (mTLS proxy support).
+	// Hostname verification is intentionally skipped because --tls-auto
+	// generates certs with SANs for 127.0.0.1/::1 only, while agents in
+	// K8s bind to pod IPs.  We still verify the peer cert chain against
+	// our mesh CA so only certs issued by the same CA are accepted.
+	// Target legitimacy is already enforced by isRegisteredAgentEndpoint().
+	if scheme == "https" {
+		// Require the full mTLS bundle for HTTPS proxy calls.
+		caPath := os.Getenv("MCP_MESH_TLS_CA")
+		certPath := os.Getenv("MCP_MESH_TLS_CERT")
+		keyPath := os.Getenv("MCP_MESH_TLS_KEY")
+		if caPath == "" || certPath == "" || keyPath == "" {
+			log.Printf("ERROR: HTTPS proxy requires MCP_MESH_TLS_CA, MCP_MESH_TLS_CERT, MCP_MESH_TLS_KEY (ca=%q, cert=%q, key=%q)", caPath, certPath, keyPath)
+			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+				Error:     "Proxy TLS misconfiguration: missing required TLS environment variables for HTTPS proxy",
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+
+		caCert, err := os.ReadFile(caPath)
+		if err != nil {
+			log.Printf("ERROR: failed to read CA cert %s: %v", caPath, err)
+			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to read CA cert: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+
+		clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			log.Printf("ERROR: failed to load client cert/key (%s, %s): %v", certPath, keyPath, err)
+			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to load client certificate: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+
+		// Skip hostname check but verify the cert chain against our CA.
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			Certificates:      []tls.Certificate{clientCert},
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return fmt.Errorf("no peer certificates presented")
+				}
+				opts := x509.VerifyOptions{
+					Roots:         caCertPool,
+					Intermediates: x509.NewCertPool(),
+				}
+				for _, cert := range cs.PeerCertificates[1:] {
+					opts.Intermediates.AddCert(cert)
+				}
+				_, err := cs.PeerCertificates[0].Verify(opts)
+				return err
+			},
+		}
+		client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	}
+
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
@@ -775,37 +843,42 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
 }
 
-// isRegisteredAgentEndpoint checks if the given host:port is a registered agent
-func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, error) {
+// isRegisteredAgentEndpoint checks if the given host:port is a registered agent.
+// Returns (isRegistered, scheme, error) where scheme is "http" or "https".
+func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, string, error) {
 	// Parse host and port
 	parts := strings.Split(hostPort, ":")
 	if len(parts) != 2 {
-		return false, nil // Invalid format
+		return false, "", nil // Invalid format
 	}
 
 	host := parts[0]
-	// port := parts[1] // We could validate port too
 
 	// Query all agents and check if any matches this endpoint
-	// For now, we'll check by host matching agent name (common in Docker/K8s)
 	params := &AgentQueryParams{}
 	resp, err := h.entService.ListAgents(params)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
+
+	port := parts[1]
 
 	for _, agent := range resp.Agents {
-		// Check if the host matches agent name or endpoint
-		// In Docker/K8s, hostname typically matches agent name
-		if agent.Name == host {
-			return true, nil
-		}
-
-		// Also check endpoint field if available
-		if agent.Endpoint == hostPort || strings.HasPrefix(agent.Endpoint, "http://"+hostPort) {
-			return true, nil
+		// Parse the registered endpoint URL for accurate host:port matching
+		if agent.Endpoint != "" {
+			parsedEP, err := url.Parse(agent.Endpoint)
+			if err == nil {
+				// Direct host:port match against parsed endpoint
+				if parsedEP.Host == hostPort {
+					return true, parsedEP.Scheme, nil
+				}
+				// Match by agent name (Docker/K8s hostname) with port verification
+				if agent.Name == host && parsedEP.Port() == port {
+					return true, parsedEP.Scheme, nil
+				}
+			}
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }

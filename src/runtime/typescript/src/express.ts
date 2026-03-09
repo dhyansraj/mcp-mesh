@@ -56,6 +56,7 @@ import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./confi
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
+import { getTlsConfigCached, getTlsOptions } from "./tls-config.js";
 
 /**
  * Build tool specs from registered routes.
@@ -172,6 +173,8 @@ export class MeshExpress {
     console.log(`Starting MeshExpress service: ${this.serviceId}`);
 
     // 0. Initialize distributed tracing
+    const tlsConfig = getTlsConfigCached();
+    const scheme = tlsConfig.enabled ? "https" : "http";
     const agentMetadata: AgentMetadata = {
       agentId: this.serviceId,
       agentName: this.config.name,
@@ -179,7 +182,7 @@ export class MeshExpress {
       agentHostname: this.config.httpHost,
       agentIp: this.config.httpHost,
       agentPort: this.config.httpPort,
-      agentEndpoint: `http://${this.config.httpHost}:${this.config.httpPort}`,
+      agentEndpoint: `${scheme}://${this.config.httpHost}:${this.config.httpPort}`,
     };
     await initTracing(agentMetadata);
 
@@ -200,12 +203,30 @@ export class MeshExpress {
     return new Promise((resolve, reject) => {
       try {
         const bindHost = process.env.HOST ?? "0.0.0.0";
-        this.server = this.app.listen(this.config.httpPort, bindHost, () => {
-          console.log(`Service listening on port ${this.config.httpPort}`);
-          resolve();
-        });
 
-        this.server.on("error", (err) => {
+        // Use HTTPS when TLS is enabled
+        const tlsOpts = getTlsOptions();
+        if (tlsOpts) {
+          const https = require("node:https");
+          const serverOpts = {
+            ...tlsOpts,
+            requestCert: true,
+            rejectUnauthorized: true,
+          };
+          this.server = https.createServer(serverOpts, this.app).listen(
+            this.config.httpPort, bindHost, () => {
+              console.log(`Service listening on port ${this.config.httpPort} (HTTPS)`);
+              resolve();
+            }
+          );
+        } else {
+          this.server = this.app.listen(this.config.httpPort, bindHost, () => {
+            console.log(`Service listening on port ${this.config.httpPort}`);
+            resolve();
+          });
+        }
+
+        this.server!.on("error", (err) => {
           reject(err);
         });
       } catch (err) {

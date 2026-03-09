@@ -170,6 +170,20 @@ class UnifiedMCPProxy:
                 existing_hooks["request"] = request_hooks
                 kwargs["event_hooks"] = existing_hooks
 
+                # Apply mTLS config for https endpoints
+                if proxy_instance.endpoint.startswith("https://"):
+                    from ..shared.tls_config import get_tls_config
+
+                    tls = get_tls_config()
+                    if tls["enabled"]:
+                        if not tls.get("cert_path") or not tls.get("key_path"):
+                            raise RuntimeError(
+                                "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+                            )
+                        kwargs["cert"] = (tls["cert_path"], tls["key_path"])
+                        if tls.get("ca_path"):
+                            kwargs["verify"] = tls["ca_path"]
+
                 return httpx.AsyncClient(**kwargs)
 
             # Create client WITHOUT static headers - headers injected via hook at request time
@@ -719,9 +733,25 @@ class UnifiedMCPProxy:
                 f"🔄 HTTP fallback call to {url} with {len(str(payload))} byte payload, timeout: {enhanced_timeout}s"
             )
 
+            # Apply mTLS config for https endpoints
+            tls_kwargs = {}
+            if url.startswith("https://"):
+                from ..shared.tls_config import get_tls_config
+
+                tls = get_tls_config()
+                if tls["enabled"]:
+                    if not tls.get("cert_path") or not tls.get("key_path"):
+                        raise RuntimeError(
+                            "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+                        )
+                    tls_kwargs["cert"] = (tls["cert_path"], tls["key_path"])
+                    if tls.get("ca_path"):
+                        tls_kwargs["verify"] = tls["ca_path"]
+
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                **tls_kwargs,
             ) as client:
                 response = await client.post(url, json=payload, headers=headers)
 

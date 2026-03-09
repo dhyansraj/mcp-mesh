@@ -50,6 +50,7 @@ import {
 } from "./llm.js";
 import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
 import { findAndSetBasePath } from "./template.js";
+import { getTlsOptions, getTlsConfigCached } from "./tls-config.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -91,6 +92,7 @@ export class MeshAgent {
    */
   private llmProviderVendors: Map<string, string> = new Map();
   private handle: JsAgentHandle | null = null;
+  private httpsProxy?: import("node:https").Server;
   private started = false;
   private tracingEnabled = false;
   private shutdownRequested = false;
@@ -350,6 +352,10 @@ export class MeshAgent {
 
     console.log(`Starting MCP Mesh agent: ${this.agentId}`);
 
+    // Resolve TLS config early so we can set the correct scheme
+    const tlsOpts = getTlsOptions();
+    const scheme = getTlsConfigCached().enabled ? "https" : "http";
+
     // 0. Initialize distributed tracing
     const agentMetadata: AgentMetadata = {
       agentId: this.agentId,
@@ -358,23 +364,82 @@ export class MeshAgent {
       agentHostname: this.config.httpHost,
       agentIp: this.config.httpHost,
       agentPort: this.config.httpPort,
-      agentEndpoint: `http://${this.config.httpHost}:${this.config.httpPort}`,
+      agentEndpoint: `${scheme}://${this.config.httpHost}:${this.config.httpPort}`,
     };
     this.tracingEnabled = await initTracing(agentMetadata);
 
     // 1. Start HTTP server via fastmcp
     // Note: fastmcp.start() is async and starts the server
     // Use stateless mode so meshctl can call without sessions
-    await this.server.start({
-      transportType: "httpStream",
-      httpStream: {
-        port: this.config.httpPort,
-        host: process.env.HOST ?? "0.0.0.0", // Listen on all interfaces, or use HOST env var
-        stateless: true,
-      },
-    });
+    if (tlsOpts) {
+      // TLS enabled: start fastmcp on an internal loopback port,
+      // then create an HTTPS proxy on the advertised port that
+      // terminates TLS/mTLS and forwards to the internal fastmcp HTTP server.
+      const internalPort = await findAvailablePort();
+      await this.server.start({
+        transportType: "httpStream",
+        httpStream: {
+          port: internalPort,
+          host: "127.0.0.1",
+          stateless: true,
+        },
+      });
 
-    console.log(`Agent listening on port ${this.config.httpPort}`);
+      const https = await import("node:https");
+      const http = await import("node:http");
+      const serverOpts = {
+        ...tlsOpts,
+        requestCert: true,
+        rejectUnauthorized: true,
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        this.httpsProxy = https.createServer(serverOpts, (req, res) => {
+          const proxyReq = http.request(
+            {
+              hostname: "127.0.0.1",
+              port: internalPort,
+              path: req.url,
+              method: req.method,
+              headers: req.headers,
+            },
+            (proxyRes) => {
+              res.writeHead(proxyRes.statusCode!, proxyRes.headers);
+              proxyRes.pipe(res);
+            }
+          );
+          proxyReq.on("error", (err) => {
+            res.writeHead(502);
+            res.end(`Proxy error: ${err.message}`);
+          });
+          req.pipe(proxyReq);
+        });
+        this.httpsProxy.listen(
+          this.config.httpPort,
+          process.env.HOST ?? "0.0.0.0",
+          () => {
+            resolve();
+          }
+        );
+        this.httpsProxy.on("error", reject);
+      });
+
+      console.log(
+        `Agent listening on port ${this.config.httpPort} (HTTPS/mTLS, internal: ${internalPort})`
+      );
+    } else {
+      // Plain HTTP - existing behavior
+      await this.server.start({
+        transportType: "httpStream",
+        httpStream: {
+          port: this.config.httpPort,
+          host: process.env.HOST ?? "0.0.0.0",
+          stateless: true,
+        },
+      });
+
+      console.log(`Agent listening on port ${this.config.httpPort}`);
+    }
 
     // 2. Register LLM tools from LlmToolRegistry
     this.registerLlmTools();
@@ -427,6 +492,11 @@ export class MeshAgent {
       console.log(
         `\nReceived ${signal}, shutting down agent ${this.agentId}...`
       );
+
+      // Close HTTPS proxy if it exists
+      if (this.httpsProxy) {
+        this.httpsProxy.close();
+      }
 
       // Call shutdown directly - this triggers Rust core to unregister
       // and send a shutdown event that breaks the event loop
@@ -804,6 +874,10 @@ export class MeshAgent {
    * Shutdown the agent gracefully.
    */
   async shutdown(): Promise<void> {
+    if (this.httpsProxy) {
+      this.httpsProxy.close();
+      this.httpsProxy = undefined;
+    }
     if (this.handle) {
       await this.handle.shutdown();
       this.handle = null;

@@ -1362,7 +1362,11 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		// Build endpoint
 		endpoint := fmt.Sprintf("stdio://%s", a.ID) // Default to stdio
 		if a.HTTPHost != "" && a.HTTPPort > 0 {
-			endpoint = fmt.Sprintf("http://%s:%d", a.HTTPHost, a.HTTPPort)
+			scheme := "http"
+			if a.EntityID != nil && *a.EntityID != "" {
+				scheme = "https"
+			}
+			endpoint = fmt.Sprintf("%s://%s:%d", scheme, a.HTTPHost, a.HTTPPort)
 		}
 
 		// Use stored status column instead of calculating
