@@ -68,7 +68,7 @@ public class McpHttpClient {
                 builder.hostnameVerifier((hostname, session) -> true);
                 log.info("OkHttpClient configured with mTLS (mode={})", tlsConfig.getMode());
             } catch (Exception e) {
-                throw new RuntimeException("Failed to configure mTLS for OkHttpClient: " + e.getMessage(), e);
+                log.error("Failed to configure mTLS for OkHttpClient — outgoing proxy calls will not use mTLS", e);
             }
         }
 
