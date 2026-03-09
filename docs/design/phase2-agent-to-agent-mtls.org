@@ -162,22 +162,25 @@ instead of reading env vars directly. One function serves both server and client
 - =ToolInvoker.isSelfDependency()= already routes to =invokeLocal()= (direct method call)
 - No HTTP/TLS involved for self-dependencies
 
-** WS6: Testing [0/4]
+** WS6: Testing [4/4]
 
-*** TODO WS6.1 — Python a2a mTLS integration test
-- Start registry + 2 Python agents with =--tls-auto=
-- Verify agent-to-agent tool call works over HTTPS
-- Verify untrusted agent (no cert) cannot call tools
+*** DONE WS6.1 — Python a2a mTLS integration test
+- UC13 tc01: Start registry + 2 Python agents with =--tls-auto=
+- Verifies agent-to-agent tool call works over HTTPS
+- Asserts both endpoints use =https://= scheme
 
-*** TODO WS6.2 — TypeScript a2a mTLS integration test
-- Same pattern as WS6.1 for TypeScript agents
+*** DONE WS6.2 — TypeScript a2a mTLS integration test
+- UC13 tc02: Python system agent + TypeScript greeter with =--tls-auto=
+- Verifies cross-runtime a2a call over mTLS
 
-*** TODO WS6.3 — Java a2a mTLS integration test
-- Same pattern as WS6.1 for Java agents
+*** DONE WS6.3 — Java a2a mTLS integration test
+- UC13 tc03: Python system agent + Java greeter with =--tls-auto=
+- Includes Maven build + Java startup wait (90s timeout)
 
-*** TODO WS6.4 — Cross-language mTLS integration test
-- Python consumer → TypeScript provider over mTLS
-- Verify all language combinations work
+*** DONE WS6.4 — Cross-language and enforcement tests
+- UC13 tc04: HTTPS enforcement — verifies plain HTTP is rejected
+- UC13 tc05: Cross-language a2a — Python + TypeScript + Java all calling each other
+- UC13 tc06: Untrusted agent rejection — rogue cert rejected by mesh agents
 
 ** WS7: Documentation [0/2]
 
@@ -231,12 +234,14 @@ These same files are used for:
   - This is safe: the call never leaves the machine
 #+end_example
 
-** Java PEM-to-Keystore Challenge
-Spring Boot requires PKCS12/JKS keystores, not raw PEM files.
-Options:
-1. Convert PEM to PKCS12 at startup using =java.security.KeyStore= API
-2. Use Bouncy Castle for PEM parsing
-3. Use Spring Boot 3.1+ =PemSslStoreDetails= (preferred if available)
+** Java TLS Implementation
+Spring Boot 3.1+ supports PEM-based SSL directly via =server.ssl.certificate=
+and =server.ssl.certificate-private-key= properties. =MeshEnvironmentPostProcessor=
+maps the mesh TLS env vars to these properties at startup.
+
+For outgoing calls, =McpHttpClient= builds an =SSLContext= by loading PEM files
+into a PKCS12 =KeyStore= in-memory (using =java.security.KeyStore= and
+=CertificateFactory= APIs). This avoids file-system keystore files.
 
 * Implementation Order
 

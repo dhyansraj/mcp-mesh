@@ -40,7 +40,17 @@ public class MeshTlsConfig {
             MeshCore core = NativeLoader.load();
             Pointer ptr = core.mesh_get_tls_config();
             if (ptr == null) {
-                log.debug("mesh_get_tls_config returned null, TLS disabled");
+                // Check if null means error vs genuinely disabled
+                Pointer errPtr = core.mesh_last_error();
+                if (errPtr != null) {
+                    try {
+                        String errMsg = errPtr.getString(0);
+                        log.warn("mesh_get_tls_config failed: {}", errMsg);
+                    } finally {
+                        core.mesh_free_string(errPtr);
+                    }
+                }
+                log.debug("TLS disabled (no config from Rust core)");
                 cached = new MeshTlsConfig(false, "off", null, null, null);
                 return cached;
             }
@@ -59,7 +69,7 @@ public class MeshTlsConfig {
                 core.mesh_free_string(ptr);
             }
         } catch (Exception e) {
-            log.debug("Failed to load TLS config from Rust core: {}", e.getMessage());
+            log.error("Failed to load TLS config from Rust core: {}", e.getMessage());
             cached = new MeshTlsConfig(false, "off", null, null, null);
         }
 

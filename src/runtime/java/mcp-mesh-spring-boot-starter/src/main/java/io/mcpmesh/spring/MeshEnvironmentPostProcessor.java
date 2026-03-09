@@ -60,6 +60,9 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
                 }
                 environment.getPropertySources().addFirst(
                     new MapPropertySource("meshTlsProperties", sslProps));
+            } else {
+                throw new IllegalStateException(
+                    "MCP_MESH_TLS_MODE=" + tlsMode + " but MCP_MESH_TLS_CERT or MCP_MESH_TLS_KEY is not set");
             }
         }
     }

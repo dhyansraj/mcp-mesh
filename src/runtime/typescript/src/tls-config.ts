@@ -29,8 +29,14 @@ export function getTlsConfigCached(): TlsConfig {
       keyPath: raw.key_path ?? null,
       caPath: raw.ca_path ?? null,
     };
-  } catch {
-    cached = { enabled: false, mode: "off", certPath: null, keyPath: null, caPath: null };
+  } catch (err: unknown) {
+    // Only swallow module-not-found (native module not available).
+    // Other errors (JSON parse, FFI crash) must propagate.
+    if (err instanceof Error && err.message.includes("Cannot find module")) {
+      cached = { enabled: false, mode: "off", certPath: null, keyPath: null, caPath: null };
+    } else {
+      throw err;
+    }
   }
 
   if (cached.enabled) {
@@ -42,11 +48,17 @@ export function getTlsConfigCached(): TlsConfig {
 
 /**
  * Read TLS files and return options for https.createServer or undici.Agent.
- * Returns null when TLS is disabled or cert paths are missing.
+ * Returns null when TLS is disabled. Throws when TLS is enabled but paths are missing.
  */
 export function getTlsOptions(): { cert: Buffer; key: Buffer; ca?: Buffer } | null {
   const config = getTlsConfigCached();
-  if (!config.enabled || !config.certPath || !config.keyPath) return null;
+  if (!config.enabled) return null;
+
+  if (!config.certPath || !config.keyPath) {
+    throw new Error(
+      "TLS enabled but certPath or keyPath is missing — check MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+    );
+  }
 
   const opts: { cert: Buffer; key: Buffer; ca?: Buffer } = {
     cert: readFileSync(config.certPath),

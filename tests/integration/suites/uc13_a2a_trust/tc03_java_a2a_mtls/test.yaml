@@ -122,8 +122,8 @@ assertions:
   - expr: "${captured.list_output} contains 'greeter'"
     message: "Java greeter should be registered"
 
-  - expr: "${captured.https_check} contains 'https://'"
-    message: "Agent endpoints should use HTTPS (from registry API)"
+  - expr: "${captured.https_check} contains 'HTTPS_COUNT=2'"
+    message: "Both agent endpoints should use HTTPS"
 
   - expr: "${captured.call_output} contains 'Hello'"
     message: "A2A tool call should succeed over mTLS"

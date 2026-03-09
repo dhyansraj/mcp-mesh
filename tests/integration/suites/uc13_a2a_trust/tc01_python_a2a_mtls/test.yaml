@@ -97,11 +97,8 @@ assertions:
   - expr: "${captured.list_output} contains 'hello-world'"
     message: "Hello world agent should be registered"
 
-  - expr: "${captured.https_check} contains 'HTTPS_COUNT='"
-    message: "Should detect HTTPS endpoints for agents"
-
-  - expr: "${captured.https_check} contains 'https://'"
-    message: "Agent endpoints should use HTTPS (from registry API)"
+  - expr: "${captured.https_check} contains 'HTTPS_COUNT=2'"
+    message: "Both agent endpoints should use HTTPS"
 
   - expr: "${captured.call_output} contains 'Hello from MCP Mesh'"
     message: "A2A tool call should succeed over mTLS"
