@@ -116,6 +116,8 @@ class MeshLlmAgentInjector(BaseInjector):
                 wrapper = llm_metadata.function
                 if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
                     llm_agent = self._create_llm_agent(function_id)
+                    if llm_agent is None:
+                        continue
                     wrapper._mesh_update_llm_agent(llm_agent)
                     logger.info(
                         f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}' (direct LiteLLM mode)"
@@ -297,6 +299,8 @@ class MeshLlmAgentInjector(BaseInjector):
             and "tools_metadata" in self._llm_agents[function_id]
         ):
             llm_agent = self._create_llm_agent(function_id)
+            if llm_agent is None:
+                return
             wrapper._mesh_update_llm_agent(llm_agent)
             logger.info(
                 f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}'"
@@ -437,6 +441,8 @@ class MeshLlmAgentInjector(BaseInjector):
 
         if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
             llm_agent = self._create_llm_agent(function_id)
+            if llm_agent is None:
+                return
             wrapper._mesh_update_llm_agent(llm_agent)
             logger.info(f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}'")
 
@@ -609,14 +615,16 @@ class MeshLlmAgentInjector(BaseInjector):
                     # Create agent with context for this call
                     # Note: _create_llm_agent requires function_id in self._llm_agents
                     # If not available yet, use cached agent with context_value set directly
+                    current_agent = None
                     if function_id in self._llm_agents:
                         current_agent = self._create_llm_agent(
                             function_id, context_value=context_value
                         )
-                        logger.debug(
-                            f"🤖 Created MeshLlmAgent with context for {func.__name__}.{param_name}"
-                        )
-                    else:
+                        if current_agent is not None:
+                            logger.debug(
+                                f"🤖 Created MeshLlmAgent with context for {func.__name__}.{param_name}"
+                            )
+                    if current_agent is None:
                         # Runtime data not yet available - use cached agent but log warning
                         # The cached agent may have been created without context
                         current_agent = wrapper._mesh_llm_agent
@@ -684,7 +692,7 @@ class MeshLlmAgentInjector(BaseInjector):
 
     def _create_llm_agent(
         self, function_id: str, context_value: Any = None
-    ) -> MeshLlmAgent:
+    ) -> MeshLlmAgent | None:
         """
         Create MeshLlmAgent instance for a function.
 
@@ -693,9 +701,14 @@ class MeshLlmAgentInjector(BaseInjector):
             context_value: Optional context for template rendering (Phase 4)
 
         Returns:
-            MeshLlmAgent instance configured with tools and config
+            MeshLlmAgent instance configured with tools and config, or None if agent data not found
         """
-        llm_agent_data = self._llm_agents[function_id]
+        llm_agent_data = self._llm_agents.get(function_id)
+        if llm_agent_data is None:
+            logger.warning(
+                f"⚠️ LLM agent data not found for '{function_id}' — agent may not be initialized yet"
+            )
+            return None
         config_dict = llm_agent_data["config"]
 
         # Create LLMConfig from dict
@@ -773,7 +786,7 @@ class MeshLlmAgentInjector(BaseInjector):
         )
 
         logger.debug(
-            f"🤖 Created MeshLlmAgent for {function_id} with {len(llm_agent_data['tools_metadata'])} tools"
+            f"🤖 Created MeshLlmAgent for {function_id} with {len(llm_agent_data.get('tools_metadata', []))} tools"
             + (f", template={template_path}" if is_template else "")
             + (
                 f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}"
@@ -846,10 +859,11 @@ class MeshLlmAgentInjector(BaseInjector):
                     wrapper = self._function_registry[function_id]
                     # Recreate LLM agent with updated tools
                     new_llm_agent = self._create_llm_agent(function_id)
-                    wrapper._mesh_llm_agent = new_llm_agent
-                    logger.debug(
-                        f"🔄 Updated MeshLlmAgent for existing wrapper: {function_id}"
-                    )
+                    if new_llm_agent is not None:
+                        wrapper._mesh_llm_agent = new_llm_agent
+                        logger.debug(
+                            f"🔄 Updated MeshLlmAgent for existing wrapper: {function_id}"
+                        )
 
             except Exception as e:
                 logger.error(
