@@ -804,42 +804,26 @@ class MeshLlmAgentInjector(BaseInjector):
 
     def update_llm_tools(self, llm_tools: dict[str, list[dict[str, Any]]]) -> None:
         """
-        Update LLM tools when topology changes.
+        Update LLM tools for specific functions when topology changes.
 
-        Handles:
-        - New tools being added
-        - Existing tools being removed
-        - Entire functions being removed
+        Handles per-function events from Rust core additively — only updates
+        the function(s) present in the event, without affecting sibling functions.
+        This matches how TypeScript (Map.set) and Java (ConcurrentHashMap.put)
+        handle per-function tool updates.
+
+        Function removal is handled separately via dependency_unavailable events,
+        not by inferring absence from partial updates.
 
         Args:
-            llm_tools: Updated llm_tools dict from registry (keyed by function_name)
+            llm_tools: Updated llm_tools dict from registry (keyed by function_name).
+                       Typically contains a single function per event from Rust core.
         """
         logger.info(f"🔄 Updating llm_tools for {len(llm_tools)} functions")
 
         # Build mapping from function_name to function_id
         function_name_to_id = self._build_function_name_to_id_mapping()
 
-        # Map function_names from registry to function_ids
-        current_function_ids = set()
-        for function_name in llm_tools.keys():
-            if function_name in function_name_to_id:
-                current_function_ids.add(function_name_to_id[function_name])
-
-        # Track which functions are still active
-        previous_functions = set(self._llm_agents.keys())
-
-        # Remove functions that are no longer in the topology
-        removed_functions = previous_functions - current_function_ids
-        for function_id in removed_functions:
-            logger.info(
-                f"🗑️ Removing LLM function {function_id} (no longer in topology)"
-            )
-            del self._llm_agents[function_id]
-            # Also remove from function registry if present
-            if function_id in self._function_registry:
-                del self._function_registry[function_id]
-
-        # Update or add functions
+        # Update or add functions (additive only — no deletion of sibling functions)
         for function_name, tools in llm_tools.items():
             try:
                 # Map function_name to function_id
