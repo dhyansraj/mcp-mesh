@@ -457,13 +457,13 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Determine output mode early (needed for system prompt formatting)
     // When tools are present, we can't use generateObject() (it doesn't support tools),
-    // so we must fall back to "hint" mode to add JSON instructions to the system prompt.
-    // This ensures the LLM knows to return structured JSON even when using generateText().
+    // but we CAN still pass responseFormat via generateText(). Keep strict mode —
+    // the handler's prepareRequest() will set responseFormat for native enforcement.
+    // formatSystemPrompt() with strict mode adds a brief note (belt-and-suspenders).
     const hasTools = request.tools && request.tools.length > 0;
-    let outputMode = handler.determineOutputMode(outputSchemaObj);
+    const outputMode = handler.determineOutputMode(outputSchemaObj);
     if (outputMode === "strict" && hasTools && outputSchemaObj) {
-      debug(`Forcing hint mode: tools present (${request.tools?.length}), can't use generateObject`);
-      outputMode = "hint";
+      debug(`Strict mode with tools: will use generateText() with responseFormat (not generateObject)`);
     }
     debug(`Output mode for system prompt: ${outputMode}`);
 
@@ -505,6 +505,7 @@ export function llmProvider(config: LlmProviderConfig): {
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
+      providerOptions?: Record<string, Record<string, unknown>>;
     }) => Promise<{
       text: string;
       toolCalls?: Array<{
@@ -586,6 +587,7 @@ export function llmProvider(config: LlmProviderConfig): {
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
+      providerOptions?: Record<string, Record<string, unknown>>;
     } = {
       model: aiModel,
       messages: convertedMessages,
@@ -616,6 +618,18 @@ export function llmProvider(config: LlmProviderConfig): {
     }
     if (modelParams.top_p !== undefined) {
       requestOptions.topP = modelParams.top_p as number;
+    }
+
+    // Pass responseFormat from handler's prepareRequest to generateText via providerOptions.
+    // This enables native structured output (response_format) alongside tools in generateText(),
+    // which generateObject() doesn't support. The handler sets responseFormat when in strict mode.
+    if (preparedRequest.responseFormat) {
+      requestOptions.providerOptions = {
+        [vendor]: {
+          response_format: preparedRequest.responseFormat,
+        },
+      };
+      debug(`Passing responseFormat via providerOptions for vendor: ${vendor}`);
     }
 
     debug(`Calling Vercel AI SDK: model=${effectiveModelName}`);
