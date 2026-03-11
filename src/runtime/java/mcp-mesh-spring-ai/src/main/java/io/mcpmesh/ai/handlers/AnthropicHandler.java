@@ -359,8 +359,33 @@ public class AnthropicHandler implements LlmProviderHandler {
             }
         }
 
-        // Execute the request
-        String content = requestSpec.call().content();
+        // Execute the request — if outputFormat was applied and the API rejects it,
+        // retry with HINT-mode instructions instead of native output_format
+        String content;
+        try {
+            content = requestSpec.call().content();
+        } catch (Exception e) {
+            if (outputSchema != null) {
+                log.warn("ChatClient call failed with output_format ({}), retrying with HINT mode: {}",
+                    outputSchema.name(), e.getMessage());
+
+                // Rebuild request without output_format, using HINT-mode system prompt
+                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, outputSchema, tools);
+
+                ChatClient.ChatClientRequestSpec retrySpec = chatClient.prompt();
+                if (hintSystemPrompt != null && !hintSystemPrompt.isEmpty()) {
+                    retrySpec.system(hintSystemPrompt);
+                }
+                retrySpec.user(userContent.toString());
+                if (!toolCallbacks.isEmpty()) {
+                    retrySpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
+                }
+                // No output_format applied — rely on HINT instructions
+                content = retrySpec.call().content();
+            } else {
+                throw e;
+            }
+        }
 
         log.debug("AnthropicHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
@@ -442,8 +467,41 @@ public class AnthropicHandler implements LlmProviderHandler {
 
         log.debug("Calling Claude with {} tools (execution disabled)", tools != null ? tools.size() : 0);
 
-        // Call model
-        org.springframework.ai.chat.model.ChatResponse response = model.call(prompt);
+        // Call model — if outputFormat was applied and the API rejects it,
+        // retry with HINT-mode instructions instead of native output_format
+        org.springframework.ai.chat.model.ChatResponse response;
+        try {
+            response = model.call(prompt);
+        } catch (Exception e) {
+            if (outputSchema != null) {
+                log.warn("model.call failed with output_format ({}), retrying with HINT mode: {}",
+                    outputSchema.name(), e.getMessage());
+
+                // Rebuild with HINT-mode detailed instructions
+                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, outputSchema, tools);
+
+                // Rebuild messages with hint system prompt
+                List<Message> hintMessages = new ArrayList<>();
+                hintMessages.add(new SystemMessage(hintSystemPrompt));
+                for (Message msg : messagesWithFormattedSystem) {
+                    if (!(msg instanceof SystemMessage)) {
+                        hintMessages.add(msg);
+                    }
+                }
+
+                // Rebuild prompt without outputFormat
+                org.springframework.ai.model.tool.ToolCallingChatOptions hintOptions =
+                    org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
+                        .toolCallbacks(toolCallbacks)
+                        .internalToolExecutionEnabled(false)
+                        .build();
+                prompt = new org.springframework.ai.chat.prompt.Prompt(hintMessages, hintOptions);
+
+                response = model.call(prompt);
+            } else {
+                throw e;
+            }
+        }
 
         // Extract content and tool calls from ALL Generations
         String content = null;
@@ -473,6 +531,15 @@ public class AnthropicHandler implements LlmProviderHandler {
             toolCalls.size());
 
         return new LlmResponse(content, toolCalls);
+    }
+
+    /**
+     * Build a fallback system prompt that replaces STRICT-mode native enforcement
+     * with detailed HINT-mode JSON schema instructions. Used when the API rejects
+     * the native output_format and we need to retry with prompt-based enforcement.
+     */
+    private String formatSystemPromptForHintFallback(String currentSystemPrompt, OutputSchema outputSchema, List<ToolDefinition> tools) {
+        return currentSystemPrompt + "\n\n" + buildHintModeInstructions(outputSchema, tools);
     }
 
     /**

@@ -1,0 +1,176 @@
+# Test Case: Cross-Runtime Structured Output - TS Consumer -> Py Claude Provider
+# Validates that TypeScript consumer with Zod structured output receives
+# proper structured JSON from a Python Claude provider.
+
+name: "Cross-Runtime Structured Output - TS Consumer -> Py Claude"
+description: "Verify TypeScript consumer receives structured JSON from Python Claude provider"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - cross-runtime
+  - typescript
+  - python
+timeout: 180
+
+pre_run:
+  # Python setup for Claude provider
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  # Node.js/TypeScript setup for consumer
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level Python Claude provider
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level TypeScript consumer
+  - name: "Copy structured consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/structured-consumer-ts /workspace/"
+    capture: copy_consumer_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Install npm dependencies for TS consumer
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/structured-consumer-ts
+
+  # Start Python Claude provider
+  - name: "Start Python Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    capture: start_provider_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list_output
+
+  # List provider tools
+  - name: "List provider tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: provider_tools_output
+
+  # Start TypeScript consumer
+  - name: "Start structured consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start structured-consumer-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9041 -d"
+    capture: start_consumer_output
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer to register"
+    handler: wait
+    seconds: 15
+
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list_output
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+
+  # Call get_country_info with France
+  - name: "Call get_country_info - France"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "France"}}'
+    capture: france_response
+
+  # Call get_country_info with Japan
+  - name: "Call get_country_info - Japan"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Japan"}}'
+    capture: japan_response
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+
+assertions:
+  # Provider started successfully
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "Python Claude provider should appear in meshctl list"
+
+  # Provider tool registered (Python Claude provider registers as claude_provider)
+  - expr: ${captured.provider_tools_output} contains 'claude_provider'
+    message: "claude_provider tool should be listed"
+
+  # Consumer started successfully
+  - expr: ${captured.all_list_output} contains 'structured-consumer-ts'
+    message: "TypeScript structured consumer should appear in meshctl list"
+
+  # Consumer tool registered
+  - expr: ${captured.all_tools_output} contains 'get_country_info'
+    message: "get_country_info tool should be listed"
+
+  # France response contains expected structured data
+  - expr: ${captured.france_response} contains 'France'
+    message: "Response should contain France"
+  - expr: ${captured.france_response} contains 'Paris'
+    message: "Response should contain Paris as capital"
+  - expr: ${captured.france_response} contains 'name'
+    message: "Response should have 'name' field (structured JSON)"
+  - expr: ${captured.france_response} contains 'capital'
+    message: "Response should have 'capital' field (structured JSON)"
+  - expr: ${captured.france_response} contains 'continent'
+    message: "Response should have 'continent' field (structured JSON)"
+
+  # Response should NOT contain schema metadata or errors
+  - expr: "${captured.france_response} not contains 'Expecting value'"
+    message: "No JSON parse errors"
+
+  # Japan response validation
+  - expr: ${captured.japan_response} contains 'Japan'
+    message: "Japan response should contain Japan"
+  - expr: ${captured.japan_response} contains 'Tokyo'
+    message: "Japan response should contain Tokyo"
+  - expr: ${captured.japan_response} contains 'name'
+    message: "Japan response should have 'name' field"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
