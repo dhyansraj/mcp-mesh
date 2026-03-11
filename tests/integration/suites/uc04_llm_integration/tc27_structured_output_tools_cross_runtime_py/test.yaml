@@ -1,0 +1,215 @@
+# Test Case: Cross-Runtime Structured Output with Tools - Py Consumer -> Java Claude
+# Verifies Python consumer with BOTH structured output AND tool calling through
+# a Java Claude provider. This tests the most complex scenario: cross-runtime +
+# structured output + tools (the production avatar pattern).
+
+name: "Cross-Runtime Structured Output with Tools - Py Consumer -> Java Claude"
+description: "Verify structured output with tool calling works cross-runtime (Python -> Java)"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - tools
+  - cross-runtime
+  - java
+  - python
+timeout: 420
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # Copy UC-level Java Claude provider artifacts
+  - name: "Copy Java Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-claude-provider /workspace/"
+    capture: copy_java_provider_output
+  # Copy TC-level calculator-agent artifacts
+  - name: "Copy calculator-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/calculator-agent /workspace/"
+    capture: copy_calc_output
+  # Copy TC-level analysis-tools-agent artifacts
+  - name: "Copy analysis-tools-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/analysis-tools-agent /workspace/"
+    capture: copy_analysis_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  # Install Maven dependencies for Java Claude provider
+  - name: "Install Maven dependencies for Java Claude provider"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+  # Start calculator-agent first (provides tools)
+  - name: "Start calculator-agent"
+    handler: shell
+    command: "meshctl start calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calc_output
+  # Wait for calculator to register
+  - name: "Wait for calculator to register"
+    handler: wait
+    seconds: 3
+  # Start Java Claude provider
+  - name: "Start Java Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
+      echo "Java Claude provider starting via meshctl"
+    capture: start_java_provider_output
+  # Wait for Java provider to register (Java is slow to start)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for java claude-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "claude-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 90s"
+      meshctl logs java-claude-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_java_registration
+    timeout: 120
+  # Verify calculator and provider registered
+  - name: "Verify calculator and provider registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: pre_agent_list_output
+  # Start analysis-tools-agent (depends on BOTH calculator and java-claude-provider)
+  - name: "Start analysis-tools-agent"
+    handler: shell
+    command: "meshctl start analysis-tools-agent/main.py -d"
+    workdir: /workspace
+    capture: start_analysis_output
+  # Wait for agent to register and resolve dependencies
+  - name: "Wait for analysis-tools-agent to register"
+    handler: wait
+    seconds: 15
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+  # Call analyze - math question using calc_add (15 + 27 = 42)
+  - name: "Call analyze - addition (should use calc_add)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "What is 15 plus 27?"}}'
+    workdir: /workspace
+    capture: add_response
+  # Wait between calls
+  - name: "Wait between calls"
+    handler: wait
+    seconds: 2
+  # Call analyze - knowledge question (should NOT use tools)
+  - name: "Call analyze - knowledge question (no tools)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "What is the capital of France?"}}'
+    workdir: /workspace
+    capture: knowledge_response
+  # Wait between calls
+  - name: "Wait between calls"
+    handler: wait
+    seconds: 2
+  # Call analyze - math question using calc_multiply (8 * 12 = 96)
+  - name: "Call analyze - multiplication (should use calc_multiply)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "What is 8 multiplied by 12?"}}'
+    workdir: /workspace
+    capture: multiply_response
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+assertions:
+  # Infrastructure assertions
+  - expr: ${captured.pre_agent_list_output} contains 'calculator-agent'
+    message: "calculator-agent should appear in meshctl list"
+  - expr: ${captured.pre_agent_list_output} contains 'claude-provider'
+    message: "claude-provider (Java) should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'analysis-tools-agent'
+    message: "analysis-tools-agent should appear in meshctl list"
+  # Tools registered
+  - expr: ${captured.tools_output} contains 'analyze'
+    message: "analyze tool should be listed"
+  - expr: ${captured.tools_output} contains 'calc_add'
+    message: "calc_add tool should be listed"
+  - expr: ${captured.tools_output} contains 'calc_multiply'
+    message: "calc_multiply tool should be listed"
+  # Addition response (15 + 27 = 42)
+  - expr: ${captured.add_response} contains '"answer"'
+    message: "Addition response should contain answer field"
+  - expr: ${captured.add_response} contains '"reasoning"'
+    message: "Addition response should contain reasoning field"
+  - expr: ${captured.add_response} contains '42'
+    message: "Addition response should contain correct answer 42"
+  # Knowledge response (capital of France)
+  - expr: ${captured.knowledge_response} contains '"answer"'
+    message: "Knowledge response should contain answer field"
+  - expr: ${captured.knowledge_response} contains '"reasoning"'
+    message: "Knowledge response should contain reasoning field"
+  - expr: ${captured.knowledge_response} contains 'Paris'
+    message: "Knowledge response should contain Paris"
+  # Multiplication response (8 * 12 = 96)
+  - expr: ${captured.multiply_response} contains '"answer"'
+    message: "Multiplication response should contain answer field"
+  - expr: ${captured.multiply_response} contains '"reasoning"'
+    message: "Multiplication response should contain reasoning field"
+  - expr: ${captured.multiply_response} contains '96'
+    message: "Multiplication response should contain correct answer 96"
+  # No error conditions
+  - expr: ${captured.add_response} not contains 'Mesh provider not resolved'
+    message: "Addition response should not have provider error"
+  - expr: ${captured.knowledge_response} not contains 'Mesh provider not resolved'
+    message: "Knowledge response should not have provider error"
+  - expr: ${captured.multiply_response} not contains 'Mesh provider not resolved'
+    message: "Multiplication response should not have provider error"
+  - expr: ${captured.add_response} not contains 'Expecting value'
+    message: "Addition response should not have JSON parse error"
+  - expr: ${captured.knowledge_response} not contains 'Expecting value'
+    message: "Knowledge response should not have JSON parse error"
+  - expr: ${captured.multiply_response} not contains 'Expecting value'
+    message: "Multiplication response should not have JSON parse error"
+  - expr: ${captured.add_response} not contains "'NoneType'"
+    message: "Addition response should not have NoneType error"
+  - expr: ${captured.knowledge_response} not contains "'NoneType'"
+    message: "Knowledge response should not have NoneType error"
+  - expr: ${captured.multiply_response} not contains "'NoneType'"
+    message: "Multiplication response should not have NoneType error"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

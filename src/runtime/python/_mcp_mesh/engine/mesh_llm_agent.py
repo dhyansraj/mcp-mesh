@@ -472,6 +472,28 @@ IMPORTANT TOOL CALLING RULES:
             # Parse it to create LiteLLM-compatible response
             message_dict = result
 
+            # Cross-runtime providers (Java, TypeScript) may return a plain string
+            # instead of a message dict. Wrap it in the expected format.
+            if isinstance(message_dict, str):
+                logger.debug(
+                    "Received string result from mesh provider, "
+                    "wrapping in message dict format"
+                )
+                try:
+                    parsed = json.loads(message_dict)
+                    if isinstance(parsed, dict):
+                        message_dict = parsed
+                    else:
+                        message_dict = {
+                            "role": "assistant",
+                            "content": message_dict,
+                        }
+                except (json.JSONDecodeError, TypeError):
+                    message_dict = {
+                        "role": "assistant",
+                        "content": message_dict,
+                    }
+
             # Create mock LiteLLM response structure
             # This mimics litellm.completion() response format
             class MockToolCall:

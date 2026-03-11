@@ -1,0 +1,198 @@
+# Test Case: Multi-Provider Structured Output - Py+Java Claude Providers
+# Verifies that when two Claude providers (Python + Java) are on the mesh,
+# a Python consumer can get structured output from either one.
+# Tests multi-provider routing and output_schema handling across runtimes.
+
+name: "Multi-Provider Structured Output - Py+Java Claude Providers"
+description: "Verify structured output works when multiple Claude providers are available"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - multi-provider
+  - java
+  - python
+timeout: 420
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  # Copy UC-level Claude provider artifacts (Python)
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_py_provider_output
+  # Copy UC-level Java Claude provider artifacts
+  - name: "Copy Java Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-claude-provider /workspace/"
+    capture: copy_java_provider_output
+  # Copy TC-level multi-provider-consumer artifacts
+  - name: "Copy multi-provider-consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/multi-provider-consumer /workspace/"
+    capture: copy_consumer_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  # Install Maven dependencies for Java Claude provider
+  - name: "Install Maven dependencies for Java Claude provider"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+  # Start Python Claude provider
+  - name: "Start Python Claude provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_py_provider_output
+  # Wait for Python provider to register
+  - name: "Wait for Python provider to register"
+    handler: wait
+    seconds: 10
+  # Start Java Claude provider
+  - name: "Start Java Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
+      echo "Java Claude provider starting via meshctl"
+    capture: start_java_provider_output
+  # Wait for Java provider to register (Java is slow to start)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for java claude-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        PROVIDER_COUNT=$(echo "$AGENTS" | grep -c "claude-provider" || echo "0")
+        if [ "$PROVIDER_COUNT" -ge 2 ]; then
+          echo "Both providers registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s) - found $PROVIDER_COUNT provider(s)"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Not all providers registered within 90s, continuing..."
+      meshctl list 2>/dev/null || true
+    capture: wait_java_registration
+    timeout: 120
+  # Verify both providers are registered
+  - name: "Verify both providers registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: both_providers_list
+  # Start Python consumer
+  - name: "Start multi-provider-consumer"
+    handler: shell
+    command: "meshctl start multi-provider-consumer/main.py -d"
+    workdir: /workspace
+    capture: start_consumer_output
+  # Wait for consumer to register
+  - name: "Wait for consumer to register"
+    handler: wait
+    seconds: 15
+  # List all agents and tools
+  - name: "List all agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  - name: "List all tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+  # Call get_country_info for France
+  - name: "Call get_country_info - France"
+    handler: shell
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "France"}}'
+    workdir: /workspace
+    capture: france_response
+  # Call get_country_info for Brazil
+  - name: "Call get_country_info - Brazil"
+    handler: shell
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Brazil"}}'
+    workdir: /workspace
+    capture: brazil_response
+  # Call get_country_info for Australia
+  - name: "Call get_country_info - Australia"
+    handler: shell
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Australia"}}'
+    workdir: /workspace
+    capture: australia_response
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+assertions:
+  # Both providers registered
+  - expr: ${captured.both_providers_list} contains 'claude-provider'
+    message: "At least one claude-provider should appear in meshctl list"
+  # Consumer registered
+  - expr: ${captured.all_list_output} contains 'multi-provider-consumer'
+    message: "multi-provider-consumer should appear in meshctl list"
+  # get_country_info tool is registered
+  - expr: ${captured.tools_output} contains 'get_country_info'
+    message: "get_country_info tool should be listed"
+  # France response has structured output fields
+  - expr: ${captured.france_response} contains '"name"'
+    message: "France response should contain name field"
+  - expr: ${captured.france_response} contains '"capital"'
+    message: "France response should contain capital field"
+  - expr: ${captured.france_response} contains '"fun_fact"'
+    message: "France response should contain fun_fact field"
+  - expr: ${captured.france_response} contains 'Paris'
+    message: "France response should contain Paris"
+  # Brazil response has structured output fields
+  - expr: ${captured.brazil_response} contains '"name"'
+    message: "Brazil response should contain name field"
+  - expr: ${captured.brazil_response} contains '"capital"'
+    message: "Brazil response should contain capital field"
+  - expr: ${captured.brazil_response} contains '"fun_fact"'
+    message: "Brazil response should contain fun_fact field"
+  - expr: ${captured.brazil_response} contains 'rasil'
+    message: "Brazil response should contain Brasilia or Brasilia (capital)"
+  # Australia response has structured output fields
+  - expr: ${captured.australia_response} contains '"name"'
+    message: "Australia response should contain name field"
+  - expr: ${captured.australia_response} contains '"capital"'
+    message: "Australia response should contain capital field"
+  - expr: ${captured.australia_response} contains '"fun_fact"'
+    message: "Australia response should contain fun_fact field"
+  # No error conditions
+  - expr: ${captured.france_response} not contains 'Expecting value'
+    message: "France response should not have JSON parse error"
+  - expr: ${captured.brazil_response} not contains 'Expecting value'
+    message: "Brazil response should not have JSON parse error"
+  - expr: ${captured.australia_response} not contains 'Expecting value'
+    message: "Australia response should not have JSON parse error"
+  - expr: ${captured.france_response} not contains '"object"'
+    message: "France response should not contain schema leak (object type string)"
+  - expr: ${captured.brazil_response} not contains '"object"'
+    message: "Brazil response should not contain schema leak (object type string)"
+  - expr: ${captured.australia_response} not contains '"object"'
+    message: "Australia response should not contain schema leak (object type string)"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

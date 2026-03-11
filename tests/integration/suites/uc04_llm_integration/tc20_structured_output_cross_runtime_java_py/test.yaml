@@ -1,0 +1,193 @@
+# Test Case: Cross-Runtime Structured Output - Python Consumer -> Java Claude Provider
+# Validates that Java AnthropicHandler.apply_structured_output uses native response_format
+# instead of HINT mode when a Python consumer sends output_schema with Pydantic model.
+
+name: "Cross-Runtime Structured Output - Py Consumer -> Java Claude"
+description: "Verify Python consumer receives structured JSON from Java Claude provider"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - cross-runtime
+  - java
+  - python
+timeout: 360
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level Java Claude provider artifacts
+  - name: "Copy Java Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-claude-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level Python consumer
+  - name: "Copy structured consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/structured-consumer-py /workspace/"
+    capture: copy_consumer_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Maven dependencies for Java provider
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+
+  # Start Java Claude provider
+  - name: "Start Java Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
+      echo "Java Claude provider starting via meshctl"
+    capture: start_provider_output
+
+  # Wait for Java provider registration (Java is slow to start)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for claude-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "claude-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 90s"
+      meshctl logs java-claude-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list_output
+
+  # List provider tools
+  - name: "List provider tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: provider_tools_output
+
+  # Start Python consumer
+  - name: "Start structured consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start structured-consumer-py/main.py --env-file .env -d"
+    capture: start_consumer_output
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer to register"
+    handler: wait
+    seconds: 15
+
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list_output
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+
+  # Call get_country_info with France
+  - name: "Call get_country_info - France"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "France"}}'
+    capture: france_response
+
+  # Call get_country_info with Japan
+  - name: "Call get_country_info - Japan"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Japan"}}'
+    capture: japan_response
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+
+assertions:
+  # Provider started successfully
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "Java Claude provider should appear in meshctl list"
+
+  # Provider tool registered
+  - expr: ${captured.provider_tools_output} contains 'llm_generate'
+    message: "llm_generate tool should be listed"
+
+  # Consumer started successfully
+  - expr: ${captured.all_list_output} contains 'structured-consumer'
+    message: "Python structured consumer should appear in meshctl list"
+
+  # Consumer tool registered
+  - expr: ${captured.all_tools_output} contains 'get_country_info'
+    message: "get_country_info tool should be listed"
+
+  # France response contains expected structured data
+  - expr: ${captured.france_response} contains 'France'
+    message: "Response should contain France"
+  - expr: ${captured.france_response} contains 'Paris'
+    message: "Response should contain Paris as capital"
+  - expr: ${captured.france_response} contains 'name'
+    message: "Response should have 'name' field (structured JSON)"
+  - expr: ${captured.france_response} contains 'capital'
+    message: "Response should have 'capital' field (structured JSON)"
+  - expr: ${captured.france_response} contains 'continent'
+    message: "Response should have 'continent' field (structured JSON)"
+
+  # Response should NOT contain schema metadata (the bug symptom)
+  - expr: "${captured.france_response} not contains 'object'"
+    message: "Response should NOT contain JSON schema type definitions"
+  - expr: "${captured.france_response} not contains 'Expecting value'"
+    message: "No JSON parse errors"
+
+  # Japan response validation
+  - expr: ${captured.japan_response} contains 'Japan'
+    message: "Japan response should contain Japan"
+  - expr: ${captured.japan_response} contains 'Tokyo'
+    message: "Japan response should contain Tokyo"
+  - expr: ${captured.japan_response} contains 'name'
+    message: "Japan response should have 'name' field"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
