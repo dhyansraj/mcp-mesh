@@ -2,6 +2,8 @@ package io.mcpmesh.ai.handlers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.anthropic.AnthropicChatOptions;
+import org.springframework.ai.anthropic.api.AnthropicApi.ChatCompletionRequest.OutputFormat;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -24,19 +26,22 @@ import java.util.function.Function;
  * <ul>
  *   <li>Full multi-turn conversation support</li>
  *   <li>System message handling (Claude prefers single system message)</li>
- *   <li>Structured output with HINT mode (prompt-based)</li>
+ *   <li>Native structured output via {@code output_format} (response_format)</li>
  *   <li>DECISION GUIDE for tool vs. direct JSON response decisions</li>
  *   <li>Anti-XML tool calling instructions</li>
  * </ul>
  *
- * <h2>Structured Output Modes (TEXT + HINT only)</h2>
- * <ul>
- *   <li><b>text</b>: Plain text output for String return types (fastest)</li>
- *   <li><b>hint</b>: JSON schema in prompt with DECISION GUIDE (~95% reliable)</li>
- * </ul>
+ * <h2>Structured Output Strategy</h2>
+ * <p>Uses a dual strategy for reliable structured output:
+ * <ol>
+ *   <li><b>Native enforcement</b>: {@code output_format} with {@code json_schema} type
+ *       via {@link AnthropicChatOptions} — guarantees schema compliance (100% reliable)</li>
+ *   <li><b>Prompt hint</b>: Brief note in system prompt for context —
+ *       the native enforcement does the heavy lifting</li>
+ * </ol>
  *
- * <p>Native response_format (strict mode) is not used due to cross-runtime
- * incompatibilities when tools are present, and grammar compilation overhead.
+ * <p>This matches the Python SDK's approach where {@code response_format} handles
+ * enforcement and prompt instructions are minimal.
  *
  * @see LlmProviderHandler
  */
@@ -75,8 +80,7 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (outputSchema == null) {
             return OUTPUT_MODE_TEXT;
         }
-        // All schemas use HINT mode for Claude -- no STRICT mode
-        return OUTPUT_MODE_HINT;
+        return OUTPUT_MODE_STRICT;
     }
 
     @Override
@@ -97,6 +101,24 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (OUTPUT_MODE_TEXT.equals(outputMode)) {
             // Text mode: No JSON instructions
             // Do nothing
+        } else if (OUTPUT_MODE_STRICT.equals(outputMode)) {
+            // Strict mode: Brief note (native output_format handles enforcement)
+            if (outputSchema != null) {
+                if (tools != null && !tools.isEmpty()) {
+                    // When tools are present, add DECISION GUIDE so Claude knows
+                    // when to call tools vs return JSON directly
+                    systemContent.append("""
+
+            DECISION GUIDE:
+            - If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+            - If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+            - After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+            """);
+                }
+                systemContent.append("\n\nYour final response will be structured as JSON matching the ")
+                    .append(outputSchema.name())
+                    .append(" format.");
+            }
         } else if (OUTPUT_MODE_HINT.equals(outputMode)) {
             // Hint mode: Add detailed JSON schema instructions with DECISION GUIDE
             if (outputSchema != null) {
@@ -255,10 +277,10 @@ public class AnthropicHandler implements LlmProviderHandler {
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema);
         }
     }
 
@@ -270,7 +292,8 @@ public class AnthropicHandler implements LlmProviderHandler {
             List<Message> springMessages,
             List<ToolDefinition> tools,
             ToolExecutorCallback toolExecutor,
-            String formattedSystemPrompt) {
+            String formattedSystemPrompt,
+            OutputSchema outputSchema) {
 
         // Convert tools to Spring AI ToolCallback objects
         List<ToolCallback> toolCallbacks = new ArrayList<>();
@@ -319,6 +342,23 @@ public class AnthropicHandler implements LlmProviderHandler {
             requestSpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
         }
 
+        // Apply native output_format when outputSchema is present
+        if (outputSchema != null) {
+            try {
+                Map<String, Object> sanitizedSchema = outputSchema.sanitize();
+                OutputFormat outputFormat = new OutputFormat("json_schema", sanitizedSchema);
+
+                AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
+                    .outputFormat(outputFormat)
+                    .build();
+
+                requestSpec.options(chatOptions);
+                log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
+            } catch (Exception e) {
+                log.warn("Failed to apply output_format for {}: {}", outputSchema.name(), e.getMessage());
+            }
+        }
+
         // Execute the request
         String content = requestSpec.call().content();
 
@@ -339,7 +379,8 @@ public class AnthropicHandler implements LlmProviderHandler {
             ChatModel model,
             List<Message> springMessages,
             List<ToolDefinition> tools,
-            String formattedSystemPrompt) {
+            String formattedSystemPrompt,
+            OutputSchema outputSchema) {
 
         // Replace system message with formatted one
         List<Message> messagesWithFormattedSystem = new ArrayList<>();
@@ -362,16 +403,42 @@ public class AnthropicHandler implements LlmProviderHandler {
         // Create tool callbacks for schema only (no execution)
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);
 
-        // Build chat options with tool execution DISABLED
-        org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
-            org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
-                .toolCallbacks(toolCallbacks)
-                .internalToolExecutionEnabled(false)  // Don't auto-execute tools!
-                .build();
+        // Build prompt with chat options
+        org.springframework.ai.chat.prompt.Prompt prompt;
 
-        // Create prompt with options
-        org.springframework.ai.chat.prompt.Prompt prompt =
-            new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+        // Apply native output_format when outputSchema is present
+        if (outputSchema != null) {
+            try {
+                Map<String, Object> sanitizedSchema = outputSchema.sanitize();
+                OutputFormat outputFormat = new OutputFormat("json_schema", sanitizedSchema);
+
+                AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
+                    .toolCallbacks(toolCallbacks)
+                    .internalToolExecutionEnabled(false)
+                    .outputFormat(outputFormat)
+                    .build();
+
+                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+                log.debug("Applied Anthropic output_format with schema: {}", outputSchema.name());
+            } catch (Exception e) {
+                log.warn("Failed to apply output_format for {}: {}, falling back to basic options",
+                    outputSchema.name(), e.getMessage());
+                org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
+                    org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
+                        .toolCallbacks(toolCallbacks)
+                        .internalToolExecutionEnabled(false)
+                        .build();
+                prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+            }
+        } else {
+            // No structured output needed
+            org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions =
+                org.springframework.ai.model.tool.ToolCallingChatOptions.builder()
+                    .toolCallbacks(toolCallbacks)
+                    .internalToolExecutionEnabled(false)
+                    .build();
+            prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);
+        }
 
         log.debug("Calling Claude with {} tools (execution disabled)", tools != null ? tools.size() : 0);
 
@@ -498,10 +565,10 @@ public class AnthropicHandler implements LlmProviderHandler {
     public Map<String, Boolean> getCapabilities() {
         return Map.of(
             "native_tool_calling", true,
-            "structured_output", false,  // Uses HINT mode (prompt-based), not native response_format
+            "structured_output", true,   // Native output_format with json_schema
             "streaming", true,
             "vision", true,
-            "json_mode", false,          // No native JSON mode used
+            "json_mode", true,           // Via output_format json_schema
             "prompt_caching", false      // Not implemented yet in Java
         );
     }
