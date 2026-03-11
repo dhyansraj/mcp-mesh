@@ -1,0 +1,229 @@
+# Test Case: Structured Output Multi-Turn Chat - Python
+# Verifies HINT-mode structured output remains reliable across 10+ conversation turns
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/598
+
+name: "Structured Output Multi-Turn Chat - Py"
+description: "Verify structured output (HINT mode) doesn't degrade across multi-turn conversations"
+tags:
+  - llm
+  - claude
+  - structured
+  - python
+  - multi-turn
+timeout: 180
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+test:
+  # Copy UC-level Claude provider artifacts
+  - name: "Copy Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+  # Copy TC-level chat-history-agent artifacts
+  - name: "Copy chat-history-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/chat-history-agent /workspace/"
+    capture: copy_agent_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+  # Start Claude provider
+  - name: "Start Claude provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider_output
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list_output
+  # Start chat-history-agent (depends on claude-provider)
+  - name: "Start chat-history-agent"
+    handler: shell
+    command: "meshctl start chat-history-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_output
+  # Wait for agent to register and resolve provider
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 15
+  # Verify both are running
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+  # === 10 SEQUENTIAL CHAT TURNS ===
+  # Each call accumulates in the agent's in-memory chat_history.
+  # The prompts are varied and conversational to tempt Claude into prose.
+  - name: "Turn 1 - Simple knowledge question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What is photosynthesis?"}}'
+    workdir: /workspace
+    capture: turn_1
+  - name: "Turn 2 - Follow-up question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "How efficient is it compared to solar panels?"}}'
+    workdir: /workspace
+    capture: turn_2
+  - name: "Turn 3 - Topic change"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Explain why the sky is blue in simple terms."}}'
+    workdir: /workspace
+    capture: turn_3
+  - name: "Turn 4 - Opinion question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What is the most fascinating fact about the ocean?"}}'
+    workdir: /workspace
+    capture: turn_4
+  - name: "Turn 5 - Complex explanation"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Describe the theory of general relativity."}}'
+    workdir: /workspace
+    capture: turn_5
+  - name: "Turn 6 - Back-reference"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "How does light from the sun relate to what we discussed about photosynthesis?"}}'
+    workdir: /workspace
+    capture: turn_6
+  - name: "Turn 7 - Creative prompt"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "If you could name a new color, what would you call it and why?"}}'
+    workdir: /workspace
+    capture: turn_7
+  - name: "Turn 8 - Technical question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What are the key differences between TCP and UDP?"}}'
+    workdir: /workspace
+    capture: turn_8
+  - name: "Turn 9 - Philosophical question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Is mathematics discovered or invented?"}}'
+    workdir: /workspace
+    capture: turn_9
+  - name: "Turn 10 - Summary request"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Summarize the main topics we have discussed so far."}}'
+    workdir: /workspace
+    capture: turn_10
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+assertions:
+  # Provider and agent started successfully
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'chat-history-agent'
+    message: "chat-history-agent should appear in meshctl list"
+  - expr: ${captured.tools_output} contains 'chat'
+    message: "chat tool should be listed"
+  # === EARLY TURNS (1-3): Should always work ===
+  - expr: ${captured.turn_1} contains '"reply"'
+    message: "Turn 1 should contain reply field (valid structured output)"
+  - expr: ${captured.turn_1} not contains 'ValidationError'
+    message: "Turn 1 should not have ValidationError"
+  - expr: ${captured.turn_2} contains '"reply"'
+    message: "Turn 2 should contain reply field"
+  - expr: ${captured.turn_2} not contains 'ValidationError'
+    message: "Turn 2 should not have ValidationError"
+  - expr: ${captured.turn_3} contains '"reply"'
+    message: "Turn 3 should contain reply field"
+  - expr: ${captured.turn_3} not contains 'ValidationError'
+    message: "Turn 3 should not have ValidationError"
+  # === MIDDLE TURNS (4-7): Degradation may start here ===
+  - expr: ${captured.turn_4} contains '"reply"'
+    message: "Turn 4 should contain reply field"
+  - expr: ${captured.turn_4} not contains 'ValidationError'
+    message: "Turn 4 should not have ValidationError"
+  - expr: ${captured.turn_5} contains '"reply"'
+    message: "Turn 5 should contain reply field"
+  - expr: ${captured.turn_5} not contains 'ValidationError'
+    message: "Turn 5 should not have ValidationError"
+  - expr: ${captured.turn_6} contains '"reply"'
+    message: "Turn 6 should contain reply field"
+  - expr: ${captured.turn_6} not contains 'ValidationError'
+    message: "Turn 6 should not have ValidationError"
+  - expr: ${captured.turn_7} contains '"reply"'
+    message: "Turn 7 should contain reply field"
+  - expr: ${captured.turn_7} not contains 'ValidationError'
+    message: "Turn 7 should not have ValidationError"
+  # === LATE TURNS (8-10): Most likely to fail if HINT degrades ===
+  - expr: ${captured.turn_8} contains '"reply"'
+    message: "Turn 8 should contain reply field (late turn - HINT durability)"
+  - expr: ${captured.turn_8} not contains 'ValidationError'
+    message: "Turn 8 should not have ValidationError"
+  - expr: ${captured.turn_9} contains '"reply"'
+    message: "Turn 9 should contain reply field (late turn - HINT durability)"
+  - expr: ${captured.turn_9} not contains 'ValidationError'
+    message: "Turn 9 should not have ValidationError"
+  - expr: ${captured.turn_10} contains '"reply"'
+    message: "Turn 10 should contain reply field (late turn - HINT durability)"
+  - expr: ${captured.turn_10} not contains 'ValidationError'
+    message: "Turn 10 should not have ValidationError"
+  # === STRUCTURAL CHECKS: All turns should have proper JSON fields ===
+  - expr: ${captured.turn_1} contains '"sentiment"'
+    message: "Turn 1 should contain sentiment field"
+  - expr: ${captured.turn_5} contains '"sentiment"'
+    message: "Turn 5 should contain sentiment field"
+  - expr: ${captured.turn_10} contains '"sentiment"'
+    message: "Turn 10 should contain sentiment field"
+  - expr: ${captured.turn_1} contains '"keywords"'
+    message: "Turn 1 should contain keywords field"
+  - expr: ${captured.turn_5} contains '"keywords"'
+    message: "Turn 5 should contain keywords field"
+  - expr: ${captured.turn_10} contains '"keywords"'
+    message: "Turn 10 should contain keywords field"
+  - expr: ${captured.turn_1} contains '"confidence"'
+    message: "Turn 1 should contain confidence field"
+  - expr: ${captured.turn_10} contains '"confidence"'
+    message: "Turn 10 should contain confidence field"
+  # === ERROR CHECKS: No parse/format errors in any turn ===
+  - expr: ${captured.turn_1} not contains 'Expecting value'
+    message: "Turn 1 should not have JSON parse error"
+  - expr: ${captured.turn_5} not contains 'Expecting value'
+    message: "Turn 5 should not have JSON parse error"
+  - expr: ${captured.turn_10} not contains 'Expecting value'
+    message: "Turn 10 should not have JSON parse error"
+  - expr: ${captured.turn_1} not contains 'Mesh provider not resolved'
+    message: "Turn 1 should not have provider error"
+  - expr: ${captured.turn_10} not contains 'Mesh provider not resolved'
+    message: "Turn 10 should not have provider error"
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
