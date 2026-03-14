@@ -150,30 +150,26 @@ assertions:
   - expr: ${captured.tools_output} contains 'get_country_info'
     message: "get_country_info tool should be listed"
   # France response has structured output fields
-  - expr: ${captured.france_response} contains '"name"'
-    message: "France response should contain name field"
-  - expr: ${captured.france_response} contains '"capital"'
-    message: "France response should contain capital field"
-  - expr: ${captured.france_response} contains '"fun_fact"'
-    message: "France response should contain fun_fact field"
-  - expr: ${captured.france_response} contains 'Paris'
-    message: "France response should contain Paris"
+  - expr: "${jq:captured.france_response:.structuredContent.name} icontains 'france'"
+    message: "France response name should contain France"
+  - expr: "${jq:captured.france_response:.structuredContent.capital} icontains 'paris'"
+    message: "France response capital should be Paris"
+  - expr: "${jq:captured.france_response:.structuredContent.fun_fact} != ''"
+    message: "France response should have a fun_fact"
   # Brazil response has structured output fields
-  - expr: ${captured.brazil_response} contains '"name"'
-    message: "Brazil response should contain name field"
-  - expr: ${captured.brazil_response} contains '"capital"'
-    message: "Brazil response should contain capital field"
-  - expr: ${captured.brazil_response} contains '"fun_fact"'
-    message: "Brazil response should contain fun_fact field"
-  - expr: ${captured.brazil_response} contains 'rasil'
-    message: "Brazil response should contain Brasilia or Brasilia (capital)"
+  - expr: "${jq:captured.brazil_response:.structuredContent.name} icontains 'brazil'"
+    message: "Brazil response name should contain Brazil"
+  - expr: "${jq:captured.brazil_response:.structuredContent.capital} icontains 'bras'"
+    message: "Brazil response capital should contain Brasilia"
+  - expr: "${jq:captured.brazil_response:.structuredContent.fun_fact} != ''"
+    message: "Brazil response should have a fun_fact"
   # Australia response has structured output fields
-  - expr: ${captured.australia_response} contains '"name"'
-    message: "Australia response should contain name field"
-  - expr: ${captured.australia_response} contains '"capital"'
-    message: "Australia response should contain capital field"
-  - expr: ${captured.australia_response} contains '"fun_fact"'
-    message: "Australia response should contain fun_fact field"
+  - expr: "${jq:captured.australia_response:.structuredContent.name} icontains 'australia'"
+    message: "Australia response name should contain Australia"
+  - expr: "${jq:captured.australia_response:.structuredContent.capital} icontains 'canberra'"
+    message: "Australia response capital should be Canberra"
+  - expr: "${jq:captured.australia_response:.structuredContent.fun_fact} != ''"
+    message: "Australia response should have a fun_fact"
   # No error conditions
   - expr: ${captured.france_response} not contains 'Expecting value'
     message: "France response should not have JSON parse error"

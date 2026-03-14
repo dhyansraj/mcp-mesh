@@ -455,30 +455,39 @@ export function llmProvider(config: LlmProviderConfig): {
     const handler = ProviderHandlerRegistry.getHandler(vendor);
     debug(`Using provider handler: ${handler.constructor.name} for vendor: ${vendor}`);
 
-    // Determine output mode early (needed for system prompt formatting)
-    // When tools are present, we can't use generateObject() (it doesn't support tools),
-    // but we CAN still pass responseFormat via generateText(). Keep strict mode —
-    // the handler's prepareRequest() will set responseFormat for native enforcement.
-    // formatSystemPrompt() with strict mode adds a brief note (belt-and-suspenders).
+    // Determine output mode early (needed for system prompt formatting and prepareRequest)
     const hasTools = request.tools && request.tools.length > 0;
     const outputMode = handler.determineOutputMode(outputSchemaObj);
-    if (outputMode === "strict" && hasTools && outputSchemaObj) {
-      debug(`Strict mode with tools: will use generateText() with responseFormat (not generateObject)`);
+
+    // When tools are present with structured output, we can't use generateObject()
+    // (Vercel AI SDK doesn't support tools + generateObject together).
+    // We use generateText() with two strategies:
+    // 1. HINT mode instructions in the system prompt (DECISION GUIDE + JSON schema)
+    //    so the LLM knows exactly what JSON structure to return
+    // 2. responseFormat via providerOptions (native enforcement, belt-and-suspenders)
+    // The prompt uses "hint" mode for detailed instructions, while prepareRequest
+    // keeps "strict" mode to set responseFormat for native enforcement.
+    const promptOutputMode = (hasTools && outputSchemaObj && outputMode === "strict")
+      ? "hint" as const
+      : outputMode;
+    if (promptOutputMode !== outputMode) {
+      debug(`Tools present with structured output: using hint mode for prompt (strict for responseFormat)`);
     }
-    debug(`Output mode for system prompt: ${outputMode}`);
+    debug(`Output mode: ${outputMode}, prompt mode: ${promptOutputMode}`);
 
     // Format system prompt with vendor-specific instructions (JSON format, tool rules, etc.)
-    // This is critical for structured output - handlers add JSON instructions in "hint" mode
-    // and brief notes in "strict" mode. Without this, LLMs may return plain text.
+    // Uses promptOutputMode so handlers add detailed HINT instructions (DECISION GUIDE,
+    // JSON schema, field descriptions, example format) when tools + structured output
+    // are both present. Without this, LLMs return wrong data.
     const formattedMessages = request.messages.map(msg => {
       if (msg.role === "system" && msg.content) {
         const formattedContent = handler.formatSystemPrompt(
           msg.content,
           request.tools ?? null,  // ToolSchema[] format (OpenAI function calling)
           outputSchemaObj,
-          outputMode
+          promptOutputMode
         );
-        debug(`Formatted system prompt (${outputMode} mode): ${formattedContent.substring(0, 200)}...`);
+        debug(`Formatted system prompt (${promptOutputMode} mode): ${formattedContent.substring(0, 200)}...`);
         return { ...msg, content: formattedContent };
       }
       return msg;
