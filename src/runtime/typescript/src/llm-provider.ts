@@ -459,14 +459,12 @@ export function llmProvider(config: LlmProviderConfig): {
     const hasTools = request.tools && request.tools.length > 0;
     const outputMode = handler.determineOutputMode(outputSchemaObj);
 
-    // When tools are present with structured output, we can't use generateObject()
-    // (Vercel AI SDK doesn't support tools + generateObject together).
-    // We use generateText() with two strategies:
-    // 1. HINT mode instructions in the system prompt (DECISION GUIDE + JSON schema)
-    //    so the LLM knows exactly what JSON structure to return
-    // 2. responseFormat via providerOptions (native enforcement, belt-and-suspenders)
-    // The prompt uses "hint" mode for detailed instructions, while prepareRequest
-    // keeps "strict" mode to set responseFormat for native enforcement.
+    // When tools are present with structured output, we use generateText() with two strategies:
+    // 1. HINT mode instructions in the system prompt (DECISION GUIDE + JSON schema + field
+    //    descriptions + example format) so the LLM knows exactly what JSON structure to return
+    // 2. responseFormat via providerOptions (native enforcement via prepareRequest)
+    // The prompt uses "hint" mode for detailed instructions, while prepareRequest keeps
+    // "strict" mode to set responseFormat for native API enforcement.
     const promptOutputMode = (hasTools && outputSchemaObj && outputMode === "strict")
       ? "hint" as const
       : outputMode;

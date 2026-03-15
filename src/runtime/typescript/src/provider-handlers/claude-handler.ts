@@ -186,11 +186,19 @@ export class ClaudeHandler implements ProviderHandler {
       return systemContent;
     }
 
-    // Strict mode: Brief note (response_format handles enforcement)
+    // Strict mode: response_format handles enforcement.
+    // When tools are present, add DECISION GUIDE so Claude knows when to
+    // call tools vs return JSON directly (matches Java handler behavior).
     if (determinedMode === "strict") {
-      systemContent += `
-
-Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
+      if (toolSchemas && toolSchemas.length > 0) {
+        systemContent += `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+      }
+      systemContent += `\n\nYour final response will be structured as JSON matching the ${outputSchema.name} format.`;
       return systemContent;
     }
 
