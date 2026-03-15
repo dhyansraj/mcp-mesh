@@ -5,6 +5,7 @@ Provides automatic agentic loop for LLM-based agents with tool integration.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -402,6 +403,29 @@ IMPORTANT TOOL CALLING RULES:
 
         return result
 
+    def _enrich_tools_with_endpoints(self) -> list[dict]:
+        """Add _mesh_endpoint to tool schemas for provider-side execution.
+
+        When mesh delegation is active, enriches each tool schema with the
+        MCP endpoint URL of the agent that owns the tool. This allows the
+        provider to execute tools directly via MCP proxies instead of
+        returning tool_calls back to the consumer.
+
+        Returns:
+            List of enriched tool schemas with _mesh_endpoint on each function.
+        """
+        if not self._tool_schemas:
+            return []
+        enriched = []
+        for tool in self._tool_schemas:
+            tool_copy = copy.deepcopy(tool)
+            func_name = tool_copy.get("function", {}).get("name", "")
+            proxy = self.tool_proxies.get(func_name)
+            if proxy and hasattr(proxy, "endpoint"):
+                tool_copy["function"]["_mesh_endpoint"] = proxy.endpoint
+            enriched.append(tool_copy)
+        return enriched
+
     async def _get_mesh_provider(self) -> Any:
         """
         Get the mesh provider proxy (already resolved during heartbeat).
@@ -716,9 +740,16 @@ IMPORTANT TOOL CALLING RULES:
                     )
 
                     # Use provider handler to prepare vendor-specific request
+                    # For mesh delegation, enrich tools with endpoint URLs
+                    # so the provider can execute tools directly
+                    effective_tools = (
+                        self._enrich_tools_with_endpoints()
+                        if self._is_mesh_delegated and self._tool_schemas
+                        else (self._tool_schemas if self._tool_schemas else None)
+                    )
                     request_params = self._provider_handler.prepare_request(
                         messages=messages,
-                        tools=self._tool_schemas if self._tool_schemas else None,
+                        tools=effective_tools if effective_tools else None,
                         output_type=self.output_type,
                         **call_kwargs,
                     )
@@ -763,7 +794,7 @@ IMPORTANT TOOL CALLING RULES:
 
                         response = await self._call_mesh_provider(
                             messages=messages,
-                            tools=self._tool_schemas if self._tool_schemas else None,
+                            tools=effective_tools if effective_tools else None,
                             **model_params,
                         )
                     else:
