@@ -510,7 +510,6 @@ export function llmProvider(config: LlmProviderConfig): {
           parameters?: Record<string, unknown>;
         }
       >;
-      maxSteps?: number;
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
@@ -577,51 +576,16 @@ export function llmProvider(config: LlmProviderConfig): {
         debug(`Tool '${tool.function.name}' cleanSchema: ${JSON.stringify(cleanSchema, null, 2)}`);
 
         const toolName = tool.function.name;
-        const toolEndpoint = toolEndpoints[toolName];
 
-        if (toolEndpoint) {
-          // Provider-side execution: tool has an endpoint, add execute function.
-          // The AI SDK will call execute(), feed results back to LLM, and repeat
-          // until the LLM produces a final text response (controlled by maxSteps).
-          vercelTools[toolName] = aiTool({
-            description: tool.function.description ?? "",
-            inputSchema: jsonSchema(cleanSchema),
-            execute: async (args: unknown) => {
-              const toolArgs = (args ?? {}) as Record<string, unknown>;
-              debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
-              try {
-                const result = await callMcpTool(
-                  toolEndpoint,
-                  toolName,
-                  toolArgs,
-                  30000, // 30s timeout
-                  1,     // 1 attempt
-                  "tool",
-                );
-                debug(`Tool '${toolName}' result: ${result.substring(0, 200)}`);
-                // Parse JSON if possible, otherwise return raw string
-                try {
-                  return JSON.parse(result);
-                } catch {
-                  return result;
-                }
-              } catch (err) {
-                const errorMsg = err instanceof Error ? err.message : String(err);
-                debug(`Tool '${toolName}' execution failed: ${errorMsg}`);
-                return { error: errorMsg };
-              }
-            },
-          });
-          debug(`Tool '${toolName}' vercelTool created with execute (provider-side)`);
-        } else {
-          // No endpoint: consumer handles execution (existing behavior)
-          vercelTools[toolName] = aiTool({
-            description: tool.function.description ?? "",
-            inputSchema: jsonSchema(cleanSchema),
-            // No execute - consumer handles execution
-          });
-          debug(`Tool '${toolName}' vercelTool created with aiTool() helper`);
-        }
+        // When hasToolEndpoints is true, we manage tool execution in our own loop
+        // (not via AI SDK's maxSteps), so ALL tools are created without execute.
+        // When hasToolEndpoints is false, consumer handles execution (also no execute).
+        vercelTools[toolName] = aiTool({
+          description: tool.function.description ?? "",
+          inputSchema: jsonSchema(cleanSchema),
+          // No execute - we manage tool execution manually in the agentic loop
+        });
+        debug(`Tool '${toolName}' vercelTool created (schema only, no execute)`);
       }
     }
 
@@ -650,7 +614,6 @@ export function llmProvider(config: LlmProviderConfig): {
       model: unknown;
       messages: any; // VercelCoreMessage[] - Vercel AI SDK validates at runtime
       tools?: Record<string, any>;
-      maxSteps?: number;
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
@@ -663,12 +626,9 @@ export function llmProvider(config: LlmProviderConfig): {
     // Add tools if present
     if (vercelTools && Object.keys(vercelTools).length > 0) {
       requestOptions.tools = vercelTools;
-      // When tools have endpoints, set maxSteps for provider-managed agentic loop.
-      // The AI SDK calls execute() on tools, feeds results back to the LLM, and repeats.
-      if (hasToolEndpoints) {
-        requestOptions.maxSteps = 10;
-        debug(`Provider-managed loop enabled: maxSteps=10`);
-      }
+      // Note: maxSteps is NOT set. When hasToolEndpoints is true, we manage
+      // the agentic loop manually below so that providerOptions (including
+      // response_format) is applied on every LLM call, not just the first.
     }
 
     // Apply default config values
@@ -718,8 +678,8 @@ export function llmProvider(config: LlmProviderConfig): {
     const useStructuredOutput = outputMode === "strict" && outputSchema && !vercelTools;
     debug(`Output mode: ${outputMode}, useStructuredOutput: ${useStructuredOutput}`);
 
-    let response: MeshLlmResponse;
-    let latencyMs: number;
+    let response: MeshLlmResponse | undefined;
+    let latencyMs: number = 0;
     let resultUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
     if (useStructuredOutput) {
@@ -779,8 +739,130 @@ export function llmProvider(config: LlmProviderConfig): {
         content: JSON.stringify(objectResult.object),
       };
       resultUsage = objectResult.usage;
+    } else if (hasToolEndpoints) {
+      // Provider-managed agentic loop: execute tools internally.
+      // Unlike AI SDK's maxSteps, this manual loop ensures providerOptions
+      // (including response_format for structured output) is applied on
+      // EVERY LLM call, not just the first one.
+      let iteration = 0;
+      const maxIterations = 10;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let currentMessages: any[] = [...convertedMessages];
+
+      while (iteration < maxIterations) {
+        iteration++;
+
+        // Build request for this iteration — reuse all options but update messages
+        const iterRequest = {
+          ...requestOptions,
+          messages: currentMessages,
+        };
+        // Do NOT set maxSteps — we manage the loop manually
+
+        const result = await generateText(iterRequest);
+
+        // Accumulate usage across iterations
+        if (result.usage) {
+          if (!resultUsage) {
+            resultUsage = { inputTokens: 0, outputTokens: 0 };
+          }
+          resultUsage.inputTokens = (resultUsage.inputTokens ?? 0) + (result.usage.inputTokens ?? 0);
+          resultUsage.outputTokens = (resultUsage.outputTokens ?? 0) + (result.usage.outputTokens ?? 0);
+        }
+
+        if (result.toolCalls && result.toolCalls.length > 0) {
+          debug(`Provider executing ${result.toolCalls.length} tool calls (iteration ${iteration}/${maxIterations})`);
+
+          // Add assistant message with tool calls (Vercel AI SDK content block format)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const assistantContentParts: any[] = [];
+          if (result.text) {
+            assistantContentParts.push({ type: "text", text: result.text });
+          }
+          for (const tc of result.toolCalls) {
+            assistantContentParts.push({
+              type: "tool-call",
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              input: tc.input,
+            });
+          }
+          currentMessages.push({
+            role: "assistant",
+            content: assistantContentParts,
+          });
+
+          // Execute each tool call and add results as tool messages
+          for (const tc of result.toolCalls) {
+            const toolName = tc.toolName;
+            const toolEndpoint = toolEndpoints[toolName];
+            let toolResultStr: string;
+
+            if (toolEndpoint) {
+              try {
+                const toolArgs = (tc.input ?? {}) as Record<string, unknown>;
+                debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
+                toolResultStr = await callMcpTool(
+                  toolEndpoint,
+                  toolName,
+                  toolArgs,
+                  30000, // 30s timeout
+                  1,     // 1 attempt
+                  "tool",
+                );
+                debug(`Tool '${toolName}' result: ${toolResultStr.substring(0, 200)}`);
+              } catch (err) {
+                const errorMsg = err instanceof Error ? err.message : String(err);
+                debug(`Tool '${toolName}' execution failed: ${errorMsg}`);
+                toolResultStr = JSON.stringify({ error: errorMsg });
+              }
+            } else {
+              toolResultStr = JSON.stringify({ error: `No endpoint for tool ${toolName}` });
+            }
+
+            // Parse JSON result if possible for structured output
+            let toolOutput: { type: string; value: unknown };
+            try {
+              toolOutput = { type: "json", value: JSON.parse(toolResultStr) };
+            } catch {
+              toolOutput = { type: "text", value: toolResultStr };
+            }
+
+            // Add tool result message in Vercel AI SDK format
+            currentMessages.push({
+              role: "tool",
+              content: [{
+                type: "tool-result",
+                toolCallId: tc.toolCallId,
+                toolName,
+                output: toolOutput,
+              }],
+            });
+          }
+        } else {
+          // No tool calls — final response
+          latencyMs = Date.now() - startTime;
+          debug(`Provider-managed loop completed in ${iteration} iterations, latency=${latencyMs}ms`);
+
+          response = {
+            role: "assistant",
+            content: result.text ?? "",
+          };
+          break;
+        }
+      }
+
+      // Safety: max iterations reached without a final text response
+      if (iteration >= maxIterations && !response) {
+        latencyMs = Date.now() - startTime;
+        debug(`Provider-managed loop hit max iterations (${maxIterations}), latency=${latencyMs}ms`);
+        response = {
+          role: "assistant",
+          content: "Maximum tool call iterations reached",
+        };
+      }
     } else {
-      // Use generateText for regular text or tool-calling scenarios
+      // No tool endpoints — regular generateText for consumer-managed tools or plain text
       const result = await generateText(requestOptions);
 
       latencyMs = Date.now() - startTime;
@@ -788,7 +870,6 @@ export function llmProvider(config: LlmProviderConfig): {
         `LLM response received: ` +
           `finishReason=${result.finishReason}, ` +
           `toolCalls=${result.toolCalls?.length ?? 0}, ` +
-          `hasToolEndpoints=${hasToolEndpoints}, ` +
           `latency=${latencyMs}ms`
       );
 
@@ -798,19 +879,19 @@ export function llmProvider(config: LlmProviderConfig): {
         content: result.text ?? "",
       };
 
-      // Include tool_calls only when provider did NOT execute them.
-      // When hasToolEndpoints is true, the AI SDK ran the full agentic loop
-      // (via maxSteps + execute functions), so tool_calls should not be returned
-      // to the consumer — the final text response is the complete answer.
-      if (!hasToolEndpoints && result.toolCalls && result.toolCalls.length > 0) {
+      // Include tool_calls for consumer-managed execution
+      if (result.toolCalls && result.toolCalls.length > 0) {
         response.tool_calls = convertToolCalls(result.toolCalls);
       }
       resultUsage = result.usage;
     }
 
-    // Include usage metadata for cost tracking (shared for both paths)
+    // All code paths above must set response; assert it here
+    const finalResponse = response!;
+
+    // Include usage metadata for cost tracking (shared for all paths)
     if (resultUsage) {
-      response._mesh_usage = {
+      finalResponse._mesh_usage = {
         prompt_tokens: resultUsage.inputTokens ?? 0,
         completion_tokens: resultUsage.outputTokens ?? 0,
         model: effectiveModel,
@@ -820,14 +901,14 @@ export function llmProvider(config: LlmProviderConfig): {
     debug(
       `LLM provider processed request ` +
         `(model=${effectiveModel}, messages=${request.messages.length}, ` +
-        `structured=${useStructuredOutput}, tool_calls=${response.tool_calls?.length ?? 0})`
+        `structured=${useStructuredOutput}, tool_calls=${finalResponse.tool_calls?.length ?? 0})`
     );
 
     // Return JSON-stringified response
     // The consumer (MeshDelegatedProvider.complete) expects content.text to be
     // a JSON string that it can parse to get the MeshLlmResponse object.
     // FastMCP wraps this in { content: [{ type: "text", text: <return_value> }] }
-    return JSON.stringify(response);
+    return JSON.stringify(finalResponse);
         } catch (err) {
           console.error("[llm-provider] execute error:", err);
           if (err instanceof Error) {
