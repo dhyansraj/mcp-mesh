@@ -656,13 +656,18 @@ export function llmProvider(config: LlmProviderConfig): {
     // Pass responseFormat from handler's prepareRequest to generateText via providerOptions.
     // This enables native structured output (response_format) alongside tools in generateText(),
     // which generateObject() doesn't support. The handler sets responseFormat when in strict mode.
-    if (preparedRequest.responseFormat) {
+    // EXCEPTION: Gemini 3 + response_format + tools causes infinite tool loops,
+    // so skip responseFormat when Gemini has tools (matching Python handler guard).
+    const skipResponseFormat = (vendor === "gemini" || vendor === "google") && hasTools;
+    if (preparedRequest.responseFormat && !skipResponseFormat) {
       requestOptions.providerOptions = {
         [vendor]: {
           response_format: preparedRequest.responseFormat,
         },
       };
       debug(`Passing responseFormat via providerOptions for vendor: ${vendor}`);
+    } else if (skipResponseFormat) {
+      debug(`Skipping responseFormat for Gemini (tools present — avoids infinite loop)`);
     }
 
     debug(`Calling Vercel AI SDK: model=${effectiveModelName}`);
