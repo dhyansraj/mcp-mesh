@@ -551,8 +551,13 @@ export function llmProvider(config: LlmProviderConfig): {
       }
     }
     const hasToolEndpoints = Object.keys(toolEndpoints).length > 0;
+    // Gemini: use AI SDK's maxSteps with execute functions instead of manual loop.
+    // The manual loop drops Gemini's thought_signature from assistant messages,
+    // causing 400 errors in multi-turn tool conversations. AI SDK preserves it.
+    // Claude/OpenAI keep the manual loop (they need response_format on every call).
+    const useMaxSteps = hasToolEndpoints && (vendor === "gemini" || vendor === "google");
     if (hasToolEndpoints) {
-      debug(`Provider-managed loop: ${Object.keys(toolEndpoints).length} tools with endpoints`);
+      debug(`Provider-managed loop: ${Object.keys(toolEndpoints).length} tools with endpoints${useMaxSteps ? " (Gemini maxSteps mode)" : ""}`);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -577,15 +582,35 @@ export function llmProvider(config: LlmProviderConfig): {
 
         const toolName = tool.function.name;
 
-        // When hasToolEndpoints is true, we manage tool execution in our own loop
-        // (not via AI SDK's maxSteps), so ALL tools are created without execute.
-        // When hasToolEndpoints is false, consumer handles execution (also no execute).
-        vercelTools[toolName] = aiTool({
-          description: tool.function.description ?? "",
-          inputSchema: jsonSchema(cleanSchema),
-          // No execute - we manage tool execution manually in the agentic loop
-        });
-        debug(`Tool '${toolName}' vercelTool created (schema only, no execute)`);
+        if (useMaxSteps) {
+          // Gemini: use execute functions + maxSteps (AI SDK preserves thought_signature)
+          const toolEndpoint = toolEndpoints[toolName];
+          vercelTools[toolName] = aiTool({
+            description: tool.function.description ?? "",
+            inputSchema: jsonSchema(cleanSchema),
+            execute: async (args: unknown) => {
+              const toolArgs = (args ?? {}) as Record<string, unknown>;
+              debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
+              try {
+                const result = await callMcpTool(toolEndpoint, toolName, toolArgs, 30000, 1, "tool");
+                debug(`Tool '${toolName}' result: ${result.substring(0, 200)}`);
+                try { return JSON.parse(result); } catch { return result; }
+              } catch (err) {
+                const errorMsg = err instanceof Error ? err.message : String(err);
+                debug(`Tool '${toolName}' execution failed: ${errorMsg}`);
+                return { error: errorMsg };
+              }
+            },
+          });
+          debug(`Tool '${toolName}' vercelTool created (with execute for Gemini maxSteps)`);
+        } else {
+          // Claude/OpenAI or no endpoints: schema only (manual loop or consumer handles)
+          vercelTools[toolName] = aiTool({
+            description: tool.function.description ?? "",
+            inputSchema: jsonSchema(cleanSchema),
+          });
+          debug(`Tool '${toolName}' vercelTool created (schema only, no execute)`);
+        }
       }
     }
 
@@ -614,6 +639,7 @@ export function llmProvider(config: LlmProviderConfig): {
       model: unknown;
       messages: any; // VercelCoreMessage[] - Vercel AI SDK validates at runtime
       tools?: Record<string, any>;
+      maxSteps?: number;
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
@@ -626,8 +652,14 @@ export function llmProvider(config: LlmProviderConfig): {
     // Add tools if present
     if (vercelTools && Object.keys(vercelTools).length > 0) {
       requestOptions.tools = vercelTools;
-      // Note: maxSteps is NOT set. When hasToolEndpoints is true, we manage
-      // the agentic loop manually below so that providerOptions (including
+      if (useMaxSteps) {
+        // Gemini: let AI SDK manage the agentic loop via maxSteps.
+        // AI SDK preserves thought_signature across turns automatically.
+        requestOptions.maxSteps = 10;
+        debug(`Gemini provider-managed loop via maxSteps=10 (AI SDK preserves thought_signature)`);
+      }
+      // Note: for non-Gemini vendors, maxSteps is NOT set. We manage
+      // the agentic loop manually so that providerOptions (including
       // response_format) is applied on every LLM call, not just the first.
     }
 
@@ -744,7 +776,7 @@ export function llmProvider(config: LlmProviderConfig): {
         content: JSON.stringify(objectResult.object),
       };
       resultUsage = objectResult.usage;
-    } else if (hasToolEndpoints) {
+    } else if (hasToolEndpoints && !useMaxSteps) {
       // Provider-managed agentic loop: execute tools internally.
       // Unlike AI SDK's maxSteps, this manual loop ensures providerOptions
       // (including response_format for structured output) is applied on
@@ -867,7 +899,9 @@ export function llmProvider(config: LlmProviderConfig): {
         };
       }
     } else {
-      // No tool endpoints — regular generateText for consumer-managed tools or plain text
+      // generateText path covers:
+      // 1. Gemini maxSteps: AI SDK manages the tool loop (execute functions + maxSteps)
+      // 2. No tool endpoints: consumer-managed tools or plain text
       const result = await generateText(requestOptions);
 
       latencyMs = Date.now() - startTime;
@@ -884,8 +918,10 @@ export function llmProvider(config: LlmProviderConfig): {
         content: result.text ?? "",
       };
 
-      // Include tool_calls for consumer-managed execution
-      if (result.toolCalls && result.toolCalls.length > 0) {
+      // Include tool_calls for consumer-managed execution only.
+      // When hasToolEndpoints is true (Gemini maxSteps), tools were already
+      // executed by AI SDK via execute functions — don't return tool_calls.
+      if (!hasToolEndpoints && result.toolCalls && result.toolCalls.length > 0) {
         response.tool_calls = convertToolCalls(result.toolCalls);
       }
       resultUsage = result.usage;
