@@ -643,6 +643,11 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     /**
      * Format available tools for LLM (OpenAI function calling format).
+     *
+     * <p>When in mesh delegation mode, enriches each tool schema with
+     * {@code _mesh_endpoint} — the MCP endpoint URL of the agent that owns
+     * the tool. This allows the provider to execute tools directly via MCP
+     * proxies instead of returning tool_calls back to the consumer.
      */
     private List<Map<String, Object>> formatToolsForLlm() {
         List<Map<String, Object>> tools = new ArrayList<>();
@@ -655,6 +660,11 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
             function.put("name", tool.name());
             function.put("description", tool.description());
             function.put("parameters", tool.inputSchema() != null ? tool.inputSchema() : Map.of("type", "object"));
+
+            // Enrich with _mesh_endpoint for provider-side tool execution
+            if (tool.endpoint() != null && !tool.endpoint().isEmpty()) {
+                function.put("_mesh_endpoint", tool.endpoint());
+            }
 
             toolDef.put("function", function);
             tools.add(toolDef);
