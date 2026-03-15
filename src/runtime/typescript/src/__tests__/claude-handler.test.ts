@@ -477,6 +477,41 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("DECISION GUIDE:");
       expect(result).toContain("RESPONSE FORMAT:");
     });
+
+    it("should add DECISION GUIDE in strict mode with tools", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const tools: ToolSchema[] = [
+        { type: "function", function: { name: "get_weather" } },
+      ];
+      const schema: OutputSchema = {
+        name: "Output",
+        schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        },
+      };
+
+      const result = handler.formatSystemPrompt(basePrompt, tools, schema, "strict");
+
+      expect(result).toContain("DECISION GUIDE:");
+      expect(result).toContain("structured as JSON matching the Output format");
+    });
+
+    it("should NOT add DECISION GUIDE in strict mode without tools", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const schema: OutputSchema = {
+        name: "Output",
+        schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        },
+      };
+
+      const result = handler.formatSystemPrompt(basePrompt, null, schema, "strict");
+
+      expect(result).not.toContain("DECISION GUIDE:");
+      expect(result).toContain("structured as JSON matching the Output format");
+    });
   });
 
   describe("schema strictness in prepareRequest", () => {
