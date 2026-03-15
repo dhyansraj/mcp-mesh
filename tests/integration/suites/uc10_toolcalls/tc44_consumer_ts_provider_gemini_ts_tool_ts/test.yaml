@@ -121,3 +121,4 @@ post_run:
       meshctl stop 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace
+disabled: true # Gemini TS provider: @ai-sdk/google drops thought_signature in multi-step tool calls (vercel/ai#12351)
