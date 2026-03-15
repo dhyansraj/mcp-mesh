@@ -136,7 +136,7 @@ export function createProxy(
  * POST /mcp with JSON-RPC 2.0 payload.
  * Includes distributed tracing: propagates trace context and publishes spans.
  */
-async function callMcpTool(
+export async function callMcpTool(
   endpoint: string,
   toolName: string,
   args: Record<string, unknown> | undefined,
