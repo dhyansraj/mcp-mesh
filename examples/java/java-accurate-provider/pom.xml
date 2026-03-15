@@ -21,7 +21,7 @@
 
     <properties>
         <java.version>17</java.version>
-        <mcp-mesh.version>0.9.11</mcp-mesh.version>
+        <mcp-mesh.version>0.9.12</mcp-mesh.version>
     </properties>
 
     <dependencies>
