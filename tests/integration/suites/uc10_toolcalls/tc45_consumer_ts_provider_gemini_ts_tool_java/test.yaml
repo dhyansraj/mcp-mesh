@@ -124,4 +124,3 @@ post_run:
       meshctl stop 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace
-disabled: true

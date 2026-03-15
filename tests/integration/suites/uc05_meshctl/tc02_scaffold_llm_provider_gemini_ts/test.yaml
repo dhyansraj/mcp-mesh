@@ -61,4 +61,3 @@ assertions:
     message: "package.json should have @mcpmesh/sdk dependency"
 post_run:
   - routine: global.cleanup_workspace
-disabled: true
