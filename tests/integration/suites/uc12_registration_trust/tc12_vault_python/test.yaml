@@ -23,7 +23,6 @@ test:
   - name: "Start Vault and configure PKI"
     handler: shell
     command: |
-      echo "Starting Vault dev server..."
       vault server -dev -dev-root-token-id=root -dev-listen-address=127.0.0.1:8200 > /var/log/vault.log 2>&1 &
       echo $! > /tmp/vault.pid
       export VAULT_ADDR=http://127.0.0.1:8200
@@ -64,36 +63,33 @@ test:
     capture: vault_setup
     timeout: 60
 
-  - name: "Start registry with Vault-issued certs and filestore trust"
+  - name: "Start registry with Vault-issued certs"
     handler: shell
     command: |
-      MCP_MESH_TLS_MODE=auto \
-      MCP_MESH_TRUST_BACKEND=filestore \
-      MCP_MESH_TRUST_DIR=/tmp/vault-trust \
-      MCP_MESH_TLS_CERT=/tmp/vault-registry-cert.pem \
-      MCP_MESH_TLS_KEY=/tmp/vault-registry-key.pem \
-      MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem \
-      mcp-mesh-registry -host localhost -port 8000 > /tmp/registry-vault.log 2>&1 &
-      echo $! > /tmp/tc12_registry.pid
+      meshctl start --registry-only -d \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TRUST_BACKEND=filestore \
+        --env MCP_MESH_TRUST_DIR=/tmp/vault-trust \
+        --env MCP_MESH_TLS_CERT=/tmp/vault-registry-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/vault-registry-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem
       sleep 3
       HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
       echo "REGISTRY_HEALTH=$HTTP_CODE"
+    workdir: /workspace
     capture: registry_start
 
   - name: "Start Python agent with Vault credential provider"
     handler: shell
     command: |
-      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
-      MCP_MESH_TLS_MODE=auto \
-      MCP_MESH_TLS_PROVIDER=vault \
-      MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
-      MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
-      VAULT_TOKEN=root \
-      MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem \
-      python system_agent.py > /tmp/agent-vault.log 2>&1 &
-      AGENT_PID=$!
-      echo $AGENT_PID > /tmp/tc12_agent.pid
-      echo "AGENT_PID=$AGENT_PID"
+      meshctl start system_agent.py -d \
+        --registry-url https://localhost:8000 \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TLS_PROVIDER=vault \
+        --env MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
+        --env MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
+        --env VAULT_TOKEN=root \
+        --env MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem
     workdir: /workspace
     capture: agent_start
 
@@ -110,15 +106,14 @@ test:
   - name: "Check agent logs for Vault flow"
     handler: shell
     command: |
-      grep -i "vault\|provider.*vault\|certificate.*obtained\|IP SAN\|DNS SAN\|resolving credentials\|mTLS\|heartbeat success" /tmp/agent-vault.log 2>&1 | head -15
+      cat $HOME/.mcp-mesh/logs/system-agent.log 2>/dev/null | grep -i "vault\|provider.*vault\|certificate.*obtained\|IP SAN\|DNS SAN\|resolving credentials\|mTLS\|Heartbeat successful" | head -15
+    workdir: /workspace
     capture: vault_logs
 
-  - name: "Stop all"
+  - name: "Stop all agents and registry"
     handler: shell
-    command: |
-      kill $(cat /tmp/tc12_agent.pid 2>/dev/null) 2>/dev/null || true
-      kill $(cat /tmp/tc12_registry.pid 2>/dev/null) 2>/dev/null || true
-      kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
     ignore_errors: true
 
 assertions:
@@ -149,10 +144,9 @@ assertions:
 post_run:
   - handler: shell
     command: |
-      kill $(cat /tmp/tc12_agent.pid 2>/dev/null) 2>/dev/null || true
-      kill $(cat /tmp/tc12_registry.pid 2>/dev/null) 2>/dev/null || true
+      meshctl stop 2>/dev/null || true
       kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
       pkill -f "vault server" 2>/dev/null || true
-      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-* /tmp/tc12_*
+      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-*
     ignore_errors: true
   - routine: global.cleanup_workspace
