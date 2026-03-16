@@ -111,7 +111,7 @@ pub struct AgentRuntime {
 
 impl AgentRuntime {
     /// Create a new agent runtime.
-    pub fn new(
+    pub async fn new(
         spec: AgentSpec,
         config: RuntimeConfig,
         event_tx: mpsc::Sender<MeshEvent>,
@@ -119,7 +119,12 @@ impl AgentRuntime {
         shutdown_rx: mpsc::Receiver<()>,
         command_rx: mpsc::Receiver<RuntimeCommand>,
     ) -> Result<Self, crate::registry::RegistryError> {
-        let tls_config = TlsConfig::from_env();
+        // Reuse cached config from prepare_tls() if available, otherwise resolve fresh
+        let tls_config = match TlsConfig::get_resolved_config() {
+            Some(config) => config,
+            None => TlsConfig::resolve(&spec.name).await
+                .map_err(|e| crate::registry::RegistryError::TlsError(e.to_string()))?,
+        };
         let registry_client = RegistryClient::new(&spec.registry_url, &tls_config)?;
         let heartbeat_config = HeartbeatConfig {
             interval: Duration::from_secs(spec.heartbeat_interval),

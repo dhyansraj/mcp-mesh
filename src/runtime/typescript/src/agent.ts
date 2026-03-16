@@ -50,7 +50,7 @@ import {
 } from "./llm.js";
 import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
 import { findAndSetBasePath } from "./template.js";
-import { getTlsOptions, getTlsConfigCached } from "./tls-config.js";
+import { getTlsOptions, getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -351,6 +351,9 @@ export class MeshAgent {
     }
 
     console.log(`Starting MCP Mesh agent: ${this.agentId}`);
+
+    // Prepare TLS credentials (fetches from Vault if configured)
+    prepareTls(this.agentId);
 
     // Resolve TLS config early so we can set the correct scheme
     const tlsOpts = getTlsOptions();
@@ -882,6 +885,7 @@ export class MeshAgent {
       await this.handle.shutdown();
       this.handle = null;
     }
+    cleanupTls();
   }
 }
 

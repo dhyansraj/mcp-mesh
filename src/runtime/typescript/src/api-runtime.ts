@@ -44,7 +44,7 @@ import {
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
-import { getTlsConfigCached } from "./tls-config.js";
+import { getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 
 /**
  * Build tool specs from registered routes.
@@ -185,6 +185,9 @@ class ApiRuntime {
 
       // Get port from MCP_MESH_HTTP_PORT env var, config, or default to 0
       const port = resolveConfigInt("http_port", this.config.httpPort ?? null) ?? 0;
+
+      // Prepare TLS credentials (fetches from Vault if configured)
+      prepareTls(this.serviceId);
 
       // Initialize distributed tracing
       const tlsConfig = getTlsConfigCached();
@@ -427,6 +430,7 @@ class ApiRuntime {
       await this.handle.shutdown();
       this.handle = null;
     }
+    cleanupTls();
   }
 
   /**

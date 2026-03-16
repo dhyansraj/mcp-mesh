@@ -121,7 +121,7 @@ class UnifiedMCPProxy:
             def create_httpx_client(**kwargs):
                 """Create httpx client with dynamic trace header injection via event hooks."""
 
-                def inject_trace_headers_hook(request: httpx.Request) -> None:
+                async def inject_trace_headers_hook(request: httpx.Request) -> None:
                     """Inject trace headers at REQUEST TIME for correct context propagation.
 
                     This hook runs just before each HTTP request is sent, capturing the
@@ -180,9 +180,13 @@ class UnifiedMCPProxy:
                             raise RuntimeError(
                                 "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
                             )
-                        kwargs["cert"] = (tls["cert_path"], tls["key_path"])
+                        import ssl
+
+                        ssl_ctx = ssl.create_default_context()
                         if tls.get("ca_path"):
-                            kwargs["verify"] = tls["ca_path"]
+                            ssl_ctx.load_verify_locations(tls["ca_path"])
+                        ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
+                        kwargs["verify"] = ssl_ctx
 
                 return httpx.AsyncClient(**kwargs)
 
@@ -757,9 +761,13 @@ class UnifiedMCPProxy:
                         raise RuntimeError(
                             "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
                         )
-                    tls_kwargs["cert"] = (tls["cert_path"], tls["key_path"])
+                    import ssl
+
+                    ssl_ctx = ssl.create_default_context()
                     if tls.get("ca_path"):
-                        tls_kwargs["verify"] = tls["ca_path"]
+                        ssl_ctx.load_verify_locations(tls["ca_path"])
+                    ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
+                    tls_kwargs["verify"] = ssl_ctx
 
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),

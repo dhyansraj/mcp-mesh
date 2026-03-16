@@ -46,9 +46,29 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
         // Map TLS env vars to Spring Boot SSL properties (PEM-based, Spring Boot 3.1+)
         String tlsMode = environment.getProperty("MCP_MESH_TLS_MODE", "off");
         if (!"off".equalsIgnoreCase(tlsMode) && !tlsMode.isEmpty()) {
+            String provider = System.getenv("MCP_MESH_TLS_PROVIDER");
             String certPath = environment.getProperty("MCP_MESH_TLS_CERT");
             String keyPath = environment.getProperty("MCP_MESH_TLS_KEY");
             String caPath = environment.getProperty("MCP_MESH_TLS_CA");
+
+            // For non-file providers (e.g., vault), try to prepare TLS early
+            if (provider != null && !"file".equalsIgnoreCase(provider) && (certPath == null || keyPath == null)) {
+                String agentName = System.getenv("MCP_MESH_AGENT_NAME");
+                if (agentName != null && !agentName.isBlank()) {
+                    try {
+                        MeshTlsConfig.prepareTls(agentName);
+                        MeshTlsConfig config = MeshTlsConfig.get();
+                        if (config.isEnabled()) {
+                            certPath = config.getCertPath();
+                            keyPath = config.getKeyPath();
+                            caPath = config.getCaPath();
+                        }
+                    } catch (Exception e) {
+                        // Log but don't fail -- TLS will be resolved later in MeshRuntime.start()
+                        System.err.println("Early TLS preparation failed (will retry later): " + e.getMessage());
+                    }
+                }
+            }
 
             if (certPath != null && keyPath != null) {
                 Map<String, Object> sslProps = new LinkedHashMap<>();
@@ -60,7 +80,8 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
                 }
                 environment.getPropertySources().addFirst(
                     new MapPropertySource("meshTlsProperties", sslProps));
-            } else {
+            } else if (provider == null || "file".equalsIgnoreCase(provider)) {
+                // Only throw for file provider -- non-file providers will configure TLS later
                 throw new IllegalStateException(
                     "MCP_MESH_TLS_MODE=" + tlsMode + " but MCP_MESH_TLS_CERT or MCP_MESH_TLS_KEY is not set");
             }

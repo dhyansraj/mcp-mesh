@@ -47,6 +47,49 @@ export function getTlsConfigCached(): TlsConfig {
 }
 
 /**
+ * Resolve TLS credentials early (fetches from Vault if configured).
+ * Must be called before getTlsConfigCached()/getTlsOptions() when using non-file providers.
+ * Writes secure temp files and caches the result globally in Rust core.
+ */
+export function prepareTls(agentName: string): void {
+  try {
+    const require = createRequire(import.meta.url);
+    const { prepareTls: nativePrepareTls } = require("@mcpmesh/core");
+    const raw = JSON.parse(nativePrepareTls(agentName));
+    // Update the local cache too so getTlsConfigCached() returns the resolved config
+    cached = {
+      enabled: raw.enabled,
+      mode: raw.mode,
+      certPath: raw.cert_path ?? null,
+      keyPath: raw.key_path ?? null,
+      caPath: raw.ca_path ?? null,
+    };
+    if (cached.enabled) {
+      console.log(`TLS prepared: mode=${cached.mode} provider=${raw.provider ?? 'file'} cert=${cached.certPath}`);
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("Cannot find module")) {
+      // Native module not available -- no-op
+    } else {
+      console.warn(`TLS preparation failed: ${err}`);
+    }
+  }
+}
+
+/**
+ * Clean up temporary TLS credential files. Call during agent shutdown.
+ */
+export function cleanupTls(): void {
+  try {
+    const require = createRequire(import.meta.url);
+    const { cleanupTls: nativeCleanupTls } = require("@mcpmesh/core");
+    nativeCleanupTls();
+  } catch {
+    // Ignore
+  }
+}
+
+/**
  * Read TLS files and return options for https.createServer or undici.Agent.
  * Returns null when TLS is disabled. Throws when TLS is enabled but paths are missing.
  */

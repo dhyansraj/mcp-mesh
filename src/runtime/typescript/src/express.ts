@@ -56,7 +56,7 @@ import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./confi
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
-import { getTlsConfigCached, getTlsOptions } from "./tls-config.js";
+import { getTlsConfigCached, getTlsOptions, prepareTls, cleanupTls } from "./tls-config.js";
 
 /**
  * Build tool specs from registered routes.
@@ -171,6 +171,9 @@ export class MeshExpress {
     }
 
     console.log(`Starting MeshExpress service: ${this.serviceId}`);
+
+    // Prepare TLS credentials (fetches from Vault if configured)
+    prepareTls(this.serviceId);
 
     // 0. Initialize distributed tracing
     const tlsConfig = getTlsConfigCached();
@@ -509,6 +512,7 @@ export class MeshExpress {
       });
       this.server = null;
     }
+    cleanupTls();
   }
 }
 

@@ -211,6 +211,20 @@ public interface MeshCore {
     Pointer mesh_get_tls_config();
 
     /**
+     * Prepare TLS credentials (fetch from Vault if configured, write secure temp files).
+     * Must be called before mesh_get_tls_config() when using non-file providers.
+     *
+     * @param agent_name Agent name for certificate CN
+     * @return JSON string with TLS config, or null on error
+     */
+    Pointer mesh_prepare_tls(String agent_name);
+
+    /**
+     * Clean up temporary TLS credential files.
+     */
+    void mesh_cleanup_tls();
+
+    /**
      * Get library version string.
      *
      * @return Version string (do not free)

@@ -47,6 +47,9 @@ public class MeshRuntime implements SmartLifecycle {
         if (running.compareAndSet(false, true)) {
             log.info("Starting MCP Mesh runtime for agent '{}'", agentSpec.getName());
             try {
+                // Prepare TLS credentials before starting (fetches from Vault if configured)
+                MeshTlsConfig.prepareTls(agentSpec.getName());
+
                 handle = MeshHandle.start(agentSpec);
                 log.info("MCP Mesh runtime started successfully");
 
