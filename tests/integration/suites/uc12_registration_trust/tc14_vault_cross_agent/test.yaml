@@ -1,0 +1,193 @@
+name: "Vault PKI - Cross-Agent mTLS Tool Call"
+description: "Verify two Python agents with Vault-issued certs can make cross-agent tool calls via FastMCP client over mTLS"
+tags:
+  - registration-trust
+  - vault
+  - cross-agent
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agents to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      cp /uc-artifacts/py-hello-world /workspace/hello_world.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start Vault and configure PKI"
+    handler: shell
+    command: |
+      vault server -dev -dev-root-token-id=root -dev-listen-address=127.0.0.1:8200 > /var/log/vault.log 2>&1 &
+      echo $! > /tmp/vault.pid
+      export VAULT_ADDR=http://127.0.0.1:8200
+      export VAULT_TOKEN=root
+
+      for i in $(seq 1 15); do
+        if vault status > /dev/null 2>&1; then break; fi
+        sleep 1
+      done
+
+      vault secrets enable pki
+      vault write -format=json pki/root/generate/internal common_name="MCP Mesh Root CA" ttl=87600h > /dev/null
+      vault secrets enable -path=pki_int pki
+      CSR=$(vault write -format=json pki_int/intermediate/generate/internal common_name="MCP Mesh Intermediate CA" ttl=43800h | jq -r '.data.csr')
+      SIGNED=$(vault write -format=json pki/root/sign-intermediate csr="$CSR" format=pem_bundle ttl=43800h | jq -r '.data.certificate')
+      echo "$SIGNED" | vault write pki_int/intermediate/set-signed certificate=-
+      vault write pki_int/roles/mesh-agent allowed_domains="mcp-mesh.local" allow_subdomains=true allow_ip_sans=true allow_localhost=true max_ttl=720h
+      vault write pki_int/roles/mesh-registry allowed_domains="localhost,mcp-mesh.local" allow_subdomains=true allow_ip_sans=true allow_localhost=true max_ttl=720h
+
+      mkdir -p /tmp/vault-trust
+      vault read -field=certificate pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+      vault read -field=certificate pki/ca/pem > /tmp/vault-trust/root-ca.pem
+      cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
+      echo "" >> /tmp/vault-trust/ca-chain.pem
+      cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem
+
+      REG_CERT=$(vault write -format=json pki_int/issue/mesh-registry common_name="localhost" ip_sans="127.0.0.1" alt_names="localhost" ttl=24h)
+      echo "$REG_CERT" | jq -r '.data.certificate' > /tmp/vault-registry-cert.pem
+      echo "$REG_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-registry-cert.pem
+      echo "$REG_CERT" | jq -r '.data.private_key' > /tmp/vault-registry-key.pem
+
+      echo "VAULT_PKI_READY=true"
+    capture: vault_setup
+    timeout: 60
+
+  - name: "Start registry with Vault certs"
+    handler: shell
+    command: |
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TRUST_BACKEND=filestore \
+      MCP_MESH_TRUST_DIR=/tmp/vault-trust \
+      MCP_MESH_TLS_CERT=/tmp/vault-registry-cert.pem \
+      MCP_MESH_TLS_KEY=/tmp/vault-registry-key.pem \
+      MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem \
+      mcp-mesh-registry -host localhost -port 8000 > /tmp/registry-vault.log 2>&1 &
+      echo $! > /tmp/tc14_registry.pid
+      sleep 3
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "REGISTRY_HEALTH=$HTTP_CODE"
+    capture: registry_start
+
+  - name: "Start system-agent with Vault provider"
+    handler: shell
+    command: |
+      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_PROVIDER=vault \
+      MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
+      MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
+      VAULT_TOKEN=root \
+      MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem \
+      python system_agent.py > /tmp/system-agent-vault.log 2>&1 &
+      echo $! > /tmp/tc14_system.pid
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 10
+
+  - name: "Start hello-world with Vault provider"
+    handler: shell
+    command: |
+      MCP_MESH_REGISTRY_URL=https://localhost:8000 \
+      MCP_MESH_TLS_MODE=auto \
+      MCP_MESH_TLS_PROVIDER=vault \
+      MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
+      MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
+      VAULT_TOKEN=root \
+      MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem \
+      python hello_world.py > /tmp/hello-world-vault.log 2>&1 &
+      echo $! > /tmp/tc14_hello.pid
+    workdir: /workspace
+    capture: hello_start
+
+  - name: "Wait for hello-world registration and dep resolution"
+    handler: wait
+    seconds: 15
+
+  - name: "Verify both agents registered"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: agents_json
+
+  - name: "Call hello_mesh_simple (cross-agent dep on date_service)"
+    handler: shell
+    command: |
+      meshctl call hello:hello_mesh_simple '{}' --registry-url https://localhost:8000 --insecure 2>&1
+    workdir: /workspace
+    capture: call_simple
+
+  - name: "Call hello_mesh_typed (cross-agent tag-based dep on info)"
+    handler: shell
+    command: |
+      meshctl call hello:hello_mesh_typed '{}' --registry-url https://localhost:8000 --insecure 2>&1
+    workdir: /workspace
+    capture: call_typed
+
+  - name: "Check hello-world logs for FastMCP success (not fallback)"
+    handler: shell
+    command: |
+      grep -i "FastMCP.*success\|FastMCP.*fail\|fallback" /tmp/hello-world-vault.log 2>&1 | tail -5
+    capture: fastmcp_logs
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      kill $(cat /tmp/tc14_system.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/tc14_hello.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/tc14_registry.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.vault_setup} contains 'VAULT_PKI_READY=true'"
+    message: "Vault PKI should be configured"
+
+  - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
+    message: "Registry should be healthy"
+
+  - expr: "${captured.agents_json} contains 'system-agent'"
+    message: "System agent should be registered"
+
+  - expr: "${captured.agents_json} contains 'hello-world'"
+    message: "Hello world agent should be registered"
+
+  - expr: "${captured.call_simple} contains 'Hello from MCP Mesh'"
+    message: "Cross-agent tool call should succeed over Vault mTLS"
+
+  - expr: "${captured.call_simple} not contains 'not available'"
+    message: "Date service dependency should be resolved"
+
+  - expr: "${captured.call_typed} contains 'Hello from smart MCP Mesh'"
+    message: "Tag-based cross-agent call should succeed"
+
+  - expr: "${captured.call_typed} contains 'system-agent'"
+    message: "Should get response from system-agent"
+
+  - expr: "${captured.fastmcp_logs} contains 'FastMCP tool call successful'"
+    message: "Cross-agent calls should use FastMCP client (not HTTP fallback)"
+
+  - expr: "${captured.fastmcp_logs} not contains 'falling back to HTTP'"
+    message: "FastMCP client should not fall back to HTTP"
+
+post_run:
+  - handler: shell
+    command: |
+      kill $(cat /tmp/tc14_system.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/tc14_hello.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/tc14_registry.pid 2>/dev/null) 2>/dev/null || true
+      kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
+      pkill -f "vault server" 2>/dev/null || true
+      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-* /tmp/tc14_*
+    ignore_errors: true
+  - routine: global.cleanup_workspace

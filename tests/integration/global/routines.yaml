@@ -378,3 +378,119 @@ routines:
             exit 1
           fi
         capture: observability_status
+
+  #############################################################################
+  # VAULT PKI
+  # HashiCorp Vault for credential provider tests
+  #############################################################################
+
+  # Start Vault dev server and configure PKI secrets engine
+  start_vault_pki:
+    description: "Start Vault in dev mode and configure PKI for mesh agent certs"
+    steps:
+      - handler: shell
+        command: |
+          echo "Starting Vault dev server..."
+          vault server -dev -dev-root-token-id=root -dev-listen-address=127.0.0.1:8200 > /var/log/vault.log 2>&1 &
+          echo $! > /tmp/vault.pid
+          export VAULT_ADDR=http://127.0.0.1:8200
+          export VAULT_TOKEN=root
+
+          # Wait for Vault to be ready
+          for i in $(seq 1 15); do
+            if vault status > /dev/null 2>&1; then
+              echo "Vault ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 15 ]; then
+              echo "ERROR: Vault not ready after 15s"
+              cat /var/log/vault.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Enable PKI secrets engine (root CA)
+          vault secrets enable pki
+          vault secrets tune -max-lease-ttl=87600h pki
+
+          # Generate root CA
+          vault write -format=json pki/root/generate/internal \
+            common_name="MCP Mesh Root CA" ttl=87600h > /tmp/vault_root_ca.json
+          vault read -field=certificate pki/ca/pem > /tmp/vault-root-ca.pem
+          echo "Root CA generated"
+
+          # Enable intermediate PKI
+          vault secrets enable -path=pki_int pki
+          vault secrets tune -max-lease-ttl=43800h pki_int
+
+          # Generate intermediate CSR and sign with root
+          vault write -format=json pki_int/intermediate/generate/internal \
+            common_name="MCP Mesh Intermediate CA" ttl=43800h > /tmp/vault_int_csr.json
+          jq -r '.data.csr' /tmp/vault_int_csr.json > /tmp/vault_int.csr
+
+          vault write -format=json pki/root/sign-intermediate \
+            csr=@/tmp/vault_int.csr format=pem_bundle ttl=43800h > /tmp/vault_int_signed.json
+          jq -r '.data.certificate' /tmp/vault_int_signed.json > /tmp/vault_int_signed.pem
+
+          vault write pki_int/intermediate/set-signed certificate=@/tmp/vault_int_signed.pem
+
+          # Create role for mesh agents (allows subdomains of mcp-mesh.local + IP SANs)
+          vault write pki_int/roles/mesh-agent \
+            allowed_domains="mcp-mesh.local" \
+            allow_subdomains=true \
+            allow_localhost=true \
+            allow_ip_sans=true \
+            max_ttl=720h
+
+          # Create role for mesh registry
+          vault write pki_int/roles/mesh-registry \
+            allowed_domains="localhost,mcp-mesh.local" \
+            allow_subdomains=true \
+            allow_localhost=true \
+            allow_ip_sans=true \
+            max_ttl=720h
+
+          # Create trust directory with CA chain
+          mkdir -p /tmp/vault-trust
+          vault read -field=certificate pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+          vault read -field=certificate pki/ca/pem > /tmp/vault-trust/root-ca.pem
+          cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
+          echo "" >> /tmp/vault-trust/ca-chain.pem
+          cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem
+
+          # Issue registry server cert
+          vault write -format=json pki_int/issue/mesh-registry \
+            common_name="localhost" ip_sans="127.0.0.1" alt_names="localhost" ttl=24h > /tmp/vault_registry_cert.json
+          jq -r '.data.certificate' /tmp/vault_registry_cert.json > /tmp/vault-registry-cert.pem
+          # Append CA chain to registry cert for full chain
+          jq -r '.data.ca_chain[]' /tmp/vault_registry_cert.json >> /tmp/vault-registry-cert.pem
+          jq -r '.data.private_key' /tmp/vault_registry_cert.json > /tmp/vault-registry-key.pem
+
+          echo "Vault PKI configured:"
+          echo "  Vault: http://127.0.0.1:8200"
+          echo "  Root CA: /tmp/vault-trust/root-ca.pem"
+          echo "  Int CA: /tmp/vault-trust/int-ca.pem"
+          echo "  CA chain: /tmp/vault-trust/ca-chain.pem"
+          echo "  Registry cert: /tmp/vault-registry-cert.pem"
+          echo "  Registry key: /tmp/vault-registry-key.pem"
+          echo "  Agent role: pki_int/issue/mesh-agent"
+          echo "VAULT_PKI_READY=true"
+        capture: vault_start
+        timeout: 60
+
+  # Stop Vault dev server
+  stop_vault:
+    description: "Stop Vault dev server and clean up"
+    steps:
+      - handler: shell
+        command: |
+          if [ -f /tmp/vault.pid ]; then
+            kill $(cat /tmp/vault.pid) 2>/dev/null || true
+            rm -f /tmp/vault.pid
+          fi
+          pkill -f "vault server" 2>/dev/null || true
+          rm -rf /tmp/vault-trust /tmp/vault_*.json /tmp/vault_*.csr /tmp/vault_*.pem /tmp/vault-registry-*.pem
+          echo "Vault stopped and cleaned up"
+        capture: vault_stop
+        ignore_errors: true
