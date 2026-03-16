@@ -257,8 +257,7 @@ fn write_secure_file(path: &str, content: &[u8]) -> Result<(), TlsError> {
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(path)
             .map_err(|e| TlsError::ProviderError(format!("Failed to create {}: {}", path, e)))?;

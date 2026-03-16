@@ -84,6 +84,7 @@ export function cleanupTls(): void {
     const require = createRequire(import.meta.url);
     const { cleanupTls: nativeCleanupTls } = require("@mcpmesh/core");
     nativeCleanupTls();
+    cached = null;
   } catch {
     // Ignore
   }

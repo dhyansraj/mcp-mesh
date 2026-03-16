@@ -78,6 +78,7 @@ public class MeshRuntime implements SmartLifecycle {
                 }
                 handle = null;
             }
+            MeshTlsConfig.cleanupTls();
             log.info("MCP Mesh runtime stopped");
         }
     }

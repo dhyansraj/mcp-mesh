@@ -78,6 +78,21 @@ public class MeshTlsConfig {
         }
     }
 
+    /**
+     * Clean up temporary TLS credential files and clear cached state.
+     * Call during agent shutdown.
+     */
+    public static synchronized void cleanupTls() {
+        try {
+            MeshCore core = NativeLoader.load();
+            core.mesh_cleanup_tls();
+            cached = null;
+            log.debug("TLS credentials cleaned up");
+        } catch (Exception e) {
+            log.debug("TLS cleanup failed: {}", e.getMessage());
+        }
+    }
+
     public static synchronized MeshTlsConfig get() {
         if (cached != null) return cached;
 
@@ -115,7 +130,8 @@ public class MeshTlsConfig {
             }
         } catch (Exception e) {
             log.error("Failed to load TLS config from Rust core: {}", e.getMessage());
-            cached = new MeshTlsConfig(false, "off", null, null, null);
+            // Return fallback but don't cache — allows retry on next call
+            return new MeshTlsConfig(false, "off", null, null, null);
         }
 
         if (cached.enabled) {

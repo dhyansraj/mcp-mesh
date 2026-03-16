@@ -66,7 +66,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/vault
 
 # Verify Node.js and Java installation
-RUN node --version && npm --version && java -version && mvn --version | head -1
+RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version
 
 # Create directories for local packages
 RUN mkdir -p /wheels /packages /java-jars /native-libs /workspace

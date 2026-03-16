@@ -443,19 +443,13 @@ export class MeshExpress {
         `\nReceived ${signal}, shutting down service ${this.serviceId}...`
       );
 
-      // Call shutdown directly - this triggers Rust core to unregister
-      // and send a shutdown event that breaks the event loop
-      if (this.handle) {
-        this.handle.shutdown().then(() => {
-          console.log(`Service ${this.serviceId} unregistered from registry`);
-          process.exit(0);
-        }).catch((err) => {
-          console.error("Error during shutdown:", err);
-          process.exit(1);
-        });
-      } else {
+      this.shutdown().then(() => {
+        console.log(`Service ${this.serviceId} shut down cleanly`);
         process.exit(0);
-      }
+      }).catch((err) => {
+        console.error("Error during shutdown:", err);
+        process.exit(1);
+      });
     };
 
     process.on("SIGINT", () => shutdownHandler("SIGINT"));
