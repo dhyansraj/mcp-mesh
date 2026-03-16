@@ -49,8 +49,8 @@ test:
 
       # Create trust dir + registry cert
       mkdir -p /tmp/vault-trust
-      vault read -field=certificate pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
-      vault read -field=certificate pki/ca/pem > /tmp/vault-trust/root-ca.pem
+      curl -s http://127.0.0.1:8200/v1/pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+      curl -s http://127.0.0.1:8200/v1/pki/ca/pem > /tmp/vault-trust/root-ca.pem
       cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
       echo "" >> /tmp/vault-trust/ca-chain.pem
       cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem

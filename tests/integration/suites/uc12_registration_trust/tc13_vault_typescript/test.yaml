@@ -47,8 +47,8 @@ test:
       vault write pki_int/roles/mesh-registry allowed_domains="localhost,mcp-mesh.local" allow_subdomains=true allow_ip_sans=true allow_localhost=true max_ttl=720h
 
       mkdir -p /tmp/vault-trust
-      vault read -field=certificate pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
-      vault read -field=certificate pki/ca/pem > /tmp/vault-trust/root-ca.pem
+      curl -s http://127.0.0.1:8200/v1/pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+      curl -s http://127.0.0.1:8200/v1/pki/ca/pem > /tmp/vault-trust/root-ca.pem
       cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
       echo "" >> /tmp/vault-trust/ca-chain.pem
       cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem

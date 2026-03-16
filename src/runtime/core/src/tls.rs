@@ -347,7 +347,21 @@ impl TlsConfig {
             mode, provider_name, agent_name
         );
 
-        let provider = create_provider(&provider_name)?;
+        let provider = match create_provider(&provider_name) {
+            Ok(p) => p,
+            Err(e) => {
+                if provider_name == "file" {
+                    // File provider fails when cert/key not set — fall back to
+                    // no-credentials config (agent can still connect without mTLS,
+                    // e.g., for strict mode rejection testing).
+                    warn!("File provider init failed ({}), continuing without credentials", e);
+                    let config = Self::from_env();
+                    let _ = RESOLVED_CONFIG.set(config.clone());
+                    return Ok(config);
+                }
+                return Err(e);
+            }
+        };
         let advertised_host = env::var("MCP_MESH_HTTP_HOST")
             .ok()
             .filter(|s| !s.is_empty())

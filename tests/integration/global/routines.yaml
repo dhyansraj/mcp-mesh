@@ -417,7 +417,7 @@ routines:
           # Generate root CA
           vault write -format=json pki/root/generate/internal \
             common_name="MCP Mesh Root CA" ttl=87600h > /tmp/vault_root_ca.json
-          vault read -field=certificate pki/ca/pem > /tmp/vault-root-ca.pem
+          curl -s http://127.0.0.1:8200/v1/pki/ca/pem > /tmp/vault-root-ca.pem
           echo "Root CA generated"
 
           # Enable intermediate PKI
@@ -453,8 +453,8 @@ routines:
 
           # Create trust directory with CA chain
           mkdir -p /tmp/vault-trust
-          vault read -field=certificate pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
-          vault read -field=certificate pki/ca/pem > /tmp/vault-trust/root-ca.pem
+          curl -s http://127.0.0.1:8200/v1/pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+          curl -s http://127.0.0.1:8200/v1/pki/ca/pem > /tmp/vault-trust/root-ca.pem
           cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
           echo "" >> /tmp/vault-trust/ca-chain.pem
           cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem
