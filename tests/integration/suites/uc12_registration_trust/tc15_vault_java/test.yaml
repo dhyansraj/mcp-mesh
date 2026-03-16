@@ -1,28 +1,26 @@
-name: "Vault PKI - TypeScript Agent Registration"
-description: "Verify TypeScript agents can register using Vault-issued TLS certificates via MCP_MESH_TLS_PROVIDER=vault"
+name: "Vault PKI - Java Agent Registration and Tool Call"
+description: "Verify Java agents can register and serve tool calls using Vault-issued TLS certificates (pre-issued via Vault CLI)"
 tags:
   - registration-trust
   - vault
-  - typescript
-timeout: 300
+  - java
+timeout: 600
 
 pre_run:
-  - routine: global.setup_for_typescript_agent
-    params:
-      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_java_agent
 
 test:
-  - name: "Copy TypeScript agent to workspace"
+  - name: "Copy Java greeter to workspace"
     handler: shell
     command: |
-      cp -rL /uc-artifacts/ts-greeter /workspace/ts-greeter
-      ls -la /workspace/ts-greeter/
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/java-greeter/
     capture: copy_output
 
-  - name: "Install TypeScript agent dependencies"
-    handler: npm-install
-    path: /workspace/ts-greeter
-    timeout: 120
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
 
   - name: "Start Vault and configure PKI"
     handler: shell
@@ -33,7 +31,10 @@ test:
       export VAULT_TOKEN=root
 
       for i in $(seq 1 15); do
-        if vault status > /dev/null 2>&1; then break; fi
+        if vault status > /dev/null 2>&1; then
+          echo "Vault ready after ${i}s"
+          break
+        fi
         sleep 1
       done
 
@@ -58,6 +59,12 @@ test:
       echo "$REG_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-registry-cert.pem
       echo "$REG_CERT" | jq -r '.data.private_key' > /tmp/vault-registry-key.pem
 
+      # Pre-issue agent cert (Java EnvironmentPostProcessor needs cert paths at startup)
+      AGENT_CERT=$(vault write -format=json pki_int/issue/mesh-agent common_name="greeter.mcp-mesh.local" ip_sans="$(hostname -i)" ttl=24h)
+      echo "$AGENT_CERT" | jq -r '.data.certificate' > /tmp/vault-agent-cert.pem
+      echo "$AGENT_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-agent-cert.pem
+      echo "$AGENT_CERT" | jq -r '.data.private_key' > /tmp/vault-agent-key.pem
+
       echo "VAULT_PKI_READY=true"
     capture: vault_setup
     timeout: 60
@@ -78,23 +85,32 @@ test:
     workdir: /workspace
     capture: registry_start
 
-  - name: "Start TypeScript agent with Vault credential provider"
+  - name: "Start Java agent with pre-issued Vault certs"
     handler: shell
     command: |
-      meshctl start ts-greeter/index.ts -d \
+      meshctl start java-greeter -d \
         --registry-url https://localhost:8000 \
         --env MCP_MESH_TLS_MODE=auto \
-        --env MCP_MESH_TLS_PROVIDER=vault \
-        --env MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
-        --env MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent \
-        --env VAULT_TOKEN=root \
+        --env MCP_MESH_TLS_CERT=/tmp/vault-agent-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/vault-agent-key.pem \
         --env MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem
     workdir: /workspace
-    capture: agent_start
+    capture: java_start
 
-  - name: "Wait for agent registration"
-    handler: wait
-    seconds: 15
+  - name: "Wait for Java agent to register (up to 90s)"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter"; then
+          echo "REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: agent did not register within 90s"
+      exit 1
+    capture: wait_output
+    timeout: 120
 
   - name: "Check agent registered"
     handler: shell
@@ -105,20 +121,16 @@ test:
   - name: "Call greet tool over Vault mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"Vault"}' --registry-url https://localhost:8000 --insecure 2>&1
+      meshctl call greeter:greet '{"name":"VaultTest"}' --registry-url https://localhost:8000 --insecure 2>&1
     workdir: /workspace
     capture: call_output
 
-  - name: "Check agent logs for Vault flow"
-    handler: shell
-    command: |
-      cat $HOME/.mcp-mesh/logs/greeter.log 2>/dev/null | grep -i "vault\|certificate.*obtained\|mTLS\|Heartbeat successful\|TLS.*provider" | head -10
-    workdir: /workspace
-    capture: vault_logs
-
   - name: "Stop all"
     handler: shell
-    command: "meshctl stop 2>/dev/null || true"
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
     workdir: /workspace
     ignore_errors: true
 
@@ -129,27 +141,29 @@ assertions:
   - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
     message: "Registry should be healthy"
 
-  - expr: "${captured.agents_json} icontains 'greeter'"
-    message: "TypeScript agent should register with Vault credentials"
+  - expr: "${captured.wait_output} contains 'REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.agents_json} contains 'greeter'"
+    message: "Java greeter should be registered"
 
   - expr: "${captured.agents_json} contains 'https://'"
     message: "Agent endpoint should be HTTPS"
 
-  - expr: "${captured.call_output} contains 'Hello, Vault'"
+  - expr: "${captured.call_output} contains 'Hello'"
     message: "Tool call should succeed over Vault mTLS"
 
-  - expr: "${captured.vault_logs} contains 'TLS prepared'"
-    message: "Agent should obtain cert from Vault"
-
-  - expr: "${captured.vault_logs} contains 'Heartbeat successful'"
-    message: "Agent should heartbeat over mTLS"
+  - expr: "${captured.call_output} contains 'VaultTest'"
+    message: "Response should contain the greeted name"
 
 post_run:
   - handler: shell
     command: |
       meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
       kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
       pkill -f "vault server" 2>/dev/null || true
-      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-*
+      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-* /tmp/vault-agent-*.pem
     ignore_errors: true
   - routine: global.cleanup_workspace
