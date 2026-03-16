@@ -1,0 +1,169 @@
+name: "Vault PKI - Java Agent Registration and Tool Call"
+description: "Verify Java agents can register and serve tool calls using Vault-issued TLS certificates (pre-issued via Vault CLI)"
+tags:
+  - registration-trust
+  - vault
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy Java greeter to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/java-greeter/
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  - name: "Start Vault and configure PKI"
+    handler: shell
+    command: |
+      vault server -dev -dev-root-token-id=root -dev-listen-address=127.0.0.1:8200 > /var/log/vault.log 2>&1 &
+      echo $! > /tmp/vault.pid
+      export VAULT_ADDR=http://127.0.0.1:8200
+      export VAULT_TOKEN=root
+
+      for i in $(seq 1 15); do
+        if vault status > /dev/null 2>&1; then
+          echo "Vault ready after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+      vault secrets enable pki
+      vault write -format=json pki/root/generate/internal common_name="MCP Mesh Root CA" ttl=87600h > /dev/null
+      vault secrets enable -path=pki_int pki
+      CSR=$(vault write -format=json pki_int/intermediate/generate/internal common_name="MCP Mesh Intermediate CA" ttl=43800h | jq -r '.data.csr')
+      SIGNED=$(vault write -format=json pki/root/sign-intermediate csr="$CSR" format=pem_bundle ttl=43800h | jq -r '.data.certificate')
+      echo "$SIGNED" | vault write pki_int/intermediate/set-signed certificate=-
+      vault write pki_int/roles/mesh-agent allowed_domains="mcp-mesh.local" allow_subdomains=true allow_ip_sans=true allow_localhost=true max_ttl=720h
+      vault write pki_int/roles/mesh-registry allowed_domains="localhost,mcp-mesh.local" allow_subdomains=true allow_ip_sans=true allow_localhost=true max_ttl=720h
+
+      mkdir -p /tmp/vault-trust
+      curl -s http://127.0.0.1:8200/v1/pki_int/ca/pem > /tmp/vault-trust/int-ca.pem
+      curl -s http://127.0.0.1:8200/v1/pki/ca/pem > /tmp/vault-trust/root-ca.pem
+      cat /tmp/vault-trust/int-ca.pem > /tmp/vault-trust/ca-chain.pem
+      echo "" >> /tmp/vault-trust/ca-chain.pem
+      cat /tmp/vault-trust/root-ca.pem >> /tmp/vault-trust/ca-chain.pem
+
+      REG_CERT=$(vault write -format=json pki_int/issue/mesh-registry common_name="localhost" ip_sans="127.0.0.1" alt_names="localhost" ttl=24h)
+      echo "$REG_CERT" | jq -r '.data.certificate' > /tmp/vault-registry-cert.pem
+      echo "$REG_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-registry-cert.pem
+      echo "$REG_CERT" | jq -r '.data.private_key' > /tmp/vault-registry-key.pem
+
+      # Pre-issue agent cert (Java EnvironmentPostProcessor needs cert paths at startup)
+      AGENT_CERT=$(vault write -format=json pki_int/issue/mesh-agent common_name="greeter.mcp-mesh.local" ip_sans="$(hostname -i)" ttl=24h)
+      echo "$AGENT_CERT" | jq -r '.data.certificate' > /tmp/vault-agent-cert.pem
+      echo "$AGENT_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-agent-cert.pem
+      echo "$AGENT_CERT" | jq -r '.data.private_key' > /tmp/vault-agent-key.pem
+
+      echo "VAULT_PKI_READY=true"
+    capture: vault_setup
+    timeout: 60
+
+  - name: "Start registry with Vault certs"
+    handler: shell
+    command: |
+      meshctl start --registry-only -d \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TRUST_BACKEND=filestore \
+        --env MCP_MESH_TRUST_DIR=/tmp/vault-trust \
+        --env MCP_MESH_TLS_CERT=/tmp/vault-registry-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/vault-registry-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem
+      sleep 3
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "REGISTRY_HEALTH=$HTTP_CODE"
+    workdir: /workspace
+    capture: registry_start
+
+  - name: "Start Java agent with pre-issued Vault certs"
+    handler: shell
+    command: |
+      meshctl start java-greeter -d \
+        --registry-url https://localhost:8000 \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TLS_CERT=/tmp/vault-agent-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/vault-agent-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/vault-trust/ca-chain.pem
+    workdir: /workspace
+    capture: java_start
+
+  - name: "Wait for Java agent to register (up to 90s)"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter"; then
+          echo "REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: agent did not register within 90s"
+      exit 1
+    capture: wait_output
+    timeout: 120
+
+  - name: "Check agent registered"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: agents_json
+
+  - name: "Call greet tool over Vault mTLS"
+    handler: shell
+    command: |
+      meshctl call greeter:greet '{"name":"VaultTest"}' --registry-url https://localhost:8000 --insecure 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.vault_setup} contains 'VAULT_PKI_READY=true'"
+    message: "Vault PKI should be configured"
+
+  - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
+    message: "Registry should be healthy"
+
+  - expr: "${captured.wait_output} contains 'REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.agents_json} contains 'greeter'"
+    message: "Java greeter should be registered"
+
+  - expr: "${captured.agents_json} contains 'https://'"
+    message: "Agent endpoint should be HTTPS"
+
+  - expr: "${captured.call_output} contains 'Hello'"
+    message: "Tool call should succeed over Vault mTLS"
+
+  - expr: "${captured.call_output} contains 'VaultTest'"
+    message: "Response should contain the greeted name"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+      kill $(cat /tmp/vault.pid 2>/dev/null) 2>/dev/null || true
+      pkill -f "vault server" 2>/dev/null || true
+      rm -rf /tmp/vault-trust /tmp/vault_* /tmp/vault-registry-* /tmp/vault-agent-*.pem
+    ignore_errors: true
+  - routine: global.cleanup_workspace

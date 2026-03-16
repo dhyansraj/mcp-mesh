@@ -478,9 +478,11 @@ pub fn get_env_var(key_name: String) -> Option<String> {
 ///
 /// Returns JSON string with TLS config including mode, cert paths, and enabled status.
 /// SDKs should call this instead of reading TLS env vars directly.
+/// If prepare_tls() was called first, returns the cached resolved config
+/// (including temp file paths from Vault provider).
 #[napi]
 pub fn get_tls_config() -> String {
-    let config = crate::tls::TlsConfig::from_env();
+    let config = crate::tls::TlsConfig::get_resolved_or_env();
     let mode_str = match config.mode {
         crate::tls::TlsMode::Off => "off",
         crate::tls::TlsMode::Auto => "auto",
@@ -489,11 +491,48 @@ pub fn get_tls_config() -> String {
     serde_json::json!({
         "enabled": config.is_enabled(),
         "mode": mode_str,
+        "provider": config.provider,
         "cert_path": config.cert_path,
         "key_path": config.key_path,
         "ca_path": config.ca_path,
     })
     .to_string()
+}
+
+/// Prepare TLS credentials (fetch from provider, write secure temp files).
+///
+/// Must be called early in agent startup, before HTTP server starts.
+/// Results are cached globally -- subsequent calls to get_tls_config()
+/// will return the resolved config with temp file paths.
+///
+/// @param agentName - Agent name for certificate CN
+/// @returns JSON string with TLS config
+#[napi]
+pub fn prepare_tls(agent_name: String) -> Result<String> {
+    let config = crate::tls::TlsConfig::prepare_blocking(&agent_name)
+        .map_err(|e| Error::from_reason(e.to_string()))?;
+    let mode_str = match config.mode {
+        crate::tls::TlsMode::Off => "off",
+        crate::tls::TlsMode::Auto => "auto",
+        crate::tls::TlsMode::Strict => "strict",
+    };
+    Ok(serde_json::json!({
+        "enabled": config.is_enabled(),
+        "mode": mode_str,
+        "provider": config.provider,
+        "cert_path": config.cert_path,
+        "key_path": config.key_path,
+        "ca_path": config.ca_path,
+    })
+    .to_string())
+}
+
+/// Clean up temporary TLS credential files.
+///
+/// Call during agent shutdown. Safe to call multiple times.
+#[napi]
+pub fn cleanup_tls() {
+    crate::tls::TlsConfig::cleanup_tls_files();
 }
 
 // =============================================================================

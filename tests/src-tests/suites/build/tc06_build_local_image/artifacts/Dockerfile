@@ -50,8 +50,23 @@ RUN ARCH=$(dpkg --print-architecture) && \
 COPY tempo.yaml /etc/tempo/tempo.yaml
 RUN mkdir -p /var/tempo && chown -R root:root /var/tempo
 
+# Install HashiCorp Vault for PKI credential provider tests (architecture-aware)
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) VAULT_ARCH="amd64" ;; \
+      arm64) VAULT_ARCH="arm64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://releases.hashicorp.com/vault/1.19.8/vault_1.19.8_linux_${VAULT_ARCH}.zip" -o /tmp/vault.zip && \
+    apt-get update && apt-get install -y --no-install-recommends unzip && \
+    unzip /tmp/vault.zip -d /usr/local/bin/ && \
+    rm /tmp/vault.zip && \
+    apt-get purge -y unzip && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    chmod +x /usr/local/bin/vault
+
 # Verify Node.js and Java installation
-RUN node --version && npm --version && java -version && mvn --version | head -1
+RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version
 
 # Create directories for local packages
 RUN mkdir -p /wheels /packages /java-jars /native-libs /workspace

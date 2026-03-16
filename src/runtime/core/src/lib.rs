@@ -40,6 +40,7 @@ pub mod runtime;
 pub mod spec;
 pub mod tls;
 pub mod tracing_publish;
+pub mod vault;
 
 // C FFI bindings module
 pub mod ffi;
@@ -143,7 +144,7 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
                     shared_state_clone,
                     shutdown_rx,
                     command_rx,
-                ) {
+                ).await {
                     Ok(agent_runtime) => {
                         agent_runtime.run().await;
                     }
@@ -196,6 +197,7 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // TLS configuration
     m.add_function(wrap_pyfunction!(tls::get_tls_config_py, m)?)?;
+    m.add_function(wrap_pyfunction!(tls::prepare_tls_py, m)?)?;
 
     // Tracing publish functions (defined in tracing_publish.rs)
     m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;

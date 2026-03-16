@@ -154,7 +154,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
     let spec_clone = spec.clone();
     let shared_state_clone = shared_state.clone();
     let agent_runtime = match runtime.block_on(async {
-        AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx, command_rx)
+        AgentRuntime::new(spec_clone, config, event_tx, shared_state_clone, shutdown_rx, command_rx).await
     }) {
         Ok(rt) => rt,
         Err(e) => {
@@ -667,7 +667,7 @@ pub extern "C" fn mesh_version() -> *const c_char {
 /// * NULL on error (check `mesh_last_error`)
 #[no_mangle]
 pub extern "C" fn mesh_get_tls_config() -> *mut c_char {
-    let config = crate::tls::TlsConfig::from_env();
+    let config = crate::tls::TlsConfig::get_resolved_or_env();
 
     let mode_str = match config.mode {
         crate::tls::TlsMode::Off => "off",
@@ -678,6 +678,7 @@ pub extern "C" fn mesh_get_tls_config() -> *mut c_char {
     let json = serde_json::json!({
         "enabled": config.is_enabled(),
         "mode": mode_str,
+        "provider": config.provider,
         "cert_path": config.cert_path,
         "key_path": config.key_path,
         "ca_path": config.ca_path,
@@ -690,6 +691,74 @@ pub extern "C" fn mesh_get_tls_config() -> *mut c_char {
             ptr::null_mut()
         }
     }
+}
+
+/// Prepare TLS credentials (fetch from provider, write secure temp files).
+///
+/// Must be called early in agent startup, before HTTP server starts.
+/// Results are cached globally -- subsequent calls to `mesh_get_tls_config()`
+/// will return the resolved config with temp file paths.
+///
+/// # Arguments
+/// * `agent_name` - Agent name for certificate CN (e.g., "greeter-abc123")
+///
+/// # Returns
+/// * JSON string with TLS config (caller must free with `mesh_free_string`)
+/// * NULL on error (check `mesh_last_error`)
+///
+/// # Safety
+/// * `agent_name` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_prepare_tls(agent_name: *const c_char) -> *mut c_char {
+    if agent_name.is_null() {
+        set_last_error("agent_name is null");
+        return ptr::null_mut();
+    }
+
+    let name = match CStr::from_ptr(agent_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in agent_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::tls::TlsConfig::prepare_blocking(name) {
+        Ok(config) => {
+            let mode_str = match config.mode {
+                crate::tls::TlsMode::Off => "off",
+                crate::tls::TlsMode::Auto => "auto",
+                crate::tls::TlsMode::Strict => "strict",
+            };
+            let json = serde_json::json!({
+                "enabled": config.is_enabled(),
+                "mode": mode_str,
+                "provider": config.provider,
+                "cert_path": config.cert_path,
+                "key_path": config.key_path,
+                "ca_path": config.ca_path,
+            });
+            match CString::new(json.to_string()) {
+                Ok(c_str) => c_str.into_raw(),
+                Err(e) => {
+                    set_last_error(format!("Failed to create C string: {}", e));
+                    ptr::null_mut()
+                }
+            }
+        }
+        Err(e) => {
+            set_last_error(format!("Failed to prepare TLS: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Clean up temporary TLS credential files.
+///
+/// Call during agent shutdown. Safe to call multiple times.
+#[no_mangle]
+pub extern "C" fn mesh_cleanup_tls() {
+    crate::tls::TlsConfig::cleanup_tls_files();
 }
 
 // =============================================================================
@@ -1046,5 +1115,41 @@ mod tests {
             let result = mesh_update_port(ptr::null_mut(), 70000);
             assert_eq!(result, -1);
         }
+    }
+
+    #[test]
+    fn test_prepare_tls_null_agent_name() {
+        unsafe {
+            let result = mesh_prepare_tls(ptr::null());
+            assert!(result.is_null());
+            let err = mesh_last_error();
+            assert!(!err.is_null());
+            let err_str = CStr::from_ptr(err).to_str().unwrap();
+            assert!(err_str.contains("null"));
+            mesh_free_string(err);
+        }
+    }
+
+    #[test]
+    fn test_prepare_tls_off_mode() {
+        // With TLS off (default), prepare_tls should return valid JSON
+        std::env::remove_var("MCP_MESH_TLS_MODE");
+        unsafe {
+            let name = CString::new("test-agent").unwrap();
+            let result = mesh_prepare_tls(name.as_ptr());
+            // May be non-null (TLS off config) or null depending on OnceLock state
+            // from other tests. Just verify no crash.
+            if !result.is_null() {
+                let json_str = CStr::from_ptr(result).to_str().unwrap();
+                assert!(json_str.contains("\"enabled\""));
+                mesh_free_string(result);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cleanup_tls_no_panic() {
+        // Should not panic even when no TLS config has been resolved
+        mesh_cleanup_tls();
     }
 }

@@ -33,6 +33,66 @@ public class MeshTlsConfig {
         this.caPath = caPath;
     }
 
+    /**
+     * Prepare TLS credentials (fetch from Vault, write secure temp files).
+     * Must be called before get() when using non-file providers.
+     * Results are cached globally in Rust core.
+     */
+    public static synchronized void prepareTls(String agentName) {
+        if (cached != null) return; // Already resolved
+
+        try {
+            MeshCore core = NativeLoader.load();
+            Pointer ptr = core.mesh_prepare_tls(agentName);
+            if (ptr == null) {
+                String errMsg = "unknown error";
+                Pointer errPtr = core.mesh_last_error();
+                if (errPtr != null) {
+                    try {
+                        errMsg = errPtr.getString(0);
+                    } finally {
+                        core.mesh_free_string(errPtr);
+                    }
+                }
+                throw new RuntimeException("mesh_prepare_tls failed: " + errMsg);
+            }
+            try {
+                String json = ptr.getString(0);
+                ObjectMapper mapper = new ObjectMapper();
+                JsonNode node = mapper.readTree(json);
+                cached = new MeshTlsConfig(
+                    node.path("enabled").asBoolean(false),
+                    node.path("mode").asText("off"),
+                    node.has("cert_path") && !node.get("cert_path").isNull() ? node.get("cert_path").asText() : null,
+                    node.has("key_path") && !node.get("key_path").isNull() ? node.get("key_path").asText() : null,
+                    node.has("ca_path") && !node.get("ca_path").isNull() ? node.get("ca_path").asText() : null
+                );
+                if (cached.enabled) {
+                    log.info("TLS prepared: mode={} cert={}", cached.mode, cached.certPath);
+                }
+            } finally {
+                core.mesh_free_string(ptr);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to prepare TLS: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Clean up temporary TLS credential files and clear cached state.
+     * Call during agent shutdown.
+     */
+    public static synchronized void cleanupTls() {
+        try {
+            MeshCore core = NativeLoader.load();
+            core.mesh_cleanup_tls();
+            cached = null;
+            log.debug("TLS credentials cleaned up");
+        } catch (Exception e) {
+            log.debug("TLS cleanup failed: {}", e.getMessage());
+        }
+    }
+
     public static synchronized MeshTlsConfig get() {
         if (cached != null) return cached;
 
@@ -70,7 +130,8 @@ public class MeshTlsConfig {
             }
         } catch (Exception e) {
             log.error("Failed to load TLS config from Rust core: {}", e.getMessage());
-            cached = new MeshTlsConfig(false, "off", null, null, null);
+            // Return fallback but don't cache — allows retry on next call
+            return new MeshTlsConfig(false, "off", null, null, null);
         }
 
         if (cached.enabled) {

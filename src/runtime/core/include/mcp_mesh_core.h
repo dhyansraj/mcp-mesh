@@ -216,6 +216,51 @@ char *mesh_auto_detect_ip(void);
 // Version string (do not free)
 const char *mesh_version(void);
 
+// Get TLS configuration resolved from environment variables.
+//
+// Returns a JSON string with the TLS config:
+// ```json
+// {
+//   "enabled": true,
+//   "mode": "auto",
+//   "cert_path": "/path/to/cert.pem",
+//   "key_path": "/path/to/key.pem",
+//   "ca_path": "/path/to/ca.pem"
+// }
+// ```
+//
+// When TLS is off, returns:
+// ```json
+// {"enabled": false, "mode": "off", "cert_path": null, "key_path": null, "ca_path": null}
+// ```
+//
+// # Returns
+// * JSON string (caller must free with `mesh_free_string`)
+// * NULL on error (check `mesh_last_error`)
+char *mesh_get_tls_config(void);
+
+// Prepare TLS credentials (fetch from provider, write secure temp files).
+//
+// Must be called early in agent startup, before HTTP server starts.
+// Results are cached globally -- subsequent calls to `mesh_get_tls_config()`
+// will return the resolved config with temp file paths.
+//
+// # Arguments
+// * `agent_name` - Agent name for certificate CN (e.g., "greeter-abc123")
+//
+// # Returns
+// * JSON string with TLS config (caller must free with `mesh_free_string`)
+// * NULL on error (check `mesh_last_error`)
+//
+// # Safety
+// * `agent_name` must be a valid null-terminated C string
+char *mesh_prepare_tls(const char *agent_name);
+
+// Clean up temporary TLS credential files.
+//
+// Call during agent shutdown. Safe to call multiple times.
+void mesh_cleanup_tls(void);
+
 // Check if distributed tracing is enabled.
 //
 // Checks MCP_MESH_DISTRIBUTED_TRACING_ENABLED environment variable.

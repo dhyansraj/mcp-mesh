@@ -1123,6 +1123,15 @@ def agent(
                     f"⚠️ AGENT DECORATOR: FastMCP lifespan creation failed: {e}"
                 )
 
+            # Prepare TLS credentials before starting HTTP server.
+            # This fetches from Vault (if configured) and writes secure temp files.
+            try:
+                from _mcp_mesh.shared.tls_config import prepare_tls
+
+                prepare_tls(agent_id)
+            except Exception as e:
+                logger.warning(f"TLS preparation failed: {e}")
+
             logger.debug(
                 f"🎯 AGENT DECORATOR: About to call _start_uvicorn_immediately({binding_host}, {final_http_port})"
             )
